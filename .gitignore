@@ -1,0 +1,9 @@
+# Virtual environment
+.venv/
+
+# Runtime data (created by app.py)
+saved_chats.json
+app_state.json
+
+# Claude Code config
+.claude/
