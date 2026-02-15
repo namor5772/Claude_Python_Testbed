@@ -50,10 +50,13 @@ DEFAULT_SYSTEM_PROMPT = (
     "requires up-to-date information, you MUST use your web_search tool to find the "
     "answer — do NOT tell the user to look it up themselves. After searching, if you "
     "need more detail from a specific result, use fetch_webpage to read that page. "
-    "Always provide a direct, helpful answer based on what you find. Refer to me by my name Roman if that makes the conversation flow more naturally. If you don't know the answer, say you don't know — do not try to make up an answer."
+    "Always provide a direct, helpful answer based on what you find. Refer to me by my name Roman if that makes the conversation flow more naturally.'"
+    "If you don't know the answer, say you don't know — do not try to make up an answer."
 )
 
 PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompts.json")
+CHATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats.json")
+APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 
 
 class HTMLTextExtractor(HTMLParser):
@@ -92,7 +95,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("Claude Chatbot")
-        self.root.geometry("700x600")
+        self.root.geometry("710x600")
 
         # Check for API key
         if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -111,28 +114,56 @@ class App:
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self.debug_enabled = tk.BooleanVar(value=True)
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
+        self.system_prompt_name = ""
         self.prompt_editor_window = None
 
         self.setup_ui()
+        self._load_last_state()
         self.root.after(50, self.check_queue)
 
     def setup_ui(self):
         # Grid weights for resizing
-        self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_rowconfigure(1, weight=0)
+        self.root.grid_rowconfigure(0, weight=0)
+        self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_rowconfigure(2, weight=0)
+        self.root.grid_rowconfigure(3, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=0)
+
+        # Chat management toolbar
+        chat_toolbar = tk.Frame(self.root)
+        chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
+
+        tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
+        self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.chat_name_entry.bind("<Return>", lambda e: self._save_chat())
+
+        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 15))
+
+        tk.Label(chat_toolbar, text="Load Chat", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        self._chat_combo_var = tk.StringVar()
+        self._chat_combo = ttk.Combobox(
+            chat_toolbar, textvariable=self._chat_combo_var, state="readonly",
+            font=("Arial", 10), width=20
+        )
+        self._chat_combo.pack(side=tk.LEFT, padx=(0, 5))
+        self._chat_combo.bind("<<ComboboxSelected>>", lambda e: self._load_chat())
+
+        tk.Button(chat_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.LEFT, padx=(5, 5))
+        tk.Button(chat_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.LEFT, padx=(5, 0))
+
+        self._refresh_chat_list()
 
         # Chat display
         self.chat_display = tk.Text(
             self.root, wrap=tk.WORD, state="disabled", font=("Arial", 11)
         )
-        self.chat_display.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        self.chat_display.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=10)
 
         # Scrollbar
         scrollbar = tk.Scrollbar(self.root, command=self.chat_display.yview)
-        scrollbar.grid(row=0, column=1, sticky="ns", pady=10, padx=(0, 10))
+        scrollbar.grid(row=1, column=1, sticky="ns", pady=10, padx=(0, 10))
         self.chat_display.config(yscrollcommand=scrollbar.set)
 
         # Text tags for styling
@@ -171,14 +202,14 @@ class App:
             self.root, height=3, wrap=tk.WORD, font=("Arial", 11)
         )
         self.input_field.grid(
-            row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5)
+            row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5)
         )
         self.input_field.bind("<Return>", self.on_enter_key)
         self.input_field.focus_set()
 
         # Button bar
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10))
 
         self.attach_button = tk.Button(
             button_frame, text="Attach Images", command=self.attach_image, width=14
@@ -205,7 +236,38 @@ class App:
         self.attach_label = tk.Label(
             self.root, text="", foreground="#6a1b9a", font=("Arial", 9)
         )
-        self.attach_label.grid(row=3, column=0, columnspan=2)
+        self.attach_label.grid(row=4, column=0, columnspan=2)
+
+    # --- App State Persistence ---
+
+    def _update_title(self):
+        if self.system_prompt_name:
+            self.root.title(f"Claude Chatbot — {self.system_prompt_name}")
+        else:
+            self.root.title("Claude Chatbot")
+
+    def _load_last_state(self):
+        """Restore the last-used system prompt on startup."""
+        if not os.path.exists(APP_STATE_FILE):
+            return
+        try:
+            with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return
+        prompt_name = state.get("last_system_prompt_name", "")
+        if prompt_name:
+            prompts = self._load_saved_prompts()
+            if prompt_name in prompts:
+                self.system_prompt = prompts[prompt_name]
+                self.system_prompt_name = prompt_name
+                self._update_title()
+
+    def _save_last_state(self):
+        """Persist the current system prompt name for next startup."""
+        state = {"last_system_prompt_name": self.system_prompt_name}
+        with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
 
     # --- System Prompt Editor ---
 
@@ -283,6 +345,9 @@ class App:
 
         # Load current prompt into editor
         self._prompt_text.insert("1.0", self.system_prompt)
+        if self.system_prompt_name:
+            self._prompt_name_entry.insert(0, self.system_prompt_name)
+            self._prompt_combo_var.set(self.system_prompt_name)
 
     def _refresh_prompt_list(self):
         prompts = self._load_saved_prompts()
@@ -340,7 +405,156 @@ class App:
             messagebox.showwarning("Empty prompt", "The prompt text is empty.", parent=self.prompt_editor_window)
             return
         self.system_prompt = text
+        self.system_prompt_name = self._prompt_name_entry.get().strip()
+        self._update_title()
+        self._save_last_state()
         self.prompt_editor_window.destroy()
+
+    # --- Chat Save / Load ---
+
+    def _load_saved_chats(self):
+        if os.path.exists(CHATS_FILE):
+            with open(CHATS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {}
+
+    def _save_chats_to_disk(self, chats):
+        with open(CHATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(chats, f, indent=2, ensure_ascii=False)
+
+    def _refresh_chat_list(self):
+        chats = self._load_saved_chats()
+        self._chat_combo["values"] = list(chats.keys())
+
+    def _serialize_messages(self):
+        """Convert messages to JSON-serializable format, stripping image data."""
+        serialized = []
+        for msg in self.messages:
+            content = msg["content"]
+            if isinstance(content, str):
+                serialized.append({"role": msg["role"], "content": content})
+            elif isinstance(content, list):
+                blocks = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "image":
+                            blocks.append({"type": "text", "text": "[Image was attached]"})
+                        else:
+                            blocks.append(block)
+                    elif hasattr(block, "model_dump"):
+                        d = block.model_dump()
+                        if d.get("type") == "image":
+                            blocks.append({"type": "text", "text": "[Image was attached]"})
+                        else:
+                            blocks.append(d)
+                    else:
+                        blocks.append({"type": "text", "text": str(block)})
+                serialized.append({"role": msg["role"], "content": blocks})
+            else:
+                serialized.append({"role": msg["role"], "content": str(content)})
+        return serialized
+
+    def _save_chat(self):
+        name = self.chat_name_entry.get().strip()
+        if not name:
+            messagebox.showwarning("No name", "Enter a name for the chat.")
+            return
+        if not self.messages:
+            messagebox.showwarning("Empty chat", "There is no chat to save.")
+            return
+        chats = self._load_saved_chats()
+        chats[name] = {
+            "messages": self._serialize_messages(),
+            "system_prompt": self.system_prompt,
+            "system_prompt_name": self.system_prompt_name,
+        }
+        self._save_chats_to_disk(chats)
+        self._refresh_chat_list()
+        self._chat_combo_var.set(name)
+
+    def _load_chat(self):
+        name = self._chat_combo_var.get()
+        if not name:
+            return
+        chats = self._load_saved_chats()
+        if name not in chats:
+            messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
+            return
+        chat_data = chats[name]
+        self.messages = chat_data["messages"]
+        self.system_prompt = chat_data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
+        self.system_prompt_name = chat_data.get("system_prompt_name", "")
+        self._update_title()
+        self._save_last_state()
+        self.chat_name_entry.delete(0, tk.END)
+        self.chat_name_entry.insert(0, name)
+        self._rebuild_display()
+
+    def _delete_chat(self):
+        name = self._chat_combo_var.get()
+        if not name:
+            name = self.chat_name_entry.get().strip()
+        if not name:
+            messagebox.showwarning("No selection", "Select or enter a chat name to delete.")
+            return
+        chats = self._load_saved_chats()
+        if name not in chats:
+            messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
+            return
+        chats.pop(name)
+        self._save_chats_to_disk(chats)
+        self._refresh_chat_list()
+        self._chat_combo_var.set("")
+        self.chat_name_entry.delete(0, tk.END)
+
+    def _new_chat(self):
+        self.messages = []
+        self.pending_images.clear()
+        self.update_attach_label()
+        self.chat_display.config(state="normal")
+        self.chat_display.delete("1.0", tk.END)
+        self.chat_display.config(state="disabled")
+        self.chat_name_entry.delete(0, tk.END)
+        self._chat_combo_var.set("")
+
+    def _rebuild_display(self):
+        """Rebuild the chat display from loaded message history."""
+        self.chat_display.config(state="normal")
+        self.chat_display.delete("1.0", tk.END)
+        for msg in self.messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "user" and isinstance(content, str):
+                self.chat_display.insert(tk.END, "You: ", "user_label")
+                self.chat_display.insert(tk.END, content + "\n\n", "user")
+            elif role == "user" and isinstance(content, list):
+                # Skip tool_result blocks (internal API messages)
+                if any(isinstance(b, dict) and b.get("type") == "tool_result" for b in content):
+                    continue
+                texts = []
+                has_images = False
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        t = block.get("text", "")
+                        if t == "[Image was attached]":
+                            has_images = True
+                        else:
+                            texts.append(t)
+                text = " ".join(texts)
+                if text or has_images:
+                    self.chat_display.insert(tk.END, "You: ", "user_label")
+                    if has_images:
+                        self.chat_display.insert(tk.END, "[Image] ", "image_info")
+                    if text:
+                        self.chat_display.insert(tk.END, text + "\n\n", "user")
+                    else:
+                        self.chat_display.insert(tk.END, "\n\n", "user")
+            elif role == "assistant" and isinstance(content, str):
+                self.chat_display.insert(tk.END, "Claude:\n", "assistant_label")
+                self.chat_display.insert(tk.END, content + "\n\n", "assistant")
+            # Skip intermediate assistant messages with tool_use blocks
+        self.chat_display.see(tk.END)
+        self.chat_display.config(state="disabled")
 
     # --- Image Attachment ---
 
