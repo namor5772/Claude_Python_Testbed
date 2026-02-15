@@ -23,12 +23,34 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - **Multi-line input** — The input field supports multiple lines; press **Enter** to send, **Shift+Enter** for a newline
 
 #### Tool Use
-The chatbot has two built-in tools that Claude can invoke autonomously during a conversation:
+The chatbot has three built-in tools that Claude can invoke autonomously during a conversation:
 
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
 - **fetch_webpage** — Fetches the full content of a URL using `httpx`, extracts readable text from HTML (stripping scripts, styles, and tags), and truncates to 20,000 characters
+- **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters
 
 When Claude decides to use a tool, the app automatically executes it, feeds the result back, and lets Claude continue — this can loop multiple times in a single turn (e.g., search then fetch a result page).
+
+#### PowerShell Safety Guardrails
+
+The `run_powershell` tool uses a two-tier safety system to prevent accidental damage:
+
+**Tier 1 — Hard Blocked** (rejected outright, never executed):
+- Disk formatting (`Format-Volume`, `Format-Disk`, `diskpart`)
+- Shutdown/restart (`Stop-Computer`, `Restart-Computer`)
+- Security policy changes (`Set-ExecutionPolicy`, `bcdedit`)
+- Registry mass-deletion (`reg delete`, `Remove-ItemProperty` on HKLM/HKCU)
+- User account manipulation (`net user /add`, `Disable-LocalUser`, `Remove-LocalUser`)
+- Event log clearing (`Clear-EventLog`)
+
+**Tier 2 — Confirmation Required** (a Yes/No dialog appears, defaulting to No):
+- File deletion/modification (`Remove-Item`, `rm`, `del`, `Move-Item`, `Set-Content`, `Out-File`)
+- Process/service control (`Stop-Process`, `kill`, `Stop-Service`, `Remove-Service`)
+- Package removal (`Uninstall-Package`)
+- Code execution (`Invoke-Expression`, `iex`, `Start-Process`)
+- Risky flags (`-Recurse`, `-Force`)
+
+**Safe commands** (e.g., `Get-Process`, `Get-ChildItem`, `hostname`, `dir`) run freely without interruption.
 
 #### Image Attachments
 - Click **Attach Images** to select one or more image files (PNG, JPG, JPEG, GIF, WEBP)
@@ -108,3 +130,4 @@ The application is a single-file tkinter app structured around the `App` class:
 - **Persistence** — Three JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, and `app_state.json` for user preferences
 - **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, and strips base64 image data to keep saved files small
 - **HTML Extraction** — The `HTMLTextExtractor` class (a `HTMLParser` subclass) strips HTML tags from fetched web pages, skipping `<script>`, `<style>`, and `<noscript>` blocks, and inserting newlines at block-level element boundaries
+- **PowerShell Safety** — Two-tier regex-based guardrail system (`POWERSHELL_BLOCKED` and `POWERSHELL_CONFIRM` pattern lists) checks commands before execution. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`

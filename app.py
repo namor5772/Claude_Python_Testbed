@@ -10,6 +10,8 @@ import os
 import base64
 import json
 import copy
+import subprocess
+import re
 
 
 # Tool definitions for the Anthropic API
@@ -42,6 +44,78 @@ TOOLS = [
             "required": ["url"],
         },
     },
+    {
+        "name": "run_powershell",
+        "description": (
+            "Execute a PowerShell command on the local Windows PC and return its output. "
+            "Use this for system tasks like listing files, checking processes, reading/writing files, "
+            "getting system info, running scripts, installing software, or any other local operation. "
+            "Commands run with the current user's permissions. Prefer single-line commands or "
+            "semicolon-separated statements."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The PowerShell command to execute",
+                }
+            },
+            "required": ["command"],
+        },
+    },
+]
+
+# PowerShell safety guardrails — two-tier system
+# Tier 1: Hard-blocked patterns (rejected outright, never run)
+POWERSHELL_BLOCKED = [
+    r"\bFormat-Volume\b",
+    r"\bFormat-Disk\b",
+    r"\bClear-Disk\b",
+    r"\bInitialize-Disk\b",
+    r"\bStop-Computer\b",
+    r"\bRestart-Computer\b",
+    r"\bSet-ExecutionPolicy\b",
+    r"\breg\s+delete\b",
+    r"\bRemove-ItemProperty\b.*\\\\HKLM",
+    r"\bRemove-ItemProperty\b.*\\\\HKCU",
+    r"\bRemove-Item\b.*\\\\HKLM",
+    r"\bRemove-Item\b.*\\\\HKCU",
+    r"\bbcdedit\b",
+    r"\bdiskpart\b",
+    r"\bnet\s+user\b.*(/add|/delete)",
+    r"\bDisable-LocalUser\b",
+    r"\bRemove-LocalUser\b",
+    r"\bClear-EventLog\b",
+    r"\bwmic\b.*delete",
+]
+
+# Tier 2: Confirmation-required patterns (user must approve via dialog)
+POWERSHELL_CONFIRM = [
+    r"\bRemove-Item\b",
+    r"\bdel\b",
+    r"\brmdir\b",
+    r"\brm\b\s",
+    r"\brd\b\s",
+    r"\bClear-Content\b",
+    r"\bClear-RecycleBin\b",
+    r"\bStop-Process\b",
+    r"\bkill\b\s",
+    r"\btaskkill\b",
+    r"\bStop-Service\b",
+    r"\bRemove-Service\b",
+    r"\bUninstall-Package\b",
+    r"\bMove-Item\b",
+    r"\bRename-Item\b",
+    r"\bSet-Content\b",
+    r"\bOut-File\b",
+    r"\bInvoke-Expression\b",
+    r"\biex\b\s",
+    r"\bInvoke-WebRequest\b.*-OutFile",
+    r"\bStart-Process\b",
+    r"\bNew-Service\b",
+    r"\b-Recurse\b",
+    r"\b-Force\b",
 ]
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -694,6 +768,70 @@ class App:
         except Exception as e:
             return f"Error fetching URL: {e}"
 
+    def _check_powershell_safety(self, command):
+        """Check command against safety tiers. Returns (allowed, message)."""
+        for pattern in POWERSHELL_BLOCKED:
+            if re.search(pattern, command, re.IGNORECASE):
+                return "blocked", f"BLOCKED: Command matches dangerous pattern ({pattern})"
+
+        for pattern in POWERSHELL_CONFIRM:
+            if re.search(pattern, command, re.IGNORECASE):
+                return "confirm", pattern
+        return "safe", ""
+
+    def _request_confirmation(self, command):
+        """Request user confirmation from the main thread via queue. Returns True/False."""
+        event = threading.Event()
+        result_holder = [False]  # mutable container for the response
+
+        def ask():
+            answer = messagebox.askyesno(
+                "PowerShell — Confirm Command",
+                f"The following command requires your approval:\n\n{command}\n\nAllow execution?",
+                default=messagebox.NO,
+            )
+            result_holder[0] = answer
+            event.set()
+
+        # Schedule the dialog on the main thread
+        self.root.after(0, ask)
+        event.wait()
+        return result_holder[0]
+
+    def run_powershell(self, command):
+        """Execute a PowerShell command with safety checks."""
+        # Tier 1 & 2 safety checks
+        safety, info = self._check_powershell_safety(command)
+
+        if safety == "blocked":
+            return info
+
+        if safety == "confirm":
+            if not self._request_confirmation(command):
+                return "Command was rejected by the user."
+
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = ""
+            if result.stdout:
+                output += result.stdout
+            if result.stderr:
+                output += f"\nSTDERR:\n{result.stderr}"
+            if result.returncode != 0:
+                output += f"\n[Exit code: {result.returncode}]"
+            if len(output) > 20000:
+                output = output[:20000] + "\n\n[Output truncated...]"
+            return output.strip() if output.strip() else "[No output]"
+        except subprocess.TimeoutExpired:
+            return "Error: Command timed out after 30 seconds."
+        except Exception as e:
+            return f"Error running command: {e}"
+
     def _make_serializable(self, obj):
         """Convert SDK objects (ParsedTextBlock, ToolUseBlock, etc.) to plain dicts."""
         if hasattr(obj, "model_dump"):
@@ -779,6 +917,12 @@ class App:
                                     {"type": "tool_info", "content": f"Fetching: {url}\n"}
                                 )
                                 result = self.fetch_url(url)
+                            elif block.name == "run_powershell":
+                                cmd = block.input.get("command", "")
+                                self.queue.put(
+                                    {"type": "tool_info", "content": f"Running: {cmd}\n"}
+                                )
+                                result = self.run_powershell(cmd)
                             else:
                                 result = f"Unknown tool: {block.name}"
 
