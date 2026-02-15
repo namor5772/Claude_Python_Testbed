@@ -2,7 +2,8 @@
 
 ## Environment
 - OS: Windows 11
-- Python: Use `py` launcher (not `python`) to run scripts
+- Python: Activate the `.venv` before running Python commands: `source .venv/Scripts/activate`
+- After activation, use `python` to run scripts (the venv maps it correctly)
 - Shell: bash (Git Bash)
 
 ## Project Structure
