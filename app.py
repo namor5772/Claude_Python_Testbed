@@ -118,6 +118,13 @@ POWERSHELL_CONFIRM = [
     r"\b-Force\b",
 ]
 
+FALLBACK_MODELS = [
+    "claude-sonnet-4-5-20250929",
+    "claude-opus-4-6",
+    "claude-haiku-4-5-20251001",
+]
+DEFAULT_MODEL = FALLBACK_MODELS[0]
+
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant with access to web_search and fetch_webpage tools. "
     "When the user asks about current events, weather, news, prices, or anything that "
@@ -169,7 +176,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("Claude Chatbot")
-        self.root.geometry("710x600")
+        self.root.geometry("710x620")
 
         # Check for API key
         if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -187,9 +194,12 @@ class App:
         self.streaming = False
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self.debug_enabled = tk.BooleanVar(value=True)
+        self.tool_calls_enabled = tk.BooleanVar(value=True)
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
         self.system_prompt_name = ""
+        self.model = DEFAULT_MODEL
         self.prompt_editor_window = None
+        self.available_models = self._fetch_available_models()
 
         self.setup_ui()
         self._load_last_state()
@@ -198,15 +208,36 @@ class App:
     def setup_ui(self):
         # Grid weights for resizing
         self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_rowconfigure(1, weight=1)
-        self.root.grid_rowconfigure(2, weight=0)
+        self.root.grid_rowconfigure(1, weight=0)
+        self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_rowconfigure(3, weight=0)
+        self.root.grid_rowconfigure(4, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=0)
 
-        # Chat management toolbar
+        # Model selection toolbar (row 0)
+        model_toolbar = tk.Frame(self.root)
+        model_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
+
+        tk.Label(model_toolbar, text="Model", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        # Show display names in dropdown, map back to model IDs
+        self._model_id_list = self.available_models
+        display_names = [
+            self._model_display_names.get(mid, mid) for mid in self._model_id_list
+        ]
+        current_display = self._model_display_names.get(self.model, self.model)
+        self._model_var = tk.StringVar(value=current_display)
+        self._model_combo = ttk.Combobox(
+            model_toolbar, textvariable=self._model_var, state="readonly",
+            font=("Arial", 9), width=28
+        )
+        self._model_combo["values"] = display_names
+        self._model_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
+
+        # Chat management toolbar (row 1)
         chat_toolbar = tk.Frame(self.root)
-        chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
+        chat_toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(5, 0))
 
         tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
@@ -233,11 +264,11 @@ class App:
         self.chat_display = tk.Text(
             self.root, wrap=tk.WORD, state="disabled", font=("Arial", 11)
         )
-        self.chat_display.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        self.chat_display.grid(row=2, column=0, sticky="nsew", padx=(10, 0), pady=10)
 
         # Scrollbar
         scrollbar = tk.Scrollbar(self.root, command=self.chat_display.yview)
-        scrollbar.grid(row=1, column=1, sticky="ns", pady=10, padx=(0, 10))
+        scrollbar.grid(row=2, column=1, sticky="ns", pady=10, padx=(0, 10))
         self.chat_display.config(yscrollcommand=scrollbar.set)
 
         # Text tags for styling
@@ -263,6 +294,12 @@ class App:
             "debug_label", foreground="#b06000", font=("Consolas", 9, "bold")
         )
         self.chat_display.tag_config(
+            "tool_debug", foreground="#00796b", font=("Consolas", 9)
+        )
+        self.chat_display.tag_config(
+            "tool_debug_label", foreground="#00796b", font=("Consolas", 9, "bold")
+        )
+        self.chat_display.tag_config(
             "call_counter", foreground="#ffffff", background="#d32f2f",
             font=("Arial", 11, "bold")
         )
@@ -276,14 +313,14 @@ class App:
             self.root, height=3, wrap=tk.WORD, font=("Arial", 11)
         )
         self.input_field.grid(
-            row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5)
+            row=3, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5)
         )
         self.input_field.bind("<Return>", self.on_enter_key)
         self.input_field.focus_set()
 
         # Button bar
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=4, column=0, columnspan=2, pady=(0, 10))
 
         self.attach_button = tk.Button(
             button_frame, text="Attach Images", command=self.attach_image, width=14
@@ -306,13 +343,43 @@ class App:
         )
         self.debug_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+        self.tool_calls_toggle = tk.Checkbutton(
+            button_frame, text="Tool Calls", variable=self.tool_calls_enabled,
+            font=("Arial", 9),
+        )
+        self.tool_calls_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
         # Attachment indicator (hidden until an image is attached)
         self.attach_label = tk.Label(
             self.root, text="", foreground="#6a1b9a", font=("Arial", 9)
         )
-        self.attach_label.grid(row=4, column=0, columnspan=2)
+        self.attach_label.grid(row=5, column=0, columnspan=2)
 
     # --- App State Persistence ---
+
+    def _fetch_available_models(self):
+        """Fetch available models from the Anthropic API, fall back to hardcoded list."""
+        try:
+            response = self.client.models.list(limit=100)
+            # Build {id: display_name} mapping and id list
+            self._model_display_names = {}
+            model_ids = []
+            for m in response.data:
+                self._model_display_names[m.id] = m.display_name
+                model_ids.append(m.id)
+            return model_ids if model_ids else FALLBACK_MODELS
+        except Exception:
+            self._model_display_names = {}
+            return list(FALLBACK_MODELS)
+
+    def _on_model_selected(self, event=None):
+        # Map display name back to model ID
+        selected_display = self._model_var.get()
+        for mid in self._model_id_list:
+            if self._model_display_names.get(mid, mid) == selected_display:
+                self.model = mid
+                break
+        self._save_last_state()
 
     def _update_title(self):
         if self.system_prompt_name:
@@ -336,10 +403,17 @@ class App:
                 self.system_prompt = prompts[prompt_name]
                 self.system_prompt_name = prompt_name
                 self._update_title()
+        model = state.get("last_model", "")
+        if model and model in self.available_models:
+            self.model = model
+            self._model_var.set(self._model_display_names.get(model, model))
 
     def _save_last_state(self):
         """Persist the current system prompt name for next startup."""
-        state = {"last_system_prompt_name": self.system_prompt_name}
+        state = {
+            "last_system_prompt_name": self.system_prompt_name,
+            "last_model": self.model,
+        }
         with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -500,8 +574,27 @@ class App:
         chats = self._load_saved_chats()
         self._chat_combo["values"] = list(chats.keys())
 
+    @staticmethod
+    def _clean_content_block(block):
+        """Strip extra fields from a content block, keeping only API-valid fields."""
+        if not isinstance(block, dict):
+            return block
+        btype = block.get("type")
+        if btype == "text":
+            return {"type": "text", "text": block.get("text", "")}
+        if btype == "tool_use":
+            return {"type": "tool_use", "id": block["id"], "name": block["name"], "input": block["input"]}
+        if btype == "tool_result":
+            cleaned = {"type": "tool_result", "tool_use_id": block["tool_use_id"]}
+            if "content" in block:
+                cleaned["content"] = block["content"]
+            return cleaned
+        if btype == "image":
+            return {"type": "text", "text": "[Image was attached]"}
+        return block
+
     def _serialize_messages(self):
-        """Convert messages to JSON-serializable format, stripping image data."""
+        """Convert messages to JSON-serializable format, stripping image data and extra fields."""
         serialized = []
         for msg in self.messages:
             content = msg["content"]
@@ -511,16 +604,10 @@ class App:
                 blocks = []
                 for block in content:
                     if isinstance(block, dict):
-                        if block.get("type") == "image":
-                            blocks.append({"type": "text", "text": "[Image was attached]"})
-                        else:
-                            blocks.append(block)
+                        blocks.append(self._clean_content_block(block))
                     elif hasattr(block, "model_dump"):
                         d = block.model_dump()
-                        if d.get("type") == "image":
-                            blocks.append({"type": "text", "text": "[Image was attached]"})
-                        else:
-                            blocks.append(d)
+                        blocks.append(self._clean_content_block(d))
                     else:
                         blocks.append({"type": "text", "text": str(block)})
                 serialized.append({"role": msg["role"], "content": blocks})
@@ -541,6 +628,7 @@ class App:
             "messages": self._serialize_messages(),
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
+            "model": self.model,
         }
         self._save_chats_to_disk(chats)
         self._refresh_chat_list()
@@ -555,9 +643,22 @@ class App:
             messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
             return
         chat_data = chats[name]
-        self.messages = chat_data["messages"]
+        # Sanitize loaded messages — strip extra fields (e.g. parsed_output)
+        # that the API rejects when sent back
+        loaded = chat_data["messages"]
+        for msg in loaded:
+            content = msg.get("content")
+            if isinstance(content, list):
+                msg["content"] = [self._clean_content_block(b) for b in content]
+        self.messages = loaded
         self.system_prompt = chat_data.get("system_prompt", DEFAULT_SYSTEM_PROMPT)
         self.system_prompt_name = chat_data.get("system_prompt_name", "")
+        saved_model = chat_data.get("model", DEFAULT_MODEL)
+        if saved_model in self.available_models:
+            self.model = saved_model
+        else:
+            self.model = DEFAULT_MODEL
+        self._model_var.set(self._model_display_names.get(self.model, self.model))
         self._update_title()
         self._save_last_state()
         self.chat_name_entry.delete(0, tk.END)
@@ -862,7 +963,7 @@ class App:
                             src["data"] = src["data"][:40] + "...[truncated]"
 
         payload = {
-            "model": "claude-sonnet-4-5-20250929",
+            "model": self.model,
             "max_tokens": 4096,
             "stream": True,
             "system": self.system_prompt,
@@ -885,7 +986,7 @@ class App:
 
                 full_text = ""
                 with self.client.messages.stream(
-                    model="claude-sonnet-4-5-20250929",
+                    model=self.model,
                     max_tokens=4096,
                     system=self.system_prompt,
                     messages=messages,
@@ -905,6 +1006,13 @@ class App:
                     tool_results = []
                     for block in final_message.content:
                         if block.type == "tool_use":
+                            # Emit full tool call details for debug view
+                            tool_call_detail = json.dumps(
+                                {"tool": block.name, "id": block.id, "input": block.input},
+                                indent=2,
+                            )
+                            self.queue.put({"type": "tool_call_debug", "content": tool_call_detail})
+
                             if block.name == "web_search":
                                 query = block.input.get("query", "")
                                 self.queue.put(
@@ -967,6 +1075,15 @@ class App:
                     self.chat_display.insert(tk.END, "--- PAYLOAD SENT TO API ---\n", "debug_label")
                     self.chat_display.insert(tk.END, msg["content"] + "\n", "debug")
                     self.chat_display.insert(tk.END, "--- END PAYLOAD ---\n\n", "debug_label")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "tool_call_debug" and not self.tool_calls_enabled.get():
+                    pass  # skip when tool calls display disabled
+                elif msg["type"] == "tool_call_debug":
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, "--- TOOL CALL ---\n", "tool_debug_label")
+                    self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_debug")
+                    self.chat_display.insert(tk.END, "--- END TOOL CALL ---\n", "tool_debug_label")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "label":
