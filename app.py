@@ -12,6 +12,14 @@ import json
 import copy
 import subprocess
 import re
+import io
+import time
+import pyautogui
+import pygetwindow as gw
+
+# Desktop automation safety settings
+pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
+pyautogui.PAUSE = 0.3       # small delay between actions
 
 
 # Tool definitions for the Anthropic API
@@ -62,6 +70,138 @@ TOOLS = [
                 }
             },
             "required": ["command"],
+        },
+    },
+    {
+        "name": "screenshot",
+        "description": "",  # patched at startup with actual screen resolution
+
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "Left edge of region to capture"},
+                "y": {"type": "integer", "description": "Top edge of region to capture"},
+                "width": {"type": "integer", "description": "Width of region to capture"},
+                "height": {"type": "integer", "description": "Height of region to capture"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "mouse_click",
+        "description": (
+            "Click the mouse at screen coordinates (x, y). Take a screenshot first to identify "
+            "the correct coordinates. Supports left/right/middle button and single/double click."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "X coordinate to click"},
+                "y": {"type": "integer", "description": "Y coordinate to click"},
+                "button": {
+                    "type": "string", "enum": ["left", "right", "middle"],
+                    "description": "Mouse button (default: left)",
+                },
+                "clicks": {
+                    "type": "integer", "enum": [1, 2],
+                    "description": "Number of clicks: 1=single, 2=double (default: 1)",
+                },
+            },
+            "required": ["x", "y"],
+        },
+    },
+    {
+        "name": "type_text",
+        "description": (
+            "Type text at the current cursor position. Click on an input field first to focus it, "
+            "then use this tool to type. Uses clipboard paste for non-ASCII characters."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "The text to type"},
+                "interval": {
+                    "type": "number",
+                    "description": "Seconds between keystrokes (default: 0.02)",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "press_key",
+        "description": (
+            "Press a key or key combination. Use '+' to combine keys. "
+            "Examples: 'enter', 'tab', 'escape', 'ctrl+c', 'ctrl+shift+s', 'alt+tab', "
+            "'alt+f4', 'win+r', 'ctrl+a'. Key names follow pyautogui naming."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "string",
+                    "description": "Key or combo to press, e.g. 'enter', 'ctrl+c', 'alt+tab'",
+                }
+            },
+            "required": ["keys"],
+        },
+    },
+    {
+        "name": "mouse_scroll",
+        "description": (
+            "Scroll the mouse wheel. Positive clicks = scroll up, negative = scroll down. "
+            "Optionally specify (x, y) to scroll at a specific position."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "clicks": {
+                    "type": "integer",
+                    "description": "Scroll amount: positive=up, negative=down",
+                },
+                "x": {"type": "integer", "description": "X coordinate to scroll at (optional)"},
+                "y": {"type": "integer", "description": "Y coordinate to scroll at (optional)"},
+            },
+            "required": ["clicks"],
+        },
+    },
+    {
+        "name": "open_application",
+        "description": (
+            "Open an application by common name or full path. Known names: chrome, firefox, edge, "
+            "notepad, calculator, excel, word, powerpoint, explorer, cmd, powershell, vscode, "
+            "spotify, discord, slack, teams. Or provide a full executable path."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "App name (e.g. 'chrome', 'notepad') or full path to executable",
+                }
+            },
+            "required": ["name"],
+        },
+    },
+    {
+        "name": "find_window",
+        "description": (
+            "Find windows matching a title pattern. Returns window titles, positions, and sizes. "
+            "Optionally activate (bring to foreground) the first matching window."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Window title or partial text to search for",
+                },
+                "activate": {
+                    "type": "boolean",
+                    "description": "If true, bring the first matching window to the foreground (default: false)",
+                },
+            },
+            "required": ["title"],
         },
     },
 ]
@@ -176,7 +316,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("Claude Chatbot")
-        self.root.geometry("710x620")
+        self.root.geometry("1050x930")
 
         # Check for API key
         if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -195,6 +335,7 @@ class App:
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self.debug_enabled = tk.BooleanVar(value=True)
         self.tool_calls_enabled = tk.BooleanVar(value=True)
+        self.desktop_enabled = tk.BooleanVar(value=False)
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
         self.system_prompt_name = ""
         self.model = DEFAULT_MODEL
@@ -348,6 +489,12 @@ class App:
             font=("Arial", 9),
         )
         self.tool_calls_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.desktop_toggle = tk.Checkbutton(
+            button_frame, text="Desktop", variable=self.desktop_enabled,
+            font=("Arial", 9),
+        )
+        self.desktop_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         # Attachment indicator (hidden until an image is attached)
         self.attach_label = tk.Label(
@@ -587,7 +734,20 @@ class App:
         if btype == "tool_result":
             cleaned = {"type": "tool_result", "tool_use_id": block["tool_use_id"]}
             if "content" in block:
-                cleaned["content"] = block["content"]
+                content = block["content"]
+                if isinstance(content, list):
+                    # Recursively clean sub-blocks, replacing images with placeholder
+                    sub_blocks = []
+                    for sub in content:
+                        if isinstance(sub, dict) and sub.get("type") == "image":
+                            sub_blocks.append({"type": "text", "text": "[Screenshot]"})
+                        elif isinstance(sub, dict):
+                            sub_blocks.append(App._clean_content_block(sub))
+                        else:
+                            sub_blocks.append(sub)
+                    cleaned["content"] = sub_blocks
+                else:
+                    cleaned["content"] = content
             return cleaned
         if btype == "image":
             return {"type": "text", "text": "[Image was attached]"}
@@ -881,18 +1041,74 @@ class App:
         return "safe", ""
 
     def _request_confirmation(self, command):
-        """Request user confirmation from the main thread via queue. Returns True/False."""
+        """Request user confirmation from the main thread via a scrollable dialog. Returns True/False."""
         event = threading.Event()
         result_holder = [False]  # mutable container for the response
 
         def ask():
-            answer = messagebox.askyesno(
-                "PowerShell — Confirm Command",
-                f"The following command requires your approval:\n\n{command}\n\nAllow execution?",
-                default=messagebox.NO,
+            dlg = tk.Toplevel(self.root)
+            dlg.title("PowerShell — Confirm Command")
+            dlg.transient(self.root)
+            dlg.grab_set()
+            dlg.resizable(True, True)
+
+            # Fixed layout: label at top, scrollable command in middle, buttons at bottom
+            dlg.grid_rowconfigure(1, weight=1)
+            dlg.grid_columnconfigure(0, weight=1)
+
+            tk.Label(
+                dlg, text="The following command requires your approval:",
+                font=("Arial", 10), wraplength=450, justify="left",
+            ).grid(row=0, column=0, sticky="w", padx=15, pady=(15, 5))
+
+            # Scrollable text area for the command
+            text_frame = tk.Frame(dlg)
+            text_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=5)
+            text_frame.grid_rowconfigure(0, weight=1)
+            text_frame.grid_columnconfigure(0, weight=1)
+
+            cmd_text = tk.Text(
+                text_frame, wrap=tk.WORD, font=("Consolas", 10),
+                relief="sunken", bd=1, height=10,
             )
-            result_holder[0] = answer
-            event.set()
+            cmd_text.grid(row=0, column=0, sticky="nsew")
+            cmd_sb = tk.Scrollbar(text_frame, command=cmd_text.yview)
+            cmd_sb.grid(row=0, column=1, sticky="ns")
+            cmd_text.config(yscrollcommand=cmd_sb.set)
+            cmd_text.insert("1.0", command)
+            cmd_text.config(state="disabled")
+
+            tk.Label(
+                dlg, text="Allow execution?", font=("Arial", 10),
+            ).grid(row=2, column=0, pady=(5, 5))
+
+            # Button bar — always visible at bottom
+            btn_frame = tk.Frame(dlg)
+            btn_frame.grid(row=3, column=0, pady=(0, 15))
+
+            def on_yes():
+                result_holder[0] = True
+                event.set()
+                dlg.destroy()
+
+            def on_no():
+                result_holder[0] = False
+                event.set()
+                dlg.destroy()
+
+            tk.Button(btn_frame, text="Deny", command=on_no, width=10).pack(side=tk.LEFT, padx=10)
+            tk.Button(btn_frame, text="Allow", command=on_yes, width=10).pack(side=tk.LEFT, padx=10)
+
+            # Handle window close (X button) as denial
+            dlg.protocol("WM_DELETE_WINDOW", on_no)
+
+            # Size the dialog sensibly — cap height to 400px
+            dlg.update_idletasks()
+            w = max(dlg.winfo_reqwidth(), 500)
+            h = min(dlg.winfo_reqheight(), 400)
+            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            dlg.geometry(f"{w}x{h}+{x}+{y}")
 
         # Schedule the dialog on the main thread
         self.root.after(0, ask)
@@ -933,6 +1149,151 @@ class App:
         except Exception as e:
             return f"Error running command: {e}"
 
+    # --- Desktop Automation Tools ---
+
+    KNOWN_APPS = {
+        "chrome": "start chrome",
+        "firefox": "start firefox",
+        "edge": "start msedge",
+        "notepad": "notepad",
+        "calculator": "calc",
+        "calc": "calc",
+        "excel": "start excel",
+        "word": "start winword",
+        "powerpoint": "start powerpnt",
+        "explorer": "explorer",
+        "cmd": "start cmd",
+        "powershell": "start powershell",
+        "vscode": "code",
+        "code": "code",
+        "spotify": "start spotify:",
+        "discord": "start discord:",
+        "slack": "start slack:",
+        "teams": "start msteams:",
+    }
+
+    def do_screenshot(self, region=None):
+        """Capture screen (or region), resize, return as content list with image block."""
+        try:
+            if region:
+                img = pyautogui.screenshot(region=region)
+            else:
+                img = pyautogui.screenshot()
+
+            orig_w, orig_h = img.size
+            max_w = 1280
+            if orig_w > max_w:
+                scale = max_w / orig_w
+                new_h = int(orig_h * scale)
+                img = img.resize((max_w, new_h))
+                display_size = f"{max_w}x{new_h}"
+            else:
+                display_size = f"{orig_w}x{orig_h}"
+
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+
+            return [
+                {"type": "text", "text": f"Screenshot captured. Screen is {orig_w}x{orig_h}. Image shown at {display_size}. Use ORIGINAL {orig_w}x{orig_h} coordinates for mouse_click."},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
+            ]
+        except Exception as e:
+            return f"Screenshot error: {e}"
+
+    def do_mouse_click(self, x, y, button="left", clicks=1):
+        """Click at (x, y) with specified button and click count."""
+        try:
+            pyautogui.click(x, y, button=button, clicks=clicks)
+            return f"Clicked ({button}, {clicks}x) at ({x}, {y})"
+        except Exception as e:
+            return f"Click error: {e}"
+
+    def do_type_text(self, text, interval=0.02):
+        """Type text. Uses pyautogui.write for ASCII, clipboard paste for Unicode."""
+        try:
+            if all(ord(c) < 128 for c in text):
+                pyautogui.write(text, interval=interval)
+            else:
+                # Clipboard paste for Unicode
+                import pyperclip
+                pyperclip.copy(text)
+                pyautogui.hotkey("ctrl", "v")
+            return f"Typed {len(text)} characters"
+        except Exception as e:
+            return f"Type error: {e}"
+
+    def do_press_key(self, keys):
+        """Press a key or combination like 'ctrl+c', 'enter', 'alt+tab'."""
+        try:
+            parts = [k.strip().lower() for k in keys.split("+")]
+            # Normalize common aliases
+            aliases = {"windows": "win", "control": "ctrl", "return": "enter", "esc": "escape"}
+            parts = [aliases.get(p, p) for p in parts]
+
+            if len(parts) == 1:
+                pyautogui.press(parts[0])
+            else:
+                pyautogui.hotkey(*parts)
+            return f"Pressed: {keys}"
+        except Exception as e:
+            return f"Key press error: {e}"
+
+    def do_mouse_scroll(self, clicks, x=None, y=None):
+        """Scroll the mouse wheel at current position or specified (x, y)."""
+        try:
+            kwargs = {}
+            if x is not None:
+                kwargs["x"] = x
+            if y is not None:
+                kwargs["y"] = y
+            pyautogui.scroll(clicks, **kwargs)
+            direction = "up" if clicks > 0 else "down"
+            pos = f" at ({x}, {y})" if x is not None else ""
+            return f"Scrolled {direction} {abs(clicks)} clicks{pos}"
+        except Exception as e:
+            return f"Scroll error: {e}"
+
+    def do_open_application(self, name):
+        """Open an application by known name or full path."""
+        try:
+            key = name.lower().strip()
+            if key in self.KNOWN_APPS:
+                cmd = self.KNOWN_APPS[key]
+                subprocess.Popen(cmd, shell=True)
+                return f"Opened {name} (command: {cmd})"
+            else:
+                # Try as a direct path or command
+                subprocess.Popen(name, shell=True)
+                return f"Launched: {name}"
+        except Exception as e:
+            return f"Error opening {name}: {e}"
+
+    def do_find_window(self, title, activate=False):
+        """Find windows matching title pattern, optionally activate the first match."""
+        try:
+            windows = gw.getWindowsWithTitle(title)
+            if not windows:
+                return f"No windows found matching '{title}'"
+
+            results = []
+            for w in windows:
+                results.append(f"  Title: {w.title}\n  Position: ({w.left}, {w.top})\n  Size: {w.width}x{w.height}")
+
+            if activate and windows:
+                try:
+                    win = windows[0]
+                    if win.isMinimized:
+                        win.restore()
+                    win.activate()
+                    results.insert(0, f"Activated: {win.title}")
+                except Exception as e:
+                    results.insert(0, f"Found but could not activate: {e}")
+
+            return f"Found {len(windows)} window(s):\n" + "\n---\n".join(results)
+        except Exception as e:
+            return f"Window search error: {e}"
+
     def _make_serializable(self, obj):
         """Convert SDK objects (ParsedTextBlock, ToolUseBlock, etc.) to plain dicts."""
         if hasattr(obj, "model_dump"):
@@ -952,25 +1313,51 @@ class App:
                 ]
             display_msgs.append({"role": msg["role"], "content": content})
 
+        # Deep copy to avoid mutating originals when truncating
+        display_msgs = copy.deepcopy(display_msgs)
+
         # Truncate base64 image data for readability
-        for msg in display_msgs:
-            content = msg.get("content")
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("type") == "image":
+        def _truncate_images(blocks):
+            for block in blocks:
+                if isinstance(block, dict):
+                    if block.get("type") == "image":
                         src = block.get("source", {})
                         if src.get("data"):
                             src["data"] = src["data"][:40] + "...[truncated]"
+                    # Also handle tool_result with list content (e.g. screenshots)
+                    if block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                        _truncate_images(block["content"])
+
+        for msg in display_msgs:
+            content = msg.get("content")
+            if isinstance(content, list):
+                _truncate_images(content)
 
         payload = {
             "model": self.model,
             "max_tokens": 4096,
             "stream": True,
             "system": self.system_prompt,
-            "tools": TOOLS,
+            "tools": self._get_tools(),
             "messages": display_msgs,
         }
         return json.dumps(payload, indent=2)
+
+    def _get_tools(self):
+        """Return TOOLS with screenshot description patched to current screen resolution."""
+        screen_w, screen_h = pyautogui.size()
+        tools = copy.deepcopy(TOOLS)
+        for tool in tools:
+            if tool["name"] == "screenshot":
+                tool["description"] = (
+                    f"Take a screenshot of the screen. The screen resolution is {screen_w}x{screen_h}. "
+                    "Always use this FIRST to see what is on the screen before clicking or typing. "
+                    "The image may be scaled down for the API, but all mouse_click coordinates must use "
+                    f"the ORIGINAL screen coordinate space (0,0) to ({screen_w-1},{screen_h-1}). "
+                    "Optionally capture only a region by specifying x, y, width, height."
+                )
+                break
+        return tools
 
     def stream_worker(self, messages):
         try:
@@ -985,18 +1372,44 @@ class App:
                 self.queue.put({"type": "debug", "content": payload_text})
 
                 full_text = ""
-                with self.client.messages.stream(
-                    model=self.model,
-                    max_tokens=4096,
-                    system=self.system_prompt,
-                    messages=messages,
-                    tools=TOOLS,
-                ) as stream:
-                    for text in stream.text_stream:
-                        full_text += text
-                        self.queue.put({"type": "text_delta", "content": text})
+                max_retries = 5
+                for attempt in range(max_retries):
+                    try:
+                        with self.client.messages.stream(
+                            model=self.model,
+                            max_tokens=4096,
+                            system=self.system_prompt,
+                            messages=messages,
+                            tools=self._get_tools(),
+                        ) as stream:
+                            for text in stream.text_stream:
+                                full_text += text
+                                self.queue.put({"type": "text_delta", "content": text})
 
-                    final_message = stream.get_final_message()
+                            final_message = stream.get_final_message()
+                        break  # success — exit retry loop
+                    except anthropic.RateLimitError as e:
+                        if attempt < max_retries - 1:
+                            wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                            self.queue.put({
+                                "type": "tool_info",
+                                "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                            })
+                            time.sleep(wait)
+                            full_text = ""  # reset for retry
+                        else:
+                            raise  # final attempt — let outer except handle it
+                    except anthropic.APIStatusError as e:
+                        if e.status_code == 529 and attempt < max_retries - 1:
+                            wait = 2 ** attempt * 10  # 10s, 20s, 40s, 80s for overload
+                            self.queue.put({
+                                "type": "tool_info",
+                                "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                            })
+                            time.sleep(wait)
+                            full_text = ""
+                        else:
+                            raise
 
                 if final_message.stop_reason == "tool_use":
                     # Append the full assistant message (with tool_use blocks) to history
@@ -1031,16 +1444,63 @@ class App:
                                     {"type": "tool_info", "content": f"Running: {cmd}\n"}
                                 )
                                 result = self.run_powershell(cmd)
+                            elif block.name in ("screenshot", "mouse_click", "type_text",
+                                                 "press_key", "mouse_scroll", "open_application",
+                                                 "find_window"):
+                                if not self.desktop_enabled.get():
+                                    result = "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
+                                else:
+                                    inp = block.input
+                                    if block.name == "screenshot":
+                                        self.queue.put({"type": "tool_info", "content": "Taking screenshot...\n"})
+                                        region = None
+                                        if all(k in inp for k in ("x", "y", "width", "height")):
+                                            region = (inp["x"], inp["y"], inp["width"], inp["height"])
+                                        result = self.do_screenshot(region)
+                                    elif block.name == "mouse_click":
+                                        self.queue.put({"type": "tool_info", "content": f"Clicking at ({inp.get('x')}, {inp.get('y')})...\n"})
+                                        result = self.do_mouse_click(
+                                            inp["x"], inp["y"],
+                                            button=inp.get("button", "left"),
+                                            clicks=inp.get("clicks", 1),
+                                        )
+                                    elif block.name == "type_text":
+                                        text = inp.get("text", "")
+                                        preview = text[:50] + "..." if len(text) > 50 else text
+                                        self.queue.put({"type": "tool_info", "content": f"Typing: {preview}\n"})
+                                        result = self.do_type_text(text, interval=inp.get("interval", 0.02))
+                                    elif block.name == "press_key":
+                                        keys = inp.get("keys", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
+                                        result = self.do_press_key(keys)
+                                    elif block.name == "mouse_scroll":
+                                        clicks_val = inp.get("clicks", 0)
+                                        self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
+                                        result = self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
+                                    elif block.name == "open_application":
+                                        app_name = inp.get("name", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}\n"})
+                                        result = self.do_open_application(app_name)
+                                    elif block.name == "find_window":
+                                        title = inp.get("title", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
+                                        result = self.do_find_window(title, activate=inp.get("activate", False))
                             else:
                                 result = f"Unknown tool: {block.name}"
 
-                            tool_results.append(
-                                {
+                            # Build tool_result — content is a list when it has images (screenshot)
+                            if isinstance(result, list):
+                                tool_results.append({
                                     "type": "tool_result",
                                     "tool_use_id": block.id,
                                     "content": result,
-                                }
-                            )
+                                })
+                            else:
+                                tool_results.append({
+                                    "type": "tool_result",
+                                    "tool_use_id": block.id,
+                                    "content": result,
+                                })
 
                     messages.append({"role": "user", "content": tool_results})
                     # Continue the loop — Claude will stream its response using the tool results
