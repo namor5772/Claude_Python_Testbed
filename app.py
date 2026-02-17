@@ -424,6 +424,7 @@ FALLBACK_MODELS = [
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
+DEFAULT_GEOMETRY = "1050x930"
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a capable personal assistant for Roman with access to a rich set of tools. "
@@ -509,7 +510,7 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("Claude Chatbot")
-        self.root.geometry("1050x930")
+        self.root.geometry(DEFAULT_GEOMETRY)
 
         # Check for API key
         if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -741,7 +742,7 @@ class App:
             self.root.title("Claude Chatbot")
 
     def _load_last_state(self):
-        """Restore the last-used system prompt on startup."""
+        """Restore the last-used system prompt and window geometry on startup."""
         if not os.path.exists(APP_STATE_FILE):
             return
         try:
@@ -760,12 +761,29 @@ class App:
         if model and model in self.available_models:
             self.model = model
             self._model_var.set(self._model_display_names.get(model, model))
+        # Restore window geometry if display setup hasn't changed
+        geometry = state.get("geometry", "")
+        saved_sw = state.get("screen_width", 0)
+        saved_sh = state.get("screen_height", 0)
+        if geometry and saved_sw and saved_sh:
+            cur_sw = self.root.winfo_screenwidth()
+            cur_sh = self.root.winfo_screenheight()
+            if saved_sw == cur_sw and saved_sh == cur_sh:
+                # Parse geometry string "WxH+X+Y" and verify on-screen
+                m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry)
+                if m:
+                    w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                    if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0:
+                        self.root.geometry(geometry)
 
     def _save_last_state(self):
-        """Persist the current system prompt name for next startup."""
+        """Persist the current system prompt name and window geometry for next startup."""
         state = {
             "last_system_prompt_name": self.system_prompt_name,
             "last_model": self.model,
+            "geometry": self.root.geometry(),
+            "screen_width": self.root.winfo_screenwidth(),
+            "screen_height": self.root.winfo_screenheight(),
         }
         with open(APP_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
@@ -1593,7 +1611,8 @@ class App:
         self._page = None
 
     def _on_close(self):
-        """Window close handler — clean up browser, then destroy."""
+        """Window close handler — save state, clean up browser, then destroy."""
+        self._save_last_state()
         self._cleanup_browser()
         self.root.destroy()
 
