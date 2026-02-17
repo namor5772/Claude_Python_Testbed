@@ -29,13 +29,26 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - **Multi-line input** — The input field supports multiple lines; press **Enter** to send, **Shift+Enter** for a newline
 
 #### Tool Use
-The chatbot has three built-in tools that Claude can invoke autonomously during a conversation:
+The chatbot has ten built-in tools that Claude can invoke autonomously during a conversation:
 
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
 - **fetch_webpage** — Fetches the full content of a URL using `httpx`, extracts readable text from HTML (stripping scripts, styles, and tags), and truncates to 20,000 characters
 - **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters
+- **screenshot** — Captures the screen (or a specified region) and returns it as an image to Claude. The tool description is dynamically patched at startup with the actual screen resolution so Claude knows the coordinate space. Images wider than 1280px are scaled down for the API, but coordinate reminders ensure Claude clicks accurately
+- **mouse_click** — Clicks at specific screen coordinates with configurable button (left/right/middle) and click count (single/double)
+- **type_text** — Types text at the current cursor position. Uses `pyautogui.write()` for ASCII and clipboard paste via `pyperclip` for Unicode characters
+- **press_key** — Presses a key or key combination (e.g., `enter`, `ctrl+c`, `alt+tab`). Supports common aliases like `windows` → `win`
+- **mouse_scroll** — Scrolls the mouse wheel up or down, optionally at a specific screen position
+- **open_application** — Opens an application by common name (e.g., `chrome`, `notepad`, `vscode`) using a built-in lookup table, or by full executable path
+- **find_window** — Finds windows matching a title pattern using `pygetwindow`, returning titles, positions, and sizes. Can optionally activate (bring to foreground) the first match
 
-When Claude decides to use a tool, the app automatically executes it, feeds the result back, and lets Claude continue — this can loop multiple times in a single turn (e.g., search then fetch a result page).
+When Claude decides to use a tool, the app automatically executes it, feeds the result back, and lets Claude continue — this can loop multiple times in a single turn (e.g., search then fetch a result page, or screenshot then click a button).
+
+#### Desktop Automation
+
+The seven desktop tools (screenshot, mouse_click, type_text, press_key, mouse_scroll, open_application, find_window) are gated behind a **Desktop** checkbox in the button bar. When disabled (the default), any attempt by Claude to use these tools returns an error message asking the user to enable the checkbox first. This prevents accidental desktop interactions.
+
+`pyautogui.FAILSAFE` is enabled — moving the mouse to the top-left corner `(0, 0)` immediately aborts any automation in progress. A 0.3-second pause between actions provides a safety buffer.
 
 #### PowerShell Safety Guardrails
 
@@ -98,6 +111,10 @@ When a named system prompt is applied, the window title updates to show it (e.g.
 - On startup, the app restores both the last system prompt and model automatically
 - The app starts in a "new chat" state (empty conversation) with the last system prompt and model pre-loaded
 
+#### Rate-Limit Retry
+
+API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) errors with exponential backoff. Rate-limit retries wait 5s, 10s, 20s, 40s; overload retries wait 10s, 20s, 40s, 80s. Up to 5 attempts are made before raising the error. Retry status messages appear in the chat as grey italicised tool-info lines.
+
 #### Debug Mode
 - Toggle the **Debug** checkbox to show/hide the full API payload sent with each request
 - When enabled, each API call displays:
@@ -122,6 +139,9 @@ When a named system prompt is applied, the window title updates to show it (e.g.
 anthropic
 ddgs
 httpx
+pyautogui
+pygetwindow
+pyperclip
 ```
 
 ### Running
@@ -138,10 +158,12 @@ python app.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 6 rows: model toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar (row 4), and attachment indicator (row 5)
+- **UI Layout** — Grid-based layout with 6 rows: model toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Debug/Tool Calls/Desktop toggles (row 4), and attachment indicator (row 5)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, labels, tool info, errors) back to the main thread
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — Three JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, and `app_state.json` for user preferences
 - **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, strips base64 image data, and sanitises content blocks through `_clean_content_block()` to remove extra SDK fields (like `parsed_output`) that the API rejects on re-submission
 - **HTML Extraction** — The `HTMLTextExtractor` class (a `HTMLParser` subclass) strips HTML tags from fetched web pages, skipping `<script>`, `<style>`, and `<noscript>` blocks, and inserting newlines at block-level element boundaries
 - **PowerShell Safety** — Two-tier regex-based guardrail system (`POWERSHELL_BLOCKED` and `POWERSHELL_CONFIRM` pattern lists) checks commands before execution. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
+- **Desktop Automation** — Seven tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`) built on `pyautogui` and `pygetwindow`. Gated behind a `desktop_enabled` `BooleanVar` toggle. The `screenshot` tool description is dynamically patched at startup via `_get_tools()` to include the current screen resolution
+- **Rate-Limit Retry** — Exponential backoff loop in `stream_worker` handles HTTP 429 (rate limit) and 529 (overload) errors with up to 5 retries before propagating the exception
