@@ -29,6 +29,7 @@ import io
 import time
 import pyautogui
 import pygetwindow as gw
+from PIL import Image
 
 # Desktop automation safety settings
 pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
@@ -85,9 +86,13 @@ TOOLS = [
             "required": ["command"],
         },
     },
+]
+
+# Desktop automation tool definitions (pyautogui-based)
+DESKTOP_TOOLS = [
     {
         "name": "screenshot",
-        "description": "",  # patched at startup with actual screen resolution
+        "description": "",  # patched at runtime with actual screen resolution
 
         "input_schema": {
             "type": "object",
@@ -217,6 +222,145 @@ TOOLS = [
                 },
             },
             "required": ["title"],
+        },
+    },
+]
+
+# Browser automation tool definitions (Playwright via CDP)
+BROWSER_TOOLS = [
+    {
+        "name": "browser_open",
+        "description": (
+            "Open or connect to Microsoft Edge and navigate to a URL. "
+            "Uses the user's real Edge profile with all cookies, logins, and extensions. "
+            "If Edge isn't running, it will be launched automatically. "
+            "Call this first before using any other browser tools."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to navigate to (e.g. 'https://google.com')",
+                }
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_navigate",
+        "description": "Navigate the current browser page to a new URL.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to navigate to",
+                }
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "browser_click",
+        "description": (
+            "Click an element on the page. Use a CSS selector (e.g. '#submit-btn', 'a.nav-link') "
+            "or provide visible text to find and click the element. Prefer selectors when possible."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector of the element to click (e.g. '#login', 'button.submit')",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Visible text of the element to click (used if selector is not provided)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "browser_fill",
+        "description": (
+            "Fill a form field with text. This clears any existing value and types instantly "
+            "(not character-by-character). Use a CSS selector to identify the input field."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector of the input field (e.g. 'input[name=q]', '#email')",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The text to fill into the field",
+                },
+            },
+            "required": ["selector", "value"],
+        },
+    },
+    {
+        "name": "browser_get_text",
+        "description": (
+            "Get the text content of the page or a specific element. "
+            "Use this to read page content without taking a screenshot. "
+            "If no selector is given, returns the full page text."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector of the element to read (optional — omit for full page text)",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "browser_run_js",
+        "description": (
+            "Execute JavaScript code on the current page and return the result. "
+            "Use for advanced interactions, extracting data, or manipulating the DOM. "
+            "The code runs in the page context. Use 'return' to get a value back."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string",
+                    "description": "JavaScript code to execute (e.g. \"return document.title\")",
+                },
+            },
+            "required": ["code"],
+        },
+    },
+    {
+        "name": "browser_screenshot",
+        "description": (
+            "Take a screenshot of the current browser page. Returns an image. "
+            "Use this to see what the page looks like visually."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "browser_close",
+        "description": (
+            "Disconnect from the browser. Edge stays open — only the automation connection is closed. "
+            "Use this when you're done with browser tasks."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
         },
     },
 ]
@@ -352,6 +496,11 @@ class App:
         self.debug_enabled = tk.BooleanVar(value=True)
         self.tool_calls_enabled = tk.BooleanVar(value=True)
         self.desktop_enabled = tk.BooleanVar(value=False)
+        self.browser_enabled = tk.BooleanVar(value=False)
+        self._playwright = None
+        self._browser = None
+        self._page = None
+        self._edge_process = None
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
         self.system_prompt_name = ""
         self.model = DEFAULT_MODEL
@@ -361,6 +510,7 @@ class App:
         self.setup_ui()
         self._load_last_state()
         self.root.after(50, self.check_queue)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def setup_ui(self):
         # Grid weights for resizing
@@ -511,6 +661,12 @@ class App:
             font=("Arial", 9),
         )
         self.desktop_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.browser_toggle = tk.Checkbutton(
+            button_frame, text="Browser", variable=self.browser_enabled,
+            font=("Arial", 9),
+        )
+        self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         # Attachment indicator (hidden until an image is attached)
         self.attach_label = tk.Label(
@@ -1316,6 +1472,200 @@ class App:
         except Exception as e:
             return f"Window search error: {e}"
 
+    # --- Browser Automation (Playwright via CDP) ---
+
+    def _ensure_browser(self):
+        """Connect to Edge via CDP, launching it if needed. Returns the page."""
+        import socket
+
+        # If we already have a live page, check it's still usable
+        if self._page is not None:
+            try:
+                self._page.title()
+                return self._page
+            except Exception:
+                # Connection dropped — clean up and reconnect
+                self._cleanup_browser()
+
+        # Check if something is already listening on port 9222
+        def _port_open():
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                return s.connect_ex(("127.0.0.1", 9222)) == 0
+
+        if not _port_open():
+            # Try to launch Edge with the debug port
+            edge_paths = [
+                os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+                os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
+            ]
+            edge_exe = None
+            for p in edge_paths:
+                if os.path.isfile(p):
+                    edge_exe = p
+                    break
+            if not edge_exe:
+                raise RuntimeError("Microsoft Edge not found. Install Edge or check its path.")
+
+            self._edge_process = subprocess.Popen(
+                [edge_exe, "--remote-debugging-port=9222"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            # Wait for the debug port to become available
+            for _ in range(30):
+                if _port_open():
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError(
+                    "Edge launched but debug port 9222 did not open. "
+                    "If Edge was already running without --remote-debugging-port, "
+                    "close all Edge windows and try again."
+                )
+
+        # Connect Playwright via CDP
+        from playwright.sync_api import sync_playwright
+
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
+
+        # Get the first page or create one
+        contexts = self._browser.contexts
+        if contexts and contexts[0].pages:
+            self._page = contexts[0].pages[0]
+        else:
+            ctx = contexts[0] if contexts else self._browser.new_context()
+            self._page = ctx.new_page()
+
+        return self._page
+
+    def _cleanup_browser(self):
+        """Disconnect Playwright. Does NOT close Edge."""
+        try:
+            if self._browser:
+                self._browser.close()
+        except Exception:
+            pass
+        try:
+            if self._playwright:
+                self._playwright.stop()
+        except Exception:
+            pass
+        self._playwright = None
+        self._browser = None
+        self._page = None
+
+    def _on_close(self):
+        """Window close handler — clean up browser, then destroy."""
+        self._cleanup_browser()
+        self.root.destroy()
+
+    def do_browser_open(self, url):
+        try:
+            page = self._ensure_browser()
+            page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return f"Navigated to {url} — page title: {page.title()}"
+        except Exception as e:
+            return f"Browser open error: {e}"
+
+    def do_browser_navigate(self, url):
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return f"Navigated to {url} — page title: {self._page.title()}"
+        except Exception as e:
+            return f"Browser navigate error: {e}"
+
+    def do_browser_click(self, selector=None, text=None):
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            if selector:
+                self._page.click(selector, timeout=10000)
+                return f"Clicked element: {selector}"
+            elif text:
+                self._page.get_by_text(text, exact=False).first.click(timeout=10000)
+                return f"Clicked element with text: {text}"
+            else:
+                return "Provide either a 'selector' or 'text' parameter."
+        except Exception as e:
+            return f"Browser click error: {e}"
+
+    def do_browser_fill(self, selector, value):
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            self._page.fill(selector, value, timeout=10000)
+            return f"Filled '{selector}' with {len(value)} characters"
+        except Exception as e:
+            return f"Browser fill error: {e}"
+
+    def do_browser_get_text(self, selector=None):
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            if selector:
+                text = self._page.inner_text(selector, timeout=10000)
+            else:
+                text = self._page.inner_text("body", timeout=10000)
+            if len(text) > 20000:
+                text = text[:20000] + "\n\n[Content truncated at 20k chars...]"
+            return text if text.strip() else "[No visible text]"
+        except Exception as e:
+            return f"Browser get_text error: {e}"
+
+    def do_browser_run_js(self, code):
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            # Wrap in a function if it uses 'return'
+            if "return " in code:
+                result = self._page.evaluate(f"() => {{ {code} }}")
+            else:
+                result = self._page.evaluate(code)
+            text = json.dumps(result, indent=2, default=str) if result is not None else "[No return value]"
+            if len(text) > 20000:
+                text = text[:20000] + "\n\n[Output truncated...]"
+            return text
+        except Exception as e:
+            return f"Browser JS error: {e}"
+
+    def do_browser_screenshot(self):
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            raw_bytes = self._page.screenshot(type="png")
+            img = Image.open(io.BytesIO(raw_bytes))
+            orig_w, orig_h = img.size
+            max_w = 1280
+            if orig_w > max_w:
+                ratio = max_w / orig_w
+                new_h = int(orig_h * ratio)
+                img = img.resize((max_w, new_h))
+                img_w, img_h = max_w, new_h
+            else:
+                img_w, img_h = orig_w, orig_h
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+            return [
+                {"type": "text", "text": f"Browser screenshot ({img_w}x{img_h}) — page: {self._page.title()}"},
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
+            ]
+        except Exception as e:
+            return f"Browser screenshot error: {e}"
+
+    def do_browser_close(self):
+        try:
+            self._cleanup_browser()
+            return "Browser connection closed. Edge remains open."
+        except Exception as e:
+            return f"Browser close error: {e}"
+
     def _make_serializable(self, obj):
         """Convert SDK objects (ParsedTextBlock, ToolUseBlock, etc.) to plain dicts."""
         if hasattr(obj, "model_dump"):
@@ -1366,19 +1716,24 @@ class App:
         return json.dumps(payload, indent=2)
 
     def _get_tools(self):
-        """Return TOOLS with screenshot description patched to current screen resolution."""
-        screen_w, screen_h = pyautogui.size()
+        """Return tool list based on which toggles are enabled."""
         tools = copy.deepcopy(TOOLS)
-        for tool in tools:
-            if tool["name"] == "screenshot":
-                tool["description"] = (
-                    f"Take a screenshot of the screen (resolution {screen_w}x{screen_h}). "
-                    "Always use this FIRST to see what is on the screen before clicking or typing. "
-                    "The image may be resized. For mouse_click, use the pixel coordinates as you see "
-                    "them in the image — they are automatically scaled to screen coordinates. "
-                    "Optionally capture only a region by specifying x, y, width, height."
-                )
-                break
+        if self.desktop_enabled.get():
+            desktop = copy.deepcopy(DESKTOP_TOOLS)
+            screen_w, screen_h = pyautogui.size()
+            for tool in desktop:
+                if tool["name"] == "screenshot":
+                    tool["description"] = (
+                        f"Take a screenshot of the screen (resolution {screen_w}x{screen_h}). "
+                        "Always use this FIRST to see what is on the screen before clicking or typing. "
+                        "The image may be resized. For mouse_click, use the pixel coordinates as you see "
+                        "them in the image — they are automatically scaled to screen coordinates. "
+                        "Optionally capture only a region by specifying x, y, width, height."
+                    )
+                    break
+            tools.extend(desktop)
+        if self.browser_enabled.get():
+            tools.extend(copy.deepcopy(BROWSER_TOOLS))
         return tools
 
     def stream_worker(self, messages):
@@ -1507,6 +1862,48 @@ class App:
                                         title = inp.get("title", "")
                                         self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
                                         result = self.do_find_window(title, activate=inp.get("activate", False))
+                            elif block.name in ("browser_open", "browser_navigate",
+                                                  "browser_click", "browser_fill",
+                                                  "browser_get_text", "browser_run_js",
+                                                  "browser_screenshot", "browser_close"):
+                                if not self.browser_enabled.get():
+                                    result = "Browser tools are disabled. Enable the Browser checkbox to use this tool."
+                                else:
+                                    inp = block.input
+                                    if block.name == "browser_open":
+                                        url = inp.get("url", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: opening {url}\n"})
+                                        result = self.do_browser_open(url)
+                                    elif block.name == "browser_navigate":
+                                        url = inp.get("url", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: navigating to {url}\n"})
+                                        result = self.do_browser_navigate(url)
+                                    elif block.name == "browser_click":
+                                        sel = inp.get("selector", "")
+                                        txt = inp.get("text", "")
+                                        target = sel or f"text='{txt}'"
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: clicking {target}\n"})
+                                        result = self.do_browser_click(selector=sel or None, text=txt or None)
+                                    elif block.name == "browser_fill":
+                                        sel = inp.get("selector", "")
+                                        val = inp.get("value", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: filling {sel}\n"})
+                                        result = self.do_browser_fill(sel, val)
+                                    elif block.name == "browser_get_text":
+                                        sel = inp.get("selector", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: reading text{' from ' + sel if sel else ''}...\n"})
+                                        result = self.do_browser_get_text(selector=sel or None)
+                                    elif block.name == "browser_run_js":
+                                        code = inp.get("code", "")
+                                        preview = code[:80] + "..." if len(code) > 80 else code
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: running JS: {preview}\n"})
+                                        result = self.do_browser_run_js(code)
+                                    elif block.name == "browser_screenshot":
+                                        self.queue.put({"type": "tool_info", "content": "Browser: taking screenshot...\n"})
+                                        result = self.do_browser_screenshot()
+                                    elif block.name == "browser_close":
+                                        self.queue.put({"type": "tool_info", "content": "Browser: closing connection...\n"})
+                                        result = self.do_browser_close()
                             else:
                                 result = f"Unknown tool: {block.name}"
 
