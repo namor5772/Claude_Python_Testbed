@@ -1,3 +1,16 @@
+import ctypes
+
+# Fix DPI scaling for desktop automation tools — must run before any window creation.
+# Without this, Windows display scaling (125%, 150%, etc.) causes screenshot pixel
+# coordinates and mouse click coordinates to use different scales, so clicks miss.
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from html.parser import HTMLParser
@@ -90,8 +103,10 @@ TOOLS = [
     {
         "name": "mouse_click",
         "description": (
-            "Click the mouse at screen coordinates (x, y). Take a screenshot first to identify "
-            "the correct coordinates. Supports left/right/middle button and single/double click."
+            "Click the mouse at the given (x, y) position. Take a screenshot first to identify "
+            "the correct coordinates — use pixel positions as seen in the screenshot image. "
+            "Coordinates are automatically mapped to the actual screen. "
+            "Supports left/right/middle button and single/double click."
         ),
         "input_schema": {
             "type": "object",
@@ -333,6 +348,7 @@ class App:
         self.queue = queue.Queue()
         self.streaming = False
         self.pending_images = []  # list of (base64_data, media_type, filename)
+        self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self.debug_enabled = tk.BooleanVar(value=True)
         self.tool_calls_enabled = tk.BooleanVar(value=True)
         self.desktop_enabled = tk.BooleanVar(value=False)
@@ -1183,19 +1199,21 @@ class App:
             orig_w, orig_h = img.size
             max_w = 1280
             if orig_w > max_w:
-                scale = max_w / orig_w
-                new_h = int(orig_h * scale)
+                ratio = orig_w / max_w
+                new_h = int(orig_h / ratio)
                 img = img.resize((max_w, new_h))
-                display_size = f"{max_w}x{new_h}"
+                self._screenshot_scale = ratio
+                img_w, img_h = max_w, new_h
             else:
-                display_size = f"{orig_w}x{orig_h}"
+                self._screenshot_scale = 1.0
+                img_w, img_h = orig_w, orig_h
 
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
 
             return [
-                {"type": "text", "text": f"Screenshot captured. Screen is {orig_w}x{orig_h}. Image shown at {display_size}. Use ORIGINAL {orig_w}x{orig_h} coordinates for mouse_click."},
+                {"type": "text", "text": f"Screenshot captured ({img_w}x{img_h}). Click coordinates are automatically mapped to the screen — just use the pixel positions you see in this image."},
                 {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
             ]
         except Exception as e:
@@ -1204,8 +1222,11 @@ class App:
     def do_mouse_click(self, x, y, button="left", clicks=1):
         """Click at (x, y) with specified button and click count."""
         try:
-            pyautogui.click(x, y, button=button, clicks=clicks)
-            return f"Clicked ({button}, {clicks}x) at ({x}, {y})"
+            scale = self._screenshot_scale
+            screen_x = int(x * scale)
+            screen_y = int(y * scale)
+            pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
+            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image coords ({x}, {y}), scale {scale:.2f}x]"
         except Exception as e:
             return f"Click error: {e}"
 
@@ -1242,11 +1263,12 @@ class App:
     def do_mouse_scroll(self, clicks, x=None, y=None):
         """Scroll the mouse wheel at current position or specified (x, y)."""
         try:
+            scale = self._screenshot_scale
             kwargs = {}
             if x is not None:
-                kwargs["x"] = x
+                kwargs["x"] = int(x * scale)
             if y is not None:
-                kwargs["y"] = y
+                kwargs["y"] = int(y * scale)
             pyautogui.scroll(clicks, **kwargs)
             direction = "up" if clicks > 0 else "down"
             pos = f" at ({x}, {y})" if x is not None else ""
@@ -1350,10 +1372,10 @@ class App:
         for tool in tools:
             if tool["name"] == "screenshot":
                 tool["description"] = (
-                    f"Take a screenshot of the screen. The screen resolution is {screen_w}x{screen_h}. "
+                    f"Take a screenshot of the screen (resolution {screen_w}x{screen_h}). "
                     "Always use this FIRST to see what is on the screen before clicking or typing. "
-                    "The image may be scaled down for the API, but all mouse_click coordinates must use "
-                    f"the ORIGINAL screen coordinate space (0,0) to ({screen_w-1},{screen_h-1}). "
+                    "The image may be resized. For mouse_click, use the pixel coordinates as you see "
+                    "them in the image — they are automatically scaled to screen coordinates. "
                     "Optionally capture only a region by specifying x, y, width, height."
                 )
                 break
