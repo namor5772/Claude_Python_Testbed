@@ -8,7 +8,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
 - **saved_chats.json** — Saved chat conversations (created at runtime)
-- **app_state.json** — Persistent app settings such as last-used system prompt (created at runtime)
+- **app_state.json** — Persistent app settings: last-used system prompt, model, window geometry, and screen dimensions (created at runtime)
 
 ## app.py — Claude Chatbot
 
@@ -145,8 +145,9 @@ Click **System Prompt** to open a dedicated editor window with:
 When a named system prompt is applied, the window title updates to show it (e.g., `Claude Chatbot — My Prompt`).
 
 #### App State Persistence
-- The last-used system prompt name and selected model are saved to `app_state.json`
-- On startup, the app restores both the last system prompt and model automatically
+- The last-used system prompt name, selected model, and window geometry (size + position) are saved to `app_state.json`
+- On startup, the app restores the last system prompt, model, and window geometry automatically
+- **Display safety check** — saved screen dimensions are compared against the current display on startup. If the resolution has changed or the saved position would place the window off-screen, geometry falls back to the default `1050x930` so the window is never lost
 - The app starts in a "new chat" state (empty conversation) with the last system prompt and model pre-loaded
 
 #### Rate-Limit Retry
