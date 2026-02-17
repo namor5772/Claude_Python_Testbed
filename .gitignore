@@ -1,6 +1,9 @@
 # Virtual environment
 .venv/
 
+# Python bytecode
+__pycache__/
+
 # Runtime data (created by app.py)
 saved_chats.json
 app_state.json
