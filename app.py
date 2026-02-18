@@ -655,6 +655,7 @@ DEFAULT_SYSTEM_PROMPT = (
 PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompts.json")
 CHATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats.json")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
+SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 
 
 class HTMLTextExtractor(HTMLParser):
@@ -725,6 +726,8 @@ class App:
         self.model = DEFAULT_MODEL
         self.temperature = 1.0
         self.prompt_editor_window = None
+        self.skills_editor_window = None
+        self.skills = self._load_skills()
         self.available_models = self._fetch_available_models()
 
         self.setup_ui()
@@ -739,6 +742,7 @@ class App:
         self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_rowconfigure(3, weight=0)
         self.root.grid_rowconfigure(4, weight=0)
+        self.root.grid_rowconfigure(5, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=0)
 
@@ -774,6 +778,9 @@ class App:
         self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
         self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
 
+        tk.Button(model_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.LEFT, padx=(10, 5))
+        tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.LEFT, padx=(5, 0))
+
         # Chat management toolbar (row 1)
         chat_toolbar = tk.Frame(self.root)
         chat_toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(5, 0))
@@ -793,9 +800,6 @@ class App:
         )
         self._chat_combo.pack(side=tk.LEFT, padx=(0, 5))
         self._chat_combo.bind("<<ComboboxSelected>>", lambda e: self._load_chat())
-
-        tk.Button(chat_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.LEFT, padx=(5, 5))
-        tk.Button(chat_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.LEFT, padx=(5, 0))
 
         self._refresh_chat_list()
 
@@ -866,42 +870,57 @@ class App:
         )
         self.attach_button.pack(side=tk.LEFT, padx=(0, 5))
 
-        self.send_button = tk.Button(
-            button_frame, text="Send", command=self.send_message, width=12
-        )
-        self.send_button.pack(side=tk.LEFT, padx=(5, 5))
 
         self.prompt_button = tk.Button(
             button_frame, text="System Prompt", command=self.open_prompt_editor, width=14
         )
         self.prompt_button.pack(side=tk.LEFT, padx=(5, 5))
 
+        on_count = sum(1 for s in self.skills.values() if s.get("mode") == "enabled")
+        od_count = sum(1 for s in self.skills.values() if s.get("mode") == "on_demand")
+        if on_count and od_count:
+            skills_label = f"Skills ({on_count}+{od_count})"
+        elif on_count:
+            skills_label = f"Skills ({on_count})"
+        elif od_count:
+            skills_label = f"Skills (0+{od_count})"
+        else:
+            skills_label = "Skills"
+        self.skills_button = tk.Button(
+            button_frame, text=skills_label, command=self.open_skills_editor, width=10
+        )
+        self.skills_button.pack(side=tk.LEFT, padx=(5, 5))
+
+        # Checkbox row (below buttons)
+        checkbox_frame = tk.Frame(self.root)
+        checkbox_frame.grid(row=5, column=0, columnspan=2, pady=(0, 5))
+
         self.debug_toggle = tk.Checkbutton(
-            button_frame, text="Debug", variable=self.debug_enabled,
+            checkbox_frame, text="Debug", variable=self.debug_enabled,
             font=("Arial", 9),
         )
         self.debug_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         self.tool_calls_toggle = tk.Checkbutton(
-            button_frame, text="Tool Calls", variable=self.tool_calls_enabled,
+            checkbox_frame, text="Tool Calls", variable=self.tool_calls_enabled,
             font=("Arial", 9),
         )
         self.tool_calls_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         self.activity_toggle = tk.Checkbutton(
-            button_frame, text="Activity", variable=self.show_activity,
+            checkbox_frame, text="Activity", variable=self.show_activity,
             font=("Arial", 9),
         )
         self.activity_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         self.desktop_toggle = tk.Checkbutton(
-            button_frame, text="Desktop", variable=self.desktop_enabled,
+            checkbox_frame, text="Desktop", variable=self.desktop_enabled,
             font=("Arial", 9),
         )
         self.desktop_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         self.browser_toggle = tk.Checkbutton(
-            button_frame, text="Browser", variable=self.browser_enabled,
+            checkbox_frame, text="Browser", variable=self.browser_enabled,
             font=("Arial", 9),
         )
         self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
@@ -910,7 +929,7 @@ class App:
         self.attach_label = tk.Label(
             self.root, text="", foreground="#6a1b9a", font=("Arial", 9)
         )
-        self.attach_label.grid(row=5, column=0, columnspan=2)
+        self.attach_label.grid(row=6, column=0, columnspan=2)
 
     # --- App State Persistence ---
 
@@ -1145,6 +1164,202 @@ class App:
         self._update_title()
         self._save_last_state()
         self.prompt_editor_window.destroy()
+
+    # --- Skills System ---
+
+    def _load_skills(self):
+        if os.path.exists(SKILLS_FILE):
+            try:
+                with open(SKILLS_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # Migrate old {enabled: bool} → {mode: "disabled"|"enabled"|"on_demand"}
+                migrated = False
+                for name, sdata in data.items():
+                    if "mode" not in sdata:
+                        sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
+                        migrated = True
+                if migrated:
+                    with open(SKILLS_FILE, "w", encoding="utf-8") as f:
+                        json.dump(data, f, indent=2, ensure_ascii=False)
+                return data
+            except (json.JSONDecodeError, OSError):
+                pass
+        return {}
+
+    def _save_skills(self):
+        with open(SKILLS_FILE, "w", encoding="utf-8") as f:
+            json.dump(self.skills, f, indent=2, ensure_ascii=False)
+
+    def _update_skills_button(self):
+        on_count = sum(1 for s in self.skills.values() if s.get("mode") == "enabled")
+        od_count = sum(1 for s in self.skills.values() if s.get("mode") == "on_demand")
+        if on_count and od_count:
+            label = f"Skills ({on_count}+{od_count})"
+        elif on_count:
+            label = f"Skills ({on_count})"
+        elif od_count:
+            label = f"Skills (0+{od_count})"
+        else:
+            label = "Skills"
+        self.skills_button.config(text=label)
+
+    def _build_system_prompt(self):
+        parts = [self.system_prompt]
+        on_demand_names = []
+        for name, skill in self.skills.items():
+            if skill.get("mode") == "enabled":
+                parts.append(f"## Skill: {name}\n{skill['content']}")
+            elif skill.get("mode") == "on_demand":
+                on_demand_names.append(name)
+        if on_demand_names:
+            listing = ", ".join(on_demand_names)
+            parts.append(
+                f"## On-Demand Skills\n"
+                f"The following skills are available via the `get_skill` tool: {listing}\n"
+                f"Call `get_skill` with the skill name when you need its content."
+            )
+        return "\n\n".join(parts)
+
+    def open_skills_editor(self):
+        if self.skills_editor_window and self.skills_editor_window.winfo_exists():
+            self.skills_editor_window.lift()
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Skills Manager")
+        win.geometry("750x500")
+        win.transient(self.root)
+        self.skills_editor_window = win
+
+        # Top bar: name entry + buttons
+        top = tk.Frame(win)
+        top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
+
+        tk.Label(top, text="Skill Name", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        name_entry = tk.Entry(top, font=("Arial", 10), width=20)
+        name_entry.pack(side=tk.LEFT, padx=(0, 5))
+
+        def save_skill():
+            name = name_entry.get().strip()
+            if not name:
+                messagebox.showwarning("No name", "Enter a name for the skill.", parent=win)
+                return
+            content = text_editor.get("1.0", "end-1c").strip()
+            if not content:
+                messagebox.showwarning("Empty", "The skill content is empty.", parent=win)
+                return
+            # Preserve mode if skill already exists
+            mode = self.skills.get(name, {}).get("mode", "disabled")
+            self.skills[name] = {"content": content, "mode": mode}
+            self._save_skills()
+            refresh_list()
+            self._update_skills_button()
+
+        def delete_skill():
+            sel = skill_listbox.curselection()
+            if not sel:
+                messagebox.showwarning("No selection", "Select a skill to delete.", parent=win)
+                return
+            name = skill_listbox.get(sel[0])[5:]
+            if name in self.skills:
+                del self.skills[name]
+                self._save_skills()
+                refresh_list()
+                name_entry.delete(0, tk.END)
+                text_editor.delete("1.0", tk.END)
+                self._update_skills_button()
+
+        def new_skill():
+            name_entry.delete(0, tk.END)
+            text_editor.delete("1.0", tk.END)
+            skill_listbox.selection_clear(0, tk.END)
+
+        tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.LEFT, padx=(5, 2))
+        tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.LEFT, padx=(2, 2))
+        tk.Button(top, text="NEW", command=new_skill, width=5).pack(side=tk.LEFT, padx=(2, 0))
+
+        # Left panel: listbox of skills
+        left = tk.Frame(win)
+        left.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
+        left.grid_rowconfigure(0, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+
+        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=20)
+        skill_listbox.grid(row=0, column=0, sticky="nsew")
+        list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
+        list_scrollbar.grid(row=0, column=1, sticky="ns")
+        skill_listbox.config(yscrollcommand=list_scrollbar.set)
+
+        toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
+        toggle_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+
+        def refresh_list():
+            skill_listbox.delete(0, tk.END)
+            for sname, sdata in self.skills.items():
+                mode = sdata.get("mode", "disabled")
+                if mode == "enabled":
+                    prefix = "[ON] "
+                elif mode == "on_demand":
+                    prefix = "[OD] "
+                else:
+                    prefix = "     "
+                skill_listbox.insert(tk.END, f"{prefix}{sname}")
+            for i, (sname, sdata) in enumerate(self.skills.items()):
+                mode = sdata.get("mode", "disabled")
+                if mode == "enabled":
+                    skill_listbox.itemconfig(i, fg="#2e7d32")
+                elif mode == "on_demand":
+                    skill_listbox.itemconfig(i, fg="#1565c0")
+
+        def on_select(event):
+            sel = skill_listbox.curselection()
+            if not sel:
+                return
+            name = skill_listbox.get(sel[0])[5:]
+            if name in self.skills:
+                name_entry.delete(0, tk.END)
+                name_entry.insert(0, name)
+                text_editor.delete("1.0", tk.END)
+                text_editor.insert("1.0", self.skills[name]["content"])
+
+        def toggle_skill():
+            sel = skill_listbox.curselection()
+            if not sel:
+                messagebox.showwarning("No selection", "Select a skill to toggle.", parent=win)
+                return
+            name = skill_listbox.get(sel[0])[5:]
+            if name in self.skills:
+                cycle = {"disabled": "enabled", "enabled": "on_demand", "on_demand": "disabled"}
+                cur = self.skills[name].get("mode", "disabled")
+                self.skills[name]["mode"] = cycle.get(cur, "disabled")
+                self._save_skills()
+                idx = sel[0]
+                refresh_list()
+                skill_listbox.selection_set(idx)
+                skill_listbox.see(idx)
+                self._update_skills_button()
+
+        skill_listbox.bind("<<ListboxSelect>>", on_select)
+        toggle_btn.config(command=toggle_skill)
+
+        # Right panel: text editor
+        right = tk.Frame(win)
+        right.grid(row=1, column=1, sticky="nsew", padx=(5, 10), pady=(0, 10))
+        right.grid_rowconfigure(0, weight=1)
+        right.grid_columnconfigure(0, weight=1)
+
+        text_editor = tk.Text(right, wrap=tk.WORD, font=("Consolas", 10))
+        text_editor.grid(row=0, column=0, sticky="nsew")
+        text_scrollbar = tk.Scrollbar(right, command=text_editor.yview)
+        text_scrollbar.grid(row=0, column=1, sticky="ns")
+        text_editor.config(yscrollcommand=text_scrollbar.set)
+
+        # Grid weights
+        win.grid_columnconfigure(0, weight=0)
+        win.grid_columnconfigure(1, weight=1)
+        win.grid_rowconfigure(1, weight=1)
+
+        refresh_list()
 
     # --- Chat Save / Load ---
 
@@ -1407,7 +1622,6 @@ class App:
         # Clear input and disable send
         self.input_field.delete("1.0", tk.END)
         self.streaming = True
-        self.send_button.config(state="disabled")
 
         # Build the message content
         images = list(self.pending_images)
@@ -2166,7 +2380,7 @@ class App:
             "max_tokens": MAX_TOKENS,
             "temperature": self.temperature,
             "stream": True,
-            "system": self.system_prompt,
+            "system": self._build_system_prompt(),
             "tools": self._get_tools(),
             "messages": display_msgs,
         }
@@ -2191,6 +2405,24 @@ class App:
             tools.extend(desktop)
         if self.browser_enabled.get():
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
+        # Add get_skill tool if any on-demand skills exist
+        od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
+        if od_names:
+            tools.append({
+                "name": "get_skill",
+                "description": "Retrieve the full content of an on-demand skill by name.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {
+                            "type": "string",
+                            "description": "Name of the skill to retrieve.",
+                            "enum": od_names,
+                        }
+                    },
+                    "required": ["skill_name"],
+                },
+            })
         return tools
 
     def stream_worker(self, messages):
@@ -2219,7 +2451,7 @@ class App:
                             model=self.model,
                             max_tokens=MAX_TOKENS,
                             temperature=self.temperature,
-                            system=self.system_prompt,
+                            system=self._build_system_prompt(),
                             messages=messages,
                             tools=self._get_tools(),
                         ) as stream:
@@ -2414,6 +2646,13 @@ class App:
                                         limit = inp.get("limit", 10)
                                         self.queue.put({"type": "tool_info", "content": f"Browser: getting elements {sel}...\n"})
                                         result = self.do_browser_get_elements(sel, limit=limit)
+                            elif block.name == "get_skill":
+                                skill_name = block.input.get("skill_name", "")
+                                self.queue.put({"type": "tool_info", "content": f"Loading skill: {skill_name}\n"})
+                                if skill_name in self.skills and self.skills[skill_name].get("mode") == "on_demand":
+                                    result = self.skills[skill_name]["content"]
+                                else:
+                                    result = f"Skill not found or not on-demand: {skill_name}"
                             else:
                                 result = f"Unknown tool: {block.name}"
 
@@ -2498,7 +2737,6 @@ class App:
                     self.chat_display.insert(tk.END, "\n\n")
                     self.chat_display.config(state="disabled")
                     self.streaming = False
-                    self.send_button.config(state="normal")
                     self.input_field.focus_set()
                 elif msg["type"] == "error":
                     self.chat_display.config(state="normal")
@@ -2508,7 +2746,6 @@ class App:
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                     self.streaming = False
-                    self.send_button.config(state="normal")
         except queue.Empty:
             pass
         self.root.after(50, self.check_queue)
