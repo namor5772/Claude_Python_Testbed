@@ -723,6 +723,7 @@ class App:
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
         self.system_prompt_name = ""
         self.model = DEFAULT_MODEL
+        self.temperature = 1.0
         self.prompt_editor_window = None
         self.available_models = self._fetch_available_models()
 
@@ -760,6 +761,18 @@ class App:
         self._model_combo["values"] = display_names
         self._model_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
+
+        tk.Label(model_toolbar, text="Temp", font=("Arial", 10)).pack(side=tk.LEFT, padx=(10, 5))
+        self._temp_var = tk.DoubleVar(value=self.temperature)
+        self._temp_spin = tk.Spinbox(
+            model_toolbar, textvariable=self._temp_var,
+            from_=0.0, to=1.0, increment=0.1,
+            width=5, font=("Arial", 10), format="%.1f",
+            command=self._on_temp_changed,
+        )
+        self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
+        self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
+        self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
 
         # Chat management toolbar (row 1)
         chat_toolbar = tk.Frame(self.root)
@@ -925,6 +938,15 @@ class App:
                 break
         self._save_last_state()
 
+    def _on_temp_changed(self):
+        try:
+            val = self._temp_var.get()
+            self.temperature = max(0.0, min(1.0, val))
+        except (tk.TclError, ValueError):
+            self.temperature = 1.0
+        self._temp_var.set(self.temperature)
+        self._save_last_state()
+
     def _update_title(self):
         if self.system_prompt_name:
             self.root.title(f"Claude Chatbot — {self.system_prompt_name}")
@@ -951,6 +973,10 @@ class App:
         if model and model in self.available_models:
             self.model = model
             self._model_var.set(self._model_display_names.get(model, model))
+        temp = state.get("temperature")
+        if temp is not None:
+            self.temperature = max(0.0, min(1.0, float(temp)))
+            self._temp_var.set(self.temperature)
         # Restore window geometry if display setup hasn't changed
         geometry = state.get("geometry", "")
         saved_sw = state.get("screen_width", 0)
@@ -971,6 +997,7 @@ class App:
         state = {
             "last_system_prompt_name": self.system_prompt_name,
             "last_model": self.model,
+            "temperature": self.temperature,
             "geometry": self.root.geometry(),
             "screen_width": self.root.winfo_screenwidth(),
             "screen_height": self.root.winfo_screenheight(),
@@ -1203,6 +1230,7 @@ class App:
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
             "model": self.model,
+            "temperature": self.temperature,
         }
         self._save_chats_to_disk(chats)
         self._refresh_chat_list()
@@ -1233,6 +1261,12 @@ class App:
         else:
             self.model = DEFAULT_MODEL
         self._model_var.set(self._model_display_names.get(self.model, self.model))
+        saved_temp = chat_data.get("temperature")
+        if saved_temp is not None:
+            self.temperature = max(0.0, min(1.0, float(saved_temp)))
+        else:
+            self.temperature = 1.0
+        self._temp_var.set(self.temperature)
         self._update_title()
         self._save_last_state()
         self.chat_name_entry.delete(0, tk.END)
@@ -2130,6 +2164,7 @@ class App:
         payload = {
             "model": self.model,
             "max_tokens": MAX_TOKENS,
+            "temperature": self.temperature,
             "stream": True,
             "system": self.system_prompt,
             "tools": self._get_tools(),
@@ -2160,6 +2195,12 @@ class App:
 
     def stream_worker(self, messages):
         try:
+            # Sync temperature from spinbox in case user typed a value without pressing Enter
+            try:
+                self.temperature = max(0.0, min(1.0, self._temp_var.get()))
+            except (tk.TclError, ValueError):
+                pass
+
             # Insert the "Claude: " label before streaming begins
             self.queue.put({"type": "label"})
 
@@ -2177,6 +2218,7 @@ class App:
                         with self.client.messages.stream(
                             model=self.model,
                             max_tokens=MAX_TOKENS,
+                            temperature=self.temperature,
                             system=self.system_prompt,
                             messages=messages,
                             tools=self._get_tools(),

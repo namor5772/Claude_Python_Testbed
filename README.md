@@ -16,11 +16,14 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 
 ### Features
 
-#### Model Selection
+#### Model Selection & Temperature
 - A **Model** dropdown at the top of the window lists all available Claude models, fetched live from the Anthropic API on startup
 - Models are shown by display name and the selected model is persisted across sessions via `app_state.json`
 - Falls back to a hardcoded list (Sonnet 4.5, Opus 4.6, Haiku 4.5) if the API is unreachable
 - Saved chats remember which model was used; loading a chat restores the model if still available
+- A **Temp** spinbox sits to the right of the Model dropdown, controlling the API temperature parameter (0.0–1.0 in 0.1 steps)
+- Temperature is persisted across sessions in `app_state.json` and saved/restored with each chat
+- Lower values (e.g. 0.0) produce more deterministic responses; the default is 1.0
 
 #### Chat Interface
 - **Streaming responses** — Claude's replies are streamed token-by-token into the chat display for a real-time feel
@@ -217,7 +220,7 @@ python app.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 6 rows: model toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
+- **UI Layout** — Grid-based layout with 6 rows: model + temperature toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, labels, tool info, errors) back to the main thread
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — Three JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, and `app_state.json` for user preferences
