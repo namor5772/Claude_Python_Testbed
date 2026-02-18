@@ -9,10 +9,11 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **system_prompts.json** — Saved system prompts (created at runtime)
 - **saved_chats.json** — Saved chat conversations (created at runtime)
 - **app_state.json** — Persistent app settings: last-used system prompt, model, window geometry, and screen dimensions (created at runtime)
+- **skills.json** — Saved skills with content and mode (created at runtime)
 
 ## app.py — Claude Chatbot
 
-A desktop chatbot application built with tkinter that connects to the Anthropic API. It supports streaming responses, tool use, image attachments, conversation management, model selection, and customisable system prompts.
+A desktop chatbot application built with tkinter that connects to the Anthropic API. It supports streaming responses, tool use, image attachments, conversation management, model selection, customisable system prompts, and a skills system for injecting reusable knowledge into conversations.
 
 ### Features
 
@@ -32,7 +33,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - **Multi-line input** — The input field supports multiple lines; press **Enter** to send, **Shift+Enter** for a newline
 
 #### Tool Use
-The chatbot has twenty-seven built-in tools that Claude can invoke autonomously during a conversation, organised into three categories:
+The chatbot has twenty-seven built-in tools (plus a dynamic `get_skill` tool) that Claude can invoke autonomously during a conversation, organised into three categories:
 
 **Core Tools (always available):**
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
@@ -67,11 +68,39 @@ The chatbot has twenty-seven built-in tools that Claude can invoke autonomously 
 - **browser_select** — Selects an option from a `<select>` dropdown element using `page.select_option()`. Options can be specified by `value` attribute or visible `label` text
 - **browser_get_elements** — Gets information about elements matching a CSS selector via a single `page.evaluate()` JavaScript call. Returns tag name, text content (truncated to 200 chars), all HTML attributes, visibility status, and bounding rect for each match (default limit: 10 elements)
 
+**Dynamic Tool:**
+- **get_skill** — Automatically added when on-demand skills exist. Retrieves the full content of a named skill so Claude can access it mid-conversation. The tool's `enum` constraint is dynamically set to the list of available on-demand skill names
+
 When Claude decides to use a tool, the app automatically executes it, feeds the result back, and lets Claude continue — this can loop multiple times in a single turn (e.g., search then fetch a result page, or open a browser then fill a form and click submit).
+
+#### Skills System
+
+Skills are reusable blocks of text (instructions, knowledge, personas, etc.) that can be injected into conversations. They are managed through a dedicated **Skills Manager** window and stored in `skills.json`.
+
+Each skill has one of three modes, cycled via a **Cycle Mode** button:
+
+| Mode | Indicator | Behaviour |
+|---|---|---|
+| **Disabled** | (no prefix) | Skill exists but is not used |
+| **Enabled** | `[ON]` (green) | Skill content is appended to the system prompt on every API call |
+| **On-Demand** | `[OD]` (blue) | Skill name is listed in the system prompt; Claude can retrieve its content via the `get_skill` tool when needed |
+
+The **Skills** button in the button bar shows a count summary — e.g., `Skills (2+3)` means 2 enabled and 3 on-demand skills. Click it to open the Skills Manager.
+
+**Skills Manager** provides:
+- **Skill Name** entry + **SAVE** / **DELETE** / **NEW** buttons for CRUD operations
+- A scrollable **listbox** showing all skills with their mode indicators
+- A **text editor** for viewing and editing skill content
+- **Cycle Mode** button to toggle a selected skill through disabled → enabled → on-demand → disabled
+
+**How skills are injected:**
+- **Enabled** skills are appended as `## Skill: <name>` sections directly into the system prompt
+- **On-demand** skills add a `get_skill` tool to the tool list, with the skill names as an enum constraint. The system prompt includes a note listing available on-demand skills and instructing Claude to call `get_skill` when needed
+- This keeps the base token cost low for large skill libraries — only enabled skills consume prompt tokens; on-demand skills add only a brief mention plus a lightweight tool definition
 
 #### Desktop Automation
 
-The thirteen desktop tools (screenshot, mouse_click, type_text, press_key, mouse_scroll, open_application, find_window, clipboard_read, clipboard_write, wait_for_window, read_screen_text, find_image_on_screen, mouse_drag) are gated behind a **Desktop** checkbox in the button bar. When disabled (the default), the desktop tool schemas are not sent to the API at all — Claude doesn't even know they exist, which saves tokens and prevents it from attempting to use unavailable tools.
+The thirteen desktop tools (screenshot, mouse_click, type_text, press_key, mouse_scroll, open_application, find_window, clipboard_read, clipboard_write, wait_for_window, read_screen_text, find_image_on_screen, mouse_drag) are gated behind a **Desktop** checkbox. When disabled (the default), the desktop tool schemas are not sent to the API at all — Claude doesn't even know they exist, which saves tokens and prevents it from attempting to use unavailable tools.
 
 **DPI-aware coordinate mapping** — The app sets `SetProcessDpiAwareness(2)` (Per-Monitor DPI Aware) at startup before any window creation, so `pyautogui.size()`, `.screenshot()`, and `.click()` all operate in the same physical-pixel coordinate space regardless of Windows display scaling (125%, 150%, etc.). Screenshots wider than 1280px are resized for the API, and the resize ratio is stored; `mouse_click` and `mouse_scroll` automatically scale image coordinates back to screen coordinates, so Claude can use pixel positions directly from the image it sees.
 
@@ -79,7 +108,7 @@ The thirteen desktop tools (screenshot, mouse_click, type_text, press_key, mouse
 
 #### Browser Automation
 
-The eleven browser tools are gated behind a **Browser** checkbox in the button bar, independent of the Desktop toggle. When disabled (the default), any attempt by Claude to use browser tools returns an error message. Browser tool schemas are only sent to the API when the checkbox is enabled, saving tokens and preventing Claude from attempting to use unavailable tools.
+The eleven browser tools are gated behind a **Browser** checkbox, independent of the Desktop toggle. When disabled (the default), any attempt by Claude to use browser tools returns an error message. Browser tool schemas are only sent to the API when the checkbox is enabled, saving tokens and preventing Claude from attempting to use unavailable tools.
 
 **How it works** — Playwright connects to Microsoft Edge via the Chrome DevTools Protocol (CDP) on port 9222. Instead of launching a sterile automation browser, this approach uses the user's real Edge installation with their full profile (cookies, saved logins, extensions, and sessions).
 
@@ -128,14 +157,16 @@ The `run_powershell` tool uses a two-tier safety system to prevent accidental da
 - If you send images without text, the app defaults to asking "What's in this image?"
 
 #### Chat Management (Toolbar)
-A toolbar at the top of the window provides full conversation management:
+Two toolbars at the top of the window provide model selection and conversation management:
 
-| Control | Description |
-|---|---|
-| **Save Chat as** | Type a name in the entry field and click **SAVE** (or press Enter) to save the current conversation |
-| **Load Chat** | Select a previously saved chat from the dropdown — instantly restores the conversation with color-coded formatting, the associated system prompt, and the prompt name |
-| **DELETE** | Deletes the selected or named chat from disk |
-| **NEW CHAT** | Clears the current conversation and display, but keeps the active system prompt |
+| Control | Location | Description |
+|---|---|---|
+| **Model** dropdown | Model toolbar | Select from available Claude models |
+| **Temp** spinbox | Model toolbar | Set API temperature (0.0–1.0) |
+| **DELETE** | Model toolbar | Deletes the selected or named chat from disk |
+| **NEW CHAT** | Model toolbar | Clears the current conversation and display, but keeps the active system prompt |
+| **Save Chat as** | Chat toolbar | Type a name and click **SAVE** (or press Enter) to save the current conversation |
+| **Load Chat** dropdown | Chat toolbar | Select a previously saved chat — restores conversation, system prompt, and model |
 
 Saved chats include:
 - The full message history (serialised to JSON, with base64 image data stripped and replaced with `[Image was attached]` placeholders to keep file sizes small)
@@ -220,10 +251,11 @@ python app.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 6 rows: model + temperature toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
+- **UI Layout** — Grid-based layout with 7 rows: model + temperature toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, labels, tool info, errors) back to the main thread
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
-- **Persistence** — Three JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, and `app_state.json` for user preferences
+- **Persistence** — Four JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, `app_state.json` for user preferences, and `skills.json` for the skills library
+- **Skills System** — Skills are loaded from `skills.json` on startup. `_build_system_prompt()` assembles the final system prompt by appending enabled skill content and listing on-demand skill names. `_get_tools()` dynamically adds a `get_skill` tool when on-demand skills exist, with the skill names constrained via an `enum` in the input schema
 - **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, strips base64 image data, and sanitises content blocks through `_clean_content_block()` to remove extra SDK fields (like `parsed_output`) that the API rejects on re-submission
 - **HTML Extraction** — The `HTMLTextExtractor` class (a `HTMLParser` subclass) strips HTML tags from fetched web pages, skipping `<script>`, `<style>`, and `<noscript>` blocks, and inserting newlines at block-level element boundaries
 - **PowerShell Safety** — Two-tier regex-based guardrail system (`POWERSHELL_BLOCKED` and `POWERSHELL_CONFIRM` pattern lists) checks commands before execution. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
