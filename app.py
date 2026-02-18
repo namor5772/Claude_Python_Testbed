@@ -224,6 +224,113 @@ DESKTOP_TOOLS = [
             "required": ["title"],
         },
     },
+    {
+        "name": "clipboard_read",
+        "description": "Read the current text contents of the Windows clipboard.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
+    {
+        "name": "clipboard_write",
+        "description": "Write text to the Windows clipboard, replacing any current content.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to place on the clipboard",
+                }
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "wait_for_window",
+        "description": (
+            "Wait until a window with the given title appears, polling every 0.5 seconds. "
+            "Returns the window info once found, or times out."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Window title or partial text to wait for",
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Maximum seconds to wait (default: 10)",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "read_screen_text",
+        "description": (
+            "Read text from a region of the screen using OCR. "
+            "Specify the region as x, y, width, height in screen coordinates."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "x": {"type": "integer", "description": "Left edge of region"},
+                "y": {"type": "integer", "description": "Top edge of region"},
+                "width": {"type": "integer", "description": "Width of region"},
+                "height": {"type": "integer", "description": "Height of region"},
+            },
+            "required": ["x", "y", "width", "height"],
+        },
+    },
+    {
+        "name": "find_image_on_screen",
+        "description": (
+            "Find an image on the screen by matching a reference image file. "
+            "Returns the center coordinates if found. Useful for finding buttons or icons."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image_path": {
+                    "type": "string",
+                    "description": "Absolute path to the reference image file (PNG, JPG, etc.)",
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Match confidence threshold 0.0-1.0 (default: 0.8)",
+                },
+            },
+            "required": ["image_path"],
+        },
+    },
+    {
+        "name": "mouse_drag",
+        "description": (
+            "Drag the mouse from one point to another. Useful for drag-and-drop, "
+            "resizing windows, moving sliders, drawing, etc."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_x": {"type": "integer", "description": "Starting X coordinate"},
+                "start_y": {"type": "integer", "description": "Starting Y coordinate"},
+                "end_x": {"type": "integer", "description": "Ending X coordinate"},
+                "end_y": {"type": "integer", "description": "Ending Y coordinate"},
+                "duration": {
+                    "type": "number",
+                    "description": "Duration of drag in seconds (default: 0.5)",
+                },
+                "button": {
+                    "type": "string",
+                    "description": "Mouse button: 'left', 'right', or 'middle' (default: 'left')",
+                },
+            },
+            "required": ["start_x", "start_y", "end_x", "end_y"],
+        },
+    },
 ]
 
 # Browser automation tool definitions (Playwright via CDP)
@@ -363,6 +470,73 @@ BROWSER_TOOLS = [
             "required": [],
         },
     },
+    {
+        "name": "browser_wait_for",
+        "description": (
+            "Wait for an element matching a CSS selector to appear on the page. "
+            "Returns the element's text content once found, or times out."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector to wait for (e.g. '#result', '.loaded')",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Maximum milliseconds to wait (default: 10000)",
+                },
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_select",
+        "description": (
+            "Select an option from a <select> dropdown element. "
+            "Specify the option by value attribute or visible label text."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector for the <select> element",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Option value attribute to select",
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Visible text of the option to select",
+                },
+            },
+            "required": ["selector"],
+        },
+    },
+    {
+        "name": "browser_get_elements",
+        "description": (
+            "Get information about elements matching a CSS selector. "
+            "Returns tag name, text content, key attributes, and visibility for each match."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector to query (e.g. 'a', 'button', '.item')",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of elements to return (default: 10)",
+                },
+            },
+            "required": ["selector"],
+        },
+    },
 ]
 
 # PowerShell safety guardrails — two-tier system
@@ -447,7 +621,13 @@ DEFAULT_SYSTEM_PROMPT = (
     "• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n"
     "• mouse_scroll — scroll up or down.\n"
     "• open_application — launch apps by name (chrome, notepad, vscode, etc.) or path.\n"
-    "• find_window — find and optionally activate windows by title.\n\n"
+    "• find_window — find and optionally activate windows by title.\n"
+    "• clipboard_read — read the current text from the Windows clipboard.\n"
+    "• clipboard_write — write text to the Windows clipboard.\n"
+    "• wait_for_window — wait until a window with a given title appears (with timeout).\n"
+    "• read_screen_text — OCR a screen region to extract text.\n"
+    "• find_image_on_screen — find a reference image on screen and return its coordinates.\n"
+    "• mouse_drag — drag the mouse from one point to another (drag-and-drop, sliders, etc.).\n\n"
 
     "BROWSER TOOLS (available when Browser is enabled):\n"
     "• browser_open — connect to Edge with Roman's real profile (cookies, logins, extensions) "
@@ -458,7 +638,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "• browser_get_text — read text content from the page or a specific element.\n"
     "• browser_run_js — execute JavaScript on the page.\n"
     "• browser_screenshot — take a screenshot of the browser page.\n"
-    "• browser_close — disconnect from the browser (Edge stays open).\n\n"
+    "• browser_close — disconnect from the browser (Edge stays open).\n"
+    "• browser_wait_for — wait for an element (CSS selector) to appear on the page.\n"
+    "• browser_select — select an option from a <select> dropdown by value or label.\n"
+    "• browser_get_elements — get info (tag, text, attributes, visibility) about matching elements.\n\n"
 
     "GUIDELINES:\n"
     "• Be direct and helpful. Provide answers, don't suggest Roman look things up.\n"
@@ -1531,6 +1714,106 @@ class App:
         except Exception as e:
             return f"Window search error: {e}"
 
+    def do_clipboard_read(self):
+        """Read text from the Windows clipboard."""
+        try:
+            text = self.root.clipboard_get()
+            return f"Clipboard contents:\n{text}"
+        except tk.TclError:
+            return "Clipboard is empty or contains non-text data."
+        except Exception as e:
+            return f"Clipboard read error: {e}"
+
+    def do_clipboard_write(self, text):
+        """Write text to the Windows clipboard."""
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            preview = text[:100] + "..." if len(text) > 100 else text
+            return f"Copied to clipboard ({len(text)} chars): {preview}"
+        except Exception as e:
+            return f"Clipboard write error: {e}"
+
+    def do_wait_for_window(self, title, timeout=10):
+        """Poll for a window with the given title until found or timeout."""
+        try:
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                windows = gw.getWindowsWithTitle(title)
+                if windows:
+                    w = windows[0]
+                    return (
+                        f"Window found: {w.title}\n"
+                        f"Position: ({w.left}, {w.top})\n"
+                        f"Size: {w.width}x{w.height}"
+                    )
+                time.sleep(0.5)
+            return f"Timed out after {timeout}s waiting for window '{title}'"
+        except Exception as e:
+            return f"Wait for window error: {e}"
+
+    def do_read_screen_text(self, x, y, width, height):
+        """OCR a region of the screen using winocr."""
+        try:
+            import winocr
+            import asyncio
+
+            scale = self._screenshot_scale
+            sx = int(x * scale)
+            sy = int(y * scale)
+            sw = int(width * scale)
+            sh = int(height * scale)
+
+            img = pyautogui.screenshot(region=(sx, sy, sw, sh))
+            result = asyncio.run(winocr.recognize_pil(img, lang="en"))
+            text = result.text.strip()
+            if not text:
+                return "OCR returned no text for the specified region."
+            return f"OCR text from ({x},{y} {width}x{height}):\n{text}"
+        except Exception as e:
+            return f"OCR error: {e}"
+
+    def do_find_image_on_screen(self, image_path, confidence=0.8):
+        """Find a reference image on the screen."""
+        try:
+            if not os.path.isfile(image_path):
+                return f"Image file not found: {image_path}"
+            location = pyautogui.locateOnScreen(image_path, confidence=confidence)
+            if location is None:
+                return f"Image not found on screen (confidence={confidence}): {image_path}"
+            cx = location.left + location.width // 2
+            cy = location.top + location.height // 2
+            scale = self._screenshot_scale
+            img_cx = int(cx / scale) if scale else cx
+            img_cy = int(cy / scale) if scale else cy
+            return (
+                f"Image found at region ({location.left}, {location.top}, "
+                f"{location.width}x{location.height})\n"
+                f"Center (screen coords): ({cx}, {cy})\n"
+                f"Center (image coords for clicking): ({img_cx}, {img_cy})"
+            )
+        except Exception as e:
+            return f"Find image error: {e}"
+
+    def do_mouse_drag(self, start_x, start_y, end_x, end_y, duration=0.5, button="left"):
+        """Drag the mouse from one point to another."""
+        try:
+            scale = self._screenshot_scale
+            sx = int(start_x * scale)
+            sy = int(start_y * scale)
+            ex = int(end_x * scale)
+            ey = int(end_y * scale)
+            pyautogui.moveTo(sx, sy, duration=0.1)
+            pyautogui.mouseDown(button=button)
+            pyautogui.moveTo(ex, ey, duration=duration)
+            pyautogui.mouseUp(button=button)
+            return (
+                f"Dragged from ({start_x},{start_y}) to ({end_x},{end_y}) "
+                f"with {button} button over {duration}s"
+            )
+        except Exception as e:
+            return f"Mouse drag error: {e}"
+
     # --- Browser Automation (Playwright via CDP) ---
 
     def _ensure_browser(self):
@@ -1726,6 +2009,85 @@ class App:
         except Exception as e:
             return f"Browser close error: {e}"
 
+    def do_browser_wait_for(self, selector, timeout=10000):
+        """Wait for an element matching a CSS selector to appear."""
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            el = self._page.wait_for_selector(selector, timeout=timeout)
+            if el is None:
+                return f"Element '{selector}' not found within {timeout}ms."
+            text = el.text_content() or ""
+            text = text.strip()
+            preview = text[:200] + "..." if len(text) > 200 else text
+            return f"Element '{selector}' appeared. Text: {preview}"
+        except Exception as e:
+            return f"browser_wait_for error: {e}"
+
+    def do_browser_select(self, selector, value=None, label=None):
+        """Select an option in a <select> dropdown."""
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            if value:
+                self._page.select_option(selector, value=value)
+                return f"Selected option with value='{value}' in '{selector}'"
+            elif label:
+                self._page.select_option(selector, label=label)
+                return f"Selected option with label='{label}' in '{selector}'"
+            else:
+                return "Provide either 'value' or 'label' to select an option."
+        except Exception as e:
+            return f"browser_select error: {e}"
+
+    def do_browser_get_elements(self, selector, limit=10):
+        """Get info about elements matching a CSS selector."""
+        try:
+            if self._page is None:
+                return "No browser connection. Use browser_open first."
+            js = """
+            (args) => {
+                const els = document.querySelectorAll(args.selector);
+                const results = [];
+                const limit = args.limit;
+                for (let i = 0; i < Math.min(els.length, limit); i++) {
+                    const el = els[i];
+                    const rect = el.getBoundingClientRect();
+                    const attrs = {};
+                    for (const attr of el.attributes) {
+                        attrs[attr.name] = attr.value;
+                    }
+                    results.push({
+                        index: i,
+                        tag: el.tagName.toLowerCase(),
+                        text: (el.textContent || '').trim().substring(0, 200),
+                        attributes: attrs,
+                        visible: rect.width > 0 && rect.height > 0,
+                        rect: {x: Math.round(rect.x), y: Math.round(rect.y),
+                               width: Math.round(rect.width), height: Math.round(rect.height)}
+                    });
+                }
+                return {total: els.length, results: results};
+            }
+            """
+            data = self._page.evaluate(js, {"selector": selector, "limit": limit})
+            total = data.get("total", 0)
+            results = data.get("results", [])
+            if total == 0:
+                return f"No elements found matching '{selector}'"
+            lines = [f"Found {total} element(s) matching '{selector}' (showing {len(results)}):"]
+            for r in results:
+                attrs_str = ", ".join(f'{k}="{v}"' for k, v in r.get("attributes", {}).items())
+                text_preview = r.get("text", "")[:100]
+                lines.append(
+                    f"  [{r['index']}] <{r['tag']}> {attrs_str}\n"
+                    f"      text: {text_preview}\n"
+                    f"      visible: {r['visible']}, rect: {r.get('rect', {})}"
+                )
+            return "\n".join(lines)
+        except Exception as e:
+            return f"browser_get_elements error: {e}"
+
     def _make_serializable(self, obj):
         """Convert SDK objects (ParsedTextBlock, ToolUseBlock, etc.) to plain dicts."""
         if hasattr(obj, "model_dump"):
@@ -1883,7 +2245,9 @@ class App:
                                 result = self.run_powershell(cmd)
                             elif block.name in ("screenshot", "mouse_click", "type_text",
                                                  "press_key", "mouse_scroll", "open_application",
-                                                 "find_window"):
+                                                 "find_window", "clipboard_read", "clipboard_write",
+                                                 "wait_for_window", "read_screen_text",
+                                                 "find_image_on_screen", "mouse_drag"):
                                 if not self.desktop_enabled.get():
                                     result = "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
                                 else:
@@ -1922,10 +2286,40 @@ class App:
                                         title = inp.get("title", "")
                                         self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
                                         result = self.do_find_window(title, activate=inp.get("activate", False))
+                                    elif block.name == "clipboard_read":
+                                        self.queue.put({"type": "tool_info", "content": "Reading clipboard...\n"})
+                                        result = self.do_clipboard_read()
+                                    elif block.name == "clipboard_write":
+                                        text = inp.get("text", "")
+                                        preview = text[:50] + "..." if len(text) > 50 else text
+                                        self.queue.put({"type": "tool_info", "content": f"Writing to clipboard: {preview}\n"})
+                                        result = self.do_clipboard_write(text)
+                                    elif block.name == "wait_for_window":
+                                        title = inp.get("title", "")
+                                        timeout = inp.get("timeout", 10)
+                                        self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
+                                        result = self.do_wait_for_window(title, timeout=timeout)
+                                    elif block.name == "read_screen_text":
+                                        self.queue.put({"type": "tool_info", "content": f"OCR region ({inp.get('x')},{inp.get('y')} {inp.get('width')}x{inp.get('height')})...\n"})
+                                        result = self.do_read_screen_text(inp["x"], inp["y"], inp["width"], inp["height"])
+                                    elif block.name == "find_image_on_screen":
+                                        path = inp.get("image_path", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
+                                        result = self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
+                                    elif block.name == "mouse_drag":
+                                        self.queue.put({"type": "tool_info", "content": f"Dragging ({inp.get('start_x')},{inp.get('start_y')}) to ({inp.get('end_x')},{inp.get('end_y')})...\n"})
+                                        result = self.do_mouse_drag(
+                                            inp["start_x"], inp["start_y"],
+                                            inp["end_x"], inp["end_y"],
+                                            duration=inp.get("duration", 0.5),
+                                            button=inp.get("button", "left"),
+                                        )
                             elif block.name in ("browser_open", "browser_navigate",
                                                   "browser_click", "browser_fill",
                                                   "browser_get_text", "browser_run_js",
-                                                  "browser_screenshot", "browser_close"):
+                                                  "browser_screenshot", "browser_close",
+                                                  "browser_wait_for", "browser_select",
+                                                  "browser_get_elements"):
                                 if not self.browser_enabled.get():
                                     result = "Browser tools are disabled. Enable the Browser checkbox to use this tool."
                                 else:
@@ -1964,6 +2358,20 @@ class App:
                                     elif block.name == "browser_close":
                                         self.queue.put({"type": "tool_info", "content": "Browser: closing connection...\n"})
                                         result = self.do_browser_close()
+                                    elif block.name == "browser_wait_for":
+                                        sel = inp.get("selector", "")
+                                        timeout = inp.get("timeout", 10000)
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: waiting for {sel}...\n"})
+                                        result = self.do_browser_wait_for(sel, timeout=timeout)
+                                    elif block.name == "browser_select":
+                                        sel = inp.get("selector", "")
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: selecting in {sel}...\n"})
+                                        result = self.do_browser_select(sel, value=inp.get("value"), label=inp.get("label"))
+                                    elif block.name == "browser_get_elements":
+                                        sel = inp.get("selector", "")
+                                        limit = inp.get("limit", 10)
+                                        self.queue.put({"type": "tool_info", "content": f"Browser: getting elements {sel}...\n"})
+                                        result = self.do_browser_get_elements(sel, limit=limit)
                             else:
                                 result = f"Unknown tool: {block.name}"
 

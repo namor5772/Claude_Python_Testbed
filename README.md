@@ -29,7 +29,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - **Multi-line input** — The input field supports multiple lines; press **Enter** to send, **Shift+Enter** for a newline
 
 #### Tool Use
-The chatbot has eighteen built-in tools that Claude can invoke autonomously during a conversation, organised into three categories:
+The chatbot has twenty-seven built-in tools that Claude can invoke autonomously during a conversation, organised into three categories:
 
 **Core Tools (always available):**
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
@@ -44,6 +44,12 @@ The chatbot has eighteen built-in tools that Claude can invoke autonomously duri
 - **mouse_scroll** — Scrolls the mouse wheel up or down, optionally at a specific screen position
 - **open_application** — Opens an application by common name (e.g., `chrome`, `notepad`, `vscode`) using a built-in lookup table, or by full executable path
 - **find_window** — Finds windows matching a title pattern using `pygetwindow`, returning titles, positions, and sizes. Can optionally activate (bring to foreground) the first match
+- **clipboard_read** — Reads the current text contents of the Windows clipboard via tkinter's `clipboard_get()`. Returns an error message if the clipboard is empty or contains non-text data
+- **clipboard_write** — Writes text to the Windows clipboard via tkinter's `clipboard_clear()` and `clipboard_append()`, replacing any current content
+- **wait_for_window** — Polls `pygetwindow.getWindowsWithTitle()` every 0.5 seconds until a window matching the given title appears, or times out (default 10 seconds). Returns the window's title, position, and size once found
+- **read_screen_text** — Captures a screen region and performs OCR using `winocr` (Windows-native OCR via `Windows.Media.Ocr`). Coordinates are scaled by `_screenshot_scale` to handle DPI differences. No Tesseract installation needed
+- **find_image_on_screen** — Locates a reference image file on the screen using `pyautogui.locateOnScreen()` with confidence-based matching (requires `opencv-python`). Returns both screen coordinates and scaled image coordinates for clicking
+- **mouse_drag** — Drags the mouse from one point to another using `pyautogui.moveTo()`, `mouseDown()`, `moveTo()`, `mouseUp()`. Coordinates are scaled by `_screenshot_scale`. Useful for drag-and-drop, resizing, sliders, and drawing
 
 **Browser Tools (enabled via Browser checkbox):**
 - **browser_open** — Connects to Microsoft Edge via Chrome DevTools Protocol (CDP) and navigates to a URL. Uses the user's real Edge profile with all cookies, logins, and extensions. Launches Edge automatically if it isn't running
@@ -54,12 +60,15 @@ The chatbot has eighteen built-in tools that Claude can invoke autonomously duri
 - **browser_run_js** — Executes JavaScript on the page and returns the result. Supports `return` statements for extracting data
 - **browser_screenshot** — Takes a visual screenshot of the browser page, resized to max 1280px wide
 - **browser_close** — Disconnects the Playwright automation connection. Edge stays open
+- **browser_wait_for** — Waits for an element matching a CSS selector to appear on the page using `page.wait_for_selector()`. Returns the element's text content once found, or times out (default 10,000ms)
+- **browser_select** — Selects an option from a `<select>` dropdown element using `page.select_option()`. Options can be specified by `value` attribute or visible `label` text
+- **browser_get_elements** — Gets information about elements matching a CSS selector via a single `page.evaluate()` JavaScript call. Returns tag name, text content (truncated to 200 chars), all HTML attributes, visibility status, and bounding rect for each match (default limit: 10 elements)
 
 When Claude decides to use a tool, the app automatically executes it, feeds the result back, and lets Claude continue — this can loop multiple times in a single turn (e.g., search then fetch a result page, or open a browser then fill a form and click submit).
 
 #### Desktop Automation
 
-The seven desktop tools (screenshot, mouse_click, type_text, press_key, mouse_scroll, open_application, find_window) are gated behind a **Desktop** checkbox in the button bar. When disabled (the default), the desktop tool schemas are not sent to the API at all — Claude doesn't even know they exist, which saves tokens and prevents it from attempting to use unavailable tools.
+The thirteen desktop tools (screenshot, mouse_click, type_text, press_key, mouse_scroll, open_application, find_window, clipboard_read, clipboard_write, wait_for_window, read_screen_text, find_image_on_screen, mouse_drag) are gated behind a **Desktop** checkbox in the button bar. When disabled (the default), the desktop tool schemas are not sent to the API at all — Claude doesn't even know they exist, which saves tokens and prevents it from attempting to use unavailable tools.
 
 **DPI-aware coordinate mapping** — The app sets `SetProcessDpiAwareness(2)` (Per-Monitor DPI Aware) at startup before any window creation, so `pyautogui.size()`, `.screenshot()`, and `.click()` all operate in the same physical-pixel coordinate space regardless of Windows display scaling (125%, 150%, etc.). Screenshots wider than 1280px are resized for the API, and the resize ratio is stored; `mouse_click` and `mouse_scroll` automatically scale image coordinates back to screen coordinates, so Claude can use pixel positions directly from the image it sees.
 
@@ -67,7 +76,7 @@ The seven desktop tools (screenshot, mouse_click, type_text, press_key, mouse_sc
 
 #### Browser Automation
 
-The eight browser tools are gated behind a **Browser** checkbox in the button bar, independent of the Desktop toggle. When disabled (the default), any attempt by Claude to use browser tools returns an error message. Browser tool schemas are only sent to the API when the checkbox is enabled, saving tokens and preventing Claude from attempting to use unavailable tools.
+The eleven browser tools are gated behind a **Browser** checkbox in the button bar, independent of the Desktop toggle. When disabled (the default), any attempt by Claude to use browser tools returns an error message. Browser tool schemas are only sent to the API when the checkbox is enabled, saving tokens and preventing Claude from attempting to use unavailable tools.
 
 **How it works** — Playwright connects to Microsoft Edge via the Chrome DevTools Protocol (CDP) on port 9222. Instead of launching a sterile automation browser, this approach uses the user's real Edge installation with their full profile (cookies, saved logins, extensions, and sessions).
 
@@ -183,11 +192,13 @@ API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) e
 anthropic
 ddgs
 httpx
+opencv-python
 Pillow
 playwright
 pyautogui
 pygetwindow
 pyperclip
+winocr
 ```
 
 > **Note:** `playwright install` is **not** required. The app connects to the system-installed Microsoft Edge via CDP, so no bundled browser binaries are needed.
@@ -213,6 +224,6 @@ The application is a single-file tkinter app structured around the `App` class:
 - **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, strips base64 image data, and sanitises content blocks through `_clean_content_block()` to remove extra SDK fields (like `parsed_output`) that the API rejects on re-submission
 - **HTML Extraction** — The `HTMLTextExtractor` class (a `HTMLParser` subclass) strips HTML tags from fetched web pages, skipping `<script>`, `<style>`, and `<noscript>` blocks, and inserting newlines at block-level element boundaries
 - **PowerShell Safety** — Two-tier regex-based guardrail system (`POWERSHELL_BLOCKED` and `POWERSHELL_CONFIRM` pattern lists) checks commands before execution. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
-- **Desktop Automation** — Seven tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`) built on `pyautogui` and `pygetwindow`. Defined in a separate `DESKTOP_TOOLS` list and conditionally included via `_get_tools()` only when the `desktop_enabled` checkbox is enabled. The `screenshot` tool description is dynamically patched with the current screen resolution. Process-level DPI awareness (`SetProcessDpiAwareness(2)`) is set before window creation, and screenshot-to-screen coordinate scaling is handled automatically via `_screenshot_scale`
-- **Browser Automation** — Eight tools (`do_browser_open`, `do_browser_navigate`, `do_browser_click`, `do_browser_fill`, `do_browser_get_text`, `do_browser_run_js`, `do_browser_screenshot`, `do_browser_close`) built on Playwright's CDP connection to Microsoft Edge. Gated behind a `browser_enabled` `BooleanVar` toggle. Tool schemas are conditionally included via `_get_tools()` only when the checkbox is enabled. `_ensure_browser()` manages the full connection lifecycle with auto-reconnect on dead connections. `WM_DELETE_WINDOW` protocol handler ensures clean Playwright disconnection on app close
+- **Desktop Automation** — Thirteen tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`, `do_clipboard_read`, `do_clipboard_write`, `do_wait_for_window`, `do_read_screen_text`, `do_find_image_on_screen`, `do_mouse_drag`) built on `pyautogui`, `pygetwindow`, `winocr`, and `opencv-python`. Defined in a separate `DESKTOP_TOOLS` list and conditionally included via `_get_tools()` only when the `desktop_enabled` checkbox is enabled. The `screenshot` tool description is dynamically patched with the current screen resolution. Process-level DPI awareness (`SetProcessDpiAwareness(2)`) is set before window creation, and screenshot-to-screen coordinate scaling is handled automatically via `_screenshot_scale`
+- **Browser Automation** — Eleven tools (`do_browser_open`, `do_browser_navigate`, `do_browser_click`, `do_browser_fill`, `do_browser_get_text`, `do_browser_run_js`, `do_browser_screenshot`, `do_browser_close`, `do_browser_wait_for`, `do_browser_select`, `do_browser_get_elements`) built on Playwright's CDP connection to Microsoft Edge. Gated behind a `browser_enabled` `BooleanVar` toggle. Tool schemas are conditionally included via `_get_tools()` only when the checkbox is enabled. `_ensure_browser()` manages the full connection lifecycle with auto-reconnect on dead connections. `WM_DELETE_WINDOW` protocol handler ensures clean Playwright disconnection on app close
 - **Rate-Limit Retry** — Exponential backoff loop in `stream_worker` handles HTTP 429 (rate limit) and 529 (overload) errors with up to 5 retries before propagating the exception
