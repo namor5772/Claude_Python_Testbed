@@ -167,6 +167,11 @@ API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) e
 - When enabled, each tool invocation displays the full JSON with tool name, call ID, and input arguments in teal-coloured `--- TOOL CALL ---` blocks
 - This is separate from the Debug payload view, so you can see just tool calls without the full API payload, or vice versa
 
+#### Activity Display
+- Toggle the **Activity** checkbox to show/hide tool activity lines (e.g., "Searching: ...", "Fetching: ...", "Running: ...", "Taking screenshot...") that appear during tool execution
+- When disabled, these status lines are suppressed for a cleaner, final-answer-only view
+- The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked — if either Debug or Tool Calls is enabled, the counter badges remain visible
+
 ### Requirements
 
 - Python 3 with tkinter (included in standard library)
@@ -201,7 +206,7 @@ python app.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 6 rows: model toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Debug/Tool Calls/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
+- **UI Layout** — Grid-based layout with 6 rows: model toolbar (row 0), chat toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, labels, tool info, errors) back to the main thread
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — Three JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, and `app_state.json` for user preferences
