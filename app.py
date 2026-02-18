@@ -530,6 +530,7 @@ class App:
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self.debug_enabled = tk.BooleanVar(value=True)
         self.tool_calls_enabled = tk.BooleanVar(value=True)
+        self.show_activity = tk.BooleanVar(value=True)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self._playwright = None
@@ -690,6 +691,12 @@ class App:
             font=("Arial", 9),
         )
         self.tool_calls_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.activity_toggle = tk.Checkbutton(
+            button_frame, text="Activity", variable=self.show_activity,
+            font=("Arial", 9),
+        )
+        self.activity_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         self.desktop_toggle = tk.Checkbutton(
             button_frame, text="Desktop", variable=self.desktop_enabled,
@@ -1993,6 +2000,8 @@ class App:
                 msg = self.queue.get_nowait()
                 if msg["type"] == "debug" and not self.debug_enabled.get():
                     pass  # skip payload dump when disabled
+                elif msg["type"] == "call_counter" and not self.show_activity.get() and not self.debug_enabled.get() and not self.tool_calls_enabled.get():
+                    pass  # skip call counter only when activity, debug, and tool calls all disabled
                 elif msg["type"] == "call_counter":
                     tag = "call_counter" if self.debug_enabled.get() else "call_counter_subtle"
                     self.chat_display.config(state="normal")
@@ -2027,6 +2036,8 @@ class App:
                     self.chat_display.insert(tk.END, msg["content"], "assistant")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
+                elif msg["type"] == "tool_info" and not self.show_activity.get():
+                    pass  # skip tool activity when activity display disabled
                 elif msg["type"] == "tool_info":
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, msg["content"], "tool_info")
