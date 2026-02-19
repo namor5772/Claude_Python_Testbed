@@ -85,7 +85,11 @@ Each skill has one of three modes, cycled via a **Cycle Mode** button:
 | **Enabled** | `[ON]` (green) | Skill content is appended to the system prompt on every API call |
 | **On-Demand** | `[OD]` (blue) | Skill name is listed in the system prompt; Claude can retrieve its content via the `get_skill` tool when needed |
 
-The **Skills** button in the button bar shows a count summary — e.g., `Skills (2+3)` means 2 enabled and 3 on-demand skills. Click it to open the Skills Manager.
+The **Skills** button in the button bar shows a count summary — e.g., `Skills (2+3)` means 2 enabled and 3 on-demand skills. The button auto-sizes to fit its label text. Click it to open the Skills Manager.
+
+**Included skills:**
+- **Example: Pirate Speak** — A simple enabled skill demonstrating persona injection
+- **NIP Generation** — An on-demand skill for producing FSANZ-compliant Australian Nutrition Information Panels in structured JSON format, using web search to source official product data with AFCD/NUTTAB fallback
 
 **Skills Manager** provides:
 - **Skill Name** entry + **SAVE** / **DELETE** / **NEW** buttons for CRUD operations
@@ -191,6 +195,7 @@ When a named system prompt is applied, the window title updates to show it (e.g.
 - The last-used system prompt name, selected model, and window geometry (size + position) are saved to `app_state.json`
 - On startup, the app restores the last system prompt, model, and window geometry automatically
 - **Display safety check** — saved screen dimensions are compared against the current display on startup. If the resolution has changed or the saved position would place the window off-screen, geometry falls back to the default `1050x930` so the window is never lost
+- If the "Default" system prompt is missing from `system_prompts.json` (e.g., on first run or after manual deletion), it is automatically recreated from the hardcoded default
 - The app starts in a "new chat" state (empty conversation) with the last system prompt and model pre-loaded
 
 #### Rate-Limit Retry
