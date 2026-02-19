@@ -47,12 +47,13 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - **Multi-line input** — The input field supports multiple lines; press **Enter** to send, **Shift+Enter** for a newline
 
 #### Tool Use
-The chatbot has twenty-seven built-in tools (plus a dynamic `get_skill` tool) that Claude can invoke autonomously during a conversation, organised into three categories:
+The chatbot has twenty-eight built-in tools (plus a dynamic `get_skill` tool) that Claude can invoke autonomously during a conversation, organised into three categories:
 
 **Core Tools (always available):**
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
 - **fetch_webpage** — Fetches the full content of a URL using `httpx`, extracts readable text from HTML (stripping scripts, styles, and tags), and truncates to 20,000 characters
 - **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters
+- **csv_search** — Searches a delimited text file (CSV, TSV, TXT, or any delimited format) for records matching a value. The file must have a header row. Supports searching a specific column or all columns, with three match modes: `contains` (default), `exact`, and `starts_with` — all case-insensitive. The delimiter is auto-detected from file content using `csv.Sniffer` (sampling the first 8KB), or can be explicitly specified (`,`, `\t`, `|`, `;`). Results are returned as labelled key-value rows, capped at 50 matches by default (configurable via `max_results`). Output is truncated at 20,000 characters
 
 **Desktop Tools (enabled via Desktop checkbox):**
 - **screenshot** — Captures the screen (or a specified region) and returns it as an image to Claude. The tool description is dynamically patched at startup with the actual screen resolution. Images wider than 1280px are scaled down for the API, and mouse coordinates are automatically mapped back to screen space so Claude can click using the positions it sees in the image
