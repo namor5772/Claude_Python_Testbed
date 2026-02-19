@@ -23,6 +23,7 @@ import os
 import base64
 import json
 import copy
+import csv
 import subprocess
 import re
 import io
@@ -84,6 +85,46 @@ TOOLS = [
                 }
             },
             "required": ["command"],
+        },
+    },
+    {
+        "name": "csv_search",
+        "description": (
+            "Search a delimited text file (CSV, TSV, TXT, etc.) for records matching a value. "
+            "The file must have a header row. You can search a specific column or all columns. "
+            "Returns matching rows as formatted text. Use this whenever the user asks to find, "
+            "look up, or filter data in a CSV, TSV, or delimited text file."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "Absolute path to the file (CSV, TSV, TXT, etc.)",
+                },
+                "delimiter": {
+                    "type": "string",
+                    "description": "Column delimiter character. Use ',' for CSV (default), '\\t' for tab-separated, '|' for pipe-separated, ';' for semicolons. If omitted, auto-detects from file content.",
+                },
+                "search_value": {
+                    "type": "string",
+                    "description": "The value to search for",
+                },
+                "column": {
+                    "type": "string",
+                    "description": "Column heading to search in. If omitted, searches all columns.",
+                },
+                "match_mode": {
+                    "type": "string",
+                    "enum": ["contains", "exact", "starts_with"],
+                    "description": "How to match: 'contains' (default), 'exact', or 'starts_with'. All modes are case-insensitive.",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of matching rows to return (default 50).",
+                },
+            },
+            "required": ["file_path", "search_value"],
         },
     },
 ]
@@ -616,7 +657,11 @@ DEFAULT_SYSTEM_PROMPT = (
     "• fetch_webpage — fetch and read a specific URL. Use after web_search to get full "
     "details from a result, or when Roman provides a link.\n"
     "• run_powershell — execute PowerShell commands on Roman's Windows PC. Use for file "
-    "operations, system info, installing software, running scripts, or any local task.\n\n"
+    "operations, system info, installing software, running scripts, or any local task.\n"
+    "• csv_search — search a delimited text file (CSV, TSV, TXT, etc.) for records by column "
+    "heading and value. Auto-detects the delimiter or accepts an explicit one. Use whenever "
+    "Roman asks to find, look up, or filter data in a CSV or text file. Supports searching a "
+    "specific column or all columns, with contains/exact/starts_with matching.\n\n"
 
     "DESKTOP TOOLS (available when Desktop is enabled):\n"
     "• screenshot — capture the screen. Always take a screenshot FIRST to see what's on "
@@ -1993,6 +2038,82 @@ class App:
         except Exception as e:
             return f"Error running command: {e}"
 
+    # --- CSV Search Tool ---
+
+    def do_csv_search(self, file_path, search_value, column=None, match_mode="contains", max_results=50, delimiter=None):
+        """Search a delimited text file for rows matching a value."""
+        try:
+            if not os.path.isfile(file_path):
+                return f"Error: File not found: {file_path}"
+
+            with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+                # Auto-detect delimiter if not specified
+                if delimiter is None:
+                    sample = f.read(8192)
+                    f.seek(0)
+                    try:
+                        dialect = csv.Sniffer().sniff(sample, delimiters=',\t|;')
+                        delimiter = dialect.delimiter
+                    except csv.Error:
+                        delimiter = ','
+                elif delimiter == '\\t':
+                    delimiter = '\t'
+
+                reader = csv.DictReader(f, delimiter=delimiter)
+                headers = reader.fieldnames
+                if not headers:
+                    return "Error: CSV file has no headers."
+
+                if column and column not in headers:
+                    return f"Error: Column '{column}' not found. Available columns: {', '.join(headers)}"
+
+                search_lower = search_value.lower()
+                matches = []
+
+                for row_num, row in enumerate(reader, start=2):  # row 1 is header
+                    cells_to_check = [row.get(column, "")] if column else row.values()
+
+                    for cell in cells_to_check:
+                        cell_lower = (cell or "").lower()
+                        if match_mode == "exact" and cell_lower == search_lower:
+                            matched = True
+                        elif match_mode == "starts_with" and cell_lower.startswith(search_lower):
+                            matched = True
+                        elif match_mode == "contains" and search_lower in cell_lower:
+                            matched = True
+                        else:
+                            matched = False
+
+                        if matched:
+                            matches.append((row_num, row))
+                            break
+
+                    if len(matches) >= max_results:
+                        break
+
+            if not matches:
+                scope = f"in column '{column}'" if column else "in any column"
+                return f"No matches found for '{search_value}' {scope}.\nColumns: {', '.join(headers)}"
+
+            # Format results as a readable table
+            lines = [f"Found {len(matches)} match(es). Columns: {', '.join(headers)}\n"]
+            for row_num, row in matches:
+                lines.append(f"--- Row {row_num} ---")
+                for h in headers:
+                    lines.append(f"  {h}: {row.get(h, '')}")
+            if len(matches) >= max_results:
+                lines.append(f"\n[Results limited to {max_results}. Use max_results to increase.]")
+
+            output = "\n".join(lines)
+            if len(output) > 20000:
+                output = output[:20000] + "\n\n[Output truncated...]"
+            return output
+
+        except UnicodeDecodeError:
+            return "Error: File encoding not supported. Expected UTF-8 CSV."
+        except Exception as e:
+            return f"Error reading CSV: {e}"
+
     # --- Desktop Automation Tools ---
 
     KNOWN_APPS = {
@@ -2748,6 +2869,20 @@ class App:
                                     {"type": "tool_info", "content": f"Running: {cmd}\n"}
                                 )
                                 result = self.run_powershell(cmd)
+                            elif block.name == "csv_search":
+                                inp = block.input
+                                fp = inp.get("file_path", "")
+                                sv = inp.get("search_value", "")
+                                self.queue.put(
+                                    {"type": "tool_info", "content": f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n"}
+                                )
+                                result = self.do_csv_search(
+                                    fp, sv,
+                                    column=inp.get("column"),
+                                    match_mode=inp.get("match_mode", "contains"),
+                                    max_results=inp.get("max_results", 50),
+                                    delimiter=inp.get("delimiter"),
+                                )
                             elif block.name in ("screenshot", "mouse_click", "type_text",
                                                  "press_key", "mouse_scroll", "open_application",
                                                  "find_window", "clipboard_read", "clipboard_write",
