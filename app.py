@@ -887,7 +887,7 @@ class App:
         else:
             skills_label = "Skills"
         self.skills_button = tk.Button(
-            button_frame, text=skills_label, command=self.open_skills_editor, width=10
+            button_frame, text=skills_label, command=self.open_skills_editor, padx=10
         )
         self.skills_button.pack(side=tk.LEFT, padx=(5, 5))
 
@@ -1029,8 +1029,13 @@ class App:
     def _load_saved_prompts(self):
         if os.path.exists(PROMPTS_FILE):
             with open(PROMPTS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {}
+                prompts = json.load(f)
+        else:
+            prompts = {}
+        if "Default" not in prompts:
+            prompts["Default"] = DEFAULT_SYSTEM_PROMPT
+            self._save_prompts_to_disk(prompts)
+        return prompts
 
     def _save_prompts_to_disk(self, prompts):
         with open(PROMPTS_FILE, "w", encoding="utf-8") as f:
