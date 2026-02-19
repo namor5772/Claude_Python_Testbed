@@ -598,6 +598,11 @@ FALLBACK_MODELS = [
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
+MAX_TOKENS_THINKING = 32768
+ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
+MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5")
+EFFORT_LEVELS = ["low", "medium", "high", "max"]
+BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 DEFAULT_GEOMETRY = "1050x930"
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -725,6 +730,9 @@ class App:
         self.system_prompt_name = ""
         self.model = DEFAULT_MODEL
         self.temperature = 1.0
+        self.thinking_enabled = False
+        self.thinking_effort = "high"
+        self.thinking_budget = 8192
         self.prompt_editor_window = None
         self.skills_editor_window = None
         self.skills = self._load_skills()
@@ -766,7 +774,8 @@ class App:
         self._model_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
 
-        tk.Label(model_toolbar, text="Temp", font=("Arial", 10)).pack(side=tk.LEFT, padx=(10, 5))
+        self._temp_label = tk.Label(model_toolbar, text="Temp", font=("Arial", 10))
+        self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
         self._temp_var = tk.DoubleVar(value=self.temperature)
         self._temp_spin = tk.Spinbox(
             model_toolbar, textvariable=self._temp_var,
@@ -777,6 +786,21 @@ class App:
         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
         self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
         self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
+
+        self._thinking_var = tk.BooleanVar(value=False)
+        self._thinking_check = tk.Checkbutton(
+            model_toolbar, text="Thinking", variable=self._thinking_var,
+            font=("Arial", 10), command=self._on_thinking_toggled,
+        )
+        self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+
+        self._thinking_strength_var = tk.StringVar(value="high")
+        self._thinking_strength_combo = ttk.Combobox(
+            model_toolbar, textvariable=self._thinking_strength_var, state="disabled",
+            font=("Arial", 9), width=6,
+        )
+        self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
 
         tk.Button(model_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.LEFT, padx=(10, 5))
         tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.LEFT, padx=(5, 0))
@@ -849,6 +873,14 @@ class App:
         self.chat_display.tag_config(
             "call_counter_subtle", foreground="#ffffff", background="#b06000",
             font=("Arial", 11, "bold")
+        )
+        self.chat_display.tag_config(
+            "thinking", foreground="#b8860b", background="#fffde7",
+            font=("Consolas", 9, "italic")
+        )
+        self.chat_display.tag_config(
+            "thinking_label", foreground="#b8860b", background="#fffde7",
+            font=("Consolas", 9, "bold italic")
         )
 
         # Input field
@@ -955,6 +987,20 @@ class App:
             if self._model_display_names.get(mid, mid) == selected_display:
                 self.model = mid
                 break
+        # Update thinking controls for new model
+        support = self._model_supports_thinking()
+        if support is None:
+            self._thinking_var.set(False)
+            self.thinking_enabled = False
+            self._thinking_check.config(state="disabled")
+            self._thinking_strength_combo.config(state="disabled")
+            self._temp_label.config(state="normal")
+            self._temp_spin.config(state="normal")
+        else:
+            self._thinking_check.config(state="normal")
+            self._update_thinking_strength_options()
+            if self.thinking_enabled:
+                self._on_thinking_toggled()
         self._save_last_state()
 
     def _on_temp_changed(self):
@@ -964,6 +1010,58 @@ class App:
         except (tk.TclError, ValueError):
             self.temperature = 1.0
         self._temp_var.set(self.temperature)
+        self._save_last_state()
+
+    def _model_supports_thinking(self, model_id=None):
+        mid = model_id or self.model
+        if mid in ADAPTIVE_THINKING_MODELS:
+            return "adaptive"
+        for prefix in MANUAL_THINKING_PREFIXES:
+            if mid.startswith(prefix):
+                return "manual"
+        return None
+
+    def _on_thinking_toggled(self):
+        self.thinking_enabled = self._thinking_var.get()
+        if self.thinking_enabled:
+            self._temp_label.config(state="disabled")
+            self._temp_spin.config(state="disabled")
+            self._update_thinking_strength_options()
+            self._thinking_strength_combo.config(state="readonly")
+        else:
+            self._temp_label.config(state="normal")
+            self._temp_spin.config(state="normal")
+            self._thinking_strength_combo.config(state="disabled")
+        self._save_last_state()
+
+    def _update_thinking_strength_options(self):
+        support = self._model_supports_thinking()
+        if support == "adaptive":
+            values = list(EFFORT_LEVELS)
+            self._thinking_strength_combo["values"] = values
+            if self._thinking_strength_var.get() not in values:
+                self._thinking_strength_var.set(self.thinking_effort if self.thinking_effort in values else "high")
+        elif support == "manual":
+            values = list(BUDGET_PRESETS.keys())
+            self._thinking_strength_combo["values"] = values
+            # Find matching preset for current budget
+            current = self._thinking_strength_var.get()
+            if current not in values:
+                # Find closest preset
+                for k, v in BUDGET_PRESETS.items():
+                    if v == self.thinking_budget:
+                        self._thinking_strength_var.set(k)
+                        break
+                else:
+                    self._thinking_strength_var.set("8K")
+
+    def _on_thinking_strength_changed(self):
+        val = self._thinking_strength_var.get()
+        support = self._model_supports_thinking()
+        if support == "adaptive":
+            self.thinking_effort = val
+        elif support == "manual":
+            self.thinking_budget = BUDGET_PRESETS.get(val, 8192)
         self._save_last_state()
 
     def _update_title(self):
@@ -996,6 +1094,26 @@ class App:
         if temp is not None:
             self.temperature = max(0.0, min(1.0, float(temp)))
             self._temp_var.set(self.temperature)
+        # Restore thinking settings
+        self.thinking_enabled = state.get("thinking_enabled", False)
+        self.thinking_effort = state.get("thinking_effort", "high")
+        self.thinking_budget = state.get("thinking_budget", 8192)
+        self._thinking_var.set(self.thinking_enabled)
+        support = self._model_supports_thinking()
+        if support is None:
+            self._thinking_var.set(False)
+            self.thinking_enabled = False
+            self._thinking_check.config(state="disabled")
+        else:
+            self._thinking_check.config(state="normal")
+            if support == "adaptive":
+                self._thinking_strength_var.set(self.thinking_effort)
+            elif support == "manual":
+                for k, v in BUDGET_PRESETS.items():
+                    if v == self.thinking_budget:
+                        self._thinking_strength_var.set(k)
+                        break
+            self._on_thinking_toggled()
         # Restore window geometry if display setup hasn't changed
         geometry = state.get("geometry", "")
         saved_sw = state.get("screen_width", 0)
@@ -1017,6 +1135,9 @@ class App:
             "last_system_prompt_name": self.system_prompt_name,
             "last_model": self.model,
             "temperature": self.temperature,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_effort": self.thinking_effort,
+            "thinking_budget": self.thinking_budget,
             "geometry": self.root.geometry(),
             "screen_width": self.root.winfo_screenwidth(),
             "screen_height": self.root.winfo_screenheight(),
@@ -1412,10 +1533,14 @@ class App:
             return cleaned
         if btype == "image":
             return {"type": "text", "text": "[Image was attached]"}
+        if btype == "thinking":
+            return {"type": "thinking", "thinking": block.get("thinking", ""), "signature": block.get("signature", "")}
+        if btype == "redacted_thinking":
+            return {"type": "redacted_thinking", "data": block.get("data", "")}
         return block
 
     def _serialize_messages(self):
-        """Convert messages to JSON-serializable format, stripping image data and extra fields."""
+        """Convert messages to JSON-serializable format, stripping image data, thinking, and extra fields."""
         serialized = []
         for msg in self.messages:
             content = msg["content"]
@@ -1425,13 +1550,18 @@ class App:
                 blocks = []
                 for block in content:
                     if isinstance(block, dict):
+                        if block.get("type") in ("thinking", "redacted_thinking"):
+                            continue
                         blocks.append(self._clean_content_block(block))
                     elif hasattr(block, "model_dump"):
                         d = block.model_dump()
+                        if d.get("type") in ("thinking", "redacted_thinking"):
+                            continue
                         blocks.append(self._clean_content_block(d))
                     else:
                         blocks.append({"type": "text", "text": str(block)})
-                serialized.append({"role": msg["role"], "content": blocks})
+                if blocks:
+                    serialized.append({"role": msg["role"], "content": blocks})
             else:
                 serialized.append({"role": msg["role"], "content": str(content)})
         return serialized
@@ -1451,6 +1581,9 @@ class App:
             "system_prompt_name": self.system_prompt_name,
             "model": self.model,
             "temperature": self.temperature,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_effort": self.thinking_effort,
+            "thinking_budget": self.thinking_budget,
         }
         self._save_chats_to_disk(chats)
         self._refresh_chat_list()
@@ -1487,6 +1620,29 @@ class App:
         else:
             self.temperature = 1.0
         self._temp_var.set(self.temperature)
+        # Restore thinking settings from saved chat
+        self.thinking_enabled = chat_data.get("thinking_enabled", False)
+        self.thinking_effort = chat_data.get("thinking_effort", "high")
+        self.thinking_budget = chat_data.get("thinking_budget", 8192)
+        self._thinking_var.set(self.thinking_enabled)
+        support = self._model_supports_thinking()
+        if support is None:
+            self._thinking_var.set(False)
+            self.thinking_enabled = False
+            self._thinking_check.config(state="disabled")
+            self._thinking_strength_combo.config(state="disabled")
+            self._temp_label.config(state="normal")
+            self._temp_spin.config(state="normal")
+        else:
+            self._thinking_check.config(state="normal")
+            if support == "adaptive":
+                self._thinking_strength_var.set(self.thinking_effort)
+            elif support == "manual":
+                for k, v in BUDGET_PRESETS.items():
+                    if v == self.thinking_budget:
+                        self._thinking_strength_var.set(k)
+                        break
+            self._on_thinking_toggled()
         self._update_title()
         self._save_last_state()
         self.chat_name_entry.delete(0, tk.END)
@@ -1555,6 +1711,21 @@ class App:
             elif role == "assistant" and isinstance(content, str):
                 self.chat_display.insert(tk.END, "Claude:\n", "assistant_label")
                 self.chat_display.insert(tk.END, content + "\n\n", "assistant")
+            elif role == "assistant" and isinstance(content, list):
+                # Extract text from list content (tool-use intermediate messages)
+                texts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        t = block.get("text", "")
+                        if t:
+                            texts.append(t)
+                    elif hasattr(block, "type") and block.type == "text":
+                        t = getattr(block, "text", "")
+                        if t:
+                            texts.append(t)
+                if texts:
+                    self.chat_display.insert(tk.END, "Claude:\n", "assistant_label")
+                    self.chat_display.insert(tk.END, "".join(texts) + "\n\n", "assistant")
             # Skip intermediate assistant messages with tool_use blocks
         self.chat_display.see(tk.END)
         self.chat_display.config(state="disabled")
@@ -1622,6 +1793,12 @@ class App:
 
         user_text = self.input_field.get("1.0", "end-1c").strip()
         if not user_text and not self.pending_images:
+            return
+
+        # Intercept local slash commands
+        if user_text.lower() in ("/exit", "/quit", "/bye"):
+            self.input_field.delete("1.0", tk.END)
+            self._new_chat()
             return
 
         # Clear input and disable send
@@ -2382,13 +2559,22 @@ class App:
 
         payload = {
             "model": self.model,
-            "max_tokens": MAX_TOKENS,
-            "temperature": self.temperature,
             "stream": True,
             "system": self._build_system_prompt(),
             "tools": self._get_tools(),
             "messages": display_msgs,
         }
+        if self.thinking_enabled:
+            support = self._model_supports_thinking()
+            payload["max_tokens"] = MAX_TOKENS_THINKING
+            if support == "adaptive":
+                payload["thinking"] = {"type": "adaptive"}
+                payload["output_config"] = {"effort": self.thinking_effort}
+            elif support == "manual":
+                payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+        else:
+            payload["max_tokens"] = MAX_TOKENS
+            payload["temperature"] = self.temperature
         return json.dumps(payload, indent=2)
 
     def _get_tools(self):
@@ -2438,8 +2624,11 @@ class App:
             except (tk.TclError, ValueError):
                 pass
 
-            # Insert the "Claude: " label before streaming begins
-            self.queue.put({"type": "label"})
+            # Only emit label upfront if thinking is disabled
+            label_emitted = False
+            if not self.thinking_enabled:
+                self.queue.put({"type": "label"})
+                label_emitted = True
 
             call_num = 0
             while True:
@@ -2449,20 +2638,57 @@ class App:
                 self.queue.put({"type": "debug", "content": payload_text})
 
                 full_text = ""
+                had_thinking = False
                 max_retries = 5
+
+                # Build API kwargs dynamically
+                api_kwargs = {
+                    "model": self.model,
+                    "system": self._build_system_prompt(),
+                    "messages": messages,
+                    "tools": self._get_tools(),
+                }
+                if self.thinking_enabled:
+                    support = self._model_supports_thinking()
+                    api_kwargs["max_tokens"] = MAX_TOKENS_THINKING
+                    if support == "adaptive":
+                        api_kwargs["thinking"] = {"type": "adaptive"}
+                        api_kwargs["output_config"] = {"effort": self.thinking_effort}
+                    elif support == "manual":
+                        api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+                else:
+                    api_kwargs["max_tokens"] = MAX_TOKENS
+                    api_kwargs["temperature"] = self.temperature
+
                 for attempt in range(max_retries):
                     try:
-                        with self.client.messages.stream(
-                            model=self.model,
-                            max_tokens=MAX_TOKENS,
-                            temperature=self.temperature,
-                            system=self._build_system_prompt(),
-                            messages=messages,
-                            tools=self._get_tools(),
-                        ) as stream:
-                            for text in stream.text_stream:
-                                full_text += text
-                                self.queue.put({"type": "text_delta", "content": text})
+                        with self.client.messages.stream(**api_kwargs) as stream:
+                            in_thinking = False
+                            for event in stream:
+                                if event.type == "content_block_start":
+                                    block = event.content_block
+                                    if hasattr(block, "type") and block.type == "thinking":
+                                        in_thinking = True
+                                        had_thinking = True
+                                        self.queue.put({"type": "thinking_start"})
+                                    elif hasattr(block, "type") and block.type == "text":
+                                        if had_thinking and in_thinking:
+                                            self.queue.put({"type": "thinking_end"})
+                                            in_thinking = False
+                                        if not label_emitted:
+                                            self.queue.put({"type": "label"})
+                                            label_emitted = True
+                                elif event.type == "content_block_delta":
+                                    delta = event.delta
+                                    if hasattr(delta, "type") and delta.type == "thinking_delta":
+                                        self.queue.put({"type": "thinking_delta", "content": delta.thinking})
+                                    elif hasattr(delta, "type") and delta.type == "text_delta":
+                                        full_text += delta.text
+                                        self.queue.put({"type": "text_delta", "content": delta.text})
+                                elif event.type == "content_block_stop":
+                                    if in_thinking:
+                                        self.queue.put({"type": "thinking_end"})
+                                        in_thinking = False
 
                             final_message = stream.get_final_message()
                         break  # success — exit retry loop
@@ -2719,6 +2945,21 @@ class App:
                     self.chat_display.insert(tk.END, "--- TOOL CALL ---\n", "tool_debug_label")
                     self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_debug")
                     self.chat_display.insert(tk.END, "--- END TOOL CALL ---\n", "tool_debug_label")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "thinking_start":
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "thinking_delta":
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, msg["content"], "thinking")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "thinking_end":
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, "\n\n", "thinking")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "label":

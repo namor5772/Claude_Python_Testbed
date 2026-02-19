@@ -8,7 +8,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
 - **saved_chats.json** — Saved chat conversations (created at runtime)
-- **app_state.json** — Persistent app settings: last-used system prompt, model, window geometry, and screen dimensions (created at runtime)
+- **app_state.json** — Persistent app settings: last-used system prompt, model, temperature, thinking settings, window geometry, and screen dimensions (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
 
 ## app.py — Claude Chatbot
@@ -17,7 +17,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 
 ### Features
 
-#### Model Selection & Temperature
+#### Model Selection, Temperature & Extended Thinking
 - A **Model** dropdown at the top of the window lists all available Claude models, fetched live from the Anthropic API on startup
 - Models are shown by display name and the selected model is persisted across sessions via `app_state.json`
 - Falls back to a hardcoded list (Sonnet 4.5, Opus 4.6, Haiku 4.5) if the API is unreachable
@@ -25,6 +25,20 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - A **Temp** spinbox sits to the right of the Model dropdown, controlling the API temperature parameter (0.0–1.0 in 0.1 steps)
 - Temperature is persisted across sessions in `app_state.json` and saved/restored with each chat
 - Lower values (e.g. 0.0) produce more deterministic responses; the default is 1.0
+
+**Extended Thinking** — A **Thinking** checkbox and **Strength** combobox on the model toolbar let you enable Claude's step-by-step reasoning mode. When enabled, Claude shows its internal reasoning in amber/gold italic text before delivering the final answer in green.
+
+| Model type | Thinking mode | Strength control |
+|---|---|---|
+| **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
+| **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+
+- When thinking is enabled, the **temperature controls are greyed out** (the API does not allow temperature with thinking)
+- `max_tokens` is automatically raised from 8,192 to 32,768 when thinking is active
+- The strength combobox automatically switches between effort levels and budget presets when you change models
+- Switching to a model that doesn't support thinking disables the checkbox and re-enables temperature
+- Thinking settings (`thinking_enabled`, `thinking_effort`, `thinking_budget`) are persisted in `app_state.json` and saved/restored with each chat
+- Thinking and redacted_thinking blocks are preserved during tool-use loops (required by the API for reasoning continuity) but stripped when serializing chats for persistence
 
 #### Chat Interface
 - **Streaming responses** — Claude's replies are streamed token-by-token into the chat display for a real-time feel
@@ -167,16 +181,19 @@ Two toolbars at the top of the window provide model selection and conversation m
 |---|---|---|
 | **Model** dropdown | Model toolbar | Select from available Claude models |
 | **Temp** spinbox | Model toolbar | Set API temperature (0.0–1.0) |
+| **Thinking** checkbox | Model toolbar | Enable extended thinking mode |
+| **Strength** combobox | Model toolbar | Set thinking effort (adaptive) or token budget (manual) |
 | **DELETE** | Model toolbar | Deletes the selected or named chat from disk |
 | **NEW CHAT** | Model toolbar | Clears the current conversation and display, but keeps the active system prompt |
 | **Save Chat as** | Chat toolbar | Type a name and click **SAVE** (or press Enter) to save the current conversation |
 | **Load Chat** dropdown | Chat toolbar | Select a previously saved chat — restores conversation, system prompt, and model |
 
 Saved chats include:
-- The full message history (serialised to JSON, with base64 image data stripped and replaced with `[Image was attached]` placeholders to keep file sizes small)
+- The full message history (serialised to JSON, with base64 image data stripped and replaced with `[Image was attached]` placeholders to keep file sizes small; thinking blocks are stripped during serialisation)
 - The system prompt text that was active during the chat
 - The system prompt name for easy identification
 - The model that was in use
+- Temperature and extended thinking settings (enabled, effort level, token budget)
 
 Messages are sanitised on both save and load — extra fields from the Anthropic SDK (e.g. `parsed_output`) are stripped to prevent API rejection errors when continuing a reloaded conversation.
 
@@ -192,8 +209,8 @@ Click **System Prompt** to open a dedicated editor window with:
 When a named system prompt is applied, the window title updates to show it (e.g., `Claude Chatbot — My Prompt`).
 
 #### App State Persistence
-- The last-used system prompt name, selected model, and window geometry (size + position) are saved to `app_state.json`
-- On startup, the app restores the last system prompt, model, and window geometry automatically
+- The last-used system prompt name, selected model, temperature, thinking settings, and window geometry (size + position) are saved to `app_state.json`
+- On startup, the app restores the last system prompt, model, temperature, thinking state, and window geometry automatically
 - **Display safety check** — saved screen dimensions are compared against the current display on startup. If the resolution has changed or the saved position would place the window off-screen, geometry falls back to the default `1050x930` so the window is never lost
 - If the "Default" system prompt is missing from `system_prompts.json` (e.g., on first run or after manual deletion), it is automatically recreated from the hardcoded default
 - The app starts in a "new chat" state (empty conversation) with the last system prompt and model pre-loaded
@@ -256,12 +273,12 @@ python app.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 7 rows: model + temperature toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
-- **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, labels, tool info, errors) back to the main thread
+- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
+- **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, labels, tool info, errors) back to the main thread. When thinking is enabled, the stream worker uses raw event iteration (`content_block_start`, `content_block_delta`, `content_block_stop`) instead of `text_stream` to handle both thinking and text blocks
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — Four JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, `app_state.json` for user preferences, and `skills.json` for the skills library
 - **Skills System** — Skills are loaded from `skills.json` on startup. `_build_system_prompt()` assembles the final system prompt by appending enabled skill content and listing on-demand skill names. `_get_tools()` dynamically adds a `get_skill` tool when on-demand skills exist, with the skill names constrained via an `enum` in the input schema
-- **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, strips base64 image data, and sanitises content blocks through `_clean_content_block()` to remove extra SDK fields (like `parsed_output`) that the API rejects on re-submission
+- **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, strips base64 image data, skips `thinking` and `redacted_thinking` blocks, and sanitises content blocks through `_clean_content_block()` to remove extra SDK fields (like `parsed_output`) that the API rejects on re-submission. `_clean_content_block()` preserves thinking/redacted_thinking blocks with their signatures for tool-use loop continuity
 - **HTML Extraction** — The `HTMLTextExtractor` class (a `HTMLParser` subclass) strips HTML tags from fetched web pages, skipping `<script>`, `<style>`, and `<noscript>` blocks, and inserting newlines at block-level element boundaries
 - **PowerShell Safety** — Two-tier regex-based guardrail system (`POWERSHELL_BLOCKED` and `POWERSHELL_CONFIRM` pattern lists) checks commands before execution. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Desktop Automation** — Thirteen tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`, `do_clipboard_read`, `do_clipboard_write`, `do_wait_for_window`, `do_read_screen_text`, `do_find_image_on_screen`, `do_mouse_drag`) built on `pyautogui`, `pygetwindow`, `winocr`, and `opencv-python`. Defined in a separate `DESKTOP_TOOLS` list and conditionally included via `_get_tools()` only when the `desktop_enabled` checkbox is enabled. The `screenshot` tool description is dynamically patched with the current screen resolution. Process-level DPI awareness (`SetProcessDpiAwareness(2)`) is set before window creation, and screenshot-to-screen coordinate scaling is handled automatically via `_screenshot_scale`
