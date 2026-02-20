@@ -821,6 +821,8 @@ class App:
         # Instance 2: start polling for injected chat content
         if self._is_second_instance:
             self.root.after(500, self._poll_inject_file)
+        # Poll for peer instance to enable/disable auto-chat and send delay
+        self.root.after(2000, self._poll_for_peer)
 
     def setup_ui(self):
         # Grid weights for resizing
@@ -897,12 +899,14 @@ class App:
         self.my_friend_entry = tk.Entry(names_toolbar, font=("Arial", 10), width=20)
         self.my_friend_entry.pack(side=tk.LEFT, padx=(0, 15))
 
-        self._auto_chat = tk.BooleanVar(value=True)
+        # Auto-chat starts disabled (solo mode); enabled when peer detected
+        self._auto_chat = tk.BooleanVar(value=False)
+        self._send_delay = 0  # 0 when solo, 5000 when paired
         if not self._is_second_instance:
             self._auto_chat_btn = tk.Button(
-                names_toolbar, text="Auto-Chat: ON", font=("Arial", 10, "bold"),
+                names_toolbar, text="Auto-Chat: OFF", font=("Arial", 10, "bold"),
                 width=14, command=self._toggle_auto_chat,
-                bg="#2e7d32", fg="white",
+                bg="#c62828", fg="white",
             )
             self._auto_chat_btn.pack(side=tk.LEFT)
 
@@ -1935,9 +1939,12 @@ class App:
     def on_enter_key(self, event):
         if event.state & 0x1:  # Shift held — allow newline
             return
-        # Delay 5 seconds before processing to allow editing/cancellation
-        self.input_field.config(state="disabled")
-        self._send_timer = self.root.after(5000, self._delayed_send)
+        if self._send_delay > 0:
+            # Delay before processing to allow editing/cancellation
+            self.input_field.config(state="disabled")
+            self._send_timer = self.root.after(self._send_delay, self._delayed_send)
+        else:
+            self.send_message()
         return "break"
 
     def _delayed_send(self):
@@ -2606,8 +2613,35 @@ class App:
         self._auto_chat.set(on)
         if on:
             self._auto_chat_btn.config(text="Auto-Chat: ON", bg="#2e7d32", fg="white")
+            self._send_delay = 5000
         else:
             self._auto_chat_btn.config(text="Auto-Chat: OFF", bg="#c62828", fg="white")
+            self._send_delay = 0
+
+    def _poll_for_peer(self):
+        """Check for another SelfBot window; enable/disable auto-chat and delay accordingly."""
+        try:
+            peers = [
+                w for w in gw.getWindowsWithTitle("Claude SelfBot")
+                if _get_window_pid(w._hWnd) != self._my_pid and w.visible
+            ]
+        except Exception:
+            peers = []
+        has_peer = len(peers) > 0
+        was_paired = self._auto_chat.get()
+        if has_peer and not was_paired:
+            # Peer just appeared — enable auto-chat and delay
+            self._auto_chat.set(True)
+            self._send_delay = 5000
+            if not self._is_second_instance:
+                self._auto_chat_btn.config(text="Auto-Chat: ON", bg="#2e7d32", fg="white")
+        elif not has_peer and was_paired:
+            # Peer gone — disable auto-chat and delay
+            self._auto_chat.set(False)
+            self._send_delay = 0
+            if not self._is_second_instance:
+                self._auto_chat_btn.config(text="Auto-Chat: OFF", bg="#c62828", fg="white")
+        self.root.after(2000, self._poll_for_peer)
 
     def _inject_response_to_other(self):
         """After a reply completes, type the response body into the other instance's input and press Enter."""
