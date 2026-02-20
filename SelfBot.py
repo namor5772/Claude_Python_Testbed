@@ -815,12 +815,19 @@ class App:
         self.setup_ui()
         self._load_last_state()
         self._my_pid = os.getpid()
+        # Save state immediately so instance 2 always has fresh data
+        try:
+            self._save_last_state()
+        except Exception:
+            pass
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         # Instance 2: start polling for injected chat content
         if self._is_second_instance:
             self.root.after(500, self._poll_inject_file)
+            # Retry loading names if they came up empty (race with instance 1)
+            self.root.after(2000, self._retry_load_names)
         # Poll for peer instance to enable/disable auto-chat and send delay
         self.root.after(2000, self._poll_for_peer)
 
@@ -1295,6 +1302,36 @@ class App:
                     if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0:
                         self.root.update_idletasks()
                         self.root.geometry(geometry)
+
+    def _retry_load_names(self):
+        """Instance 2: retry reading names from instance 1's state if they were empty."""
+        if not self._is_second_instance:
+            return
+        current_name = self.my_name_entry.get().strip()
+        current_friend = self.my_friend_entry.get().strip()
+        if current_name and current_friend:
+            return  # already populated
+        try:
+            with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+                i1_state = json.load(f)
+            my_name = i1_state.get("my_friend", "")
+            my_friend = i1_state.get("my_name", "")
+            if my_name or my_friend:
+                self.my_name_entry.config(state="normal")
+                self.my_friend_entry.config(state="normal")
+                self.my_name_entry.delete(0, tk.END)
+                self.my_friend_entry.delete(0, tk.END)
+                if my_name:
+                    self.my_name_entry.insert(0, my_name)
+                if my_friend:
+                    self.my_friend_entry.insert(0, my_friend)
+                self.my_name_entry.config(state="readonly")
+                self.my_friend_entry.config(state="readonly")
+                return
+        except (OSError, json.JSONDecodeError):
+            pass
+        # Still empty — keep retrying every 2 seconds
+        self.root.after(2000, self._retry_load_names)
 
     def _save_last_state(self):
         """Persist the current system prompt name and window geometry for next startup."""
