@@ -1,0 +1,13 @@
+{
+  "last_system_prompt_name": "ROMAN",
+  "last_model": "claude-sonnet-4-6",
+  "temperature": 0.0,
+  "thinking_enabled": false,
+  "thinking_effort": "high",
+  "thinking_budget": 8192,
+  "my_name": "NIGEL",
+  "my_friend": "ROMAN",
+  "geometry": "1098x1275+1246+115",
+  "screen_width": 2560,
+  "screen_height": 1600
+}
