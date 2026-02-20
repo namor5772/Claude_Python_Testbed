@@ -794,8 +794,10 @@ class App:
         self.skills = self._load_skills()
         self.available_models = self._fetch_available_models()
 
-        # Detect second instance via lock file
-        if os.path.exists(LOCK_FILE):
+        # Detect second instance via named mutex (OS auto-releases on crash/kill)
+        _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        self._mutex = _k32.CreateMutexW(None, True, "SelfBotInstanceMutex")
+        if ctypes.get_last_error() == 183:          # ERROR_ALREADY_EXISTS
             self._is_second_instance = True
             self._state_file = APP_STATE_FILE_2
         else:
@@ -1228,15 +1230,30 @@ class App:
                         self._thinking_strength_var.set(k)
                         break
             self._on_thinking_toggled()
-        # Restore name fields (swap only on first bootstrap from instance 1's state)
-        my_name = state.get("my_name", "")
-        my_friend = state.get("my_friend", "")
-        if bootstrap_swap:
-            my_name, my_friend = my_friend, my_name
+        # Restore name fields
+        # Instance 2: always read names from instance 1's state and swap them
+        if self._is_second_instance:
+            try:
+                with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+                    i1_state = json.load(f)
+                my_name = i1_state.get("my_friend", "")
+                my_friend = i1_state.get("my_name", "")
+            except (OSError, json.JSONDecodeError):
+                my_name = state.get("my_friend", "")
+                my_friend = state.get("my_name", "")
+        else:
+            my_name = state.get("my_name", "")
+            my_friend = state.get("my_friend", "")
+        self.my_name_entry.delete(0, tk.END)
+        self.my_friend_entry.delete(0, tk.END)
         if my_name:
             self.my_name_entry.insert(0, my_name)
         if my_friend:
             self.my_friend_entry.insert(0, my_friend)
+        # Instance 2: make name fields read-only
+        if self._is_second_instance:
+            self.my_name_entry.config(state="readonly")
+            self.my_friend_entry.config(state="readonly")
         # Restore window geometry if display setup hasn't changed
         geometry = state.get("geometry", "")
         saved_sw = state.get("screen_width", 0)
