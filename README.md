@@ -12,7 +12,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **app_state.json** — Persistent app settings for app.py and SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
-- **selfbot.lock** — Lock file for SelfBot instance detection (created/deleted at runtime)
+- **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
 
 ## app.py — Claude Chatbot
 
@@ -295,21 +295,24 @@ A variant of app.py that enables two Claude instances to have an autonomous conv
 
 ### How It Works
 
-1. **Launch instance 1** — Run `python SelfBot.py`. It creates a `selfbot.lock` file and operates as the primary instance
-2. **Launch instance 2** — Run `python SelfBot.py` again. It detects the lock file and configures itself as the secondary instance
-3. **Send a message in instance 1** — After the first response completes, the message text is injected into instance 2's output window as context
-4. **Auto-conversation loop** — Each time either instance receives a reply, the response body is automatically pasted into the other instance's input field and submitted, creating a continuous back-and-forth dialogue
+1. **Launch instance 1** — Run `python SelfBot.py`. It acquires a Windows named mutex and operates as the primary instance. When running solo, there is no send delay and auto-chat is disabled — it behaves like a normal chatbot
+2. **Launch instance 2** — Run `python SelfBot.py` again. The mutex detects instance 1 is already running and configures this as the secondary instance
+3. **Peer detection** — Instance 1 polls every 2 seconds for a peer SelfBot window. When instance 2 appears, auto-chat and the configurable send delay are automatically enabled; when instance 2 closes, they are disabled again
+4. **Send a message in instance 1** — After the first response completes, the user's original message is injected into instance 2's output window (in assistant/green colour), and the reply body is pasted into instance 2's input field
+5. **Auto-conversation loop** — Each time either instance receives a reply, the response body is automatically pasted into the other instance's input field and submitted, creating a continuous back-and-forth dialogue
 
-### Instance Detection & Lock File
+### Instance Detection (Named Mutex)
 
-- On startup, SelfBot checks for `selfbot.lock` in the project directory
-- If absent → this is instance 1; the lock file is created with the process PID
-- If present → this is instance 2
-- Instance 1 deletes the lock file on close, so the next launch starts fresh
+Instance detection uses a Windows named mutex (`CreateMutexW`) instead of relying solely on a lock file. The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created for cleanup tracking but is not used for instance detection.
 
-### Name Swapping
+- If the mutex is not held → this is instance 1; the mutex is acquired and the lock file is created
+- If the mutex is already held → this is instance 2
 
-The "Terminal user" and "Chatting with" name fields are automatically swapped for instance 2, so each side of the conversation sees the correct perspective. On instance 2's first launch, names are bootstrapped from instance 1's state file with the swap applied.
+### Name Swapping & Read-Only Fields
+
+The "Terminal user" and "Chatting with" name fields are automatically swapped for instance 2, so each side of the conversation sees the correct perspective. Instance 2 **always** reads names from instance 1's state file (`app_state.json`) and swaps them — not just on first bootstrap. The name fields on instance 2 are **read-only**; names can only be changed in instance 1.
+
+If instance 2 starts before instance 1 has saved its state, the name fields retry loading every 2 seconds until they are populated. Instance 1 also saves state immediately on startup to minimise this race window.
 
 ### Separate Persistence
 
@@ -318,17 +321,22 @@ Each instance has its own state file so settings don't interfere:
 | Instance | State file | Description |
 |---|---|---|
 | Instance 1 | `app_state.json` | Primary instance settings |
-| Instance 2 | `app_state_2.json` | Secondary instance settings (bootstrapped from instance 1 on first run) |
+| Instance 2 | `app_state_2.json` | Secondary instance settings |
 
-Both instances independently persist: model, temperature, thinking settings, name fields, and window geometry.
+Both instances independently persist: model, temperature, thinking settings, send delay, and window geometry. Name fields are only editable and persisted by instance 1; instance 2 always derives its names from instance 1's state.
 
-### Auto-Chat Toggle
+### Auto-Chat Toggle & Send Delay
 
-Instance 1 has an **Auto-Chat: ON/OFF** button on the names toolbar:
-- **ON** (green) — Responses are automatically forwarded to the other instance (default)
-- **OFF** (red) — Auto-forwarding is paused; both instances operate independently
+When running solo (no peer detected), the **Auto: ON/OFF** button and **Delay(s)** spinbox are hidden. Enter sends messages immediately with no delay.
 
-This button is hidden on instance 2 since the toggle controls the loop from instance 1's side.
+When a peer instance is detected, the controls appear on instance 1's names toolbar:
+- **Auto: ON** (green) — Responses are automatically forwarded to the other instance
+- **Auto: OFF** (red) — Auto-forwarding is paused; both instances operate independently
+- **Delay(s)** spinbox (0–30 seconds) — Configurable delay before messages are sent, providing time to review or cancel. The delay value is persisted across sessions
+
+Auto-chat is enabled automatically when a peer appears and disabled when it leaves. Manually toggling auto-chat off is respected — the peer poll will not re-enable it until the peer disconnects and reconnects.
+
+These controls are hidden on instance 2 since the toggle controls the loop from instance 1's side.
 
 ### Cross-Instance GUI Injection
 
@@ -337,7 +345,10 @@ The injection mechanism uses OS-level automation to simulate real user interacti
 - The target window is activated and brought to foreground
 - `pyautogui` clicks into the input field and pastes the response text via clipboard
 - Enter is pressed to submit the message
-- A 5-second delay on Enter key press provides a buffer before messages are processed
+
+### Default Checkbox States
+
+All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off** on startup.
 
 ### Running
 
