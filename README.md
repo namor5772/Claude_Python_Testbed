@@ -5,11 +5,14 @@ A repo containing various Python scripts written using Claude Code. The main app
 ## Contents
 
 - **app.py** — Claude chatbot GUI application (see details below)
+- **SelfBot.py** — Dual-instance self-chatting variant (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
 - **saved_chats.json** — Saved chat conversations (created at runtime)
-- **app_state.json** — Persistent app settings: last-used system prompt, model, temperature, thinking settings, window geometry, and screen dimensions (created at runtime)
+- **app_state.json** — Persistent app settings for app.py and SelfBot instance 1 (created at runtime)
+- **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
+- **selfbot.lock** — Lock file for SelfBot instance detection (created/deleted at runtime)
 
 ## app.py — Claude Chatbot
 
@@ -285,3 +288,66 @@ The application is a single-file tkinter app structured around the `App` class:
 - **Desktop Automation** — Thirteen tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`, `do_clipboard_read`, `do_clipboard_write`, `do_wait_for_window`, `do_read_screen_text`, `do_find_image_on_screen`, `do_mouse_drag`) built on `pyautogui`, `pygetwindow`, `winocr`, and `opencv-python`. Defined in a separate `DESKTOP_TOOLS` list and conditionally included via `_get_tools()` only when the `desktop_enabled` checkbox is enabled. The `screenshot` tool description is dynamically patched with the current screen resolution. Process-level DPI awareness (`SetProcessDpiAwareness(2)`) is set before window creation, and screenshot-to-screen coordinate scaling is handled automatically via `_screenshot_scale`
 - **Browser Automation** — Eleven tools (`do_browser_open`, `do_browser_navigate`, `do_browser_click`, `do_browser_fill`, `do_browser_get_text`, `do_browser_run_js`, `do_browser_screenshot`, `do_browser_close`, `do_browser_wait_for`, `do_browser_select`, `do_browser_get_elements`) built on Playwright's CDP connection to Microsoft Edge. Gated behind a `browser_enabled` `BooleanVar` toggle. Tool schemas are conditionally included via `_get_tools()` only when the checkbox is enabled. `_ensure_browser()` manages the full connection lifecycle with auto-reconnect on dead connections. `WM_DELETE_WINDOW` protocol handler ensures clean Playwright disconnection on app close
 - **Rate-Limit Retry** — Exponential backoff loop in `stream_worker` handles HTTP 429 (rate limit) and 529 (overload) errors with up to 5 retries before propagating the exception
+
+## SelfBot.py — Dual-Instance Self-Chatting Bot
+
+A variant of app.py that enables two Claude instances to have an autonomous conversation with each other. Both instances share the same codebase but automatically configure themselves for their respective roles.
+
+### How It Works
+
+1. **Launch instance 1** — Run `python SelfBot.py`. It creates a `selfbot.lock` file and operates as the primary instance
+2. **Launch instance 2** — Run `python SelfBot.py` again. It detects the lock file and configures itself as the secondary instance
+3. **Send a message in instance 1** — After the first response completes, the message text is injected into instance 2's output window as context
+4. **Auto-conversation loop** — Each time either instance receives a reply, the response body is automatically pasted into the other instance's input field and submitted, creating a continuous back-and-forth dialogue
+
+### Instance Detection & Lock File
+
+- On startup, SelfBot checks for `selfbot.lock` in the project directory
+- If absent → this is instance 1; the lock file is created with the process PID
+- If present → this is instance 2
+- Instance 1 deletes the lock file on close, so the next launch starts fresh
+
+### Name Swapping
+
+The "Terminal user" and "Chatting with" name fields are automatically swapped for instance 2, so each side of the conversation sees the correct perspective. On instance 2's first launch, names are bootstrapped from instance 1's state file with the swap applied.
+
+### Separate Persistence
+
+Each instance has its own state file so settings don't interfere:
+
+| Instance | State file | Description |
+|---|---|---|
+| Instance 1 | `app_state.json` | Primary instance settings |
+| Instance 2 | `app_state_2.json` | Secondary instance settings (bootstrapped from instance 1 on first run) |
+
+Both instances independently persist: model, temperature, thinking settings, name fields, and window geometry.
+
+### Auto-Chat Toggle
+
+Instance 1 has an **Auto-Chat: ON/OFF** button on the names toolbar:
+- **ON** (green) — Responses are automatically forwarded to the other instance (default)
+- **OFF** (red) — Auto-forwarding is paused; both instances operate independently
+
+This button is hidden on instance 2 since the toggle controls the loop from instance 1's side.
+
+### Cross-Instance GUI Injection
+
+The injection mechanism uses OS-level automation to simulate real user interaction:
+- `pygetwindow` finds the other "Claude SelfBot" window by title, excluding the current process via `GetWindowThreadProcessId()`
+- The target window is activated and brought to foreground
+- `pyautogui` clicks into the input field and pastes the response text via clipboard
+- Enter is pressed to submit the message
+- A 5-second delay on Enter key press provides a buffer before messages are processed
+
+### Running
+
+```bash
+# Activate the virtual environment
+source .venv/Scripts/activate
+
+# Launch instance 1
+python SelfBot.py
+
+# In a second terminal, launch instance 2
+python SelfBot.py
+```
