@@ -913,8 +913,8 @@ class App:
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
         if not self._is_second_instance:
             self._auto_chat_btn = tk.Button(
-                names_toolbar, text="Auto-Chat: OFF", font=("Arial", 10, "bold"),
-                width=14, command=self._toggle_auto_chat,
+                names_toolbar, text="Auto: OFF", font=("Arial", 10, "bold"),
+                width=10, command=self._toggle_auto_chat,
                 bg="#c62828", fg="white",
             )
             # Start hidden — shown by _poll_for_peer when paired
@@ -2673,10 +2673,10 @@ class App:
         self._auto_chat.set(on)
         self._auto_chat_user_off = not on
         if on:
-            self._auto_chat_btn.config(text="Auto-Chat: ON", bg="#2e7d32", fg="white")
+            self._auto_chat_btn.config(text="Auto: ON", bg="#2e7d32", fg="white")
             self._send_delay = self._delay_seconds * 1000
         else:
-            self._auto_chat_btn.config(text="Auto-Chat: OFF", bg="#c62828", fg="white")
+            self._auto_chat_btn.config(text="Auto: OFF", bg="#c62828", fg="white")
             self._send_delay = 0
 
     def _on_delay_changed(self):
@@ -2707,7 +2707,7 @@ class App:
             self._auto_chat.set(True)
             self._send_delay = self._delay_seconds * 1000
             if not self._is_second_instance:
-                self._auto_chat_btn.config(text="Auto-Chat: ON", bg="#2e7d32", fg="white")
+                self._auto_chat_btn.config(text="Auto: ON", bg="#2e7d32", fg="white")
                 self._auto_chat_btn.pack(side=tk.LEFT)
                 self._delay_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._delay_spin.pack(side=tk.LEFT)
