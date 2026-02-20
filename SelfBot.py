@@ -775,7 +775,7 @@ class App:
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
-        self.show_activity = tk.BooleanVar(value=True)
+        self.show_activity = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self._playwright = None
