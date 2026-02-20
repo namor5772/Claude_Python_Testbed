@@ -901,6 +901,7 @@ class App:
 
         # Auto-chat starts disabled (solo mode); enabled when peer detected
         self._auto_chat = tk.BooleanVar(value=False)
+        self._auto_chat_user_off = False  # set when user manually toggles off; cleared when peer leaves
         self._send_delay = 0  # 0 when solo, delay_seconds*1000 when paired
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
         if not self._is_second_instance:
@@ -2633,6 +2634,7 @@ class App:
         """Toggle the auto-chat loop on/off."""
         on = not self._auto_chat.get()
         self._auto_chat.set(on)
+        self._auto_chat_user_off = not on
         if on:
             self._auto_chat_btn.config(text="Auto-Chat: ON", bg="#2e7d32", fg="white")
             self._send_delay = self._delay_seconds * 1000
@@ -2663,8 +2665,8 @@ class App:
             peers = []
         has_peer = len(peers) > 0
         was_paired = self._auto_chat.get()
-        if has_peer and not was_paired:
-            # Peer just appeared — enable auto-chat and delay, show delay control
+        if has_peer and not was_paired and not self._auto_chat_user_off:
+            # Peer just appeared — enable auto-chat and delay, show controls
             self._auto_chat.set(True)
             self._send_delay = self._delay_seconds * 1000
             if not self._is_second_instance:
@@ -2672,9 +2674,16 @@ class App:
                 self._auto_chat_btn.pack(side=tk.LEFT)
                 self._delay_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._delay_spin.pack(side=tk.LEFT)
-        elif not has_peer and was_paired:
-            # Peer gone — disable auto-chat and delay, hide all controls
+        elif has_peer and not was_paired and not self._is_second_instance:
+            # Peer present but user toggled off — just ensure controls are visible
+            if not self._auto_chat_btn.winfo_ismapped():
+                self._auto_chat_btn.pack(side=tk.LEFT)
+                self._delay_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._delay_spin.pack(side=tk.LEFT)
+        elif not has_peer:
+            # Peer gone — disable auto-chat and delay, hide all controls, reset override
             self._auto_chat.set(False)
+            self._auto_chat_user_off = False
             self._send_delay = 0
             if not self._is_second_instance:
                 self._auto_chat_btn.pack_forget()
