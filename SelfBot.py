@@ -909,8 +909,8 @@ class App:
                 width=14, command=self._toggle_auto_chat,
                 bg="#c62828", fg="white",
             )
-            self._auto_chat_btn.pack(side=tk.LEFT)
-            # Delay selector (hidden until peer detected)
+            # Start hidden — shown by _poll_for_peer when paired
+            # Delay selector (also hidden until peer detected)
             self._delay_label = tk.Label(names_toolbar, text="Delay(s)", font=("Arial", 10))
             self._delay_var = tk.IntVar(value=self._delay_seconds)
             self._delay_spin = tk.Spinbox(
@@ -2669,14 +2669,15 @@ class App:
             self._send_delay = self._delay_seconds * 1000
             if not self._is_second_instance:
                 self._auto_chat_btn.config(text="Auto-Chat: ON", bg="#2e7d32", fg="white")
+                self._auto_chat_btn.pack(side=tk.LEFT)
                 self._delay_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._delay_spin.pack(side=tk.LEFT)
         elif not has_peer and was_paired:
-            # Peer gone — disable auto-chat and delay, hide delay control
+            # Peer gone — disable auto-chat and delay, hide all controls
             self._auto_chat.set(False)
             self._send_delay = 0
             if not self._is_second_instance:
-                self._auto_chat_btn.config(text="Auto-Chat: OFF", bg="#c62828", fg="white")
+                self._auto_chat_btn.pack_forget()
                 self._delay_label.pack_forget()
                 self._delay_spin.pack_forget()
         self.root.after(2000, self._poll_for_peer)
