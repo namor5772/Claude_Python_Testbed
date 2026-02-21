@@ -913,9 +913,9 @@ class App:
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
         if not self._is_second_instance:
             self._auto_chat_btn = tk.Button(
-                names_toolbar, text="Auto: OFF", font=("Arial", 10, "bold"),
+                names_toolbar, text="Auto: OFF", font=("Arial", 9),
                 width=10, command=self._toggle_auto_chat,
-                bg="#c62828", fg="white", pady=0, bd=1,
+                bg="#c62828", fg="white", pady=0, bd=1, highlightthickness=0,
             )
             # Start hidden — shown by _poll_for_peer when paired
             # Delay selector (also hidden until peer detected)
