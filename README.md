@@ -8,7 +8,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **SelfBot.py** — Dual-instance self-chatting variant (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
-- **saved_chats.json** — Saved chat conversations (created at runtime)
+- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime; migrated automatically from old `saved_chats.json` on first launch)
 - **app_state.json** — Persistent app settings for app.py and SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
@@ -280,7 +280,7 @@ The application is a single-file tkinter app structured around the `App` class:
 - **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, labels, tool info, errors) back to the main thread. When thinking is enabled, the stream worker uses raw event iteration (`content_block_start`, `content_block_delta`, `content_block_stop`) instead of `text_stream` to handle both thinking and text blocks
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
-- **Persistence** — Four JSON files handle different concerns: `system_prompts.json` for the prompt library, `saved_chats.json` for conversation history, `app_state.json` for user preferences, and `skills.json` for the skills library
+- **Persistence** — JSON-based storage handles different concerns: `system_prompts.json` for the prompt library, individual `.json` files in `saved_chats/` for conversation history (one file per chat), `app_state.json` for user preferences, and `skills.json` for the skills library
 - **Skills System** — Skills are loaded from `skills.json` on startup. `_build_system_prompt()` assembles the final system prompt by appending enabled skill content and listing on-demand skill names. `_get_tools()` dynamically adds a `get_skill` tool when on-demand skills exist, with the skill names constrained via an `enum` in the input schema
 - **Serialisation** — The `_serialize_messages()` method converts Anthropic SDK Pydantic objects (e.g., `ToolUseBlock`, `TextBlock`) to plain dicts via `model_dump()`, strips base64 image data, skips `thinking` and `redacted_thinking` blocks, and sanitises content blocks through `_clean_content_block()` to remove extra SDK fields (like `parsed_output`) that the API rejects on re-submission. `_clean_content_block()` preserves thinking/redacted_thinking blocks with their signatures for tool-use loop continuity
 - **HTML Extraction** — The `HTMLTextExtractor` class (a `HTMLParser` subclass) strips HTML tags from fetched web pages, skipping `<script>`, `<style>`, and `<noscript>` blocks, and inserting newlines at block-level element boundaries
