@@ -915,7 +915,7 @@ class App:
             self._auto_chat_btn = tk.Button(
                 names_toolbar, text="Auto: OFF", font=("Arial", 10, "bold"),
                 width=10, command=self._toggle_auto_chat,
-                bg="#c62828", fg="white",
+                bg="#c62828", fg="white", pady=0, bd=1,
             )
             # Start hidden — shown by _poll_for_peer when paired
             # Delay selector (also hidden until peer detected)
