@@ -833,7 +833,7 @@ class App:
 
     def setup_ui(self):
         # Grid weights for resizing
-        self.root.grid_rowconfigure(0, weight=0)
+        self.root.grid_rowconfigure(0, weight=0, minsize=40)
         self.root.grid_rowconfigure(1, weight=0)
         self.root.grid_rowconfigure(2, weight=0)
         self.root.grid_rowconfigure(3, weight=1)
