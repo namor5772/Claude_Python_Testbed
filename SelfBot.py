@@ -899,11 +899,11 @@ class App:
         names_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
 
         tk.Label(names_toolbar, text="Terminal user", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
-        self.my_name_entry = tk.Entry(names_toolbar, font=("Arial", 10), width=20)
+        self.my_name_entry = tk.Entry(names_toolbar, font=("Arial", 10), width=14)
         self.my_name_entry.pack(side=tk.LEFT, padx=(0, 15))
 
         tk.Label(names_toolbar, text="Chatting with", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
-        self.my_friend_entry = tk.Entry(names_toolbar, font=("Arial", 10), width=20)
+        self.my_friend_entry = tk.Entry(names_toolbar, font=("Arial", 10), width=14)
         self.my_friend_entry.pack(side=tk.LEFT, padx=(0, 15))
 
         # Auto-chat starts disabled (solo mode); enabled when peer detected
