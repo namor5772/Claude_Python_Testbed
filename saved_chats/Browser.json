@@ -1,0 +1,59 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Open a web browser"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll open a web browser for you using PowerShell."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_012T3ULBXRchYbXMq3nKNvEq",
+          "name": "run_powershell",
+          "input": {
+            "command": "Start-Process \"msedge\""
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_012T3ULBXRchYbXMq3nKNvEq",
+          "content": "[No output]"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "I've opened Microsoft Edge for you. If you'd prefer a different browser (like Chrome or Firefox), let me know and I can open that instead."
+    },
+    {
+      "role": "user",
+      "content": "Press the CMC Invest favourite button to open that page"
+    },
+    {
+      "role": "assistant",
+      "content": "I cannot directly control your browser or press buttons within it through PowerShell commands. I don't have the ability to interact with the browser's UI elements, favorites, or bookmarks.\n\nHowever, I can help you in a few ways:\n\n1. **If you know the URL** for CMC Invest, I can open it directly in your browser\n2. **I can search** for the CMC Invest website and open it\n3. **You can manually click** the favorite/bookmark yourself\n\nWould you like me to search for and open the CMC Invest website URL?"
+    },
+    {
+      "role": "user",
+      "content": "Is there a tool that I could create for you to be able to press gui buttons in windows apps"
+    },
+    {
+      "role": "assistant",
+      "content": "Yes, there are several approaches you could create to enable me to interact with GUI elements in Windows applications:\n\n## 1. **UI Automation via PowerShell** (Easiest to implement)\nYou could create PowerShell functions using:\n- **UIAutomation module** - Controls Windows UI elements\n- **Windows.Automation** .NET classes\n- Can find and click buttons, fill text boxes, etc.\n\nExample tool structure:\n```powershell\n# Find and click a button by name\nfunction Click-UIButton {\n    param([string]$WindowTitle, [string]$ButtonName)\n    # Use UIAutomation to find and invoke the button\n}\n```\n\n## 2. **AutoHotkey Script Execution**\nCreate a tool that lets me execute AutoHotkey scripts via PowerShell:\n- More robust for GUI automation\n- Can handle complex mouse/keyboard sequences\n- Better for clicking specific screen coordinates\n\n## 3. **Python + pyautogui/pywinauto**\nA tool that executes Python scripts with GUI automation libraries:\n- Very powerful for UI interaction\n- Can handle image recognition for buttons\n- More flexible than PowerShell alone\n\n## 4. **Selenium WebDriver** (For browsers specifically)\nSince you mentioned CMC Invest (likely a web page), a Selenium-based tool would be ideal:\n- Full browser control\n- Can click links, buttons, fill forms\n- Most reliable for web automation\n\n**My recommendation**: Create a tool using **UIAutomation in PowerShell** for general Windows apps, and/or a **Selenium-based tool** specifically for browser automation. Would you like help designing either of these tools?"
+    }
+  ],
+  "system_prompt": "You are an Australian food-labelling assistant.\nYour job is to produce Nutrition Information Panels (NIP) that comply with FSANZ Standard 1.2.8 and Schedules 11–12.\n\nCore Rules\n\nAlways express values per 100g if food is a solid or per 100mL if the food is a liquid\n\nUnits must be:\nkJ   (energy)\ng    (protein, fat total, saturated fat, polyunsaturated fat, monounsaturated fat, carbohydrate, sugars, dietary fibre, alcohol)\nmg   (trans fat, sodium, calcium, potassium, thiamin, riboflavin, niacin, iron, magnesium, vitamin c, caffeine, cholesterol)\nµg   (folate)\n\n\n🔍 Data Source Priority and Retrieval Rules (critical)\n\nPrimary source – Official product website, manufacturer or retailer\nAlways search for and extract the Nutrition Information Panel (NIP) directly from the manufacturers or retailer's official website first.\nIf photos of the food and/or its NIP are supplied use these.\nCopy those per 100g or 100mL values exactly as stated.\n\nFallback source – Australian Food Composition Database (AFCD/NUTTAB)\nUse AFCD/NUTTAB values only when product data are unavailable or incomplete.\n\nLast resort – If none of the above exist, use a close Australian or international match (e.g. USDA, OpenFoodFacts) but add \"NEED_SOURCE\" in notes section.\n\nIf some nutrients are not available always estimate them using any sources available\n\nMerging & estimation policy\n\nNever override website-derived values.\nIf a nutrient is missing from any above sources, always estimate missing nutrient values from AFCD or USDA or similar.\n\nRounding\n\nApply FSANZ Schedule 11 rounding conventions for each nutrient.\n\n⚠️ Source Enforcement Reminder\n\nBefore producing any output:\n\nCheck the official product webpage first.\nUse it as the primary source of truth.\nFill missing fields from AFCD or other reliable Australian data.\nNever substitute or overwrite website values.\nRecord all clarifications or fallback sources only inside the \"notes\" field.\n\n🧾 Diagnostic Clause (for audit transparency)\n\nIf the official product website could not be accessed or did not provide a full NIP, include a concise diagnostic statement in \"notes\".\nExamples:\n\"notes\": \"No NIP on manufacturer website – used AFCD equivalent (honey, generic).\"\n\"notes\": \"Website data partially missing – estimated fibre and folate from NUTTAB 2021.\"\n\"notes\": \"Website unavailable – used spreadsheet record from Beechworth Honey 2024-09.\"\n\nThe model must output only valid JSON — no prose, no markdown, no comments, no preamble, no trailing explanation.\n\nIf the NIP is per 100mL then always ensure the FoodDescription string ends with \" (AI) mL#\" else if per 100g then ends with \"(AI) #\"\nBegin the FoodDescription with the name of the food category (with capital first letter) followed by a comma and space eg \"Oats, \"\n\n\n**CRITICAL OUTPUT RULE (do not violate):**\n\nOutput valid JSON only, inside a single ```json``` code block.\nUse pretty-printed formatting with 2-space indentation.\nPut each property on its own line.\nDo not output minified JSON.\nYou must output JSON matching this schema EXACTLY, keeping this key order:\n\n{\n  \"FoodDescription\": \"string\",\n  \"Energy\": \"number\",\n  \"Protein\": \"number\",\n  \"FatTotal\": \"number\",\n  \"SaturatedFat\": \"number\",\n  \"TransFat\": \"number\",\n  \"PolyunsaturatedFat\": \"number\",\n  \"MonounsaturatedFat\": \"number\",\n  \"Carbohydrate\": \"number\",\n  \"Sugars\": \"number\",\n  \"DietaryFibre\": \"number\",\n  \"SodiumNa\": \"number\",\n  \"CalciumCa\": \"number\",\n  \"PotassiumK\": \"number\",\n  \"ThiaminB1\": \"number\",\n  \"RiboflavinB2\": \"number\",\n  \"NiacinB3\": \"number\",\n  \"Folate\": \"number\",\n  \"IronFe\": \"number\",\n  \"MagnesiumMg\": \"number\",\n  \"VitaminC\": \"number\",\n  \"Caffeine\": \"number\",\n  \"Cholesterol\": \"number\",\n  \"Alcohol\": \"number\",\n  \"notes\": \"string\"\n}\n\nNo extra text before or after the JSON.\nIf you include *any* non-JSON text, the response is invalid.\n\nEstimate any missing nutrient values\nPut weight of serve, meal or visible food in grams in notes section;",
+  "system_prompt_name": "NIP",
+  "model": "claude-sonnet-4-5-20250929",
+  "name": "Browser"
+}

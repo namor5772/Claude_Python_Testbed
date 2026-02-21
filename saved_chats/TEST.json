@@ -1,0 +1,25 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello_"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! 👋 How are you doing? How can I assist you today? Whether you have a question, need help with something on your computer, or want me to look something up — I'm here to help! 😊"
+    },
+    {
+      "role": "user",
+      "content": "Hello"
+    },
+    {
+      "role": "assistant",
+      "content": "Arrr, ahoy there, matey! ⚓ Welcome aboard! How can this old sea dog be of service to ye today? Whether ye need information from the vast seas of the internet, help with yer computer, or just a good chat — I'm here to help! 🏴‍☠️"
+    }
+  ],
+  "system_prompt": "NULL",
+  "system_prompt_name": "NULL",
+  "model": "claude-sonnet-4-6",
+  "temperature": 1.0,
+  "name": "TEST"
+}
