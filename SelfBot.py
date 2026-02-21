@@ -2708,15 +2708,15 @@ class App:
             self._send_delay = self._delay_seconds * 1000
             if not self._is_second_instance:
                 self._auto_chat_btn.config(text="Auto: ON", bg="#2e7d32", fg="white")
-                self._auto_chat_btn.pack(side=tk.LEFT)
-                self._delay_label.pack(side=tk.LEFT, padx=(10, 5))
-                self._delay_spin.pack(side=tk.LEFT)
+                self._delay_spin.pack(side=tk.RIGHT)
+                self._delay_label.pack(side=tk.RIGHT, padx=(10, 5))
+                self._auto_chat_btn.pack(side=tk.RIGHT)
         elif has_peer and not was_paired and not self._is_second_instance:
             # Peer present but user toggled off — just ensure controls are visible
             if not self._auto_chat_btn.winfo_ismapped():
-                self._auto_chat_btn.pack(side=tk.LEFT)
-                self._delay_label.pack(side=tk.LEFT, padx=(10, 5))
-                self._delay_spin.pack(side=tk.LEFT)
+                self._delay_spin.pack(side=tk.RIGHT)
+                self._delay_label.pack(side=tk.RIGHT, padx=(10, 5))
+                self._auto_chat_btn.pack(side=tk.RIGHT)
         elif not has_peer:
             # Peer gone — disable auto-chat and delay, hide all controls, reset override
             self._auto_chat.set(False)
