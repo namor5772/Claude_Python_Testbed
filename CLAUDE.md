@@ -23,7 +23,7 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 - `SelfBot.py` — Dual-instance self-chatting variant of app.py; two instances auto-converse via GUI injection
 - `skills.json` — User-defined skills with content and mode (created at runtime)
 - `system_prompts.json` — Saved system prompts (created at runtime)
-- `saved_chats.json` — Saved chat conversations (created at runtime)
+- `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat (migrated from old `saved_chats.json`)
 - `app_state.json` — Persistent settings for app.py / SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
