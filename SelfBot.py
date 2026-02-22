@@ -706,7 +706,6 @@ DEFAULT_SYSTEM_PROMPT = (
 
 PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompts.json")
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
-CHATS_FILE_OLD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats.json")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
@@ -967,7 +966,6 @@ class App:
         self._chat_combo.pack(side=tk.LEFT, padx=(0, 5))
         self._chat_combo.bind("<<ComboboxSelected>>", lambda e: self._load_chat())
 
-        self._migrate_chats()
         self._refresh_chat_list()
 
         # Chat display
@@ -1775,23 +1773,6 @@ class App:
     @staticmethod
     def _chat_file_path(name):
         return os.path.join(CHATS_DIR, App._sanitize_filename(name))
-
-    def _migrate_chats(self):
-        """One-time migration from saved_chats.json to individual files."""
-        if not os.path.exists(CHATS_FILE_OLD):
-            return
-        try:
-            with open(CHATS_FILE_OLD, "r", encoding="utf-8") as f:
-                chats = json.load(f)
-            os.makedirs(CHATS_DIR, exist_ok=True)
-            for name, data in chats.items():
-                data["name"] = name
-                fpath = self._chat_file_path(name)
-                with open(fpath, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-            os.rename(CHATS_FILE_OLD, CHATS_FILE_OLD + ".bak")
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"Chat migration error: {e}")
 
     def _load_saved_chats(self):
         """Load all saved chats from individual files in saved_chats directory."""
