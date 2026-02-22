@@ -2812,6 +2812,8 @@ class App:
                     os.remove(AUTO_MSG_FILE)
                     self.input_field.delete("1.0", tk.END)
                     self.input_field.insert("1.0", text)
+                    self.input_field.see("end")
+                    self.root.update_idletasks()
                     delay = self._send_delay if self._send_delay > 0 else 0
                     if delay > 0:
                         self.input_field.config(state="disabled")
@@ -2830,8 +2832,16 @@ class App:
         self.send_message()
 
     def _on_close(self):
-        """Window close handler — save state, clean up browser, then destroy."""
+        """Window close handler — save state, close peer instance, clean up browser, then destroy."""
         self._save_last_state()
+        # Close any other SelfBot instance
+        try:
+            for w in gw.getWindowsWithTitle("Claude SelfBot"):
+                pid = _get_window_pid(w._hWnd)
+                if pid != self._my_pid:
+                    os.kill(pid, 9)
+        except Exception:
+            pass
         # First instance owns the lock file — remove it on exit
         if not self._is_second_instance:
             try:
