@@ -1,13 +1,15 @@
 {
-  "last_system_prompt_name": "ROMAN",
+  "last_system_prompt_name": "SHAUN_",
   "last_model": "claude-sonnet-4-6",
   "temperature": 0.0,
-  "thinking_enabled": false,
-  "thinking_effort": "high",
+  "thinking_enabled": true,
+  "thinking_effort": "medium",
   "thinking_budget": 8192,
   "my_name": "NIGEL",
-  "my_friend": "ROMAN",
-  "geometry": "1098x1275+1246+115",
+  "my_friend": "SHAUN",
+  "delay_seconds": 5,
+  "duo_geometry": "1044x789+1285+87",
+  "geometry": "1050x930+304+304",
   "screen_width": 2560,
   "screen_height": 1600
 }

@@ -951,7 +951,12 @@ class App:
         self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry.bind("<Return>", lambda e: self._save_chat())
 
-        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 15))
+        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 5))
+        self.save_output_txt = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            chat_toolbar, text="+ Output .txt", variable=self.save_output_txt,
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT, padx=(0, 15))
 
         tk.Label(chat_toolbar, text="Load Chat", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self._chat_combo_var = tk.StringVar()
@@ -1910,6 +1915,11 @@ class App:
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
         })
+        if self.save_output_txt.get():
+            txt_path = os.path.join("saved_chats", f"{name}.txt")
+            output_text = self.chat_display.get("1.0", tk.END).rstrip()
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(output_text)
         self._refresh_chat_list()
         self._chat_combo_var.set(name)
 
