@@ -28,6 +28,8 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
 - `selfbot_auto_msg.json` — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
+- `LaunchSelfBot.bat` — Launcher that starts both SelfBot instances side by side with focus on instance 1
+- `selfbot_position.ps1` — PowerShell helper used by the launcher to position and focus windows
 
 ## Architecture (app.py)
 

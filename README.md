@@ -14,6 +14,8 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **skills.json** — Saved skills with content and mode (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
+- **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (see below)
+- **selfbot_position.ps1** — PowerShell helper used by the launcher to position and focus windows
 
 ## app.py — Claude Chatbot
 
@@ -361,6 +363,9 @@ All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off*
 
 ### Running
 
+**Quick launch (recommended):** Double-click `LaunchSelfBot.bat` (or the "Claude SelfBot Duo" desktop shortcut). This kills any existing instances, cleans up stale files, launches both instances with correct timing, positions them side by side filling the screen, and focuses instance 1's input field so you can start typing immediately.
+
+**Manual launch:**
 ```bash
 # Activate the virtual environment
 source .venv/Scripts/activate
