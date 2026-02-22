@@ -813,6 +813,7 @@ class App:
         self._response_count = 0
         self._first_message_text = ""
         self._current_response_text = ""
+        self._current_thinking_text = ""
 
         self.setup_ui()
         self._load_last_state()
@@ -2795,8 +2796,12 @@ class App:
         if not text:
             return
         try:
+            payload = {"from_pid": self._my_pid, "text": text}
+            thinking = self._current_thinking_text.strip()
+            if thinking:
+                payload["thinking"] = thinking
             with open(AUTO_MSG_FILE, "w", encoding="utf-8") as f:
-                json.dump({"from_pid": self._my_pid, "text": text}, f)
+                json.dump(payload, f)
         except OSError:
             pass
 
@@ -2810,6 +2815,14 @@ class App:
                 text = data.get("text", "").strip()
                 if from_pid != self._my_pid and text and not self.streaming:
                     os.remove(AUTO_MSG_FILE)
+                    # Display the peer's thinking block (display-only, not in conversation)
+                    thinking = data.get("thinking", "").strip()
+                    if thinking:
+                        self.chat_display.config(state="normal")
+                        self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
+                        self.chat_display.insert(tk.END, thinking + "\n\n", "thinking")
+                        self.chat_display.see(tk.END)
+                        self.chat_display.config(state="disabled")
                     self.input_field.delete("1.0", tk.END)
                     self.input_field.insert("1.0", text)
                     self.input_field.see("end")
@@ -3485,11 +3498,13 @@ class App:
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "thinking_start":
+                    self._current_thinking_text = ""
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "thinking_delta":
+                    self._current_thinking_text += msg["content"]
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, msg["content"], "thinking")
                     self.chat_display.see(tk.END)
