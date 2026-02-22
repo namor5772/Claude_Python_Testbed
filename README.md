@@ -13,6 +13,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
+- **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 
 ## app.py — Claude Chatbot
 
@@ -298,8 +299,8 @@ A variant of app.py that enables two Claude instances to have an autonomous conv
 1. **Launch instance 1** — Run `python SelfBot.py`. It acquires a Windows named mutex and operates as the primary instance. When running solo, there is no send delay and auto-chat is disabled — it behaves like a normal chatbot
 2. **Launch instance 2** — Run `python SelfBot.py` again. The mutex detects instance 1 is already running and configures this as the secondary instance
 3. **Peer detection** — Instance 1 polls every 2 seconds for a peer SelfBot window. When instance 2 appears, auto-chat and the configurable send delay are automatically enabled; when instance 2 closes, they are disabled again
-4. **Send a message in instance 1** — After the first response completes, the user's original message is injected into instance 2's output window (in assistant/green colour), and the reply body is pasted into instance 2's input field
-5. **Auto-conversation loop** — Each time either instance receives a reply, the response body is automatically pasted into the other instance's input field and submitted, creating a continuous back-and-forth dialogue
+4. **Send a message in instance 1** — After the first response completes, the user's original message is injected into instance 2's output window (in assistant/green colour), and the reply body is written to a shared file for instance 2 to pick up
+5. **Auto-conversation loop** — Each time either instance receives a reply, the response body is written to a shared JSON file (`selfbot_auto_msg.json`). The other instance polls for this file, reads the text into its own input field, and sends it internally — creating a continuous back-and-forth dialogue without any window switching or focus changes
 
 ### Instance Detection (Named Mutex)
 
@@ -338,13 +339,21 @@ Auto-chat is enabled automatically when a peer appears and disabled when it leav
 
 These controls are hidden on instance 2 since the toggle controls the loop from instance 1's side.
 
-### Cross-Instance GUI Injection
+### Cross-Instance Message Passing
 
-The injection mechanism uses OS-level automation to simulate real user interaction:
-- `pygetwindow` finds the other "Claude SelfBot" window by title, excluding the current process via `GetWindowThreadProcessId()`
-- The target window is activated and brought to foreground
-- `pyautogui` clicks into the input field and pastes the response text via clipboard
-- Enter is pressed to submit the message
+The injection mechanism uses file-based message passing instead of GUI automation, making it reliable regardless of window focus or position:
+- When a response completes, the sender writes the text and its PID to `selfbot_auto_msg.json`
+- Both instances poll for this file every 500ms via `_poll_auto_msg()`
+- The receiver (identified by PID mismatch) reads the text, inserts it into its own input field, and calls `send_message()` internally
+- The configured send delay is respected — the text sits visibly in the input field for the delay duration before sending
+- No window activation, coordinate clicking, or clipboard pasting is involved
+
+### Pause & Resume (Pending Injection)
+
+When Auto is toggled OFF mid-conversation, the current API response completes but the injection is deferred:
+- A `_pending_injection` flag is set when a response completes while Auto is OFF
+- When Auto is toggled back ON, any pending injection fires immediately, resuming the conversation loop
+- This allows pausing the conversation to read responses without losing the thread
 
 ### Default Checkbox States
 
