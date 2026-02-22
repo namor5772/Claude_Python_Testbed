@@ -244,6 +244,12 @@ API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) e
 - When disabled, these status lines are suppressed for a cleaner, final-answer-only view
 - The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked — if either Debug or Tool Calls is enabled, the counter badges remain visible
 
+#### Show Thinking Display
+- Toggle the **Show Thinking** checkbox to show/hide the extended thinking blocks that appear when Thinking mode is enabled on the model toolbar
+- When checked (the default), thinking blocks are displayed in amber/gold italic text before the response
+- When unchecked, thinking blocks are suppressed from the display (the API still generates them, they are just hidden)
+- This is independent of the model toolbar **Thinking** checkbox, which controls whether the API generates thinking blocks at all
+
 ### Requirements
 
 - Python 3 with tkinter (included in standard library)
@@ -280,7 +286,7 @@ python app.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
+- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, labels, tool info, errors) back to the main thread. When thinking is enabled, the stream worker uses raw event iteration (`content_block_start`, `content_block_delta`, `content_block_stop`) instead of `text_stream` to handle both thinking and text blocks
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — JSON-based storage handles different concerns: `system_prompts.json` for the prompt library, individual `.json` files in `saved_chats/` for conversation history (one file per chat), `app_state.json` for user preferences, and `skills.json` for the skills library
@@ -365,7 +371,7 @@ Closing either SelfBot window automatically closes the other instance. The `_on_
 
 ### Default Checkbox States
 
-All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off** on startup.
+All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off** on startup. The **Show Thinking** checkbox defaults to **on**.
 
 ### Running
 
