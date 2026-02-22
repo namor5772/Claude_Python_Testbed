@@ -703,8 +703,7 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompts.json")
-CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
-CHATS_FILE_OLD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats.json")
+CHATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats.json")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 
@@ -766,7 +765,6 @@ class App:
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=True)
-        self.show_thinking = tk.BooleanVar(value=True)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self._playwright = None
@@ -872,7 +870,6 @@ class App:
         self._chat_combo.pack(side=tk.LEFT, padx=(0, 5))
         self._chat_combo.bind("<<ComboboxSelected>>", lambda e: self._load_chat())
 
-        self._migrate_chats()
         self._refresh_chat_list()
 
         # Chat display
@@ -992,12 +989,6 @@ class App:
             font=("Arial", 9),
         )
         self.activity_toggle.pack(side=tk.LEFT, padx=(5, 0))
-
-        self.thinking_toggle = tk.Checkbutton(
-            checkbox_frame, text="Thinking", variable=self.show_thinking,
-            font=("Arial", 9),
-        )
-        self.thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         self.desktop_toggle = tk.Checkbutton(
             checkbox_frame, text="Desktop", variable=self.desktop_enabled,
@@ -1543,75 +1534,19 @@ class App:
 
     # --- Chat Save / Load ---
 
-    @staticmethod
-    def _sanitize_filename(name):
-        """Convert a chat name to a safe filename."""
-        safe = re.sub(r'[<>:"/\\|?*]', '_', name)
-        safe = safe.strip('. ')
-        return (safe or '_') + '.json'
-
-    @staticmethod
-    def _chat_file_path(name):
-        return os.path.join(CHATS_DIR, App._sanitize_filename(name))
-
-    def _migrate_chats(self):
-        """One-time migration from saved_chats.json to individual files."""
-        if not os.path.exists(CHATS_FILE_OLD):
-            return
-        try:
-            with open(CHATS_FILE_OLD, "r", encoding="utf-8") as f:
-                chats = json.load(f)
-            os.makedirs(CHATS_DIR, exist_ok=True)
-            for name, data in chats.items():
-                data["name"] = name
-                fpath = self._chat_file_path(name)
-                with open(fpath, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-            # Rename old file so migration doesn't repeat
-            os.rename(CHATS_FILE_OLD, CHATS_FILE_OLD + ".bak")
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"Chat migration error: {e}")
-
     def _load_saved_chats(self):
-        """Load all saved chats from individual files in saved_chats directory."""
-        chats = {}
-        if not os.path.isdir(CHATS_DIR):
-            return chats
-        for fname in os.listdir(CHATS_DIR):
-            if not fname.endswith('.json'):
-                continue
-            fpath = os.path.join(CHATS_DIR, fname)
-            try:
-                with open(fpath, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                name = data.get('name', fname[:-5])
-                chats[name] = data
-            except (json.JSONDecodeError, OSError):
-                continue
-        return chats
-
-    def _load_single_chat(self, name):
-        """Load a single chat by name."""
-        fpath = self._chat_file_path(name)
-        if not os.path.exists(fpath):
-            return None
-        try:
-            with open(fpath, 'r', encoding='utf-8') as f:
+        if os.path.exists(CHATS_FILE):
+            with open(CHATS_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return None
+        return {}
 
-    def _save_chat_file(self, name, data):
-        """Save a single chat to its own file."""
-        os.makedirs(CHATS_DIR, exist_ok=True)
-        data['name'] = name
-        fpath = self._chat_file_path(name)
-        with open(fpath, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+    def _save_chats_to_disk(self, chats):
+        with open(CHATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(chats, f, indent=2, ensure_ascii=False)
 
     def _refresh_chat_list(self):
         chats = self._load_saved_chats()
-        self._chat_combo["values"] = sorted(chats.keys())
+        self._chat_combo["values"] = list(chats.keys())
 
     @staticmethod
     def _clean_content_block(block):
@@ -1684,7 +1619,8 @@ class App:
         if not self.messages:
             messagebox.showwarning("Empty chat", "There is no chat to save.")
             return
-        self._save_chat_file(name, {
+        chats = self._load_saved_chats()
+        chats[name] = {
             "messages": self._serialize_messages(),
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
@@ -1693,7 +1629,8 @@ class App:
             "thinking_enabled": self.thinking_enabled,
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
-        })
+        }
+        self._save_chats_to_disk(chats)
         self._refresh_chat_list()
         self._chat_combo_var.set(name)
 
@@ -1701,10 +1638,11 @@ class App:
         name = self._chat_combo_var.get()
         if not name:
             return
-        chat_data = self._load_single_chat(name)
-        if chat_data is None:
+        chats = self._load_saved_chats()
+        if name not in chats:
             messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
             return
+        chat_data = chats[name]
         # Sanitize loaded messages — strip extra fields (e.g. parsed_output)
         # that the API rejects when sent back
         loaded = chat_data["messages"]
@@ -1763,11 +1701,12 @@ class App:
         if not name:
             messagebox.showwarning("No selection", "Select or enter a chat name to delete.")
             return
-        fpath = self._chat_file_path(name)
-        if not os.path.exists(fpath):
+        chats = self._load_saved_chats()
+        if name not in chats:
             messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
             return
-        os.remove(fpath)
+        chats.pop(name)
+        self._save_chats_to_disk(chats)
         self._refresh_chat_list()
         self._chat_combo_var.set("")
         self.chat_name_entry.delete(0, tk.END)
@@ -3144,23 +3083,20 @@ class App:
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "thinking_start":
-                    if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
                 elif msg["type"] == "thinking_delta":
-                    if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, msg["content"], "thinking")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, msg["content"], "thinking")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
                 elif msg["type"] == "thinking_end":
-                    if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, "\n\n", "thinking")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, "\n\n", "thinking")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
                 elif msg["type"] == "label":
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, "Claude:\n", "assistant_label")
