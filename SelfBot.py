@@ -28,6 +28,7 @@ import csv
 import subprocess
 import re
 import io
+import sys
 import time
 import pyautogui
 import pygetwindow as gw
@@ -815,6 +816,7 @@ class App:
         self._first_message_text = ""
         self._current_response_text = ""
         self._current_thinking_text = ""
+        self._duo_mode = "--no-geometry" in sys.argv
 
         self.setup_ui()
         self._load_last_state()
@@ -1301,21 +1303,44 @@ class App:
         if self._is_second_instance:
             self.my_name_entry.config(state="readonly")
             self.my_friend_entry.config(state="readonly")
-        # Restore window geometry if display setup hasn't changed
-        geometry = state.get("geometry", "")
-        saved_sw = state.get("screen_width", 0)
-        saved_sh = state.get("screen_height", 0)
-        if geometry and saved_sw and saved_sh:
-            cur_sw = self.root.winfo_screenwidth()
-            cur_sh = self.root.winfo_screenheight()
-            if saved_sw == cur_sw and saved_sh == cur_sh:
-                # Parse geometry string "WxH+X+Y" and verify on-screen
-                m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry)
+        # Restore window geometry — duo and solo modes are independent
+        if self._duo_mode:
+            # Launched from LaunchSelfBot.bat — restore saved duo geometry or default side-by-side
+            duo_geo = state.get("duo_geometry", "")
+            if duo_geo:
+                m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", duo_geo)
                 if m:
                     w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                    cur_sw = self.root.winfo_screenwidth()
+                    cur_sh = self.root.winfo_screenheight()
                     if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0 and w >= 400 and h >= 300:
-                        self.root.update_idletasks()
-                        self.root.geometry(geometry)
+                        self.root.geometry(duo_geo)
+                        return
+            # No saved duo geometry — calculate side-by-side from work area
+            rect = ctypes.wintypes.RECT()
+            ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+            wa_x, wa_y = rect.left, rect.top
+            wa_w, wa_h = rect.right - rect.left, rect.bottom - rect.top
+            half_w = wa_w // 2
+            if self._is_second_instance:
+                self.root.geometry(f"{half_w}x{wa_h}+{wa_x + half_w}+{wa_y}")
+            else:
+                self.root.geometry(f"{half_w}x{wa_h}+{wa_x}+{wa_y}")
+        else:
+            # Manual launch — restore saved solo geometry if display setup hasn't changed
+            geometry = state.get("geometry", "")
+            saved_sw = state.get("screen_width", 0)
+            saved_sh = state.get("screen_height", 0)
+            if geometry and saved_sw and saved_sh:
+                cur_sw = self.root.winfo_screenwidth()
+                cur_sh = self.root.winfo_screenheight()
+                if saved_sw == cur_sw and saved_sh == cur_sh:
+                    m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry)
+                    if m:
+                        w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+                        if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0 and w >= 400 and h >= 300:
+                            self.root.update_idletasks()
+                            self.root.geometry(geometry)
 
     def _retry_load_names(self):
         """Instance 2: retry reading names from instance 1's state if they were empty."""
@@ -1359,10 +1384,27 @@ class App:
             "my_name": self.my_name_entry.get(),
             "my_friend": self.my_friend_entry.get(),
             "delay_seconds": self._delay_seconds,
-            "geometry": self.root.geometry(),
-            "screen_width": self.root.winfo_screenwidth(),
-            "screen_height": self.root.winfo_screenheight(),
         }
+        # Load existing state to preserve the other mode's geometry
+        try:
+            with open(self._state_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+        # Preserve whichever geometry key belongs to the other mode
+        if self._duo_mode:
+            state["duo_geometry"] = self.root.geometry()
+            # Keep solo geometry from existing state
+            for k in ("geometry", "screen_width", "screen_height"):
+                if k in existing:
+                    state[k] = existing[k]
+        else:
+            state["geometry"] = self.root.geometry()
+            state["screen_width"] = self.root.winfo_screenwidth()
+            state["screen_height"] = self.root.winfo_screenheight()
+            # Keep duo geometry from existing state
+            if "duo_geometry" in existing:
+                state["duo_geometry"] = existing["duo_geometry"]
         with open(self._state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 

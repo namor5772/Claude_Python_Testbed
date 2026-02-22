@@ -334,6 +334,8 @@ Each instance has its own state file so settings don't interfere:
 
 Both instances independently persist: model, temperature, thinking settings, send delay, and window geometry. Name fields are only editable and persisted by instance 1; instance 2 always derives its names from instance 1's state.
 
+**Independent geometry for solo vs duo mode** — Each state file stores two separate geometry keys: `geometry` (used when SelfBot is launched manually as a single instance) and `duo_geometry` (used when launched via the shortcut/batch file). Resizing or repositioning in one mode does not affect the other. On first duo launch, windows default to side-by-side filling the screen; subsequent duo launches restore the saved duo geometry.
+
 ### Auto-Chat Toggle & Send Delay
 
 When running solo (no peer detected), the **Auto: ON/OFF** button and **Delay(s)** spinbox are hidden. Enter sends messages immediately with no delay.
@@ -375,7 +377,7 @@ All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off*
 
 ### Running
 
-**Quick launch (recommended):** Double-click `LaunchSelfBot.bat` (or the "Claude SelfBot Duo" desktop shortcut). This kills any existing instances, cleans up stale files, launches both instances with correct timing, positions them side by side filling the screen, and focuses instance 1's input field so you can start typing immediately.
+**Quick launch (recommended):** Double-click `LaunchSelfBot.bat` (or the "Claude SelfBot Duo" desktop shortcut). This kills any existing instances, cleans up stale files, launches both instances with `--no-geometry` (so SelfBot positions itself using the saved duo geometry or side-by-side defaults), and focuses instance 1's input field so you can start typing immediately.
 
 **Manual launch:**
 ```bash
