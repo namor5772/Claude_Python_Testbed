@@ -350,6 +350,8 @@ The injection mechanism uses file-based message passing instead of GUI automatio
 - The configured send delay is respected — the text sits visibly in the input field for the delay duration before sending
 - No window activation, coordinate clicking, or clipboard pasting is involved
 
+**Thinking block transmission** — When Thinking mode is enabled, the sender's thinking text is included in the JSON payload alongside the response text. The receiving instance displays the styled "Thinking:" block in its output window before the response appears in its input field. This is purely visual — the thinking text is not added to the receiver's conversation history
+
 ### Pause & Resume (Pending Injection)
 
 When Auto is toggled OFF mid-conversation, the current API response completes but the injection is deferred:
