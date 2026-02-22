@@ -711,6 +711,7 @@ APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app
 SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lock")
 INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_inject.txt")
+AUTO_MSG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_auto_msg.json")
 
 
 class HTMLTextExtractor(HTMLParser):
@@ -831,6 +832,8 @@ class App:
             self.root.after(2000, self._retry_load_names)
         # Poll for peer instance to enable/disable auto-chat and send delay
         self.root.after(2000, self._poll_for_peer)
+        # Poll for auto-injected messages from the other instance
+        self.root.after(500, self._poll_auto_msg)
 
     def setup_ui(self):
         # Grid weights for resizing
@@ -910,6 +913,7 @@ class App:
         # Auto-chat starts disabled (solo mode); enabled when peer detected
         self._auto_chat = tk.BooleanVar(value=False)
         self._auto_chat_user_off = False  # set when user manually toggles off; cleared when peer leaves
+        self._pending_injection = False  # True when a response completed but wasn't injected (Auto was OFF)
         self._send_delay = 0  # 0 when solo, delay_seconds*1000 when paired
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
         if not self._is_second_instance:
@@ -2731,6 +2735,9 @@ class App:
         else:
             self._auto_chat_btn.config(text="Auto: OFF", bg="#c62828", fg="white")
             self._send_delay = 0
+        if on and self._pending_injection and not self.streaming:
+            self._pending_injection = False
+            self.root.after(1000, self._inject_response_to_other)
 
     def _on_delay_changed(self):
         """Update the send delay when the user changes the spinbox value."""
@@ -2782,38 +2789,45 @@ class App:
         self.root.after(2000, self._poll_for_peer)
 
     def _inject_response_to_other(self):
-        """After a reply completes, type the response body into the other instance's input and press Enter."""
+        """After a reply completes, write response to shared file for the other instance to pick up."""
+        self._pending_injection = False
         text = self._current_response_text.strip()
         if not text:
             return
-        targets = [
-            w for w in gw.getWindowsWithTitle("Claude SelfBot")
-            if _get_window_pid(w._hWnd) != self._my_pid and w.visible
-        ]
-        if not targets:
-            return
-        # Set clipboard BEFORE switching windows
-        self.root.clipboard_clear()
-        self.root.clipboard_append(text)
-        self.root.update_idletasks()
-        target = targets[0]
         try:
-            target.activate()
-        except Exception:
+            with open(AUTO_MSG_FILE, "w", encoding="utf-8") as f:
+                json.dump({"from_pid": self._my_pid, "text": text}, f)
+        except OSError:
+            pass
+
+    def _poll_auto_msg(self):
+        """Poll for a message file written by the other instance and send it after delay."""
+        if os.path.exists(AUTO_MSG_FILE):
             try:
-                target.minimize()
-                target.restore()
-            except Exception:
+                with open(AUTO_MSG_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                from_pid = data.get("from_pid")
+                text = data.get("text", "").strip()
+                if from_pid != self._my_pid and text and not self.streaming:
+                    os.remove(AUTO_MSG_FILE)
+                    self.input_field.delete("1.0", tk.END)
+                    self.input_field.insert("1.0", text)
+                    delay = self._send_delay if self._send_delay > 0 else 0
+                    if delay > 0:
+                        self.input_field.config(state="disabled")
+                        self.root.after(delay, self._auto_msg_delayed_send)
+                    else:
+                        self.send_message()
+                    self.root.after(max(delay, 500), self._poll_auto_msg)
+                    return
+            except (OSError, json.JSONDecodeError):
                 pass
-        time.sleep(0.3)
-        # Click into the input field (bottom area of the target window)
-        input_x = target.left + target.width // 2
-        input_y = target.top + target.height - 80
-        pyautogui.click(input_x, input_y)
-        time.sleep(0.1)
-        pyautogui.hotkey("ctrl", "v")
-        time.sleep(0.1)
-        pyautogui.press("enter")
+        self.root.after(500, self._poll_auto_msg)
+
+    def _auto_msg_delayed_send(self):
+        """Send the auto-injected message after the configured delay."""
+        self.input_field.config(state="normal")
+        self.send_message()
 
     def _on_close(self):
         """Window close handler — save state, clean up browser, then destroy."""
@@ -2828,6 +2842,10 @@ class App:
                 os.remove(INJECT_FILE)
             except OSError:
                 pass
+        try:
+            os.remove(AUTO_MSG_FILE)
+        except OSError:
+            pass
         self._cleanup_browser()
         self.root.destroy()
 
@@ -3499,8 +3517,12 @@ class App:
                     if not self._is_second_instance and self._response_count == 1:
                         self._write_inject_file()
                     # Inject response body into the other instance's input
-                    if self._auto_chat.get() and self._current_response_text.strip():
-                        self.root.after(1000, self._inject_response_to_other)
+                    if self._current_response_text.strip():
+                        if self._auto_chat.get():
+                            self._pending_injection = False
+                            self.root.after(1000, self._inject_response_to_other)
+                        else:
+                            self._pending_injection = True
                     self.input_field.focus_set()
                 elif msg["type"] == "error":
                     self.chat_display.config(state="normal")
