@@ -306,7 +306,7 @@ A variant of app.py that enables two Claude instances to have an autonomous conv
 
 ### Instance Detection (Named Mutex)
 
-Instance detection uses a Windows named mutex (`CreateMutexW`) instead of relying solely on a lock file. The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created for cleanup tracking but is not used for instance detection.
+Instance detection uses a Windows named mutex (`CreateMutexW`) instead of relying solely on a lock file. The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created containing instance 1's PID, used by the launcher (`selfbot_position.ps1`) to identify which window is instance 1 for correct positioning.
 
 - If the mutex is not held → this is instance 1; the mutex is acquired and the lock file is created
 - If the mutex is already held → this is instance 2
@@ -356,6 +356,10 @@ When Auto is toggled OFF mid-conversation, the current API response completes bu
 - A `_pending_injection` flag is set when a response completes while Auto is OFF
 - When Auto is toggled back ON, any pending injection fires immediately, resuming the conversation loop
 - This allows pausing the conversation to read responses without losing the thread
+
+### Paired Shutdown
+
+Closing either SelfBot window automatically closes the other instance. The `_on_close` handler finds the peer by window title (excluding its own PID) and terminates it before shutting down, so you never have to manually close both windows.
 
 ### Default Checkbox States
 
