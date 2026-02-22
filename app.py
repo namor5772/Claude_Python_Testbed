@@ -1173,7 +1173,7 @@ class App:
                 m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry)
                 if m:
                     w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-                    if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0:
+                    if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0 and w >= 400 and h >= 300:
                         self.root.geometry(geometry)
 
     def _save_last_state(self):
