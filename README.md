@@ -8,7 +8,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **SelfBot.py** — Dual-instance self-chatting variant (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
-- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime; migrated automatically from old `saved_chats.json` on first launch). Optional `.txt` exports of the output window are also saved here
+- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). Optional `.txt` exports of the output window are also saved here
 - **app_state.json** — Persistent app settings for app.py and SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
