@@ -19,7 +19,7 @@ taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/n
 There are no tests, linter, or build steps — this is a single-file testbed app.
 
 ## Project Structure
-- `app.py` — Single-file tkinter GUI application (~2900 lines), the entire chatbot lives here
+- `app.py` — Single-file tkinter GUI application (~3200 lines), the entire chatbot lives here
 - `SelfBot.py` — Dual-instance self-chatting variant of app.py; two instances auto-converse via file-based message passing; closing either window closes both
 - `skills.json` — User-defined skills with content and mode (created at runtime)
 - `system_prompts.json` — Saved system prompts (created at runtime)

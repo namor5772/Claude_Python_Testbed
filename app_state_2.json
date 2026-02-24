@@ -1,14 +1,14 @@
 {
-  "last_system_prompt_name": "SHAUN_",
+  "last_system_prompt_name": "SHAUNprompt1",
   "last_model": "claude-sonnet-4-6",
   "temperature": 0.0,
   "thinking_enabled": true,
-  "thinking_effort": "medium",
+  "thinking_effort": "high",
   "thinking_budget": 8192,
   "my_name": "NIGEL",
   "my_friend": "SHAUN",
   "delay_seconds": 5,
-  "duo_geometry": "1044x789+1285+87",
+  "duo_geometry": "1047x1362+1472+15",
   "geometry": "1050x930+304+304",
   "screen_width": 2560,
   "screen_height": 1600
