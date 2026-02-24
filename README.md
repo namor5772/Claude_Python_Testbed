@@ -255,6 +255,7 @@ API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) e
 
 ### Requirements
 
+- Windows 10/11
 - Python 3 with tkinter (included in standard library)
 - An Anthropic API key set as the `ANTHROPIC_API_KEY` environment variable
 
@@ -274,6 +275,29 @@ winocr
 ```
 
 > **Note:** `playwright install` is **not** required. The app connects to the system-installed Microsoft Edge via CDP, so no bundled browser binaries are needed.
+
+### Setup (New Machine)
+
+The project is fully portable — no hardcoded paths. To set up on a new Windows PC:
+
+```bash
+# Clone the repository
+git clone https://github.com/namor5772/Claude_Python_Testbed.git
+cd Claude_Python_Testbed
+
+# Create and activate the virtual environment
+python -m venv .venv
+source .venv/Scripts/activate   # Git Bash
+# or: .venv\Scripts\activate    # CMD / PowerShell
+
+# Install dependencies
+pip install anthropic ddgs httpx opencv-python Pillow playwright pyautogui pygetwindow pyperclip winocr
+
+# Set your API key (or add to your environment permanently)
+export ANTHROPIC_API_KEY="your-key-here"
+```
+
+The `.venv` directory is gitignored and must be recreated on each machine. All runtime files (`app_state.json`, `skills.json`, `saved_chats/`, etc.) are created automatically on first run.
 
 ### Running
 

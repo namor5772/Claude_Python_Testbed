@@ -58,6 +58,12 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 
 **DPI handling** — `SetProcessDpiAwareness(2)` is called before any window creation. Screenshot coordinates are scaled via `_screenshot_scale` for mouse click mapping.
 
+## Portability
+- No hardcoded paths — the project works when cloned to any directory on any Windows PC
+- `LaunchSelfBot.bat` uses `%~dp0` (resolves to its own directory at runtime)
+- Python files use relative paths for all runtime file I/O
+- The `.venv` is gitignored and must be recreated on each machine (`python -m venv .venv` + `pip install` dependencies)
+
 ## Workflow
 - After editing or changing a .py file, always re-run it automatically — close any currently running instance first if necessary
 
