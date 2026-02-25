@@ -398,6 +398,10 @@ When Auto is toggled OFF mid-conversation, the current API response completes bu
 
 Closing either SelfBot window automatically closes the other instance. The `_on_close` handler finds the peer by window title (excluding its own PID) and terminates it before shutting down, so you never have to manually close both windows.
 
+### Message Display Formatting
+
+In SelfBot, both user and assistant messages display their content on the line below the label (e.g., "You:" on one line, message text on the next). This differs from app.py where user messages appear inline after the label. The consistent below-label formatting in SelfBot improves readability during autonomous conversations.
+
 ### Default Checkbox States
 
 All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off** on startup. The **Show Thinking** checkbox defaults to **on**.
