@@ -1997,7 +1997,7 @@ class App:
             role = msg["role"]
             content = msg["content"]
             if role == "user" and isinstance(content, str):
-                self.chat_display.insert(tk.END, f"{self._get_user_label()}: ", "user_label")
+                self.chat_display.insert(tk.END, f"{self._get_user_label()}:\n", "user_label")
                 self.chat_display.insert(tk.END, content + "\n\n", "user")
             elif role == "user" and isinstance(content, list):
                 # Skip tool_result blocks (internal API messages)
@@ -2014,7 +2014,7 @@ class App:
                             texts.append(t)
                 text = " ".join(texts)
                 if text or has_images:
-                    self.chat_display.insert(tk.END, f"{self._get_user_label()}: ", "user_label")
+                    self.chat_display.insert(tk.END, f"{self._get_user_label()}:\n", "user_label")
                     if has_images:
                         self.chat_display.insert(tk.END, "[Image] ", "image_info")
                     if text:
@@ -3607,7 +3607,7 @@ class App:
     def append_message(self, role, content, filenames=None):
         self.chat_display.config(state="normal")
         if role == "user":
-            self.chat_display.insert(tk.END, f"{self._get_user_label()}: ", "user_label")
+            self.chat_display.insert(tk.END, f"{self._get_user_label()}:\n", "user_label")
             if filenames:
                 for name in filenames:
                     self.chat_display.insert(
