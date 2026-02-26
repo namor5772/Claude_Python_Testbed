@@ -1,15 +1,14 @@
 # Claude Python Testbed
 
-A repo containing various Python scripts written using Claude Code. The main application is a full-featured Claude chatbot with a tkinter GUI.
+A repo containing various Python scripts written using Claude Code. The main application is a full-featured Claude chatbot with a tkinter GUI that also supports dual-instance self-chatting.
 
 ## Contents
 
-- **app.py** — Claude chatbot GUI application (see details below)
-- **SelfBot.py** — Dual-instance self-chatting variant (see details below)
+- **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
 - **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). Optional `.txt` exports of the output window are also saved here
-- **app_state.json** — Persistent app settings for app.py and SelfBot instance 1 (created at runtime)
+- **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
@@ -17,9 +16,9 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (see below)
 - **selfbot_position.ps1** — PowerShell helper used by the launcher to position and focus windows
 
-## app.py — Claude Chatbot
+## SelfBot.py — Claude Chatbot & Dual-Instance Self-Chatting Bot
 
-A desktop chatbot application built with tkinter that connects to the Anthropic API. It supports streaming responses, tool use, image attachments, conversation management, model selection, customisable system prompts, and a skills system for injecting reusable knowledge into conversations.
+A desktop chatbot application built with tkinter that connects to the Anthropic API. It supports streaming responses, tool use, image attachments, conversation management, model selection, customisable system prompts, and a skills system for injecting reusable knowledge into conversations. When a second instance is launched, it automatically enables dual-instance self-chatting where two Claude instances converse autonomously.
 
 ### Features
 
@@ -190,7 +189,7 @@ Two toolbars at the top of the window provide model selection and conversation m
 | **Temp** spinbox | Model toolbar | Set API temperature (0.0–1.0) |
 | **Thinking** checkbox | Model toolbar | Enable extended thinking mode |
 | **Strength** combobox | Model toolbar | Set thinking effort (adaptive) or token budget (manual) |
-| **DELETE** | Model toolbar | Deletes the selected or named chat from disk |
+| **DELETE** | Model toolbar | Deletes the selected or named chat (and any associated `.txt` file) from disk |
 | **NEW CHAT** | Model toolbar | Clears the current conversation and display, but keeps the active system prompt |
 | **Save Chat as** | Chat toolbar | Type a name and click **SAVE** (or press Enter) to save the current conversation |
 | **+ Output .txt** | Chat toolbar | Checkbox next to SAVE — when checked, also saves the raw output window text as a `.txt` file alongside the `.json` chat file |
@@ -207,6 +206,8 @@ Messages are sanitised on both save and load — extra fields from the Anthropic
 
 **Output .txt export** — When the **+ Output .txt** checkbox is ticked before saving, the raw text content of the output window is also written to `saved_chats/<name>.txt`. This captures the display exactly as shown (including thinking blocks, labels, and formatting) as a plain text file. These `.txt` files are write-only — the app never loads them; they serve as human-readable archives.
 
+**Auto-save on close** — When the app is closed (via [X] button or `taskkill`), instance 1 automatically saves the current chat as both `.json` and `.txt` to `saved_chats/`. If a name is typed in the Save Chat entry, that name is used; otherwise a name is auto-generated from the first user message (or a timestamp fallback). A periodic auto-save runs every 5 seconds to protect against force-kill data loss.
+
 #### System Prompt Editor
 Click **System Prompt** to open a dedicated editor window with:
 
@@ -216,7 +217,7 @@ Click **System Prompt** to open a dedicated editor window with:
 - **Clear** — Reset the editor fields
 - **Apply to Chat** — Set the editor's prompt as the active system prompt and close the editor
 
-When a named system prompt is applied, the window title updates to show it (e.g., `Claude Chatbot — My Prompt`).
+When a named system prompt is applied, the window title updates to show it (e.g., `Claude SelfBot — My Prompt`).
 
 #### App State Persistence
 - The last-used system prompt name, selected model, temperature, thinking settings, and window geometry (size + position) are saved to `app_state.json`
@@ -249,9 +250,90 @@ API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) e
 
 #### Show Thinking Display
 - Toggle the **Show Thinking** checkbox to show/hide the extended thinking blocks that appear when Thinking mode is enabled on the model toolbar
-- When checked (the default), thinking blocks are displayed in amber/gold italic text before the response
-- When unchecked, thinking blocks are suppressed from the display (the API still generates them, they are just hidden)
+- When checked, thinking blocks are displayed in amber/gold italic text before the response
+- When unchecked (the default), thinking blocks are suppressed from the display (the API still generates them, they are just hidden)
 - This is independent of the model toolbar **Thinking** checkbox, which controls whether the API generates thinking blocks at all
+
+### Dual-Instance Self-Chatting
+
+When a second instance is launched, SelfBot automatically enables dual-instance mode where two Claude instances converse autonomously.
+
+#### How It Works
+
+1. **Launch instance 1** — Run `python SelfBot.py`. It acquires a Windows named mutex and operates as the primary instance. When running solo, there is no send delay and auto-chat is disabled — it behaves like a normal chatbot
+2. **Launch instance 2** — Run `python SelfBot.py` again. The mutex detects instance 1 is already running and configures this as the secondary instance
+3. **Peer detection** — Instance 1 polls every 2 seconds for a peer SelfBot window. When instance 2 appears, auto-chat and the configurable send delay are automatically enabled; when instance 2 closes, they are disabled again
+4. **Send a message in instance 1** — After the first response completes, the user's original message is injected into instance 2's output window (in assistant/green colour), and the reply body is written to a shared file for instance 2 to pick up
+5. **Auto-conversation loop** — Each time either instance receives a reply, the response body is written to a shared JSON file (`selfbot_auto_msg.json`). The other instance polls for this file, reads the text into its own input field, and sends it internally — creating a continuous back-and-forth dialogue without any window switching or focus changes
+
+#### Instance Detection (Named Mutex)
+
+Instance detection uses a Windows named mutex (`CreateMutexW`) instead of relying solely on a lock file. The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created containing instance 1's PID, used by the launcher (`selfbot_position.ps1`) to identify which window is instance 1 for correct positioning.
+
+- If the mutex is not held → this is instance 1; the mutex is acquired and the lock file is created
+- If the mutex is already held → this is instance 2
+
+#### Name Swapping & Read-Only Fields
+
+The "Terminal user" and "Chatting with" name fields are automatically swapped for instance 2, so each side of the conversation sees the correct perspective. Instance 2 **always** reads names from instance 1's state file (`app_state.json`) and swaps them — not just on first bootstrap. The name fields on instance 2 are **read-only**; names can only be changed in instance 1.
+
+If instance 2 starts before instance 1 has saved its state, the name fields retry loading every 2 seconds until they are populated. Instance 1 also saves state immediately on startup to minimise this race window.
+
+#### Separate Persistence
+
+Each instance has its own state file so settings don't interfere:
+
+| Instance | State file | Description |
+|---|---|---|
+| Instance 1 | `app_state.json` | Primary instance settings |
+| Instance 2 | `app_state_2.json` | Secondary instance settings |
+
+Both instances independently persist: model, temperature, thinking settings, send delay, and window geometry. Name fields are only editable and persisted by instance 1; instance 2 always derives its names from instance 1's state.
+
+**Independent geometry for solo vs duo mode** — Each state file stores two separate geometry keys: `geometry` (used when SelfBot is launched manually as a single instance) and `duo_geometry` (used when launched via the shortcut/batch file). Resizing or repositioning in one mode does not affect the other. On first duo launch, windows default to side-by-side filling the screen; subsequent duo launches restore the saved duo geometry.
+
+#### Auto-Chat Toggle & Send Delay
+
+When running solo (no peer detected), the **Auto: ON/OFF** button and **Delay(s)** spinbox are hidden. Enter sends messages immediately with no delay.
+
+When a peer instance is detected, the controls appear on instance 1's names toolbar:
+- **Auto: ON** (green) — Responses are automatically forwarded to the other instance
+- **Auto: OFF** (red) — Auto-forwarding is paused; both instances operate independently
+- **Delay(s)** spinbox (0–30 seconds) — Configurable delay before messages are sent, providing time to review or cancel. The delay value is persisted across sessions
+
+Auto-chat is enabled automatically when a peer appears and disabled when it leaves. Manually toggling auto-chat off is respected — the peer poll will not re-enable it until the peer disconnects and reconnects.
+
+These controls are hidden on instance 2 since the toggle controls the loop from instance 1's side.
+
+#### Cross-Instance Message Passing
+
+The injection mechanism uses file-based message passing instead of GUI automation, making it reliable regardless of window focus or position:
+- When a response completes, the sender writes the text and its PID to `selfbot_auto_msg.json`
+- Both instances poll for this file every 500ms via `_poll_auto_msg()`
+- The receiver (identified by PID mismatch) reads the text, inserts it into its own input field, and calls `send_message()` internally
+- The configured send delay is respected — the text sits visibly in the input field for the delay duration before sending
+- No window activation, coordinate clicking, or clipboard pasting is involved
+
+**Thinking block transmission** — When Thinking mode is enabled, the sender's thinking text is included in the JSON payload alongside the response text. The receiving instance displays the styled "Thinking:" block in its output window before the response appears in its input field. This is purely visual — the thinking text is not added to the receiver's conversation history
+
+#### Pause & Resume (Pending Injection)
+
+When Auto is toggled OFF mid-conversation, the current API response completes but the injection is deferred:
+- A `_pending_injection` flag is set when a response completes while Auto is OFF
+- When Auto is toggled back ON, any pending injection fires immediately, resuming the conversation loop
+- This allows pausing the conversation to read responses without losing the thread
+
+#### Paired Shutdown
+
+Closing either SelfBot window stops the auto-chat conversation, waits for any in-flight API streaming to finish, auto-saves instance 1's chat (both `.json` and `.txt`), and then shuts down both instances cleanly via `WM_CLOSE` messages. A periodic auto-save every 5 seconds also protects against force-kill (`taskkill /F`, `Stop-Process`) data loss.
+
+#### Message Display Formatting
+
+Both user and assistant messages display their content on the line below the label (e.g., "You:" on one line, message text on the next). This consistent below-label formatting improves readability during autonomous conversations.
+
+#### Default Checkbox States
+
+All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser) default to **off** on startup.
 
 ### Requirements
 
@@ -301,12 +383,27 @@ The `.venv` directory is gitignored and must be recreated on each machine. All r
 
 ### Running
 
+**Solo mode:**
 ```bash
 # Activate the virtual environment
 source .venv/Scripts/activate
 
 # Run the application
-python app.py
+python SelfBot.py
+```
+
+**Dual-instance mode (recommended):** Double-click `LaunchSelfBot.bat` (or the "Claude SelfBot Duo" desktop shortcut). This kills any existing instances, cleans up stale files, launches both instances with `--no-geometry` (so SelfBot positions itself using the saved duo geometry or side-by-side defaults), and focuses instance 1's input field so you can start typing immediately.
+
+**Manual dual launch:**
+```bash
+# Activate the virtual environment
+source .venv/Scripts/activate
+
+# Launch instance 1
+python SelfBot.py
+
+# In a second terminal, launch instance 2
+python SelfBot.py
 ```
 
 ### Architecture
@@ -324,100 +421,4 @@ The application is a single-file tkinter app structured around the `App` class:
 - **Desktop Automation** — Thirteen tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`, `do_clipboard_read`, `do_clipboard_write`, `do_wait_for_window`, `do_read_screen_text`, `do_find_image_on_screen`, `do_mouse_drag`) built on `pyautogui`, `pygetwindow`, `winocr`, and `opencv-python`. Defined in a separate `DESKTOP_TOOLS` list and conditionally included via `_get_tools()` only when the `desktop_enabled` checkbox is enabled. The `screenshot` tool description is dynamically patched with the current screen resolution. Process-level DPI awareness (`SetProcessDpiAwareness(2)`) is set before window creation, and screenshot-to-screen coordinate scaling is handled automatically via `_screenshot_scale`
 - **Browser Automation** — Eleven tools (`do_browser_open`, `do_browser_navigate`, `do_browser_click`, `do_browser_fill`, `do_browser_get_text`, `do_browser_run_js`, `do_browser_screenshot`, `do_browser_close`, `do_browser_wait_for`, `do_browser_select`, `do_browser_get_elements`) built on Playwright's CDP connection to Microsoft Edge. Gated behind a `browser_enabled` `BooleanVar` toggle. Tool schemas are conditionally included via `_get_tools()` only when the checkbox is enabled. `_ensure_browser()` manages the full connection lifecycle with auto-reconnect on dead connections. `WM_DELETE_WINDOW` protocol handler ensures clean Playwright disconnection on app close
 - **Rate-Limit Retry** — Exponential backoff loop in `stream_worker` handles HTTP 429 (rate limit) and 529 (overload) errors with up to 5 retries before propagating the exception
-
-## SelfBot.py — Dual-Instance Self-Chatting Bot
-
-A variant of app.py that enables two Claude instances to have an autonomous conversation with each other. Both instances share the same codebase but automatically configure themselves for their respective roles.
-
-### How It Works
-
-1. **Launch instance 1** — Run `python SelfBot.py`. It acquires a Windows named mutex and operates as the primary instance. When running solo, there is no send delay and auto-chat is disabled — it behaves like a normal chatbot
-2. **Launch instance 2** — Run `python SelfBot.py` again. The mutex detects instance 1 is already running and configures this as the secondary instance
-3. **Peer detection** — Instance 1 polls every 2 seconds for a peer SelfBot window. When instance 2 appears, auto-chat and the configurable send delay are automatically enabled; when instance 2 closes, they are disabled again
-4. **Send a message in instance 1** — After the first response completes, the user's original message is injected into instance 2's output window (in assistant/green colour), and the reply body is written to a shared file for instance 2 to pick up
-5. **Auto-conversation loop** — Each time either instance receives a reply, the response body is written to a shared JSON file (`selfbot_auto_msg.json`). The other instance polls for this file, reads the text into its own input field, and sends it internally — creating a continuous back-and-forth dialogue without any window switching or focus changes
-
-### Instance Detection (Named Mutex)
-
-Instance detection uses a Windows named mutex (`CreateMutexW`) instead of relying solely on a lock file. The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created containing instance 1's PID, used by the launcher (`selfbot_position.ps1`) to identify which window is instance 1 for correct positioning.
-
-- If the mutex is not held → this is instance 1; the mutex is acquired and the lock file is created
-- If the mutex is already held → this is instance 2
-
-### Name Swapping & Read-Only Fields
-
-The "Terminal user" and "Chatting with" name fields are automatically swapped for instance 2, so each side of the conversation sees the correct perspective. Instance 2 **always** reads names from instance 1's state file (`app_state.json`) and swaps them — not just on first bootstrap. The name fields on instance 2 are **read-only**; names can only be changed in instance 1.
-
-If instance 2 starts before instance 1 has saved its state, the name fields retry loading every 2 seconds until they are populated. Instance 1 also saves state immediately on startup to minimise this race window.
-
-### Separate Persistence
-
-Each instance has its own state file so settings don't interfere:
-
-| Instance | State file | Description |
-|---|---|---|
-| Instance 1 | `app_state.json` | Primary instance settings |
-| Instance 2 | `app_state_2.json` | Secondary instance settings |
-
-Both instances independently persist: model, temperature, thinking settings, send delay, and window geometry. Name fields are only editable and persisted by instance 1; instance 2 always derives its names from instance 1's state.
-
-**Independent geometry for solo vs duo mode** — Each state file stores two separate geometry keys: `geometry` (used when SelfBot is launched manually as a single instance) and `duo_geometry` (used when launched via the shortcut/batch file). Resizing or repositioning in one mode does not affect the other. On first duo launch, windows default to side-by-side filling the screen; subsequent duo launches restore the saved duo geometry.
-
-### Auto-Chat Toggle & Send Delay
-
-When running solo (no peer detected), the **Auto: ON/OFF** button and **Delay(s)** spinbox are hidden. Enter sends messages immediately with no delay.
-
-When a peer instance is detected, the controls appear on instance 1's names toolbar:
-- **Auto: ON** (green) — Responses are automatically forwarded to the other instance
-- **Auto: OFF** (red) — Auto-forwarding is paused; both instances operate independently
-- **Delay(s)** spinbox (0–30 seconds) — Configurable delay before messages are sent, providing time to review or cancel. The delay value is persisted across sessions
-
-Auto-chat is enabled automatically when a peer appears and disabled when it leaves. Manually toggling auto-chat off is respected — the peer poll will not re-enable it until the peer disconnects and reconnects.
-
-These controls are hidden on instance 2 since the toggle controls the loop from instance 1's side.
-
-### Cross-Instance Message Passing
-
-The injection mechanism uses file-based message passing instead of GUI automation, making it reliable regardless of window focus or position:
-- When a response completes, the sender writes the text and its PID to `selfbot_auto_msg.json`
-- Both instances poll for this file every 500ms via `_poll_auto_msg()`
-- The receiver (identified by PID mismatch) reads the text, inserts it into its own input field, and calls `send_message()` internally
-- The configured send delay is respected — the text sits visibly in the input field for the delay duration before sending
-- No window activation, coordinate clicking, or clipboard pasting is involved
-
-**Thinking block transmission** — When Thinking mode is enabled, the sender's thinking text is included in the JSON payload alongside the response text. The receiving instance displays the styled "Thinking:" block in its output window before the response appears in its input field. This is purely visual — the thinking text is not added to the receiver's conversation history
-
-### Pause & Resume (Pending Injection)
-
-When Auto is toggled OFF mid-conversation, the current API response completes but the injection is deferred:
-- A `_pending_injection` flag is set when a response completes while Auto is OFF
-- When Auto is toggled back ON, any pending injection fires immediately, resuming the conversation loop
-- This allows pausing the conversation to read responses without losing the thread
-
-### Paired Shutdown
-
-Closing either SelfBot window automatically closes the other instance. The `_on_close` handler finds the peer by window title (excluding its own PID) and terminates it before shutting down, so you never have to manually close both windows.
-
-### Message Display Formatting
-
-In SelfBot, both user and assistant messages display their content on the line below the label (e.g., "You:" on one line, message text on the next). This differs from app.py where user messages appear inline after the label. The consistent below-label formatting in SelfBot improves readability during autonomous conversations.
-
-### Default Checkbox States
-
-All checkboxes (Debug, Tool Calls, Activity, Desktop, Browser) default to **off** on startup. The **Show Thinking** checkbox defaults to **on**.
-
-### Running
-
-**Quick launch (recommended):** Double-click `LaunchSelfBot.bat` (or the "Claude SelfBot Duo" desktop shortcut). This kills any existing instances, cleans up stale files, launches both instances with `--no-geometry` (so SelfBot positions itself using the saved duo geometry or side-by-side defaults), and focuses instance 1's input field so you can start typing immediately.
-
-**Manual launch:**
-```bash
-# Activate the virtual environment
-source .venv/Scripts/activate
-
-# Launch instance 1
-python SelfBot.py
-
-# In a second terminal, launch instance 2
-python SelfBot.py
-```
+- **Auto-Save & Graceful Shutdown** — `_auto_save_on_close()` silently saves the chat (`.json` + `.txt`) using the entry field name or an auto-generated name. `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected. `_on_close()` stops auto-chat, waits for streaming to finish via `_finish_close()` polling, saves instance 1's chat, sends `WM_CLOSE` to peer windows, and cleans up lock files and browser connections. Re-entrancy is guarded by a `_closing` flag, and `_poll_auto_msg`/`_auto_msg_delayed_send`/`_poll_for_peer` all bail immediately when closing
