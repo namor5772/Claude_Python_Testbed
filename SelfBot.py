@@ -778,7 +778,7 @@ class App:
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
-        self.show_thinking = tk.BooleanVar(value=True)
+        self.show_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self._playwright = None
@@ -916,6 +916,7 @@ class App:
         # Auto-chat starts disabled (solo mode); enabled when peer detected
         self._auto_chat = tk.BooleanVar(value=False)
         self._auto_chat_user_off = False  # set when user manually toggles off; cleared when peer leaves
+        self._ever_had_peer = False  # set True when a peer is first detected; used by close-save logic
         self._pending_injection = False  # True when a response completed but wasn't injected (Auto was OFF)
         self._send_delay = 0  # 0 when solo, delay_seconds*1000 when paired
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
@@ -1412,11 +1413,20 @@ class App:
             json.dump(state, f, indent=2)
 
     def _periodic_save(self):
-        """Auto-save state every 5 seconds so force-kill doesn't lose settings."""
+        """Auto-save state and chat every 5 seconds so force-kill doesn't lose data."""
         try:
             self._save_last_state()
         except Exception:
             pass
+        # Periodically auto-save the chat (instance 1 only) so a force-kill doesn't lose it
+        if not self._is_second_instance and self.messages:
+            try:
+                msg_count = len(self.messages)
+                if msg_count != getattr(self, '_last_autosaved_msg_count', 0):
+                    self._auto_save_on_close()
+                    self._last_autosaved_msg_count = msg_count
+            except Exception:
+                pass
         self.root.after(5000, self._periodic_save)
 
     # --- System Prompt Editor ---
@@ -1975,6 +1985,12 @@ class App:
             messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
             return
         os.remove(fpath)
+        # Also remove the associated .txt export if it exists
+        txt_path = os.path.join(CHATS_DIR, f"{name}.txt")
+        try:
+            os.remove(txt_path)
+        except OSError:
+            pass
         self._refresh_chat_list()
         self._chat_combo_var.set("")
         self.chat_name_entry.delete(0, tk.END)
@@ -2794,6 +2810,8 @@ class App:
 
     def _poll_for_peer(self):
         """Check for another SelfBot window; enable/disable auto-chat and delay accordingly."""
+        if getattr(self, '_closing', False):
+            return
         try:
             peers = [
                 w for w in gw.getWindowsWithTitle("Claude SelfBot")
@@ -2805,6 +2823,7 @@ class App:
         was_paired = self._auto_chat.get()
         if has_peer and not was_paired and not self._auto_chat_user_off:
             # Peer just appeared — enable auto-chat and delay, show controls
+            self._ever_had_peer = True
             self._auto_chat.set(True)
             self._send_delay = self._delay_seconds * 1000
             if not self._is_second_instance:
@@ -2847,6 +2866,8 @@ class App:
 
     def _poll_auto_msg(self):
         """Poll for a message file written by the other instance and send it after delay."""
+        if getattr(self, '_closing', False):
+            return
         if os.path.exists(AUTO_MSG_FILE):
             try:
                 with open(AUTO_MSG_FILE, "r", encoding="utf-8") as f:
@@ -2882,19 +2903,101 @@ class App:
     def _auto_msg_delayed_send(self):
         """Send the auto-injected message after the configured delay."""
         self.input_field.config(state="normal")
+        if getattr(self, '_closing', False):
+            return
         self.send_message()
 
-    def _on_close(self):
-        """Window close handler — save state, close peer instance, clean up browser, then destroy."""
-        self._save_last_state()
-        # Close any other SelfBot instance
+    def _auto_save_on_close(self):
+        """Silently save the current chat (like pressing SAVE) before closing."""
+        if not self.messages:
+            return
+        name = self.chat_name_entry.get().strip()
+        if not name:
+            # Generate a name from the first user message or use a timestamp
+            for msg in self.messages:
+                if msg.get("role") == "user":
+                    text = msg.get("content", "")
+                    if isinstance(text, list):
+                        text = " ".join(
+                            b.get("text", "") for b in text
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                    text = text.strip()
+                    if text:
+                        name = text[:50].rstrip()
+                        break
+            if not name:
+                name = time.strftime("SelfBot_%Y%m%d_%H%M%S")
+        self._save_chat_file(name, {
+            "messages": self._serialize_messages(),
+            "system_prompt": self.system_prompt,
+            "system_prompt_name": self.system_prompt_name,
+            "model": self.model,
+            "temperature": self.temperature,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_effort": self.thinking_effort,
+            "thinking_budget": self.thinking_budget,
+        })
+        # Always export the output .txt on close-save
+        txt_path = os.path.join("saved_chats", f"{name}.txt")
         try:
-            for w in gw.getWindowsWithTitle("Claude SelfBot"):
-                pid = _get_window_pid(w._hWnd)
-                if pid != self._my_pid:
-                    os.kill(pid, 9)
+            output_text = self.chat_display.get("1.0", tk.END).rstrip()
+            with open(txt_path, "w", encoding="utf-8") as f:
+                f.write(output_text)
         except Exception:
             pass
+
+    def _on_close(self):
+        """Window close handler — stop auto-chat, wait for streaming, save, close peer, destroy."""
+        # Guard against re-entrant calls (peer sending WM_CLOSE back)
+        if getattr(self, '_closing', False):
+            return
+        self._closing = True
+        # Stop auto-chat immediately so no new messages get injected
+        self._auto_chat.set(False)
+        self._auto_chat_user_off = True
+        # Remove the shared message file to prevent the peer from picking up queued messages
+        try:
+            os.remove(AUTO_MSG_FILE)
+        except OSError:
+            pass
+        # If currently streaming, wait for it to finish before saving/closing
+        if self.streaming:
+            self.root.after(200, self._finish_close)
+            return
+        self._finish_close()
+
+    def _finish_close(self):
+        """Continue the close sequence once streaming has stopped."""
+        # Still streaming — keep waiting
+        if self.streaming:
+            self.root.after(200, self._finish_close)
+            return
+        self._save_last_state()
+        # Auto-save the chat on close (instance 1 / solo instance only)
+        if not self._is_second_instance:
+            self._auto_save_on_close()
+        # Find any remaining peer windows to close
+        peer_windows = []
+        try:
+            peer_windows = [
+                w for w in gw.getWindowsWithTitle("Claude SelfBot")
+                if _get_window_pid(w._hWnd) != self._my_pid and w.visible
+            ]
+        except Exception:
+            pass
+        # Close any other SelfBot instance — send WM_CLOSE so it shuts down cleanly
+        WM_CLOSE = 0x0010
+        for w in peer_windows:
+            try:
+                ctypes.windll.user32.PostMessageW(w._hWnd, WM_CLOSE, 0, 0)
+            except Exception:
+                # Fallback to hard kill if PostMessage fails
+                try:
+                    pid = _get_window_pid(w._hWnd)
+                    os.kill(pid, 9)
+                except Exception:
+                    pass
         # First instance owns the lock file — remove it on exit
         if not self._is_second_instance:
             try:
