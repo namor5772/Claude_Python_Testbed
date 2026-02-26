@@ -3318,7 +3318,7 @@ class App:
 
                 full_text = ""
                 had_thinking = False
-                max_retries = 5
+                max_retries = 10
 
                 # Build API kwargs dynamically
                 api_kwargs = {
@@ -3373,7 +3373,7 @@ class App:
                         break  # success — exit retry loop
                     except anthropic.RateLimitError as e:
                         if attempt < max_retries - 1:
-                            wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                            wait = min(2 ** attempt * 5, 60)  # 5s, 10s, 20s, 40s, 60s, 60s… (capped)
                             self.queue.put({
                                 "type": "tool_info",
                                 "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
@@ -3384,7 +3384,7 @@ class App:
                             raise  # final attempt — let outer except handle it
                     except anthropic.APIStatusError as e:
                         if e.status_code == 529 and attempt < max_retries - 1:
-                            wait = 2 ** attempt * 10  # 10s, 20s, 40s, 80s for overload
+                            wait = min(2 ** attempt * 10, 90)  # 10s, 20s, 40s, 80s, 90s, 90s… (capped)
                             self.queue.put({
                                 "type": "tool_info",
                                 "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
