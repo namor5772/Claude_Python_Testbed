@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 ```bash
 # Activate venv and run the app
-source .venv/Scripts/activate && python app.py
+source .venv/Scripts/activate && python SelfBot.py
 
 # Kill any running instances before relaunching (Windows)
 taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/null
@@ -19,19 +19,18 @@ taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/n
 There are no tests, linter, or build steps — this is a single-file testbed app.
 
 ## Project Structure
-- `app.py` — Single-file tkinter GUI application (~3200 lines), the entire chatbot lives here
-- `SelfBot.py` — Dual-instance self-chatting variant of app.py; two instances auto-converse via file-based message passing; closing either window closes both
+- `SelfBot.py` — Single-file tkinter GUI application (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
 - `skills.json` — User-defined skills with content and mode (created at runtime)
 - `system_prompts.json` — Saved system prompts (created at runtime)
 - `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat; optional `.txt` exports of the output window are also saved here
-- `app_state.json` — Persistent settings for app.py / SelfBot instance 1 (created at runtime)
+- `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
 - `selfbot_auto_msg.json` — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - `LaunchSelfBot.bat` — Launcher that starts both SelfBot instances side by side with focus on instance 1
 - `selfbot_position.ps1` — PowerShell helper used by the launcher to position and focus windows
 
-## Architecture (app.py)
+## Architecture (SelfBot.py)
 
 **Single class design** — The `App` class contains all UI, API, tool execution, and persistence logic. No separate modules.
 
@@ -48,15 +47,19 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 
 **Threading model** — API calls run in a background `stream_worker` thread. A `queue.Queue` passes events (text, thinking, tool info, errors) to the main thread, polled every 50ms via `root.after()`.
 
-**Thinking accumulator lifecycle (SelfBot)** — `_current_thinking_text` is reset at `thinking_start` (not at `label`), so the accumulated thinking text survives past the label event and is available when `complete` fires to inject into the peer instance.
+**Thinking accumulator lifecycle** — `_current_thinking_text` is reset at `thinking_start` (not at `label`), so the accumulated thinking text survives past the label event and is available when `complete` fires to inject into the peer instance.
 
-**Show Thinking checkbox** — The `show_thinking` BooleanVar (defaults True) gates display of thinking blocks in `check_queue` and `_poll_auto_msg`. This is separate from `thinking_enabled` which controls whether the API generates thinking blocks. Both must be on for thinking to appear in the output.
+**Show Thinking checkbox** — The `show_thinking` BooleanVar (defaults False) gates display of thinking blocks in `check_queue` and `_poll_auto_msg`. This is separate from `thinking_enabled` which controls whether the API generates thinking blocks. Both must be on for thinking to appear in the output.
 
-**Dual geometry persistence (SelfBot)** — State files store `geometry` (solo mode) and `duo_geometry` (duo mode via `--no-geometry` flag) independently. `_duo_mode` is set in `__init__` from `sys.argv` before any save can occur. On save, the app reads the existing state file to preserve the other mode's geometry key.
+**Dual geometry persistence** — State files store `geometry` (solo mode) and `duo_geometry` (duo mode via `--no-geometry` flag) independently. `_duo_mode` is set in `__init__` from `sys.argv` before any save can occur. On save, the app reads the existing state file to preserve the other mode's geometry key.
 
 **Skills system** — Three modes: disabled, enabled (injected into system prompt), on-demand (retrieved via `get_skill` tool). Managed through `_build_system_prompt()` and `_get_tools()`.
 
 **DPI handling** — `SetProcessDpiAwareness(2)` is called before any window creation. Screenshot coordinates are scaled via `_screenshot_scale` for mouse click mapping.
+
+**Auto-save on close** — When closing (via [X] button or `taskkill`), instance 1 auto-saves the chat as `.json` + `.txt` to `saved_chats/`. Uses the name from the Save Chat entry if provided, otherwise auto-generates from the first user message. A periodic auto-save every 5 seconds also protects against force-kill data loss.
+
+**Graceful duo shutdown** — Pressing [X] on either instance stops auto-chat, waits for any active streaming to finish, saves instance 1's chat, then closes both windows via `WM_CLOSE` messages.
 
 ## Portability
 - No hardcoded paths — the project works when cloned to any directory on any Windows PC
@@ -70,4 +73,4 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 ## Conventions
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
-- Single-file architecture: all changes go in `app.py` unless there's a strong reason to split
+- Single-file architecture: all changes go in `SelfBot.py` unless there's a strong reason to split
