@@ -1,0 +1,5 @@
+SHAUN:
+Hi all
+
+NIGEL:
+Error: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'max_tokens: 8192 > 4096, which is the maximum allowed number of output tokens for claude-3-haiku-20240307'}, 'request_id': 'req_011CYWFn1iEsRRyBwekMD6k9'}

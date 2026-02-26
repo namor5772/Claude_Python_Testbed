@@ -1774,11 +1774,11 @@ class App:
     # --- Chat Save / Load ---
 
     @staticmethod
-    def _sanitize_filename(name):
+    def _sanitize_filename(name, ext='.json'):
         """Convert a chat name to a safe filename."""
         safe = re.sub(r'[<>:"/\\|?*]', '_', name)
         safe = safe.strip('. ')
-        return (safe or '_') + '.json'
+        return (safe or '_') + ext
 
     @staticmethod
     def _chat_file_path(name):
@@ -1907,7 +1907,7 @@ class App:
             "thinking_budget": self.thinking_budget,
         })
         if self.save_output_txt.get():
-            txt_path = os.path.join("saved_chats", f"{name}.txt")
+            txt_path = os.path.join("saved_chats", self._sanitize_filename(name, '.txt'))
             output_text = self.chat_display.get("1.0", tk.END).rstrip()
             with open(txt_path, "w", encoding="utf-8") as f:
                 f.write(output_text)
@@ -1986,7 +1986,7 @@ class App:
             return
         os.remove(fpath)
         # Also remove the associated .txt export if it exists
-        txt_path = os.path.join(CHATS_DIR, f"{name}.txt")
+        txt_path = os.path.join(CHATS_DIR, self._sanitize_filename(name, '.txt'))
         try:
             os.remove(txt_path)
         except OSError:
@@ -2939,7 +2939,7 @@ class App:
             "thinking_budget": self.thinking_budget,
         })
         # Always export the output .txt on close-save
-        txt_path = os.path.join("saved_chats", f"{name}.txt")
+        txt_path = os.path.join("saved_chats", self._sanitize_filename(name, '.txt'))
         try:
             output_text = self.chat_display.get("1.0", tk.END).rstrip()
             with open(txt_path, "w", encoding="utf-8") as f:
