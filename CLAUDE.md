@@ -61,6 +61,8 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 
 **Graceful duo shutdown** — Pressing [X] on either instance stops auto-chat, waits for any active streaming to finish, saves instance 1's chat, then closes both windows via `WM_CLOSE` messages.
 
+**API retry logic** — `stream_worker` retries up to 10 times on transient API errors. Rate-limit errors (429) use exponential backoff capped at 60s (~6.5 min total). Overload errors (529) use exponential backoff capped at 90s (~10 min total). This makes the app resilient to prolonged Anthropic API outages without absurdly long individual waits.
+
 ## Portability
 - No hardcoded paths — the project works when cloned to any directory on any Windows PC
 - `LaunchSelfBot.bat` uses `%~dp0` (resolves to its own directory at runtime)
