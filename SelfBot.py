@@ -951,12 +951,7 @@ class App:
         self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry.bind("<Return>", lambda e: self._save_chat())
 
-        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 5))
-        self.save_output_txt = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            chat_toolbar, text="+ Output .txt", variable=self.save_output_txt,
-            font=("Arial", 9),
-        ).pack(side=tk.LEFT, padx=(0, 15))
+        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 15))
 
         tk.Label(chat_toolbar, text="Load Chat", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self._chat_combo_var = tk.StringVar()
@@ -1418,8 +1413,8 @@ class App:
             self._save_last_state()
         except Exception:
             pass
-        # Periodically auto-save the chat (instance 1 only) so a force-kill doesn't lose it
-        if not self._is_second_instance and self.messages:
+        # Periodically auto-save the chat so a force-kill doesn't lose data
+        if self.messages:
             try:
                 msg_count = len(self.messages)
                 if msg_count != getattr(self, '_last_autosaved_msg_count', 0):
@@ -1773,6 +1768,12 @@ class App:
 
     # --- Chat Save / Load ---
 
+    def _save_name(self, name):
+        """Append '_' to save names for the second instance to avoid filename collisions."""
+        if self._is_second_instance:
+            return name + "_"
+        return name
+
     @staticmethod
     def _sanitize_filename(name, ext='.json'):
         """Convert a chat name to a safe filename."""
@@ -1896,7 +1897,8 @@ class App:
         if not self.messages:
             messagebox.showwarning("Empty chat", "There is no chat to save.")
             return
-        self._save_chat_file(name, {
+        save_name = self._save_name(name)
+        self._save_chat_file(save_name, {
             "messages": self._serialize_messages(),
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
@@ -1906,13 +1908,12 @@ class App:
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
         })
-        if self.save_output_txt.get():
-            txt_path = os.path.join("saved_chats", self._sanitize_filename(name, '.txt'))
-            output_text = self.chat_display.get("1.0", tk.END).rstrip()
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(output_text)
+        txt_path = os.path.join("saved_chats", self._sanitize_filename(save_name, '.txt'))
+        output_text = self.chat_display.get("1.0", tk.END).rstrip()
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(output_text)
         self._refresh_chat_list()
-        self._chat_combo_var.set(name)
+        self._chat_combo_var.set(save_name)
 
     def _load_chat(self):
         name = self._chat_combo_var.get()
@@ -2928,7 +2929,8 @@ class App:
                         break
             if not name:
                 name = time.strftime("SelfBot_%Y%m%d_%H%M%S")
-        self._save_chat_file(name, {
+        save_name = self._save_name(name)
+        self._save_chat_file(save_name, {
             "messages": self._serialize_messages(),
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
@@ -2939,7 +2941,7 @@ class App:
             "thinking_budget": self.thinking_budget,
         })
         # Always export the output .txt on close-save
-        txt_path = os.path.join("saved_chats", self._sanitize_filename(name, '.txt'))
+        txt_path = os.path.join("saved_chats", self._sanitize_filename(save_name, '.txt'))
         try:
             output_text = self.chat_display.get("1.0", tk.END).rstrip()
             with open(txt_path, "w", encoding="utf-8") as f:
@@ -2974,9 +2976,8 @@ class App:
             self.root.after(200, self._finish_close)
             return
         self._save_last_state()
-        # Auto-save the chat on close (instance 1 / solo instance only)
-        if not self._is_second_instance:
-            self._auto_save_on_close()
+        # Auto-save the chat on close (all instances)
+        self._auto_save_on_close()
         # Find any remaining peer windows to close
         peer_windows = []
         try:

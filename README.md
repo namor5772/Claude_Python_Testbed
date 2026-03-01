@@ -7,7 +7,7 @@ A repo containing various Python scripts written using Claude Code. The main app
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts (created at runtime)
-- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). Optional `.txt` exports of the output window are also saved here
+- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **skills.json** — Saved skills with content and mode (created at runtime)
@@ -191,8 +191,7 @@ Two toolbars at the top of the window provide model selection and conversation m
 | **Strength** combobox | Model toolbar | Set thinking effort (adaptive) or token budget (manual) |
 | **DELETE** | Model toolbar | Deletes the selected or named chat (and any associated `.txt` file) from disk |
 | **NEW CHAT** | Model toolbar | Clears the current conversation and display, but keeps the active system prompt |
-| **Save Chat as** | Chat toolbar | Type a name and click **SAVE** (or press Enter) to save the current conversation |
-| **+ Output .txt** | Chat toolbar | Checkbox next to SAVE — when checked, also saves the raw output window text as a `.txt` file alongside the `.json` chat file |
+| **Save Chat as** | Chat toolbar | Type a name and click **SAVE** (or press Enter) to save the current conversation as `.json` + `.txt` |
 | **Load Chat** dropdown | Chat toolbar | Select a previously saved chat — restores conversation, system prompt, and model |
 
 Saved chats include:
@@ -204,9 +203,9 @@ Saved chats include:
 
 Messages are sanitised on both save and load — extra fields from the Anthropic SDK (e.g. `parsed_output`) are stripped to prevent API rejection errors when continuing a reloaded conversation.
 
-**Output .txt export** — When the **+ Output .txt** checkbox is ticked before saving, the raw text content of the output window is also written to `saved_chats/<name>.txt`. This captures the display exactly as shown (including thinking blocks, labels, and formatting) as a plain text file. These `.txt` files are write-only — the app never loads them; they serve as human-readable archives.
+**Output .txt export** — Every save (manual or automatic) writes both the `.json` chat file and a matching `.txt` file to `saved_chats/`. The `.txt` captures the raw text content of the output window exactly as shown (including thinking blocks, labels, and formatting) as a plain text file. These `.txt` files are write-only — the app never loads them; they serve as human-readable archives. Deleting a chat via the **DELETE** button always removes both the `.json` and its associated `.txt` file.
 
-**Auto-save on close** — When the app is closed (via [X] button or `taskkill`), instance 1 automatically saves the current chat as both `.json` and `.txt` to `saved_chats/`. If a name is typed in the Save Chat entry, that name is used; otherwise a name is auto-generated from the first user message (or a timestamp fallback). A periodic auto-save runs every 5 seconds to protect against force-kill data loss.
+**Auto-save on close** — When the app is closed (via [X] button or `taskkill`), all instances automatically save the current chat as both `.json` and `.txt` to `saved_chats/`. If a name is typed in the Save Chat entry, that name is used; otherwise a name is auto-generated from the first user message (or a timestamp fallback). A periodic auto-save runs every 5 seconds on all instances to protect against force-kill data loss. In dual-instance mode, instance 2's saved files are suffixed with `_` (e.g., `My Chat_.json`, `My Chat_.txt`) to avoid filename collisions with instance 1.
 
 #### System Prompt Editor
 Click **System Prompt** to open a dedicated editor window with:
@@ -325,7 +324,7 @@ When Auto is toggled OFF mid-conversation, the current API response completes bu
 
 #### Paired Shutdown
 
-Closing either SelfBot window stops the auto-chat conversation, waits for any in-flight API streaming to finish, auto-saves instance 1's chat (both `.json` and `.txt`), and then shuts down both instances cleanly via `WM_CLOSE` messages. A periodic auto-save every 5 seconds also protects against force-kill (`taskkill /F`, `Stop-Process`) data loss.
+Closing either SelfBot window stops the auto-chat conversation, waits for any in-flight API streaming to finish, auto-saves both instances' chats (`.json` + `.txt`), and then shuts down both instances cleanly via `WM_CLOSE` messages. Instance 2's files are suffixed with `_` to avoid collisions. A periodic auto-save every 5 seconds on all instances also protects against force-kill (`taskkill /F`, `Stop-Process`) data loss.
 
 #### Message Display Formatting
 
@@ -410,7 +409,7 @@ python SelfBot.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
+- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar with SAVE button (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, labels, tool info, errors) back to the main thread. When thinking is enabled, the stream worker uses raw event iteration (`content_block_start`, `content_block_delta`, `content_block_stop`) instead of `text_stream` to handle both thinking and text blocks
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — JSON-based storage handles different concerns: `system_prompts.json` for the prompt library, individual `.json` files in `saved_chats/` for conversation history (one file per chat), `app_state.json` for user preferences, and `skills.json` for the skills library
@@ -421,4 +420,4 @@ The application is a single-file tkinter app structured around the `App` class:
 - **Desktop Automation** — Thirteen tools (`do_screenshot`, `do_mouse_click`, `do_type_text`, `do_press_key`, `do_mouse_scroll`, `do_open_application`, `do_find_window`, `do_clipboard_read`, `do_clipboard_write`, `do_wait_for_window`, `do_read_screen_text`, `do_find_image_on_screen`, `do_mouse_drag`) built on `pyautogui`, `pygetwindow`, `winocr`, and `opencv-python`. Defined in a separate `DESKTOP_TOOLS` list and conditionally included via `_get_tools()` only when the `desktop_enabled` checkbox is enabled. The `screenshot` tool description is dynamically patched with the current screen resolution. Process-level DPI awareness (`SetProcessDpiAwareness(2)`) is set before window creation, and screenshot-to-screen coordinate scaling is handled automatically via `_screenshot_scale`
 - **Browser Automation** — Eleven tools (`do_browser_open`, `do_browser_navigate`, `do_browser_click`, `do_browser_fill`, `do_browser_get_text`, `do_browser_run_js`, `do_browser_screenshot`, `do_browser_close`, `do_browser_wait_for`, `do_browser_select`, `do_browser_get_elements`) built on Playwright's CDP connection to Microsoft Edge. Gated behind a `browser_enabled` `BooleanVar` toggle. Tool schemas are conditionally included via `_get_tools()` only when the checkbox is enabled. `_ensure_browser()` manages the full connection lifecycle with auto-reconnect on dead connections. `WM_DELETE_WINDOW` protocol handler ensures clean Playwright disconnection on app close
 - **Rate-Limit Retry** — Exponential backoff loop in `stream_worker` handles HTTP 429 (rate limit) and 529 (overload) errors with up to 5 retries before propagating the exception
-- **Auto-Save & Graceful Shutdown** — `_auto_save_on_close()` silently saves the chat (`.json` + `.txt`) using the entry field name or an auto-generated name. `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected. `_on_close()` stops auto-chat, waits for streaming to finish via `_finish_close()` polling, saves instance 1's chat, sends `WM_CLOSE` to peer windows, and cleans up lock files and browser connections. Re-entrancy is guarded by a `_closing` flag, and `_poll_auto_msg`/`_auto_msg_delayed_send`/`_poll_for_peer` all bail immediately when closing
+- **Auto-Save & Graceful Shutdown** — `_auto_save_on_close()` silently saves the chat (`.json` + `.txt`) using the entry field name or an auto-generated name; instance 2's filenames are suffixed with `_` via `_save_name()` to avoid collisions. `_periodic_save()` runs every 5 seconds on all instances and triggers auto-save when new messages are detected. `_on_close()` stops auto-chat, waits for streaming to finish via `_finish_close()` polling, saves the current instance's chat, sends `WM_CLOSE` to peer windows, and cleans up lock files and browser connections. Re-entrancy is guarded by a `_closing` flag, and `_poll_auto_msg`/`_auto_msg_delayed_send`/`_poll_for_peer` all bail immediately when closing
