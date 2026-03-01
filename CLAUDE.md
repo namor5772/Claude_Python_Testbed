@@ -22,7 +22,7 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 - `SelfBot.py` — Single-file tkinter GUI application (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
 - `skills.json` — User-defined skills with content and mode (created at runtime)
 - `system_prompts.json` — Saved system prompts (created at runtime)
-- `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat; optional `.txt` exports of the output window are also saved here
+- `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat; a matching `.txt` export of the output window is always saved alongside each `.json` file
 - `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
@@ -57,9 +57,9 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 
 **DPI handling** — `SetProcessDpiAwareness(2)` is called before any window creation. Screenshot coordinates are scaled via `_screenshot_scale` for mouse click mapping.
 
-**Auto-save on close** — When closing (via [X] button or `taskkill`), instance 1 auto-saves the chat as `.json` + `.txt` to `saved_chats/`. Uses the name from the Save Chat entry if provided, otherwise auto-generates from the first user message. A periodic auto-save every 5 seconds also protects against force-kill data loss.
+**Auto-save on close** — When closing (via [X] button or `taskkill`), all instances auto-save their chat as `.json` + `.txt` to `saved_chats/`. Uses the name from the Save Chat entry if provided, otherwise auto-generates from the first user message. Instance 2's files are suffixed with `_` via `_save_name()` to avoid collisions. A periodic auto-save every 5 seconds on all instances also protects against force-kill data loss.
 
-**Graceful duo shutdown** — Pressing [X] on either instance stops auto-chat, waits for any active streaming to finish, saves instance 1's chat, then closes both windows via `WM_CLOSE` messages.
+**Graceful duo shutdown** — Pressing [X] on either instance stops auto-chat, waits for any active streaming to finish, saves both instances' chats, then closes both windows via `WM_CLOSE` messages.
 
 **API retry logic** — `stream_worker` retries up to 10 times on transient API errors. Rate-limit errors (429) use exponential backoff capped at 60s (~6.5 min total). Overload errors (529) use exponential backoff capped at 90s (~10 min total). This makes the app resilient to prolonged Anthropic API outages without absurdly long individual waits.
 
