@@ -8,7 +8,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **MyAgent.py** — Autonomous Claude agent GUI application (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
-- **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime)
+- **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
 - **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)

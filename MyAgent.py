@@ -719,7 +719,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "• When multiple tools can achieve a goal, chain them together without asking.\n"
     "• For desktop automation: screenshot first, then act on what you see.\n"
     "• For browser tasks: use browser tools (not desktop tools) for precision.\n"
-    "• CRITICAL: If you need user input, confirmation, or action — you MUST call the user_prompt tool. "
+    "• CRITICAL: If you need user input, confirmation, or action, or your output ends with a question — you MUST call the user_prompt tool. "
     "NEVER just output text and stop. Outputting a question or request as plain text ends your turn "
     "and the user has no way to respond. The ONLY way to get a reply from the user is user_prompt.\n"
     "• If you genuinely can't complete a step, explain what went wrong.\n"
