@@ -75,7 +75,10 @@ TOOLS = [
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
             "getting system info, running scripts, installing software, or any other local operation. "
             "Commands run with the current user's permissions. Prefer single-line commands or "
-            "semicolon-separated statements."
+            "semicolon-separated statements. "
+            "IMPORTANT: When launching GUI applications (e.g. notepad++, mspaint, excel), "
+            "always use Start-Process so the command returns immediately instead of blocking. "
+            "Example: Start-Process notepad++ -ArgumentList 'C:\\path\\to\\file.txt'"
         ),
         "input_schema": {
             "type": "object",
@@ -251,16 +254,21 @@ DESKTOP_TOOLS = [
         "name": "open_application",
         "description": (
             "Open an application by common name or full path. Known names: chrome, firefox, edge, "
-            "notepad, calculator, excel, word, powerpoint, explorer, cmd, powershell, vscode, "
-            "spotify, discord, slack, teams. Or provide a full executable path."
+            "notepad, notepad++, calculator, excel, word, powerpoint, explorer, cmd, powershell, vscode, "
+            "spotify, discord, slack, teams. Or provide a full executable path. "
+            "Use the optional 'args' parameter to pass arguments (e.g. a file path to open)."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string",
-                    "description": "App name (e.g. 'chrome', 'notepad') or full path to executable",
-                }
+                    "description": "App name (e.g. 'chrome', 'notepad++') or full path to executable",
+                },
+                "args": {
+                    "type": "string",
+                    "description": "Optional arguments to pass (e.g. a file path to open in the application)",
+                },
             },
             "required": ["name"],
         },
@@ -2204,6 +2212,7 @@ class App:
         "firefox": "start firefox",
         "edge": "start msedge",
         "notepad": "notepad",
+        "notepad++": "start notepad++",
         "calculator": "calc",
         "calc": "calc",
         "excel": "start excel",
@@ -2297,16 +2306,17 @@ class App:
         except Exception as e:
             return f"Scroll error: {e}"
 
-    def do_open_application(self, name):
+    def do_open_application(self, name, args=None):
         try:
             key = name.lower().strip()
             if key in self.KNOWN_APPS:
                 cmd = self.KNOWN_APPS[key]
-                subprocess.Popen(cmd, shell=True)
-                return f"Opened {name} (command: {cmd})"
             else:
-                subprocess.Popen(name, shell=True)
-                return f"Launched: {name}"
+                cmd = name
+            if args:
+                cmd = f'{cmd} "{args}"'
+            subprocess.Popen(cmd, shell=True)
+            return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"
         except Exception as e:
             return f"Error opening {name}: {e}"
 
@@ -2931,8 +2941,9 @@ class App:
                                         result = self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
                                     elif block.name == "open_application":
                                         app_name = inp.get("name", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}\n"})
-                                        result = self.do_open_application(app_name)
+                                        app_args = inp.get("args")
+                                        self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n"})
+                                        result = self.do_open_application(app_name, args=app_args)
                                     elif block.name == "find_window":
                                         title = inp.get("title", "")
                                         self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
