@@ -1,0 +1,11 @@
+{
+  "last_instruction_name": "Default",
+  "last_model": "claude-opus-4-6",
+  "temperature": 1.0,
+  "thinking_enabled": true,
+  "thinking_effort": "max",
+  "thinking_budget": 8192,
+  "geometry": "1050x930+1346+83",
+  "screen_width": 2560,
+  "screen_height": 1600
+}

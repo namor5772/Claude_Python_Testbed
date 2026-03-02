@@ -1,0 +1,47 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "What is the weather today in Sydney"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll search for the current weather in Sydney for you."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_017wkor97zHeP2je1G6VMxew",
+          "name": "web_search",
+          "input": {
+            "query": "weather today Sydney"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_017wkor97zHeP2je1G6VMxew",
+          "content": "Title: Weather Tenday\nURL: https://weather.com/en-AU/weather/tenday/l/North+Sydney+New+South+Wales+2089?canonicalCityId=215f4fcfdebd42a51758d57d8db85ec4\nSnippet: Today. 75° / 70°. Rain. 98%. 12 mph ... Rain. High 75°F. Winds ESE at 10 to 15 mph. Chance of rain 100%. Rainfall around 0.25 inch. Locally heavier rainfall ...\n\nTitle: Sydney, New South Wales, AU Weather Today & Tomorrow\nURL: https://www.weatherbug.com/weather-forecast/now/sydney-new-south-wales-as\nSnippet: Today ... Mostly cloudy with a slight chance of rain. Chance of precipitation 30%. High temperature around 79F. Dew point will be around 65F with an average ...\n\nTitle: Hourly forecast for Sydney Central Business District, New South Wales ...\nURL: https://www.timeanddate.com/weather/@6619280/hourly\nSnippet: Hour-by-hour Forecast in Sydney Central Business District — Graph ... Passing showers. Overcast. Feels Like: 77 °F. Humidity: 70%.\n\nTitle: Sydney Weather Nerds (@SYDWN) - Facebook\nURL: https://www.facebook.com/SYDWN/\nSnippet: Current Situation (5–6pm): Radar says moderate rain across parts of southern & SW Sydney. Heavier bursts near the Illawarra escarpment. Tonight's Forecast: * ...\n\nTitle: Today's weather forecast for Sydney, New South Wales\nURL: https://www.weatheraustralia.info/australia/new-south-wales/weather-sydney/\nSnippet: What will the weather be like in Sydney over the next few hours? Saturday, 28 February 2026. The weather today in Sydney. 19:00. Sydney - Partly cloudy. 23°C.\n"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Based on the search results, here's the current weather in Sydney:\n\n**Today's Weather in Sydney:**\n- **Temperature:** Around 75-79°F (approximately 24-26°C)\n- **Conditions:** Mostly cloudy with rain/passing showers\n- **Chance of Rain:** High (around 30-100% depending on the specific area)\n- **Winds:** ESE at 10-15 mph\n- **Humidity:** Around 70%\n- **Feels Like:** 77°F (25°C)\n\nSydney is experiencing a rainy day with overcast skies and passing showers. Some areas, particularly in southern and southwest Sydney, are seeing moderate to heavier rainfall. It's a typical humid, cloudy day with temperatures in the mid-70s Fahrenheit (mid-20s Celsius)."
+    }
+  ],
+  "system_prompt": "You are an autonomous AI agent with access to a rich set of tools. Your task is given in the first user message — execute it fully and proactively.\n\nCORE TOOLS (always available):\n• web_search — search the web for current information.\n• fetch_webpage — fetch and read a specific URL.\n• run_powershell — execute PowerShell commands on the local Windows PC.\n• csv_search — search a delimited text file for records by column heading and value.\n\nDESKTOP TOOLS (available when Desktop is enabled):\n• screenshot — capture the screen. Always take a screenshot FIRST before clicking or typing.\n• mouse_click — click at specific coordinates from the screenshot.\n• type_text — type text at the current cursor position.\n• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n• mouse_scroll — scroll up or down.\n• open_application — launch apps by name or path.\n• find_window — find and optionally activate windows by title.\n• clipboard_read / clipboard_write — read/write the Windows clipboard.\n• wait_for_window — wait until a window appears.\n• read_screen_text — OCR a screen region to extract text.\n• find_image_on_screen — find a reference image on screen.\n• mouse_drag — drag the mouse from one point to another.\n\nBROWSER TOOLS (available when Browser is enabled):\n• browser_open — connect to Edge with real profile and navigate to a URL.\n• browser_navigate — go to a new URL.\n• browser_click — click an element by CSS selector or visible text.\n• browser_fill — fill a form field by CSS selector.\n• browser_get_text — read text content from the page or element.\n• browser_run_js — execute JavaScript on the page.\n• browser_screenshot — take a screenshot of the browser page.\n• browser_close — disconnect from the browser.\n• browser_wait_for — wait for an element to appear.\n• browser_select — select an option from a dropdown.\n• browser_get_elements — get info about matching elements.\n\nGUIDELINES:\n• Execute the task autonomously — chain tools together without hesitation.\n• When multiple tools can achieve a goal, chain them together without asking.\n• For desktop automation: screenshot first, then act on what you see.\n• For browser tasks: use browser tools (not desktop tools) for precision.\n• If you genuinely can't complete a step, explain what went wrong.\n• When the task is complete, summarise what you did.",
+  "agent_instruction_name": "TEST",
+  "model": "claude-sonnet-4-5-20250929",
+  "temperature": 1.0,
+  "thinking_enabled": false,
+  "thinking_effort": "high",
+  "thinking_budget": 8192,
+  "name": "What is the weather today in Sydney"
+}

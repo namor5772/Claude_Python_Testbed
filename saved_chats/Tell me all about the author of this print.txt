@@ -1,0 +1,6 @@
+Instruction:
+[Image: 1990_GROBLICKA_Lidia_AM.jpg] Tell me all about the author of this print
+
+Agent:
+  Call #1  
+Error: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'messages.0.content.0.image.source.base64: image exceeds 5 MB maximum: 6571468 bytes > 5242880 bytes'}, 'request_id': 'req_011CYdGefKbSuhLEYiFVgqtF'}

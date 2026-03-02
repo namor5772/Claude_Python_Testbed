@@ -1,19 +1,23 @@
 # Claude Python Testbed
 
-A repo containing various Python scripts written using Claude Code. The main application is a full-featured Claude chatbot with a tkinter GUI that also supports dual-instance self-chatting.
+A repo containing various Python scripts written using Claude Code. The two main applications are a full-featured Claude chatbot with dual-instance self-chatting (SelfBot.py) and an autonomous task agent that loops until a job is done (MyAgent.py).
 
 ## Contents
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
+- **MyAgent.py** — Autonomous Claude agent GUI application (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
-- **system_prompts.json** — Saved system prompts (created at runtime)
+- **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
+- **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime)
 - **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
-- **skills.json** — Saved skills with content and mode (created at runtime)
+- **agent_state.json** — Persistent app settings for MyAgent (created at runtime)
+- **skills.json** — Saved skills with content and mode, shared by both apps (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (see below)
+- **LaunchMyAgent.bat** — One-click launcher for MyAgent
 - **selfbot_position.ps1** — PowerShell helper used by the launcher to position and focus windows
 
 ## SelfBot.py — Claude Chatbot & Dual-Instance Self-Chatting Bot
@@ -421,3 +425,172 @@ The application is a single-file tkinter app structured around the `App` class:
 - **Browser Automation** — Eleven tools (`do_browser_open`, `do_browser_navigate`, `do_browser_click`, `do_browser_fill`, `do_browser_get_text`, `do_browser_run_js`, `do_browser_screenshot`, `do_browser_close`, `do_browser_wait_for`, `do_browser_select`, `do_browser_get_elements`) built on Playwright's CDP connection to Microsoft Edge. Gated behind a `browser_enabled` `BooleanVar` toggle. Tool schemas are conditionally included via `_get_tools()` only when the checkbox is enabled. `_ensure_browser()` manages the full connection lifecycle with auto-reconnect on dead connections. `WM_DELETE_WINDOW` protocol handler ensures clean Playwright disconnection on app close
 - **Rate-Limit Retry** — Exponential backoff loop in `stream_worker` handles HTTP 429 (rate limit) and 529 (overload) errors with up to 5 retries before propagating the exception
 - **Auto-Save & Graceful Shutdown** — `_auto_save_on_close()` silently saves the chat (`.json` + `.txt`) using the entry field name or an auto-generated name; instance 2's filenames are suffixed with `_` via `_save_name()` to avoid collisions. `_periodic_save()` runs every 5 seconds on all instances and triggers auto-save when new messages are detected. `_on_close()` stops auto-chat, waits for streaming to finish via `_finish_close()` polling, saves the current instance's chat, sends `WM_CLOSE` to peer windows, and cleans up lock files and browser connections. Re-entrancy is guarded by a `_closing` flag, and `_poll_auto_msg`/`_auto_msg_delayed_send`/`_poll_for_peer` all bail immediately when closing
+
+---
+
+## MyAgent.py — Autonomous Claude Task Agent
+
+A fire-and-forget autonomous task runner built with tkinter that connects to the Anthropic API. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Agent Instruction** (a task description, optionally with images), press **START**, and Claude autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"Claude Agent"**.
+
+### How the Agentic Loop Works
+
+1. **Configure** — Write or load an Agent Instruction describing the task (e.g., "Search for today's top tech news and summarise it", "Check disk space and clean up temp files"). Optionally attach reference images.
+2. **Press START** — The instruction is injected as the first user message and a background thread begins the agentic loop.
+3. **Loop** — `stream_worker()` runs a `while True:` loop:
+   - Sends the full message history to the Anthropic API via streaming.
+   - Streams the response token-by-token into the display.
+   - If the API returns `stop_reason: "tool_use"`: executes all requested tools, appends the results to the conversation, and **loops again** (next API call with updated history).
+   - If the API returns `stop_reason: "end_turn"`: the task is complete — the loop exits.
+4. **Press STOP** (optional) — Halts the loop cleanly at the top of the next iteration or after the current API call finishes.
+
+There is **no fixed iteration limit** — the agent runs until Claude decides it is done or the user hits STOP. Each iteration displays a **Call #N** counter badge so you can track how many API round-trips have occurred.
+
+### Features
+
+#### Agent Instructions
+
+Agent Instructions are pre-configured task descriptions that serve as the first (and only) user message. They are managed through a dedicated **Agent Instruction** editor window and stored in `agent_instructions.json`.
+
+| Control | Description |
+|---|---|
+| **Instruction Name** entry | Name for saving/loading instructions |
+| **SAVE** button | Save the current instruction text and attached images under the given name |
+| **DELETE** button | Remove the named instruction from disk |
+| **APPLY** button | Set the instruction as active and close the editor |
+| **Text editor** | Multi-line area for writing the task description |
+| **Instruction list** | Scrollable listbox of all saved instructions — click to load |
+
+**Images persist with instructions** — When you save a named instruction, any currently-attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
+
+When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
+
+A "Default" instruction is automatically created on first run if missing. Old-format instruction files (plain string values) are auto-migrated to the new dict format that includes image data.
+
+#### Model Selection, Temperature & Extended Thinking
+
+Identical to SelfBot.py — a **Model** dropdown fetches available Claude models live from the Anthropic API on startup (falling back to a hardcoded list), a **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox with **Strength** combobox enables extended thinking.
+
+| Model type | Thinking mode | Strength control |
+|---|---|---|
+| **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
+| **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+
+All model, temperature, and thinking settings are persisted across sessions in `agent_state.json`.
+
+#### Tool Use
+
+MyAgent has the same twenty-eight built-in tools as SelfBot (plus the dynamic `get_skill` tool), organised into the same three categories:
+
+**Core Tools (always available):** `web_search`, `fetch_webpage`, `run_powershell`, `csv_search`
+
+**Desktop Tools (enabled via Desktop checkbox):** `screenshot`, `mouse_click`, `type_text`, `press_key`, `mouse_scroll`, `open_application`, `find_window`, `clipboard_read`, `clipboard_write`, `wait_for_window`, `read_screen_text`, `find_image_on_screen`, `mouse_drag`
+
+**Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
+
+**Dynamic Tool:** `get_skill` — automatically added when on-demand skills exist
+
+All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Edge, PowerShell safety guardrails, image compression) is identical to SelfBot. See the SelfBot.py tool sections above for full details.
+
+#### Skills System
+
+Shared with SelfBot — both apps read from the same `skills.json` file. The three-mode system (disabled, enabled, on-demand) works identically. See the SelfBot.py Skills System section above for full details.
+
+#### Image Attachments
+
+- Click **Attach Images** to select image files (PNG, JPG, JPEG, GIF, WEBP)
+- Attached images are shown as a purple indicator below the button bar (click to clear)
+- Images are sent to Claude as base64-encoded content blocks alongside the Agent Instruction text
+- Images exceeding 4.8 MB are automatically compressed — first trying JPEG at decreasing quality levels (90, 75, 60, 45, 30), then progressively halving dimensions if still too large
+
+#### Chat Save
+
+- Type a name in the **Save Chat as** field and click **SAVE** to save the agent's output as `.json` + `.txt` to `saved_chats/`
+- Saved chats include the full message history, system prompt, agent instruction name, model, temperature, and thinking settings
+- Base64 image data is stripped during serialisation and replaced with `[Screenshot]` or `[Image was attached]` placeholders
+- **Auto-save on close** — closing the window (or `taskkill`) auto-saves the current run. If no name is provided, one is auto-generated from the first 50 characters of the instruction text (or a timestamp fallback `Agent_YYYYMMDD_HHMMSS`)
+- **Periodic auto-save** every 5 seconds protects against force-kill data loss
+
+#### Display Toggles
+
+Six checkboxes control what is shown in the output display (all default to **off**):
+
+| Checkbox | What it shows/hides |
+|---|---|
+| **Debug** | Full API payload JSON with each request |
+| **Tool Calls** | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
+| **Activity** | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
+| **Show Thinking** | Extended thinking blocks in amber/gold italic text |
+| **Desktop** | Enables the 13 desktop automation tools |
+| **Browser** | Enables the 11 browser automation tools |
+
+The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
+
+#### App State Persistence
+
+- Last-used instruction name, model, temperature, thinking settings, and window geometry are saved to `agent_state.json`
+- On startup, the app restores all settings and the last instruction automatically
+- **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to the default `1050x930`
+
+#### Rate-Limit Retry
+
+API calls automatically retry up to 10 times on transient errors with exponential backoff. Rate-limit errors (HTTP 429) use backoff capped at 60 seconds. Overload errors (HTTP 529) use backoff capped at 90 seconds. Retry status messages appear in the output as grey italicised lines.
+
+#### Graceful Shutdown
+
+Closing the window stops the agentic loop, waits for any in-flight API streaming to finish (polling every 200ms), auto-saves the chat, cleans up any browser connection, then destroys the window. `SIGINT` (Ctrl+C) is suppressed — the only way to stop is via the STOP button or closing the window.
+
+### UI Layout
+
+The window is 1050x930 (default). Grid layout with 6 rows:
+
+| Row | Contents |
+|---|---|
+| **Row 0** | Model toolbar: Model dropdown, Temp spinbox, Thinking checkbox, Strength combobox |
+| **Row 1** | Chat toolbar: Save Chat as entry + SAVE button, START button (green), STOP button (red) |
+| **Row 2** | Chat display: read-only text area with scrollbar, colour-coded output |
+| **Row 3** | Button bar: Attach Images, Agent Instruction, Skills buttons |
+| **Row 4** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser |
+| **Row 5** | Attachment indicator: purple italic label showing attached filenames |
+
+**Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
+
+### Key Differences from SelfBot.py
+
+| Aspect | SelfBot.py | MyAgent.py |
+|---|---|---|
+| **Paradigm** | Interactive chatbot — user sends messages, gets replies | Autonomous agent — configure a task, press START, observe |
+| **User input** | Multi-line text input field for typing messages | No input field — task is defined via Agent Instruction editor |
+| **Controls** | Send button (Enter key) | START / STOP buttons |
+| **Conversation** | Multi-turn back-and-forth with user | Single task instruction, then autonomous tool-use loop |
+| **Dual-instance** | Yes — two instances can self-chat autonomously | No — strictly single-instance |
+| **System prompt editor** | Full editor with save/load/delete/apply | No user-facing editor — system prompt is built internally |
+| **Task config** | System prompts (reusable prompt text) | Agent Instructions (reusable task descriptions with embedded images) |
+| **State file** | `app_state.json` / `app_state_2.json` | `agent_state.json` |
+| **Instruction file** | `system_prompts.json` | `agent_instructions.json` |
+| **Chat loading** | Save and load chats | Save only (no load-back into UI) |
+| **Window title** | "Claude SelfBot" | "Claude Agent" |
+
+### Running
+
+```bash
+# Activate the virtual environment
+source .venv/Scripts/activate
+
+# Run the application
+python MyAgent.py
+```
+
+Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
+
+### Architecture
+
+The application is a single-file (~3,030 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+
+- **UI Layout** — Grid-based layout with 6 rows: model + temperature + thinking toolbar (row 0), chat save toolbar with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Attach Images, Agent Instruction, and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
+- **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
+- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools, appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, and `skills.json` (shared with SelfBot) for the skills library
+- **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Adding a new tool requires the same three changes as SelfBot: schema, `do_<name>()` method, and dispatch wiring in `stream_worker()`
+- **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
+- **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
+- **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected. `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat, cleans up browser connections, then destroys the window

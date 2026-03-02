@@ -10,25 +10,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 ```bash
-# Activate venv and run the app
+# Activate venv and run SelfBot
 source .venv/Scripts/activate && python SelfBot.py
+
+# Activate venv and run MyAgent
+source .venv/Scripts/activate && python MyAgent.py
 
 # Kill any running instances before relaunching (Windows)
 taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/null
 ```
-There are no tests, linter, or build steps — this is a single-file testbed app.
+There are no tests, linter, or build steps — these are single-file testbed apps.
 
 ## Project Structure
-- `SelfBot.py` — Single-file tkinter GUI application (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `skills.json` — User-defined skills with content and mode (created at runtime)
-- `system_prompts.json` — Saved system prompts (created at runtime)
+- `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
+- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3030 lines); fire-and-forget task runner with an agentic tool-use loop
+- `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
+- `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
+- `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)
 - `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat; a matching `.txt` export of the output window is always saved alongside each `.json` file
 - `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
+- `agent_state.json` — Persistent settings for MyAgent (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
 - `selfbot_auto_msg.json` — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - `LaunchSelfBot.bat` — Launcher that starts both SelfBot instances side by side with focus on instance 1
-- `selfbot_position.ps1` — PowerShell helper used by the launcher to position and focus windows
+- `LaunchMyAgent.bat` — Launcher for MyAgent
+- `selfbot_position.ps1` — PowerShell helper used by the SelfBot launcher to position and focus windows
 
 ## Architecture (SelfBot.py)
 
@@ -63,6 +70,24 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 
 **API retry logic** — `stream_worker` retries up to 10 times on transient API errors. Rate-limit errors (429) use exponential backoff capped at 60s (~6.5 min total). Overload errors (529) use exponential backoff capped at 90s (~10 min total). This makes the app resilient to prolonged Anthropic API outages without absurdly long individual waits.
 
+## Architecture (MyAgent.py)
+
+**Single class design** — Same as SelfBot: the `App` class contains all UI, API, tool execution, and persistence logic.
+
+**Agentic loop** — `stream_worker()` runs a `while True:` loop: sends messages to the API, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
+
+**Tool system** — Identical three-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) and `_get_tools()` assembler. Adding a new tool follows the same three-step pattern as SelfBot.
+
+**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}]}}`. Images are embedded as base64 and re-attached when loading an instruction.
+
+**Threading model** — Same as SelfBot: background daemon thread for API calls, `queue.Queue` for events, main thread polls every 50ms via `root.after()`.
+
+**State persistence** — `agent_state.json` stores last instruction name, model, temperature, thinking settings, and window geometry. Periodic auto-save every 5 seconds.
+
+**No dual-instance support** — Strictly single-instance. No mutex, no lock file, no cross-instance message passing.
+
+**API retry logic** — Same as SelfBot: up to 10 retries with exponential backoff capped at 60s (429) or 90s (529).
+
 ## Portability
 - No hardcoded paths — the project works when cloned to any directory on any Windows PC
 - `LaunchSelfBot.bat` uses `%~dp0` (resolves to its own directory at runtime)
@@ -75,4 +100,4 @@ There are no tests, linter, or build steps — this is a single-file testbed app
 ## Conventions
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
-- Single-file architecture: all changes go in `SelfBot.py` unless there's a strong reason to split
+- Single-file architecture: SelfBot changes go in `SelfBot.py`, agent changes go in `MyAgent.py`

@@ -1,0 +1,56 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Search the web for today's top 3 technology news headlines and summarise them."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "toolu_01HK7mV1u9BPaW3GQNwanhWy",
+          "name": "web_search",
+          "input": {
+            "query": "today's top technology news headlines"
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_012uGK4ZWvMVaxkNAW2suUTk",
+          "name": "web_search",
+          "input": {
+            "query": "latest tech news today 2025"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01HK7mV1u9BPaW3GQNwanhWy",
+          "content": "Title: Technology News Headlines - What's New In Technology\nURL: https://weeklyreviewer.com/all-news/technology/\nSnippet: Read the latest Technology news headlines and see what ’ s new in technology . ... you top technology headlines from leading industry news ...\n\nTitle: Today's Tech News and Hottest Headlines - WizyTechs\nURL: https://www.wizytechs.com/2017/11/today-tech-news-and-hottest-headlines.html\nSnippet: ... I will be updating you with series of catchy Tech news headlines ... Having said that, below are some of the top tech news headlines for today .\n\nTitle: Top Technology News Headlines Today March 30 2018 - WizyTechs\nURL: https://www.wizytechs.com/2018/03/top-technology-news-headlines-today.html\nSnippet: TECHNOLOGY NEWS HEADLINES 👉🏿Facebook is making its privacy settings easier to find 👉🏿Playboy deletes its Facebook accounts 👉🏿Apple ...\n\nTitle: Top Headlines from the World of Tech News –\nURL: https://faubourg36-lefilm.com/top-headlines-from-the-world-of-tech-news.html\nSnippet: From quantum computing breakthroughs to advancements in renewable energy, the stories featured in top tech news headlines now reflect a world of ...\n\nTitle: Today's Latest English Technology News Updates -\nURL: https://widebinary.org/uncategorized/today-technology-news-in-english/\nSnippet: In today ’ s technology news , a frequently asked question revolves around the classification of technology into different types.\n"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_012uGK4ZWvMVaxkNAW2suUTk",
+          "content": "Title: www.weforum.org › stories › 2025 These are the Top 10 Emerging Technologies of 2025\nURL: https://www.weforum.org/stories/2025/06/top-10-emerging-technologies-of-2025/\nSnippet: Jun 24, 2025 · The World Economic Forum’s latest Top 10 Emerging Technologies report explores the tech that’s at the tipping point between scientific progress and real-world impact.\n\nTitle: techstartups.com › 2025 /11/25 › top- tech - news - today -november Top Tech News Today, November 25, 2025 - Tech Startups\nURL: https://techstartups.com/2025/11/25/top-tech-news-today-november-25-2025/\nSnippet: Nov 25, 2025 · Whether you are a founder, investor, policymaker, engineer, or tech enthusiast, this briefing delivers fast, reliable insight into the shifts that matter most — cutting through the noise to connect the dots between emerging technology, global competition, regulatory pressure, and the force reshaping tomorrow’s digital economy.\n\nTitle: www.hotbot.com › articles › biggest- tech -headlines The Biggest Tech Headlines of 2025 You Need to Know\nURL: https://www.hotbot.com/articles/biggest-tech-headlines/\nSnippet: Nov 15, 2025 · In 2025 , the biggest tech headlines spotlight AI and Generative AI reshaping industries amid surging quantum computing, spatial computing, and immersive technologies including extended reality (XR) innovations.\n\nTitle: www.analyticsinsight.net › tech - news › the-biggest- news The Biggest News Stories of 2025 - Analytics Insight\nURL: https://www.analyticsinsight.net/tech-news/the-biggest-news-stories-of-2025\nSnippet: Jul 28, 2025 · Is 2025 on the Right Track for Tech Innovation? These are the most significant tech updates of 2025 or top news stories of 2025 that happened this year up to July 2025 .\n\nTitle: www.techrepublic.com › article › news -top-10- tech -stories-of- 2025 2025 in Tech: A Year of Outages, AI Races, and Power Plays\nURL: https://www.techrepublic.com/article/news-top-10-tech-stories-of-2025/\nSnippet: Dec 10, 2025 · Explore the 10 biggest tech stories of 2025 , from AI megacenters and space-powered data centers to record-breaking breaches, outages, and satellite showdowns.\n"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": ""
+    }
+  ],
+  "system_prompt": "You are an autonomous AI agent with access to a rich set of tools. Your task is given in the first user message — execute it fully and proactively.\n\nCORE TOOLS (always available):\n• web_search — search the web for current information.\n• fetch_webpage — fetch and read a specific URL.\n• run_powershell — execute PowerShell commands on the local Windows PC.\n• csv_search — search a delimited text file for records by column heading and value.\n\nDESKTOP TOOLS (available when Desktop is enabled):\n• screenshot — capture the screen. Always take a screenshot FIRST before clicking or typing.\n• mouse_click — click at specific coordinates from the screenshot.\n• type_text — type text at the current cursor position.\n• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n• mouse_scroll — scroll up or down.\n• open_application — launch apps by name or path.\n• find_window — find and optionally activate windows by title.\n• clipboard_read / clipboard_write — read/write the Windows clipboard.\n• wait_for_window — wait until a window appears.\n• read_screen_text — OCR a screen region to extract text.\n• find_image_on_screen — find a reference image on screen.\n• mouse_drag — drag the mouse from one point to another.\n\nBROWSER TOOLS (available when Browser is enabled):\n• browser_open — connect to Edge with real profile and navigate to a URL.\n• browser_navigate — go to a new URL.\n• browser_click — click an element by CSS selector or visible text.\n• browser_fill — fill a form field by CSS selector.\n• browser_get_text — read text content from the page or element.\n• browser_run_js — execute JavaScript on the page.\n• browser_screenshot — take a screenshot of the browser page.\n• browser_close — disconnect from the browser.\n• browser_wait_for — wait for an element to appear.\n• browser_select — select an option from a dropdown.\n• browser_get_elements — get info about matching elements.\n\nGUIDELINES:\n• Execute the task autonomously — chain tools together without hesitation.\n• When multiple tools can achieve a goal, chain them together without asking.\n• For desktop automation: screenshot first, then act on what you see.\n• For browser tasks: use browser tools (not desktop tools) for precision.\n• If you genuinely can't complete a step, explain what went wrong.\n• When the task is complete, summarise what you did.",
+  "agent_instruction_name": "Default",
+  "model": "claude-opus-4-6",
+  "temperature": 1.0,
+  "thinking_enabled": true,
+  "thinking_effort": "max",
+  "thinking_budget": 8192,
+  "name": "Search the web for today's top 3 technology news h"
+}

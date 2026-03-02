@@ -1,0 +1,27 @@
+Instruction:
+What is the weather today in Sydney
+
+Agent:
+  Call #1  
+I'll search for the current weather in Sydney for you.--- TOOL CALL ---
+{
+  "tool": "web_search",
+  "id": "toolu_017wkor97zHeP2je1G6VMxew",
+  "input": {
+    "query": "weather today Sydney"
+  }
+}
+--- END TOOL CALL ---
+Searching: weather today Sydney
+  Call #2  
+Based on the search results, here's the current weather in Sydney:
+
+**Today's Weather in Sydney:**
+- **Temperature:** Around 75-79°F (approximately 24-26°C)
+- **Conditions:** Mostly cloudy with rain/passing showers
+- **Chance of Rain:** High (around 30-100% depending on the specific area)
+- **Winds:** ESE at 10-15 mph
+- **Humidity:** Around 70%
+- **Feels Like:** 77°F (25°C)
+
+Sydney is experiencing a rainy day with overcast skies and passing showers. Some areas, particularly in southern and southwest Sydney, are seeing moderate to heavier rainfall. It's a typical humid, cloudy day with temperatures in the mid-70s Fahrenheit (mid-20s Celsius).
