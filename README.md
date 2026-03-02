@@ -61,7 +61,7 @@ The chatbot has twenty-eight built-in tools (plus a dynamic `get_skill` tool) th
 **Core Tools (always available):**
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
 - **fetch_webpage** — Fetches the full content of a URL using `httpx`, extracts readable text from HTML (stripping scripts, styles, and tags), and truncates to 20,000 characters
-- **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters
+- **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters. The tool description instructs Claude to use `Start-Process` when launching GUI applications to avoid blocking the tool loop
 - **csv_search** — Searches a delimited text file (CSV, TSV, TXT, or any delimited format) for records matching a value. The file must have a header row. Supports searching a specific column or all columns, with three match modes: `contains` (default), `exact`, and `starts_with` — all case-insensitive. The delimiter is auto-detected from file content using `csv.Sniffer` (sampling the first 8KB), or can be explicitly specified (`,`, `\t`, `|`, `;`). Results are returned as labelled key-value rows, capped at 50 matches by default (configurable via `max_results`). Output is truncated at 20,000 characters
 
 **Desktop Tools (enabled via Desktop checkbox):**
@@ -70,7 +70,7 @@ The chatbot has twenty-eight built-in tools (plus a dynamic `get_skill` tool) th
 - **type_text** — Types text at the current cursor position. Uses `pyautogui.write()` for ASCII and clipboard paste via `pyperclip` for Unicode characters
 - **press_key** — Presses a key or key combination (e.g., `enter`, `ctrl+c`, `alt+tab`). Supports common aliases like `windows` → `win`
 - **mouse_scroll** — Scrolls the mouse wheel up or down, optionally at a specific screen position
-- **open_application** — Opens an application by common name (e.g., `chrome`, `notepad`, `vscode`) using a built-in lookup table, or by full executable path
+- **open_application** — Opens an application by common name (e.g., `chrome`, `notepad++`, `vscode`) using a built-in lookup table, or by full executable path. Accepts an optional `args` parameter to pass arguments (e.g., a file path to open in the application). Uses `subprocess.Popen` so it returns immediately without blocking the tool loop
 - **find_window** — Finds windows matching a title pattern using `pygetwindow`, returning titles, positions, and sizes. Can optionally activate (bring to foreground) the first match
 - **clipboard_read** — Reads the current text contents of the Windows clipboard via tkinter's `clipboard_get()`. Returns an error message if the clipboard is empty or contains non-text data
 - **clipboard_write** — Writes text to the Windows clipboard via tkinter's `clipboard_clear()` and `clipboard_append()`, replacing any current content
