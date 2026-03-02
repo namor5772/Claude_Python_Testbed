@@ -454,13 +454,30 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | Control | Description |
 |---|---|
 | **Instruction Name** entry | Name for saving/loading instructions |
-| **SAVE** button | Save the current instruction text and attached images under the given name |
+| **SAVE** button | Save the instruction (text, images, tool toggles) to disk and make it the active instruction |
 | **DELETE** button | Remove the named instruction from disk |
-| **APPLY** button | Set the instruction as active and close the editor |
+| **CLEAR** button | Reset the editor — clears text, images, and tool toggles |
+| **Load Instruction** dropdown | Select a previously saved instruction — populates the editor fields for preview |
 | **Text editor** | Multi-line area for writing the task description |
-| **Instruction list** | Scrollable listbox of all saved instructions — click to load |
+| **Attach Images** button | Select image files to attach to the instruction |
+| **Remove Selected** button | Delete selected images from the image list |
+| **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
+| **Desktop** checkbox | Enable/disable the 13 desktop automation tools for this instruction |
+| **Browser** checkbox | Enable/disable the 11 browser automation tools for this instruction |
+| **Apply** button | Make the instruction active for this session (no disk write) and close the editor |
 
-**Images persist with instructions** — When you save a named instruction, any currently-attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
+**Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
+
+| Action | Makes it active | Saves to disk | Closes editor |
+|---|---|---|---|
+| **Load Instruction** | No | No | No |
+| **SAVE** | Yes | Yes | No |
+| **Apply** | Yes | No | Yes |
+| **Close [X]** | No | No | Yes |
+
+**Images persist with instructions** — When you save a named instruction, any attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
+
+**Tool toggles persist with instructions** — Each saved instruction stores its Desktop and Browser checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window. This effectively makes each instruction a self-contained task profile — text, images, and which tool categories are needed.
 
 When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
 
@@ -497,38 +514,41 @@ Shared with SelfBot — both apps read from the same `skills.json` file. The thr
 
 #### Image Attachments
 
-- Click **Attach Images** to select image files (PNG, JPG, JPEG, GIF, WEBP)
-- Attached images are shown as a purple indicator below the button bar (click to clear)
-- Images are sent to Claude as base64-encoded content blocks alongside the Agent Instruction text
+- Image management is integrated into the **Agent Instruction Editor** — click **Attach Images** to select files (PNG, JPG, JPEG, GIF, WEBP)
+- Attached images appear in a scrollable listbox showing filenames in purple text
+- Select one or more images and click **Remove Selected** to delete them (supports Ctrl+click and Shift+click for multi-select)
+- Images are sent to Claude as base64-encoded content blocks alongside the Agent Instruction text when START is pressed
 - Images exceeding 4.8 MB are automatically compressed — first trying JPEG at decreasing quality levels (90, 75, 60, 45, 30), then progressively halving dimensions if still too large
 
 #### Chat Save
 
-- Type a name in the **Save Chat as** field and click **SAVE** to save the agent's output as `.json` + `.txt` to `saved_chats/`
+Chat saving is fully automatic — there is no manual SAVE button.
+
+- The **Save Chat as** entry field on the chat toolbar sets the filename for saved chats. If left empty, a name is auto-generated from the first 50 characters of the instruction text (or a timestamp fallback `Agent_YYYYMMDD_HHMMSS`)
+- **Periodic auto-save** every 5 seconds writes `.json` + `.txt` to `saved_chats/` whenever new messages are detected, protecting against force-kill data loss
+- **Auto-save on close** — closing the window (or `taskkill`) saves the current run
 - Saved chats include the full message history, system prompt, agent instruction name, model, temperature, and thinking settings
 - Base64 image data is stripped during serialisation and replaced with `[Screenshot]` or `[Image was attached]` placeholders
-- **Auto-save on close** — closing the window (or `taskkill`) auto-saves the current run. If no name is provided, one is auto-generated from the first 50 characters of the instruction text (or a timestamp fallback `Agent_YYYYMMDD_HHMMSS`)
-- **Periodic auto-save** every 5 seconds protects against force-kill data loss
 
 #### Display Toggles
 
-Six checkboxes control what is shown in the output display (all default to **off**):
+Six checkboxes on the main window control what is shown in the output display and which tools are available (all default to **off**):
 
-| Checkbox | What it shows/hides |
+| Checkbox | What it controls |
 |---|---|
 | **Debug** | Full API payload JSON with each request |
 | **Tool Calls** | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
 | **Activity** | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
 | **Show Thinking** | Extended thinking blocks in amber/gold italic text |
-| **Desktop** | Enables the 13 desktop automation tools |
-| **Browser** | Enables the 11 browser automation tools |
+| **Desktop** | Enables the 13 desktop automation tools (also settable per-instruction in the editor) |
+| **Browser** | Enables the 11 browser automation tools (also settable per-instruction in the editor) |
 
 The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
 
 #### App State Persistence
 
 - Last-used instruction name, model, temperature, thinking settings, and window geometry are saved to `agent_state.json`
-- On startup, the app restores all settings and the last instruction automatically
+- On startup, the app restores all settings and the last instruction (including its images and Desktop/Browser toggles) automatically
 - **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to the default `1050x930`
 
 #### Rate-Limit Retry
@@ -541,16 +561,15 @@ Closing the window stops the agentic loop, waits for any in-flight API streaming
 
 ### UI Layout
 
-The window is 1050x930 (default). Grid layout with 6 rows:
+The window is 1050x930 (default). Grid layout with 5 rows:
 
 | Row | Contents |
 |---|---|
 | **Row 0** | Model toolbar: Model dropdown, Temp spinbox, Thinking checkbox, Strength combobox |
-| **Row 1** | Chat toolbar: Save Chat as entry + SAVE button, START button (green), STOP button (red) |
+| **Row 1** | Chat toolbar: Save Chat as entry, START button (green), STOP button (red) |
 | **Row 2** | Chat display: read-only text area with scrollbar, colour-coded output |
-| **Row 3** | Button bar: Attach Images, Agent Instruction, Skills buttons |
+| **Row 3** | Button bar: Agent Instruction, Skills buttons |
 | **Row 4** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser |
-| **Row 5** | Attachment indicator: purple italic label showing attached filenames |
 
 **Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
@@ -586,10 +605,10 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 The application is a single-file (~3,030 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
-- **UI Layout** — Grid-based layout with 6 rows: model + temperature + thinking toolbar (row 0), chat save toolbar with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Attach Images, Agent Instruction, and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4), and attachment indicator (row 5)
+- **UI Layout** — Grid-based layout with 5 rows: model + temperature + thinking toolbar (row 0), chat save entry with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Agent Instruction and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4). Image attachment and Desktop/Browser tool toggles are managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools, appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images and Desktop/Browser toggle state), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Adding a new tool requires the same three changes as SelfBot: schema, `do_<name>()` method, and dispatch wiring in `stream_worker()`
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s

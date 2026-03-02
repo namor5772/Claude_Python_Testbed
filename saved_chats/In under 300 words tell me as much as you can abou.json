@@ -1,0 +1,99 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "In under 300 words tell me as much as you can about what is on this Laptop"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Let me quickly scan your laptop to get a comprehensive picture of what's on it."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01VFyUTeBc5iZf5N6F18Po6f",
+          "name": "run_powershell",
+          "input": {
+            "command": "Get-ComputerInfo | Select-Object CsName, CsModel, CsManufacturer, OsName, OsVersion, OsArchitecture, CsProcessors, CsTotalPhysicalMemory | Format-List"
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01DwewpqkjZQEm8bcaqrB4fe",
+          "name": "run_powershell",
+          "input": {
+            "command": "Get-Disk | Select-Object FriendlyName, Size, OperationalStatus | Format-Table -AutoSize; Get-Volume | Where-Object DriveLetter | Select-Object DriveLetter, FileSystemLabel, @{N='SizeGB';E={[math]::Round($_.Size/1GB,1)}}, @{N='FreeGB';E={[math]::Round($_.SizeRemaining/1GB,1)}} | Format-Table -AutoSize"
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_017QKjtYnrBPBdRdy3fGrzjk",
+          "name": "run_powershell",
+          "input": {
+            "command": "Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* | Select-Object DisplayName | Where-Object {$_.DisplayName} | Sort-Object DisplayName | Select-Object -First 40"
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01TzAbu4c1J7dKo9qAZc2ySQ",
+          "name": "run_powershell",
+          "input": {
+            "command": "$docs = (Get-ChildItem \"$env:USERPROFILE\\Documents\" -ErrorAction SilentlyContinue | Measure-Object).Count; $desk = (Get-ChildItem \"$env:USERPROFILE\\Desktop\" -ErrorAction SilentlyContinue | Measure-Object).Count; $dl = (Get-ChildItem \"$env:USERPROFILE\\Downloads\" -ErrorAction SilentlyContinue | Measure-Object).Count; \"Desktop: $desk items | Documents: $docs items | Downloads: $dl items\"; \"`n--- Desktop ---\"; Get-ChildItem \"$env:USERPROFILE\\Desktop\" -Name -ErrorAction SilentlyContinue | Select-Object -First 15; \"`n--- Recent Downloads ---\"; Get-ChildItem \"$env:USERPROFILE\\Downloads\" -Name -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 10"
+          }
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_011WRm6dsCHyhz4mQH2kaU2h",
+          "name": "run_powershell",
+          "input": {
+            "command": "Get-Process | Sort-Object WorkingSet64 -Descending | Select-Object Name -First 15 -Unique | ForEach-Object { $_.Name }"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01VFyUTeBc5iZf5N6F18Po6f",
+          "content": "CsName                : LENOVOAUG23\nCsModel               : 83AS\nCsManufacturer        : LENOVO\nOsName                : Microsoft Windows 11 Home Insider Preview\nOsVersion             : 10.0.26220\nOsArchitecture        : 64-bit\nCsProcessors          : {AMD Ryzen 7 7735HS with Radeon Graphics}\nCsTotalPhysicalMemory : 29734412288"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01DwewpqkjZQEm8bcaqrB4fe",
+          "content": "FriendlyName                     Size OperationalStatus\n------------                     ---- -----------------\nSKHynix_HFS001TEJ4X112N 1024209543168 Online           \n\n\n\nDriveLetter FileSystemLabel SizeGB FreeGB\n----------- --------------- ------ ------\n          C Len23SSD         951.6  427.4"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_017QKjtYnrBPBdRdy3fGrzjk",
+          "content": "DisplayName                                                \n-----------                                                \n.NET for Android Templates (x64)                           \n.NET MAUI SDK (x64)                                        \n.NET MAUI SDK (x64)                                        \n.NET MAUI Templates (x64)                                  \n.NET MAUI Templates (x64)                                  \nAndroid Studio                                             \nApplication Verifier x64 External Package (DesktopEditions)\nApplication Verifier x64 External Package (OnecoreUAP)     \nArduino IDE 2.3.7                                          \nAudials Radio SE 2024                                      \nBitwarden                                                  \nBlender                                                    \nCanoScan LiDE 210 Scanner Driver                           \nCore FTP LE x64                                            \nDB Browser for SQLite                                      \nDiagnosticsHub_CollectionService                           \nFreeCAD 0.21.2                                             \nGIMP 3.0.4                                                 \nGit                                                        \nIIS 10.0 Express                                           \nIIS Express Application Compatibility Database for x64     \nIIS Express Application Compatibility Database for x86     \nIntelliTraceProfilerProxy                                  \nKiCad 9.0                                                  \nLenovo Voice Service                                       \nMicrosoft .NET 10.0 Templates 10.0.103 x64                 \nMicrosoft .NET 8.0 Templates 8.0.121 (x64)                 \nMicrosoft .NET AppHost Pack - 10.0.3 (x64)                 \nMicrosoft .NET AppHost Pack - 10.0.3 (x64_arm64)           \nMicrosoft .NET AppHost Pack - 10.0.3 (x64_x86)             \nMicrosoft .NET AppHost Pack - 8.0.21 (x64)                 \nMicrosoft .NET AppHost Pack - 8.0.21 (x64_arm64)           \nMicrosoft .NET AppHost Pack - 8.0.21 (x64_x86)             \nMicrosoft .NET Host - 10.0.3 (x64)                         \nMicrosoft .NET Host - 6.0.36 (x64)                         \nMicrosoft .NET Host - 7.0.20 (x64)                         \nMicrosoft .NET Host - 8.0.21 (x64)                         \nMicrosoft .NET Host FX Resolver - 10.0.0 (x64)             \nMicrosoft .NET Host FX Resolver - 10.0.3 (x64)             \nMicrosoft .NET Host FX Resolver - 6.0.36 (x64)"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01TzAbu4c1J7dKo9qAZc2ySQ",
+          "content": "Desktop: 0 items | Documents: 30 items | Downloads: 154 items\n\n--- Desktop ---\n\n--- Recent Downloads ---\np2.jpg\np1.jpg\nPart_2_Estimation.pdf\nPart_1_Probability.pdf\nOnion2.jpg\nOIG.XHDqYIVsVCRK.jpg\nOIG.XEy.jpg\nonion1.jpg\nOLET2110-Narrative-Non-Fiction-Story.pdf\nPart_3_Regression.pdf"
+        },
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_011WRm6dsCHyhz4mQH2kaU2h",
+          "content": "claude\nCode\nexplorer\nOneDrive\nProtonVPN.Client\nMsMpEng\nPhoneExperienceHost\nProtonDrive\nmsedge\nCopilot\nMicrosoftSecurityApp"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Here's a snapshot of your laptop in under 300 words:\n\n---\n\n## 💻 Your Laptop at a Glance\n\n**Hardware:** A **Lenovo IdeaPad (Model 83AS)** powered by an **AMD Ryzen 7 7735HS** with Radeon Graphics and **~28 GB RAM** — a solid mid-to-high-end machine. Storage is a **1 TB SK Hynix NVMe SSD** with about **427 GB free**.\n\n**OS:** Running **Windows 11 Home Insider Preview** (Build 26220), meaning you're opted into early Windows builds.\n\n**Developer/Creator Focus:** This is clearly a **power-user/developer machine**. You have **Visual Studio** (.NET 8/10, MAUI, Android templates), **Android Studio**, **Git**, **DB Browser for SQLite**, and **IIS Express** installed — pointing to **.NET/C# and mobile app development**. **Arduino IDE** and **KiCad 9.0** suggest you're into **electronics/PCB design** too.\n\n**Creative Tools:** **Blender** (3D), **GIMP 3.0** (image editing), **FreeCAD** (CAD modeling), and a **CanoScan LiDE 210** scanner driver show a creative/maker side.\n\n**Privacy-Conscious:** You're running **ProtonVPN** and **ProtonDrive** actively, alongside **Bitwarden** (password manager) — indicating strong privacy and security habits.\n\n**Daily Drivers:** **Microsoft Edge** is your browser, **OneDrive** for cloud sync, **Copilot** is active, and **Claude** (desktop app) is your top running process right now.\n\n**Other:** **Audials Radio SE 2024** for streaming, and **Core FTP LE** for file transfers.\n\n**Files:** Your Desktop is clean (empty!). **Downloads (154 items)** include PDFs on **Probability, Estimation, and Regression** (stats coursework?), images, and a **Narrative Non-Fiction** document — suggesting you're a **student or self-learner**. Documents holds 30 items.\n\n**In short:** A privacy-focused developer/maker's laptop used for .NET & Android development, electronics design, 3D/creative work, and academic studies. 🚀"
+    }
+  ],
+  "system_prompt": "You are an autonomous AI agent with access to a rich set of tools. Your task is given in the first user message — execute it fully and proactively.\n\nCORE TOOLS (always available):\n• web_search — search the web for current information.\n• fetch_webpage — fetch and read a specific URL.\n• run_powershell — execute PowerShell commands on the local Windows PC.\n• csv_search — search a delimited text file for records by column heading and value.\n\nDESKTOP TOOLS (available when Desktop is enabled):\n• screenshot — capture the screen. Always take a screenshot FIRST before clicking or typing.\n• mouse_click — click at specific coordinates from the screenshot.\n• type_text — type text at the current cursor position.\n• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n• mouse_scroll — scroll up or down.\n• open_application — launch apps by name or path.\n• find_window — find and optionally activate windows by title.\n• clipboard_read / clipboard_write — read/write the Windows clipboard.\n• wait_for_window — wait until a window appears.\n• read_screen_text — OCR a screen region to extract text.\n• find_image_on_screen — find a reference image on screen.\n• mouse_drag — drag the mouse from one point to another.\n\nBROWSER TOOLS (available when Browser is enabled):\n• browser_open — connect to Edge with real profile and navigate to a URL.\n• browser_navigate — go to a new URL.\n• browser_click — click an element by CSS selector or visible text.\n• browser_fill — fill a form field by CSS selector.\n• browser_get_text — read text content from the page or element.\n• browser_run_js — execute JavaScript on the page.\n• browser_screenshot — take a screenshot of the browser page.\n• browser_close — disconnect from the browser.\n• browser_wait_for — wait for an element to appear.\n• browser_select — select an option from a dropdown.\n• browser_get_elements — get info about matching elements.\n\nGUIDELINES:\n• Execute the task autonomously — chain tools together without hesitation.\n• When multiple tools can achieve a goal, chain them together without asking.\n• For desktop automation: screenshot first, then act on what you see.\n• For browser tasks: use browser tools (not desktop tools) for precision.\n• If you genuinely can't complete a step, explain what went wrong.\n• When the task is complete, summarise what you did.",
+  "agent_instruction_name": "Default",
+  "model": "claude-opus-4-6",
+  "temperature": 1.0,
+  "thinking_enabled": true,
+  "thinking_effort": "max",
+  "thinking_budget": 8192,
+  "name": "In under 300 words tell me as much as you can abou"
+}
