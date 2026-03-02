@@ -128,6 +128,27 @@ TOOLS = [
             "required": ["file_path", "search_value"],
         },
     },
+    {
+        "name": "user_prompt",
+        "description": (
+            "Pause execution and display a message to the user, then wait for their "
+            "response. You MUST use this tool whenever you need the user to do something "
+            "(e.g., log into a website, approve something, make a choice) or when you need "
+            "information only the user can provide. NEVER just output text asking the user "
+            "something — that ends your turn and they cannot reply. This tool is the ONLY "
+            "way to communicate with the user and receive a response."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The message or question to display to the user",
+                }
+            },
+            "required": ["message"],
+        },
+    },
 ]
 
 # Desktop automation tool definitions (pyautogui-based)
@@ -663,7 +684,8 @@ DEFAULT_SYSTEM_PROMPT = (
     "• web_search — search the web for current information.\n"
     "• fetch_webpage — fetch and read a specific URL.\n"
     "• run_powershell — execute PowerShell commands on the local Windows PC.\n"
-    "• csv_search — search a delimited text file for records by column heading and value.\n\n"
+    "• csv_search — search a delimited text file for records by column heading and value.\n"
+    "• user_prompt — ask the user a question and wait for their reply. This is the ONLY way to get user input.\n\n"
 
     "DESKTOP TOOLS (available when Desktop is enabled):\n"
     "• screenshot — capture the screen. Always take a screenshot FIRST before clicking or typing.\n"
@@ -697,6 +719,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "• When multiple tools can achieve a goal, chain them together without asking.\n"
     "• For desktop automation: screenshot first, then act on what you see.\n"
     "• For browser tasks: use browser tools (not desktop tools) for precision.\n"
+    "• CRITICAL: If you need user input, confirmation, or action — you MUST call the user_prompt tool. "
+    "NEVER just output text and stop. Outputting a question or request as plain text ends your turn "
+    "and the user has no way to respond. The ONLY way to get a reply from the user is user_prompt.\n"
     "• If you genuinely can't complete a step, explain what went wrong.\n"
     "• When the task is complete, summarise what you did."
 )
@@ -1994,6 +2019,94 @@ class App:
         event.wait()
         return result_holder[0]
 
+    def do_user_prompt(self, message):
+        """Pause the agent and ask the user for input via a modal dialog."""
+        event = threading.Event()
+        result_holder = [""]
+
+        def ask():
+            dlg = tk.Toplevel(self.root)
+            dlg.title("Agent Request")
+            dlg.transient(self.root)
+            dlg.grab_set()
+            dlg.resizable(True, True)
+
+            dlg.grid_rowconfigure(1, weight=1)
+            dlg.grid_rowconfigure(3, weight=1)
+            dlg.grid_columnconfigure(0, weight=1)
+
+            tk.Label(
+                dlg, text="The agent is requesting your input:",
+                font=("Arial", 10), anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=15, pady=(15, 5))
+
+            msg_frame = tk.Frame(dlg)
+            msg_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=5)
+            msg_frame.grid_rowconfigure(0, weight=1)
+            msg_frame.grid_columnconfigure(0, weight=1)
+
+            msg_text = tk.Text(
+                msg_frame, wrap=tk.WORD, font=("Consolas", 10),
+                relief="sunken", bd=1, height=6,
+            )
+            msg_text.grid(row=0, column=0, sticky="nsew")
+            msg_sb = tk.Scrollbar(msg_frame, command=msg_text.yview)
+            msg_sb.grid(row=0, column=1, sticky="ns")
+            msg_text.config(yscrollcommand=msg_sb.set)
+            msg_text.insert("1.0", message)
+            msg_text.config(state="disabled")
+
+            tk.Label(
+                dlg, text="Your response:", font=("Arial", 10), anchor="w",
+            ).grid(row=2, column=0, sticky="w", padx=15, pady=(10, 2))
+
+            resp_frame = tk.Frame(dlg)
+            resp_frame.grid(row=3, column=0, sticky="nsew", padx=15, pady=5)
+            resp_frame.grid_rowconfigure(0, weight=1)
+            resp_frame.grid_columnconfigure(0, weight=1)
+
+            resp_text = tk.Text(
+                resp_frame, wrap=tk.WORD, font=("Consolas", 10),
+                relief="sunken", bd=1, height=6,
+            )
+            resp_text.grid(row=0, column=0, sticky="nsew")
+            resp_sb = tk.Scrollbar(resp_frame, command=resp_text.yview)
+            resp_sb.grid(row=0, column=1, sticky="ns")
+            resp_text.config(yscrollcommand=resp_sb.set)
+
+            btn_frame = tk.Frame(dlg)
+            btn_frame.grid(row=4, column=0, pady=(5, 15))
+
+            def on_inject():
+                result_holder[0] = resp_text.get("1.0", tk.END).strip()
+                event.set()
+                dlg.destroy()
+
+            def on_close():
+                result_holder[0] = "[User dismissed the dialog without responding]"
+                event.set()
+                dlg.destroy()
+
+            tk.Button(
+                btn_frame, text="INJECT", command=on_inject, width=12,
+                font=("Arial", 10, "bold"),
+            ).pack(side=tk.LEFT, padx=10)
+
+            dlg.protocol("WM_DELETE_WINDOW", on_close)
+
+            dlg.update_idletasks()
+            w = max(dlg.winfo_reqwidth(), 500)
+            h = max(dlg.winfo_reqheight(), 400)
+            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            dlg.geometry(f"{w}x{h}+{x}+{y}")
+
+            resp_text.focus_set()
+
+        self.root.after(0, ask)
+        event.wait()
+        return result_holder[0]
+
     def run_powershell(self, command):
         safety, info = self._check_powershell_safety(command)
         if safety == "blocked":
@@ -2777,6 +2890,10 @@ class App:
                                     max_results=inp.get("max_results", 50),
                                     delimiter=inp.get("delimiter"),
                                 )
+                            elif block.name == "user_prompt":
+                                prompt_msg = block.input.get("message", "")
+                                self.queue.put({"type": "tool_info", "content": "Requesting user input...\n"})
+                                result = self.do_user_prompt(prompt_msg)
                             elif block.name in ("screenshot", "mouse_click", "type_text",
                                                  "press_key", "mouse_scroll", "open_application",
                                                  "find_window", "clipboard_read", "clipboard_write",
