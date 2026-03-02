@@ -4,8 +4,9 @@
 # Python bytecode
 __pycache__/
 
-# Runtime data (created by app.py)
+# Runtime data
 app_state.json
+agent_instructions.json
 
 # Claude Code config
 .claude/
