@@ -1,11 +1,11 @@
 {
-  "last_instruction_name": "NIP test",
-  "last_model": "claude-opus-4-6",
+  "last_instruction_name": "TEST_Inject",
+  "last_model": "claude-haiku-4-5-20251001",
   "temperature": 1.0,
   "thinking_enabled": true,
   "thinking_effort": "max",
   "thinking_budget": 8192,
-  "geometry": "1276x1481+1271+0",
+  "geometry": "986x1345+1498+6",
   "screen_width": 2560,
   "screen_height": 1600
 }

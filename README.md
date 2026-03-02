@@ -439,7 +439,7 @@ A fire-and-forget autonomous task runner built with tkinter that connects to the
 3. **Loop** — `stream_worker()` runs a `while True:` loop:
    - Sends the full message history to the Anthropic API via streaming.
    - Streams the response token-by-token into the display.
-   - If the API returns `stop_reason: "tool_use"`: executes all requested tools, appends the results to the conversation, and **loops again** (next API call with updated history).
+   - If the API returns `stop_reason: "tool_use"`: executes all requested tools (including `user_prompt`, which pauses the loop to show a dialog and wait for user input), appends the results to the conversation, and **loops again** (next API call with updated history).
    - If the API returns `stop_reason: "end_turn"`: the task is complete — the loop exits.
 4. **Press STOP** (optional) — Halts the loop cleanly at the top of the next iteration or after the current API call finishes.
 
@@ -496,13 +496,16 @@ All model, temperature, and thinking settings are persisted across sessions in `
 
 #### Tool Use
 
-MyAgent has the same twenty-eight built-in tools as SelfBot (plus the dynamic `get_skill` tool), organised into the same three categories:
+MyAgent has twenty-nine built-in tools (the same twenty-eight as SelfBot plus `user_prompt`) and the dynamic `get_skill` tool, organised into the same three categories:
 
-**Core Tools (always available):** `web_search`, `fetch_webpage`, `run_powershell`, `csv_search`
+**Core Tools (always available):** `web_search`, `fetch_webpage`, `run_powershell`, `csv_search`, `user_prompt`
 
 **Desktop Tools (enabled via Desktop checkbox):** `screenshot`, `mouse_click`, `type_text`, `press_key`, `mouse_scroll`, `open_application`, `find_window`, `clipboard_read`, `clipboard_write`, `wait_for_window`, `read_screen_text`, `find_image_on_screen`, `mouse_drag`
 
 **Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
+
+**User Interaction Tool:**
+- **user_prompt** — Pauses the agentic loop and displays a modal dialog to the user with the agent's message, then waits for the user to type a response. This is the **only** way the agent can get user input mid-task (e.g., asking the user to log in, approve an action, or make a choice). The system prompt strongly instructs Claude to always use this tool rather than outputting a question as plain text (which would end the turn and exit the loop). The user can respond via the dialog's text field and INJECT button, or dismiss the dialog to return a default "no response" message
 
 **Dynamic Tool:** `get_skill` — automatically added when on-demand skills exist
 
@@ -578,7 +581,7 @@ The window is 1050x930 (default). Grid layout with 5 rows:
 | Aspect | SelfBot.py | MyAgent.py |
 |---|---|---|
 | **Paradigm** | Interactive chatbot — user sends messages, gets replies | Autonomous agent — configure a task, press START, observe |
-| **User input** | Multi-line text input field for typing messages | No input field — task is defined via Agent Instruction editor |
+| **User input** | Multi-line text input field for typing messages | No input field — task is defined via Agent Instruction editor; mid-task input via `user_prompt` tool dialog |
 | **Controls** | Send button (Enter key) | START / STOP buttons |
 | **Conversation** | Multi-turn back-and-forth with user | Single task instruction, then autonomous tool-use loop |
 | **Dual-instance** | Yes — two instances can self-chat autonomously | No — strictly single-instance |
@@ -607,7 +610,7 @@ The application is a single-file (~3,030 lines) tkinter app structured around th
 
 - **UI Layout** — Grid-based layout with 5 rows: model + temperature + thinking toolbar (row 0), chat save entry with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Agent Instruction and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4). Image attachment and Desktop/Browser tool toggles are managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
-- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools, appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
+- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
 - **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images and Desktop/Browser toggle state), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Adding a new tool requires the same three changes as SelfBot: schema, `do_<name>()` method, and dispatch wiring in `stream_worker()`
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
