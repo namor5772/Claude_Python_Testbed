@@ -1,0 +1,12 @@
+ I would like you to built a general Anthropic API powered AI Agent (in a MyAgent.py python file).
+  1. Give it a Tkinter GUI interface.
+  2. Use the same layout to SelfBot.py except:
+     a. We don't need the [Terminal user] and [Chatting with] fields and associated wiring.
+     b. The [DELETE] and [NEW CHAT] buttons and associated wiring are unecessary. Have a [START] button to start the agent.
+     c. We don't need the [Load Chat] field and associated wiring
+     d. We don't need the user input field.
+  3. create an [Agent Instruction] button with analagous wiring to the [System Prompt] button (of SelfBot.py). Except that The selected
+  Agent Instruction text is injected into the chat as the first and only user input (when the [START] button is pressed)
+  4. Make the output of the output window analagous to the behavious in SelfBot.py
+  5. So not import ANY behaviour related to the dual instance case. It is clearly not needed.
+  6. Have the same tools available as in SelfBot.py
