@@ -763,7 +763,8 @@ class App:
         self.queue = queue.Queue()
         self.streaming = False
         self.stop_requested = False
-        self.pending_images = []  # list of (base64_data, media_type, filename)
+        self.pending_images = []   # list of (base64_data, media_type, filename)
+        self._editor_images = []   # working copy while editor is open
         self._screenshot_scale = 1.0
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
@@ -869,10 +870,7 @@ class App:
 
         tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
-        self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 5))
-        self.chat_name_entry.bind("<Return>", lambda e: self._save_chat())
-
-        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 15))
+        self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 15))
 
         self._stop_button = tk.Button(
             chat_toolbar, text="STOP", command=self._stop_agent, width=8,
@@ -946,11 +944,6 @@ class App:
         button_frame = tk.Frame(self.root)
         button_frame.grid(row=3, column=0, columnspan=2, pady=(0, 5))
 
-        self.attach_button = tk.Button(
-            button_frame, text="Attach Images", command=self.attach_image, width=14
-        )
-        self.attach_button.pack(side=tk.LEFT, padx=(0, 5))
-
         self.instruction_button = tk.Button(
             button_frame, text="Agent Instruction", command=self.open_instruction_editor, width=16
         )
@@ -1010,12 +1003,6 @@ class App:
             font=("Arial", 9),
         )
         self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
-
-        # Row 5: Attachment indicator
-        self.attach_label = tk.Label(
-            self.root, text="", foreground="#6a1b9a", font=("Arial", 9)
-        )
-        self.attach_label.grid(row=5, column=0, columnspan=2)
 
     # ── Model / Thinking Helpers ────────────────────────────────────────
 
@@ -1155,7 +1142,8 @@ class App:
                     (img["data"], img["media_type"], img["filename"])
                     for img in entry.get("images", [])
                 ]
-                self.update_attach_label()
+                self.desktop_enabled.set(entry.get("desktop", False))
+                self.browser_enabled.set(entry.get("browser", False))
                 self._update_title()
         # Restore model
         model = state.get("last_model", "")
@@ -1248,7 +1236,7 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.title("Agent Instruction Editor")
-        win.geometry("650x500")
+        win.geometry("650x580")
         win.transient(self.root)
         self.instruction_editor_window = win
 
@@ -1291,21 +1279,58 @@ class App:
         instr_scrollbar.grid(row=2, column=5, sticky="ns", pady=(5, 5), padx=(0, 5))
         self._instr_text.config(yscrollcommand=instr_scrollbar.set)
 
-        # Row 3: Apply button
+        # Row 3: Image management + tool toggles
+        img_frame = tk.Frame(win)
+        img_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+
+        tk.Button(
+            img_frame, text="Attach Images", command=self.attach_image, width=14
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Button(
+            img_frame, text="Remove Selected", command=self._remove_selected_images, width=16
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get())
+        self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
+        tk.Checkbutton(
+            img_frame, text="Desktop", variable=self._editor_desktop,
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT, padx=(15, 0))
+        tk.Checkbutton(
+            img_frame, text="Browser", variable=self._editor_browser,
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
+        self._instr_image_listbox = tk.Listbox(
+            win, height=4, font=("Arial", 9), foreground="#6a1b9a",
+            selectmode=tk.EXTENDED,
+        )
+        self._instr_image_listbox.grid(
+            row=4, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 5)
+        )
+        img_list_scrollbar = tk.Scrollbar(win, command=self._instr_image_listbox.yview)
+        img_list_scrollbar.grid(row=4, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
+        self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
+
+        # Row 5: Apply button
         tk.Button(
             win, text="Apply", command=self._apply_instruction,
             font=("Arial", 10, "bold"), width=16
-        ).grid(row=3, column=0, columnspan=5, pady=(5, 10))
+        ).grid(row=5, column=0, columnspan=5, pady=(5, 10))
 
         # Grid weights
         win.grid_columnconfigure(1, weight=1)
         win.grid_rowconfigure(2, weight=1)
+
+        # Work on a copy of images so closing without Apply discards changes
+        self._editor_images = list(self.pending_images)
 
         # Load current instruction into editor
         self._instr_text.insert("1.0", self.agent_instruction)
         if self.agent_instruction_name:
             self._instr_name_entry.insert(0, self.agent_instruction_name)
             self._instr_combo_var.set(self.agent_instruction_name)
+        self._refresh_image_listbox()
 
     def _refresh_instruction_list(self):
         instructions = self._load_saved_instructions()
@@ -1320,6 +1345,13 @@ class App:
         if not text:
             messagebox.showwarning("Empty", "The instruction text is empty.", parent=self.instruction_editor_window)
             return
+        # Commit editor state to live
+        self.pending_images = list(self._editor_images)
+        self.desktop_enabled.set(self._editor_desktop.get())
+        self.browser_enabled.set(self._editor_browser.get())
+        self.agent_instruction = text
+        self.agent_instruction_name = name
+        # Persist to disk
         instructions = self._load_saved_instructions()
         instructions[name] = {
             "text": text,
@@ -1327,10 +1359,14 @@ class App:
                 {"data": d, "media_type": mt, "filename": fn}
                 for d, mt, fn in self.pending_images
             ],
+            "desktop": self.desktop_enabled.get(),
+            "browser": self.browser_enabled.get(),
         }
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
         self._instr_combo_var.set(name)
+        self._update_title()
+        self._save_last_state()
 
     def _delete_instruction(self):
         name = self._instr_combo_var.get()
@@ -1353,8 +1389,10 @@ class App:
         self._instr_text.delete("1.0", tk.END)
         self._instr_name_entry.delete(0, tk.END)
         self._instr_combo_var.set("")
-        self.pending_images.clear()
-        self.update_attach_label()
+        self._editor_images.clear()
+        self._editor_desktop.set(False)
+        self._editor_browser.set(False)
+        self._refresh_image_listbox()
 
     def _on_instruction_selected(self, event):
         name = self._instr_combo_var.get()
@@ -1365,21 +1403,26 @@ class App:
             self._instr_text.insert("1.0", entry["text"])
             self._instr_name_entry.delete(0, tk.END)
             self._instr_name_entry.insert(0, name)
-            # Load this instruction's saved images
-            self.pending_images = [
+            # Load this instruction's saved images and tool toggles into editor
+            self._editor_images = [
                 (img["data"], img["media_type"], img["filename"])
                 for img in entry.get("images", [])
             ]
-            self.update_attach_label()
+            self._editor_desktop.set(entry.get("desktop", False))
+            self._editor_browser.set(entry.get("browser", False))
+            self._refresh_image_listbox()
 
     def _apply_instruction(self):
         text = self._instr_text.get("1.0", "end-1c").strip()
         if not text:
             messagebox.showwarning("Empty", "The instruction text is empty.", parent=self.instruction_editor_window)
             return
+        # Commit editor state to live (no disk write)
+        self.pending_images = list(self._editor_images)
+        self.desktop_enabled.set(self._editor_desktop.get())
+        self.browser_enabled.set(self._editor_browser.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
-        # Images in pending_images are now part of this instruction
         self._update_title()
         self._save_last_state()
         self.instruction_editor_window.destroy()
@@ -1653,29 +1696,6 @@ class App:
                 serialized.append({"role": msg["role"], "content": str(content)})
         return serialized
 
-    def _save_chat(self):
-        name = self.chat_name_entry.get().strip()
-        if not name:
-            messagebox.showwarning("No name", "Enter a name for the chat.")
-            return
-        if not self.messages:
-            messagebox.showwarning("Empty chat", "There is no chat to save.")
-            return
-        self._save_chat_file(name, {
-            "messages": self._serialize_messages(),
-            "system_prompt": self.system_prompt,
-            "agent_instruction_name": self.agent_instruction_name,
-            "model": self.model,
-            "temperature": self.temperature,
-            "thinking_enabled": self.thinking_enabled,
-            "thinking_effort": self.thinking_effort,
-            "thinking_budget": self.thinking_budget,
-        })
-        txt_path = os.path.join(CHATS_DIR, self._sanitize_filename(name, '.txt'))
-        output_text = self.chat_display.get("1.0", tk.END).rstrip()
-        with open(txt_path, "w", encoding="utf-8") as f:
-            f.write(output_text)
-
     def _auto_save_on_close(self):
         if not self.messages:
             return
@@ -1777,23 +1797,33 @@ class App:
                 raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
             image_data = base64.standard_b64encode(raw).decode("utf-8")
             filename = os.path.basename(filepath)
-            self.pending_images.append((image_data, media_type, filename))
-        self.update_attach_label()
+            self._editor_images.append((image_data, media_type, filename))
+        self._refresh_image_listbox()
 
-    def update_attach_label(self):
-        if not self.pending_images:
-            self.attach_label.config(text="")
-            self.attach_label.unbind("<Button-1>")
+    def _refresh_image_listbox(self):
+        """Populate the editor's image listbox from _editor_images."""
+        try:
+            if (self.instruction_editor_window
+                    and self.instruction_editor_window.winfo_exists()
+                    and self._instr_image_listbox.winfo_exists()):
+                self._instr_image_listbox.delete(0, tk.END)
+                for _data, _mt, filename in self._editor_images:
+                    self._instr_image_listbox.insert(tk.END, filename)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _remove_selected_images(self):
+        """Remove images selected in the editor's listbox."""
+        try:
+            selection = list(self._instr_image_listbox.curselection())
+        except (tk.TclError, AttributeError):
             return
-        names = ", ".join(img[2] for img in self.pending_images)
-        count = len(self.pending_images)
-        label = f"Attached ({count}): {names}  [click to clear]"
-        self.attach_label.config(text=label)
-        self.attach_label.bind("<Button-1>", lambda e: self.remove_images())
+        if not selection:
+            return
+        for idx in reversed(selection):
+            del self._editor_images[idx]
+        self._refresh_image_listbox()
 
-    def remove_images(self):
-        self.pending_images.clear()
-        self.update_attach_label()
 
     # ── Agent Start / Stop ──────────────────────────────────────────────
 
