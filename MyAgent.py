@@ -28,6 +28,7 @@ import re
 import io
 import sys
 import time
+import concurrent.futures
 import pyautogui
 import pygetwindow as gw
 from PIL import Image
@@ -2797,6 +2798,179 @@ class App:
             })
         return tools
 
+    def _execute_tool(self, block):
+        """Execute a single tool_use block and return the result.
+
+        Thread-safe for parallel-safe tools (web_search, fetch_webpage,
+        csv_search, get_skill). Sequential tools (desktop, browser,
+        run_powershell, user_prompt) must only be called from one thread.
+        """
+        if block.name == "web_search":
+            query = block.input.get("query", "")
+            self.queue.put({"type": "tool_info", "content": f"Searching: {query}\n"})
+            return self.search_web(query)
+        elif block.name == "fetch_webpage":
+            url = block.input.get("url", "")
+            self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
+            return self.fetch_url(url)
+        elif block.name == "run_powershell":
+            cmd = block.input.get("command", "")
+            self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
+            return self.run_powershell(cmd)
+        elif block.name == "csv_search":
+            inp = block.input
+            fp = inp.get("file_path", "")
+            sv = inp.get("search_value", "")
+            self.queue.put({"type": "tool_info", "content": f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n"})
+            return self.do_csv_search(
+                fp, sv,
+                column=inp.get("column"),
+                match_mode=inp.get("match_mode", "contains"),
+                max_results=inp.get("max_results", 50),
+                delimiter=inp.get("delimiter"),
+            )
+        elif block.name == "user_prompt":
+            prompt_msg = block.input.get("message", "")
+            self.queue.put({"type": "tool_info", "content": "Requesting user input...\n"})
+            return self.do_user_prompt(prompt_msg)
+        elif block.name in ("screenshot", "mouse_click", "type_text",
+                             "press_key", "mouse_scroll", "open_application",
+                             "find_window", "clipboard_read", "clipboard_write",
+                             "wait_for_window", "read_screen_text",
+                             "find_image_on_screen", "mouse_drag"):
+            if not self.desktop_enabled.get():
+                return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
+            inp = block.input
+            if block.name == "screenshot":
+                self.queue.put({"type": "tool_info", "content": "Taking screenshot...\n"})
+                region = None
+                if all(k in inp for k in ("x", "y", "width", "height")):
+                    region = (inp["x"], inp["y"], inp["width"], inp["height"])
+                return self.do_screenshot(region)
+            elif block.name == "mouse_click":
+                self.queue.put({"type": "tool_info", "content": f"Clicking at ({inp.get('x')}, {inp.get('y')})...\n"})
+                return self.do_mouse_click(
+                    inp["x"], inp["y"],
+                    button=inp.get("button", "left"),
+                    clicks=inp.get("clicks", 1),
+                )
+            elif block.name == "type_text":
+                text = inp.get("text", "")
+                preview = text[:50] + "..." if len(text) > 50 else text
+                self.queue.put({"type": "tool_info", "content": f"Typing: {preview}\n"})
+                return self.do_type_text(text, interval=inp.get("interval", 0.02))
+            elif block.name == "press_key":
+                keys = inp.get("keys", "")
+                self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
+                return self.do_press_key(keys)
+            elif block.name == "mouse_scroll":
+                clicks_val = inp.get("clicks", 0)
+                self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
+                return self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
+            elif block.name == "open_application":
+                app_name = inp.get("name", "")
+                app_args = inp.get("args")
+                self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n"})
+                return self.do_open_application(app_name, args=app_args)
+            elif block.name == "find_window":
+                title = inp.get("title", "")
+                self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
+                return self.do_find_window(title, activate=inp.get("activate", False))
+            elif block.name == "clipboard_read":
+                self.queue.put({"type": "tool_info", "content": "Reading clipboard...\n"})
+                return self.do_clipboard_read()
+            elif block.name == "clipboard_write":
+                text = inp.get("text", "")
+                preview = text[:50] + "..." if len(text) > 50 else text
+                self.queue.put({"type": "tool_info", "content": f"Writing to clipboard: {preview}\n"})
+                return self.do_clipboard_write(text)
+            elif block.name == "wait_for_window":
+                title = inp.get("title", "")
+                timeout = inp.get("timeout", 10)
+                self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
+                return self.do_wait_for_window(title, timeout=timeout)
+            elif block.name == "read_screen_text":
+                self.queue.put({"type": "tool_info", "content": f"OCR region ({inp.get('x')},{inp.get('y')} {inp.get('width')}x{inp.get('height')})...\n"})
+                return self.do_read_screen_text(inp["x"], inp["y"], inp["width"], inp["height"])
+            elif block.name == "find_image_on_screen":
+                path = inp.get("image_path", "")
+                self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
+                return self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
+            elif block.name == "mouse_drag":
+                self.queue.put({"type": "tool_info", "content": f"Dragging ({inp.get('start_x')},{inp.get('start_y')}) to ({inp.get('end_x')},{inp.get('end_y')})...\n"})
+                return self.do_mouse_drag(
+                    inp["start_x"], inp["start_y"],
+                    inp["end_x"], inp["end_y"],
+                    duration=inp.get("duration", 0.5),
+                    button=inp.get("button", "left"),
+                )
+        elif block.name in ("browser_open", "browser_navigate",
+                              "browser_click", "browser_fill",
+                              "browser_get_text", "browser_run_js",
+                              "browser_screenshot", "browser_close",
+                              "browser_wait_for", "browser_select",
+                              "browser_get_elements"):
+            if not self.browser_enabled.get():
+                return "Browser tools are disabled. Enable the Browser checkbox to use this tool."
+            inp = block.input
+            if block.name == "browser_open":
+                url = inp.get("url", "")
+                self.queue.put({"type": "tool_info", "content": f"Browser: opening {url}\n"})
+                return self.do_browser_open(url)
+            elif block.name == "browser_navigate":
+                url = inp.get("url", "")
+                self.queue.put({"type": "tool_info", "content": f"Browser: navigating to {url}\n"})
+                return self.do_browser_navigate(url)
+            elif block.name == "browser_click":
+                sel = inp.get("selector", "")
+                txt = inp.get("text", "")
+                target = sel or f"text='{txt}'"
+                self.queue.put({"type": "tool_info", "content": f"Browser: clicking {target}\n"})
+                return self.do_browser_click(selector=sel or None, text=txt or None)
+            elif block.name == "browser_fill":
+                sel = inp.get("selector", "")
+                val = inp.get("value", "")
+                self.queue.put({"type": "tool_info", "content": f"Browser: filling {sel}\n"})
+                return self.do_browser_fill(sel, val)
+            elif block.name == "browser_get_text":
+                sel = inp.get("selector", "")
+                self.queue.put({"type": "tool_info", "content": f"Browser: reading text{' from ' + sel if sel else ''}...\n"})
+                return self.do_browser_get_text(selector=sel or None)
+            elif block.name == "browser_run_js":
+                code = inp.get("code", "")
+                preview = code[:80] + "..." if len(code) > 80 else code
+                self.queue.put({"type": "tool_info", "content": f"Browser: running JS: {preview}\n"})
+                return self.do_browser_run_js(code)
+            elif block.name == "browser_screenshot":
+                self.queue.put({"type": "tool_info", "content": "Browser: taking screenshot...\n"})
+                return self.do_browser_screenshot()
+            elif block.name == "browser_close":
+                self.queue.put({"type": "tool_info", "content": "Browser: closing connection...\n"})
+                return self.do_browser_close()
+            elif block.name == "browser_wait_for":
+                sel = inp.get("selector", "")
+                timeout = inp.get("timeout", 10000)
+                self.queue.put({"type": "tool_info", "content": f"Browser: waiting for {sel}...\n"})
+                return self.do_browser_wait_for(sel, timeout=timeout)
+            elif block.name == "browser_select":
+                sel = inp.get("selector", "")
+                self.queue.put({"type": "tool_info", "content": f"Browser: selecting in {sel}...\n"})
+                return self.do_browser_select(sel, value=inp.get("value"), label=inp.get("label"))
+            elif block.name == "browser_get_elements":
+                sel = inp.get("selector", "")
+                limit = inp.get("limit", 10)
+                self.queue.put({"type": "tool_info", "content": f"Browser: getting elements {sel}...\n"})
+                return self.do_browser_get_elements(sel, limit=limit)
+        elif block.name == "get_skill":
+            skill_name = block.input.get("skill_name", "")
+            self.queue.put({"type": "tool_info", "content": f"Loading skill: {skill_name}\n"})
+            if skill_name in self.skills and self.skills[skill_name].get("mode") == "on_demand":
+                return self.skills[skill_name]["content"]
+            else:
+                return f"Skill not found or not on-demand: {skill_name}"
+        else:
+            return f"Unknown tool: {block.name}"
+
     def stream_worker(self, messages):
         try:
             # Sync temperature from spinbox
@@ -2905,197 +3079,59 @@ class App:
                 if final_message.stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": final_message.content})
 
-                    tool_results = []
-                    for block in final_message.content:
-                        if block.type == "tool_use":
-                            tool_call_detail = json.dumps(
-                                {"tool": block.name, "id": block.id, "input": block.input},
-                                indent=2,
-                            )
-                            self.queue.put({"type": "tool_call_debug", "content": tool_call_detail})
+                    # -- Parallel-safe tools (network I/O, pure lookups) --
+                    PARALLEL_SAFE = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
 
-                            if block.name == "web_search":
-                                query = block.input.get("query", "")
-                                self.queue.put({"type": "tool_info", "content": f"Searching: {query}\n"})
-                                result = self.search_web(query)
-                            elif block.name == "fetch_webpage":
-                                url = block.input.get("url", "")
-                                self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
-                                result = self.fetch_url(url)
-                            elif block.name == "run_powershell":
-                                cmd = block.input.get("command", "")
-                                self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
-                                result = self.run_powershell(cmd)
-                            elif block.name == "csv_search":
-                                inp = block.input
-                                fp = inp.get("file_path", "")
-                                sv = inp.get("search_value", "")
-                                self.queue.put({"type": "tool_info", "content": f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n"})
-                                result = self.do_csv_search(
-                                    fp, sv,
-                                    column=inp.get("column"),
-                                    match_mode=inp.get("match_mode", "contains"),
-                                    max_results=inp.get("max_results", 50),
-                                    delimiter=inp.get("delimiter"),
-                                )
-                            elif block.name == "user_prompt":
-                                prompt_msg = block.input.get("message", "")
-                                self.queue.put({"type": "tool_info", "content": "Requesting user input...\n"})
-                                result = self.do_user_prompt(prompt_msg)
-                            elif block.name in ("screenshot", "mouse_click", "type_text",
-                                                 "press_key", "mouse_scroll", "open_application",
-                                                 "find_window", "clipboard_read", "clipboard_write",
-                                                 "wait_for_window", "read_screen_text",
-                                                 "find_image_on_screen", "mouse_drag"):
-                                if not self.desktop_enabled.get():
-                                    result = "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
-                                else:
-                                    inp = block.input
-                                    if block.name == "screenshot":
-                                        self.queue.put({"type": "tool_info", "content": "Taking screenshot...\n"})
-                                        region = None
-                                        if all(k in inp for k in ("x", "y", "width", "height")):
-                                            region = (inp["x"], inp["y"], inp["width"], inp["height"])
-                                        result = self.do_screenshot(region)
-                                    elif block.name == "mouse_click":
-                                        self.queue.put({"type": "tool_info", "content": f"Clicking at ({inp.get('x')}, {inp.get('y')})...\n"})
-                                        result = self.do_mouse_click(
-                                            inp["x"], inp["y"],
-                                            button=inp.get("button", "left"),
-                                            clicks=inp.get("clicks", 1),
-                                        )
-                                    elif block.name == "type_text":
-                                        text = inp.get("text", "")
-                                        preview = text[:50] + "..." if len(text) > 50 else text
-                                        self.queue.put({"type": "tool_info", "content": f"Typing: {preview}\n"})
-                                        result = self.do_type_text(text, interval=inp.get("interval", 0.02))
-                                    elif block.name == "press_key":
-                                        keys = inp.get("keys", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
-                                        result = self.do_press_key(keys)
-                                    elif block.name == "mouse_scroll":
-                                        clicks_val = inp.get("clicks", 0)
-                                        self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
-                                        result = self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
-                                    elif block.name == "open_application":
-                                        app_name = inp.get("name", "")
-                                        app_args = inp.get("args")
-                                        self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n"})
-                                        result = self.do_open_application(app_name, args=app_args)
-                                    elif block.name == "find_window":
-                                        title = inp.get("title", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
-                                        result = self.do_find_window(title, activate=inp.get("activate", False))
-                                    elif block.name == "clipboard_read":
-                                        self.queue.put({"type": "tool_info", "content": "Reading clipboard...\n"})
-                                        result = self.do_clipboard_read()
-                                    elif block.name == "clipboard_write":
-                                        text = inp.get("text", "")
-                                        preview = text[:50] + "..." if len(text) > 50 else text
-                                        self.queue.put({"type": "tool_info", "content": f"Writing to clipboard: {preview}\n"})
-                                        result = self.do_clipboard_write(text)
-                                    elif block.name == "wait_for_window":
-                                        title = inp.get("title", "")
-                                        timeout = inp.get("timeout", 10)
-                                        self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
-                                        result = self.do_wait_for_window(title, timeout=timeout)
-                                    elif block.name == "read_screen_text":
-                                        self.queue.put({"type": "tool_info", "content": f"OCR region ({inp.get('x')},{inp.get('y')} {inp.get('width')}x{inp.get('height')})...\n"})
-                                        result = self.do_read_screen_text(inp["x"], inp["y"], inp["width"], inp["height"])
-                                    elif block.name == "find_image_on_screen":
-                                        path = inp.get("image_path", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
-                                        result = self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
-                                    elif block.name == "mouse_drag":
-                                        self.queue.put({"type": "tool_info", "content": f"Dragging ({inp.get('start_x')},{inp.get('start_y')}) to ({inp.get('end_x')},{inp.get('end_y')})...\n"})
-                                        result = self.do_mouse_drag(
-                                            inp["start_x"], inp["start_y"],
-                                            inp["end_x"], inp["end_y"],
-                                            duration=inp.get("duration", 0.5),
-                                            button=inp.get("button", "left"),
-                                        )
-                            elif block.name in ("browser_open", "browser_navigate",
-                                                  "browser_click", "browser_fill",
-                                                  "browser_get_text", "browser_run_js",
-                                                  "browser_screenshot", "browser_close",
-                                                  "browser_wait_for", "browser_select",
-                                                  "browser_get_elements"):
-                                if not self.browser_enabled.get():
-                                    result = "Browser tools are disabled. Enable the Browser checkbox to use this tool."
-                                else:
-                                    inp = block.input
-                                    if block.name == "browser_open":
-                                        url = inp.get("url", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: opening {url}\n"})
-                                        result = self.do_browser_open(url)
-                                    elif block.name == "browser_navigate":
-                                        url = inp.get("url", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: navigating to {url}\n"})
-                                        result = self.do_browser_navigate(url)
-                                    elif block.name == "browser_click":
-                                        sel = inp.get("selector", "")
-                                        txt = inp.get("text", "")
-                                        target = sel or f"text='{txt}'"
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: clicking {target}\n"})
-                                        result = self.do_browser_click(selector=sel or None, text=txt or None)
-                                    elif block.name == "browser_fill":
-                                        sel = inp.get("selector", "")
-                                        val = inp.get("value", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: filling {sel}\n"})
-                                        result = self.do_browser_fill(sel, val)
-                                    elif block.name == "browser_get_text":
-                                        sel = inp.get("selector", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: reading text{' from ' + sel if sel else ''}...\n"})
-                                        result = self.do_browser_get_text(selector=sel or None)
-                                    elif block.name == "browser_run_js":
-                                        code = inp.get("code", "")
-                                        preview = code[:80] + "..." if len(code) > 80 else code
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: running JS: {preview}\n"})
-                                        result = self.do_browser_run_js(code)
-                                    elif block.name == "browser_screenshot":
-                                        self.queue.put({"type": "tool_info", "content": "Browser: taking screenshot...\n"})
-                                        result = self.do_browser_screenshot()
-                                    elif block.name == "browser_close":
-                                        self.queue.put({"type": "tool_info", "content": "Browser: closing connection...\n"})
-                                        result = self.do_browser_close()
-                                    elif block.name == "browser_wait_for":
-                                        sel = inp.get("selector", "")
-                                        timeout = inp.get("timeout", 10000)
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: waiting for {sel}...\n"})
-                                        result = self.do_browser_wait_for(sel, timeout=timeout)
-                                    elif block.name == "browser_select":
-                                        sel = inp.get("selector", "")
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: selecting in {sel}...\n"})
-                                        result = self.do_browser_select(sel, value=inp.get("value"), label=inp.get("label"))
-                                    elif block.name == "browser_get_elements":
-                                        sel = inp.get("selector", "")
-                                        limit = inp.get("limit", 10)
-                                        self.queue.put({"type": "tool_info", "content": f"Browser: getting elements {sel}...\n"})
-                                        result = self.do_browser_get_elements(sel, limit=limit)
-                            elif block.name == "get_skill":
-                                skill_name = block.input.get("skill_name", "")
-                                self.queue.put({"type": "tool_info", "content": f"Loading skill: {skill_name}\n"})
-                                if skill_name in self.skills and self.skills[skill_name].get("mode") == "on_demand":
-                                    result = self.skills[skill_name]["content"]
-                                else:
-                                    result = f"Skill not found or not on-demand: {skill_name}"
-                            else:
-                                result = f"Unknown tool: {block.name}"
+                    tool_blocks = [b for b in final_message.content if b.type == "tool_use"]
 
-                            if isinstance(result, list):
-                                tool_results.append({
+                    # Log all tool calls up front
+                    for block in tool_blocks:
+                        tool_call_detail = json.dumps(
+                            {"tool": block.name, "id": block.id, "input": block.input},
+                            indent=2,
+                        )
+                        self.queue.put({"type": "tool_call_debug", "content": tool_call_detail})
+
+                    # Partition into parallel-safe vs sequential, preserving original index
+                    parallel_items = []   # [(index, block), ...]
+                    sequential_items = [] # [(index, block), ...]
+                    for idx, block in enumerate(tool_blocks):
+                        if block.name in PARALLEL_SAFE:
+                            parallel_items.append((idx, block))
+                        else:
+                            sequential_items.append((idx, block))
+
+                    # Pre-allocate results list to preserve original order
+                    tool_results_ordered = [None] * len(tool_blocks)
+
+                    # Execute parallel-safe tools concurrently
+                    if parallel_items:
+                        if len(parallel_items) > 1:
+                            self.queue.put({"type": "tool_info", "content": f"Running {len(parallel_items)} tools in parallel...\n"})
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_items)) as executor:
+                            future_map = {}
+                            for idx, block in parallel_items:
+                                future = executor.submit(self._execute_tool, block)
+                                future_map[future] = (idx, block)
+                            for future in concurrent.futures.as_completed(future_map):
+                                idx, block = future_map[future]
+                                result = future.result()
+                                tool_results_ordered[idx] = {
                                     "type": "tool_result",
                                     "tool_use_id": block.id,
                                     "content": result,
-                                })
-                            else:
-                                tool_results.append({
-                                    "type": "tool_result",
-                                    "tool_use_id": block.id,
-                                    "content": result,
-                                })
+                                }
 
-                    messages.append({"role": "user", "content": tool_results})
+                    # Execute sequential tools one at a time, in order
+                    for idx, block in sequential_items:
+                        result = self._execute_tool(block)
+                        tool_results_ordered[idx] = {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        }
+
+                    messages.append({"role": "user", "content": tool_results_ordered})
                 else:
                     # Normal end_turn — agent is done
                     break
