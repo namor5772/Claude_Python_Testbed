@@ -76,7 +76,9 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Agentic loop** — `stream_worker()` runs a `while True:` loop: sends messages to the API, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
 
-**Tool system** — Identical three-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) and `_get_tools()` assembler, plus a `user_prompt` core tool that pauses the loop and shows a modal dialog to collect user input. Adding a new tool follows the same three-step pattern as SelfBot.
+**Tool system** — Identical three-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) and `_get_tools()` assembler, plus a `user_prompt` core tool that pauses the loop and shows a modal dialog to collect user input. Tool dispatch is handled by the `_execute_tool()` helper method. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless.
+
+**Parallel tool execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering.
 
 **Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states and model parameters (model, temperature, thinking settings) are saved per-instruction and restored on load.
 

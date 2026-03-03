@@ -1,11 +1,11 @@
 {
-  "last_instruction_name": "Weather_Agent",
+  "last_instruction_name": "Parallel_Test_4",
   "last_model": "claude-haiku-4-5-20251001",
   "temperature": 0.0,
-  "thinking_enabled": false,
+  "thinking_enabled": true,
   "thinking_effort": "high",
   "thinking_budget": 8192,
-  "geometry": "778x794+1636+151",
+  "geometry": "778x1135+1636+151",
   "screen_width": 2560,
   "screen_height": 1600,
   "editor_geometry": "1058x761+349+167"

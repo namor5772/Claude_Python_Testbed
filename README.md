@@ -439,7 +439,7 @@ A fire-and-forget autonomous task runner built with tkinter that connects to the
 3. **Loop** — `stream_worker()` runs a `while True:` loop:
    - Sends the full message history to the Anthropic API via streaming.
    - Streams the response token-by-token into the display.
-   - If the API returns `stop_reason: "tool_use"`: executes all requested tools (including `user_prompt`, which pauses the loop to show a dialog and wait for user input), appends the results to the conversation, and **loops again** (next API call with updated history).
+   - If the API returns `stop_reason: "tool_use"`: executes all requested tools with **parallel execution** for network I/O tools (including `user_prompt`, which pauses the loop to show a dialog and wait for user input), appends the results to the conversation, and **loops again** (next API call with updated history).
    - If the API returns `stop_reason: "end_turn"`: the task is complete — the loop exits.
 4. **Press STOP** (optional) — Halts the loop cleanly at the top of the next iteration or after the current API call finishes.
 
@@ -512,6 +512,16 @@ MyAgent has twenty-nine built-in tools (the same twenty-eight as SelfBot plus `u
 **Dynamic Tool:** `get_skill` — automatically added when on-demand skills exist
 
 All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Edge, PowerShell safety guardrails, image compression) is identical to SelfBot. See the SelfBot.py tool sections above for full details.
+
+#### Parallel Tool Execution
+
+When Claude requests multiple tools in a single turn, MyAgent automatically classifies each tool as **parallel-safe** or **sequential** and executes them accordingly:
+
+**Parallel-safe tools** (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) run concurrently via `ThreadPoolExecutor` — if Claude requests three web searches at once, they execute simultaneously rather than one after another. A status message ("Running N tools in parallel...") appears in the Activity output when multiple parallel tools fire.
+
+**Sequential tools** (all desktop, browser, `run_powershell`, and `user_prompt` tools) run one at a time in their original order, since they interact with shared state (screen, browser session, filesystem, user attention).
+
+Results are slotted back into their original API-requested order regardless of execution order, so the model always sees responses in the sequence it expects. Tool dispatch is handled by the `_execute_tool()` helper method, which is thread-safe for parallel-safe tools.
 
 #### Skills System
 
@@ -615,7 +625,8 @@ The application is a single-file (~3,030 lines) tkinter app structured around th
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
 - **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, and model parameters), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences and editor window geometry, and `skills.json` (shared with SelfBot) for the skills library
-- **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Adding a new tool requires the same three changes as SelfBot: schema, `do_<name>()` method, and dispatch wiring in `stream_worker()`
+- **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
+- **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
 - **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected, but only if the user has typed a name in the Save Chat entry (blank = no save). `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat (if named), cleans up browser connections, then destroys the window
