@@ -78,7 +78,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Tool system** — Identical three-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) and `_get_tools()` assembler, plus a `user_prompt` core tool that pauses the loop and shows a modal dialog to collect user input. Adding a new tool follows the same three-step pattern as SelfBot.
 
-**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states are saved per-instruction and restored on load.
+**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states and model parameters (model, temperature, thinking settings) are saved per-instruction and restored on load.
 
 **Editor draft/commit model** — The instruction editor works on temporary copies (`_editor_images`, `_editor_desktop`, `_editor_browser`). Changes are only committed to live state on SAVE (persists to disk) or Apply (session-only). Closing the editor with [X] discards uncommitted changes.
 

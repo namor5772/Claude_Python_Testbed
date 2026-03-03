@@ -1091,6 +1091,41 @@ class App:
                 return "manual"
         return None
 
+    def _restore_model_params(self, entry, state_file=False):
+        """Restore model, temperature, and thinking settings from an instruction entry or state file."""
+        # Restore model
+        model_key = "last_model" if state_file else "model"
+        model = entry.get(model_key, "")
+        if model and model in self.available_models:
+            self.model = model
+            self._model_var.set(self._model_display_names.get(model, model))
+        # Restore temperature
+        temp = entry.get("temperature")
+        if temp is not None:
+            self.temperature = max(0.0, min(1.0, float(temp)))
+            self._temp_var.set(self.temperature)
+        # Restore thinking
+        if "thinking_enabled" in entry:
+            self.thinking_enabled = entry["thinking_enabled"]
+            self.thinking_effort = entry.get("thinking_effort", "high")
+            self.thinking_budget = entry.get("thinking_budget", 8192)
+            self._thinking_var.set(self.thinking_enabled)
+            support = self._model_supports_thinking()
+            if support is None:
+                self._thinking_var.set(False)
+                self.thinking_enabled = False
+                self._thinking_check.config(state="disabled")
+            else:
+                self._thinking_check.config(state="normal")
+                if support == "adaptive":
+                    self._thinking_strength_var.set(self.thinking_effort)
+                elif support == "manual":
+                    for k, v in BUDGET_PRESETS.items():
+                        if v == self.thinking_budget:
+                            self._thinking_strength_var.set(k)
+                            break
+                self._on_thinking_toggled()
+
     def _on_thinking_toggled(self):
         self.thinking_enabled = self._thinking_var.get()
         if self.thinking_enabled:
@@ -1152,6 +1187,11 @@ class App:
             "screen_width": self.root.winfo_screenwidth(),
             "screen_height": self.root.winfo_screenheight(),
         }
+        # Capture editor window geometry if it's open
+        if self.instruction_editor_window and self.instruction_editor_window.winfo_exists():
+            state["editor_geometry"] = self.instruction_editor_window.geometry()
+        elif hasattr(self, '_last_editor_geometry') and self._last_editor_geometry:
+            state["editor_geometry"] = self._last_editor_geometry
         with open(AGENT_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -1165,6 +1205,7 @@ class App:
             return
         # Restore instruction (with its images)
         instr_name = state.get("last_instruction_name", "")
+        model_restored = False
         if instr_name:
             instructions = self._load_saved_instructions()
             if instr_name in instructions:
@@ -1178,36 +1219,13 @@ class App:
                 self.desktop_enabled.set(entry.get("desktop", False))
                 self.browser_enabled.set(entry.get("browser", False))
                 self._update_title()
-        # Restore model
-        model = state.get("last_model", "")
-        if model and model in self.available_models:
-            self.model = model
-            self._model_var.set(self._model_display_names.get(model, model))
-        # Restore temperature
-        temp = state.get("temperature")
-        if temp is not None:
-            self.temperature = max(0.0, min(1.0, float(temp)))
-            self._temp_var.set(self.temperature)
-        # Restore thinking
-        self.thinking_enabled = state.get("thinking_enabled", False)
-        self.thinking_effort = state.get("thinking_effort", "high")
-        self.thinking_budget = state.get("thinking_budget", 8192)
-        self._thinking_var.set(self.thinking_enabled)
-        support = self._model_supports_thinking()
-        if support is None:
-            self._thinking_var.set(False)
-            self.thinking_enabled = False
-            self._thinking_check.config(state="disabled")
-        else:
-            self._thinking_check.config(state="normal")
-            if support == "adaptive":
-                self._thinking_strength_var.set(self.thinking_effort)
-            elif support == "manual":
-                for k, v in BUDGET_PRESETS.items():
-                    if v == self.thinking_budget:
-                        self._thinking_strength_var.set(k)
-                        break
-            self._on_thinking_toggled()
+                # Use instruction's model params if saved
+                if "model" in entry:
+                    self._restore_model_params(entry)
+                    model_restored = True
+        if not model_restored:
+            # Fall back to state file's model params (for old instructions or no instruction)
+            self._restore_model_params(state, state_file=True)
         # Restore geometry
         geo = state.get("geometry")
         if geo:
@@ -1215,6 +1233,12 @@ class App:
             sh = state.get("screen_height")
             if sw == self.root.winfo_screenwidth() and sh == self.root.winfo_screenheight():
                 self.root.geometry(geo)
+        # Restore editor geometry for next time the editor is opened
+        editor_geo = state.get("editor_geometry")
+        if editor_geo:
+            self._last_editor_geometry = editor_geo
+            self._editor_screen_width = state.get("screen_width")
+            self._editor_screen_height = state.get("screen_height")
 
     def _periodic_save(self):
         try:
@@ -1269,8 +1293,19 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.title("Agent Instruction Editor")
-        win.geometry("650x580")
+        # Restore saved geometry or use default
+        editor_geo = getattr(self, '_last_editor_geometry', None)
+        if editor_geo:
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            if sw == getattr(self, '_editor_screen_width', sw) and sh == getattr(self, '_editor_screen_height', sh):
+                win.geometry(editor_geo)
+            else:
+                win.geometry("650x580")
+        else:
+            win.geometry("650x580")
         win.transient(self.root)
+        win.protocol("WM_DELETE_WINDOW", lambda: self._on_editor_close(win))
         self.instruction_editor_window = win
 
         # Row 0: Save row
@@ -1365,6 +1400,16 @@ class App:
             self._instr_combo_var.set(self.agent_instruction_name)
         self._refresh_image_listbox()
 
+    def _on_editor_close(self, win):
+        """Capture editor geometry before destroying."""
+        try:
+            self._last_editor_geometry = win.geometry()
+            self._editor_screen_width = self.root.winfo_screenwidth()
+            self._editor_screen_height = self.root.winfo_screenheight()
+        except Exception:
+            pass
+        win.destroy()
+
     def _refresh_instruction_list(self):
         instructions = self._load_saved_instructions()
         self._instr_combo["values"] = list(instructions.keys())
@@ -1394,6 +1439,11 @@ class App:
             ],
             "desktop": self.desktop_enabled.get(),
             "browser": self.browser_enabled.get(),
+            "model": self.model,
+            "temperature": self.temperature,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_effort": self.thinking_effort,
+            "thinking_budget": self.thinking_budget,
         }
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
@@ -1443,6 +1493,7 @@ class App:
             ]
             self._editor_desktop.set(entry.get("desktop", False))
             self._editor_browser.set(entry.get("browser", False))
+            self._restore_model_params(entry)
             self._refresh_image_listbox()
 
     def _apply_instruction(self):
