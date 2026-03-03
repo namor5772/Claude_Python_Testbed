@@ -1,12 +1,14 @@
 {
-  "last_instruction_name": "Parallel_Test_4",
-  "last_model": "claude-haiku-4-5-20251001",
-  "temperature": 0.0,
+  "last_instruction_name": "WESTPAC_dostuff2",
+  "last_model": "claude-sonnet-4-6",
+  "temperature": 1.0,
   "thinking_enabled": true,
   "thinking_effort": "high",
   "thinking_budget": 8192,
-  "geometry": "778x1135+1636+151",
+  "geometry": "800x932+1747+0",
   "screen_width": 2560,
   "screen_height": 1600,
-  "editor_geometry": "1058x761+349+167"
+  "editor_geometry": "993x761+-12+0",
+  "prompt_dialog_geometry": "799x354+1747+985",
+  "confirm_dialog_geometry": "714x415+1028+0"
 }

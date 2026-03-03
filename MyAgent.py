@@ -1193,6 +1193,13 @@ class App:
             state["editor_geometry"] = self.instruction_editor_window.geometry()
         elif hasattr(self, '_last_editor_geometry') and self._last_editor_geometry:
             state["editor_geometry"] = self._last_editor_geometry
+        # Persist dialog geometries
+        prompt_geo = getattr(self, '_last_prompt_dialog_geometry', None)
+        if prompt_geo:
+            state["prompt_dialog_geometry"] = prompt_geo
+        confirm_geo = getattr(self, '_last_confirm_dialog_geometry', None)
+        if confirm_geo:
+            state["confirm_dialog_geometry"] = confirm_geo
         with open(AGENT_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -1240,6 +1247,13 @@ class App:
             self._last_editor_geometry = editor_geo
             self._editor_screen_width = state.get("screen_width")
             self._editor_screen_height = state.get("screen_height")
+        # Restore dialog geometries
+        prompt_geo = state.get("prompt_dialog_geometry")
+        if prompt_geo:
+            self._last_prompt_dialog_geometry = prompt_geo
+        confirm_geo = state.get("confirm_dialog_geometry")
+        if confirm_geo:
+            self._last_confirm_dialog_geometry = confirm_geo
 
     def _periodic_save(self):
         try:
@@ -1294,7 +1308,9 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.title("Agent Instruction Editor")
-        # Restore saved geometry or use default
+        win.transient(self.root)
+        # Restore saved geometry or use default (transient must be set first
+        # so it doesn't override the position we set here)
         editor_geo = getattr(self, '_last_editor_geometry', None)
         if editor_geo:
             sw = self.root.winfo_screenwidth()
@@ -1305,7 +1321,6 @@ class App:
                 win.geometry("650x580")
         else:
             win.geometry("650x580")
-        win.transient(self.root)
         win.protocol("WM_DELETE_WINDOW", lambda: self._on_editor_close(win))
         self.instruction_editor_window = win
 
@@ -1402,7 +1417,7 @@ class App:
         self._refresh_image_listbox()
 
     def _on_editor_close(self, win):
-        """Capture editor geometry before destroying."""
+        """Capture editor geometry before destroying and persist to disk."""
         try:
             self._last_editor_geometry = win.geometry()
             self._editor_screen_width = self.root.winfo_screenwidth()
@@ -1410,6 +1425,10 @@ class App:
         except Exception:
             pass
         win.destroy()
+        try:
+            self._save_last_state()
+        except Exception:
+            pass
 
     def _refresh_instruction_list(self):
         instructions = self._load_saved_instructions()
@@ -1509,6 +1528,13 @@ class App:
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
         self._update_title()
+        # Capture geometry before destroying so periodic saves don't overwrite it
+        try:
+            self._last_editor_geometry = self.instruction_editor_window.geometry()
+            self._editor_screen_width = self.root.winfo_screenwidth()
+            self._editor_screen_height = self.root.winfo_screenheight()
+        except Exception:
+            pass
         self._save_last_state()
         self.instruction_editor_window.destroy()
 
@@ -2040,13 +2066,21 @@ class App:
             btn_frame = tk.Frame(dlg)
             btn_frame.grid(row=3, column=0, pady=(0, 15))
 
+            def _capture_geo():
+                try:
+                    self._last_confirm_dialog_geometry = dlg.geometry()
+                except Exception:
+                    pass
+
             def on_yes():
                 result_holder[0] = True
+                _capture_geo()
                 event.set()
                 dlg.destroy()
 
             def on_no():
                 result_holder[0] = False
+                _capture_geo()
                 event.set()
                 dlg.destroy()
 
@@ -2055,12 +2089,17 @@ class App:
 
             dlg.protocol("WM_DELETE_WINDOW", on_no)
 
-            dlg.update_idletasks()
-            w = max(dlg.winfo_reqwidth(), 500)
-            h = min(dlg.winfo_reqheight(), 400)
-            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-            dlg.geometry(f"{w}x{h}+{x}+{y}")
+            # Restore saved geometry or center over main window
+            saved_geo = getattr(self, '_last_confirm_dialog_geometry', None)
+            if saved_geo:
+                dlg.geometry(saved_geo)
+            else:
+                dlg.update_idletasks()
+                w = max(dlg.winfo_reqwidth(), 500)
+                h = min(dlg.winfo_reqheight(), 400)
+                x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+                y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+                dlg.geometry(f"{w}x{h}+{x}+{y}")
 
         self.root.after(0, ask)
         event.wait()
@@ -2121,38 +2160,50 @@ class App:
             resp_sb.grid(row=0, column=1, sticky="ns")
             resp_text.config(yscrollcommand=resp_sb.set)
 
-            btn_frame = tk.Frame(dlg)
-            btn_frame.grid(row=4, column=0, pady=(5, 15))
+            def _capture_and_close():
+                """Save dialog geometry before destroying."""
+                try:
+                    self._last_prompt_dialog_geometry = dlg.geometry()
+                except Exception:
+                    pass
 
-            def on_inject():
+            def on_inject(ev=None):
                 result_holder[0] = resp_text.get("1.0", tk.END).strip()
+                _capture_and_close()
                 event.set()
                 dlg.destroy()
+                return "break"
 
             def on_close():
                 result_holder[0] = "[User dismissed the dialog without responding]"
+                _capture_and_close()
                 event.set()
                 dlg.destroy()
 
-            tk.Button(
-                btn_frame, text="INJECT", command=on_inject, width=12,
-                font=("Arial", 10, "bold"),
-            ).pack(side=tk.LEFT, padx=10)
-
+            resp_text.bind("<Return>", on_inject)
             dlg.protocol("WM_DELETE_WINDOW", on_close)
 
-            dlg.update_idletasks()
-            w = max(dlg.winfo_reqwidth(), 500)
-            h = max(dlg.winfo_reqheight(), 400)
-            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-            dlg.geometry(f"{w}x{h}+{x}+{y}")
+            # Restore saved geometry or center over main window
+            saved_geo = getattr(self, '_last_prompt_dialog_geometry', None)
+            if saved_geo:
+                dlg.geometry(saved_geo)
+            else:
+                dlg.update_idletasks()
+                w = max(dlg.winfo_reqwidth(), 500)
+                h = max(dlg.winfo_reqheight(), 400)
+                x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+                y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+                dlg.geometry(f"{w}x{h}+{x}+{y}")
 
             resp_text.focus_set()
 
         self.root.after(0, ask)
         event.wait()
-        return result_holder[0]
+        # Echo the user's response in the chat display so it's visible
+        response = result_holder[0]
+        if response and response != "[User dismissed the dialog without responding]":
+            self.queue.put({"type": "user_prompt_echo", "content": response})
+        return response
 
     def run_powershell(self, command):
         safety, info = self._check_powershell_safety(command)
@@ -3123,6 +3174,7 @@ class App:
                                 }
 
                     # Execute sequential tools one at a time, in order
+                    had_user_prompt = False
                     for idx, block in sequential_items:
                         result = self._execute_tool(block)
                         tool_results_ordered[idx] = {
@@ -3130,6 +3182,12 @@ class App:
                             "tool_use_id": block.id,
                             "content": result,
                         }
+                        if block.name == "user_prompt":
+                            had_user_prompt = True
+
+                    # After user_prompt, reset label so next response gets a fresh "Agent:" heading
+                    if had_user_prompt:
+                        label_emitted = False
 
                     messages.append({"role": "user", "content": tool_results_ordered})
                 else:
@@ -3203,6 +3261,12 @@ class App:
                     self._current_response_text += msg["content"]
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, msg["content"], "assistant")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "user_prompt_echo":
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, "\nYou:\n", "user_label")
+                    self.chat_display.insert(tk.END, msg["content"] + "\n\n", "user")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "tool_info" and not self.show_activity.get():
