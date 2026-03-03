@@ -525,11 +525,11 @@ Shared with SelfBot — both apps read from the same `skills.json` file. The thr
 
 #### Chat Save
 
-Chat saving is fully automatic — there is no manual SAVE button.
+Chat saving is opt-in — there is no manual SAVE button, and **no chat is saved unless you type a name** in the **Save Chat as** entry field.
 
-- The **Save Chat as** entry field on the chat toolbar sets the filename for saved chats. If left empty, a name is auto-generated from the first 50 characters of the instruction text (or a timestamp fallback `Agent_YYYYMMDD_HHMMSS`)
-- **Periodic auto-save** every 5 seconds writes `.json` + `.txt` to `saved_chats/` whenever new messages are detected, protecting against force-kill data loss
-- **Auto-save on close** — closing the window (or `taskkill`) saves the current run
+- The **Save Chat as** entry field on the chat toolbar sets the filename for saved chats. If left blank (the default), **no chat file is created** — neither on close nor by the periodic auto-save
+- **Periodic auto-save** every 5 seconds writes `.json` + `.txt` to `saved_chats/` whenever new messages are detected, but only if a save name is provided
+- **Auto-save on close** — closing the window (or `taskkill`) saves the current run, but only if a save name is provided
 - Saved chats include the full message history, system prompt, agent instruction name, model, temperature, and thinking settings
 - Base64 image data is stripped during serialisation and replaced with `[Screenshot]` or `[Image was attached]` placeholders
 
@@ -615,4 +615,4 @@ The application is a single-file (~3,030 lines) tkinter app structured around th
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Adding a new tool requires the same three changes as SelfBot: schema, `do_<name>()` method, and dispatch wiring in `stream_worker()`
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
-- **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected. `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat, cleans up browser connections, then destroys the window
+- **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected, but only if the user has typed a name in the Save Chat entry (blank = no save). `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat (if named), cleans up browser connections, then destroys the window

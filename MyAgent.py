@@ -1734,20 +1734,7 @@ class App:
             return
         name = self.chat_name_entry.get().strip()
         if not name:
-            for msg in self.messages:
-                if msg.get("role") == "user":
-                    text = msg.get("content", "")
-                    if isinstance(text, list):
-                        text = " ".join(
-                            b.get("text", "") for b in text
-                            if isinstance(b, dict) and b.get("type") == "text"
-                        )
-                    text = text.strip()
-                    if text:
-                        name = text[:50].rstrip()
-                        break
-            if not name:
-                name = time.strftime("Agent_%Y%m%d_%H%M%S")
+            return
         self._save_chat_file(name, {
             "messages": self._serialize_messages(),
             "system_prompt": self.system_prompt,

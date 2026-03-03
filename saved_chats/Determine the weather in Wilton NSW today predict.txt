@@ -1,0 +1,7 @@
+Instruction:
+Determine the weather in Wilton NSW today predict it for tomorrow. Put this weather information into at text file.
+Display it in Notepad++.
+After this close this Claude Agent app by pressing the [x] button OR killing the relevant process!.
+
+Agent:
+I'll help you with this task, matey! Let me start by searching for the weather information for Wilton NSW.Let me search more specifically for Wilton NSW weather:Good! Now let me fetch the detailed weather information:Excellent! I've got the weather information. Now let me create a text file with this data and then open it in Notepad++. Let me create the file using PowerShell:Perfect! Now let me open this file in Notepad++:Great! Now let me take a screenshot to show the file open in Notepad++:Excellent! The weather forecast is now displayed in Notepad++! I can see the file is open with all the detailed weather information for Wilton NSW. Now I need to close the Claude Agent app by either pressing the [x] button or killing the process. Let me close the Claude Agent window:Let me fix that and try again:
