@@ -454,7 +454,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | Control | Description |
 |---|---|
 | **Instruction Name** entry | Name for saving/loading instructions |
-| **SAVE** button | Save the instruction (text, images, tool toggles) to disk and make it the active instruction |
+| **SAVE** button | Save the instruction (text, images, tool toggles, model parameters) to disk and make it the active instruction |
 | **DELETE** button | Remove the named instruction from disk |
 | **CLEAR** button | Reset the editor — clears text, images, and tool toggles |
 | **Load Instruction** dropdown | Select a previously saved instruction — populates the editor fields for preview |
@@ -477,7 +477,9 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Images persist with instructions** — When you save a named instruction, any attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
 
-**Tool toggles persist with instructions** — Each saved instruction stores its Desktop and Browser checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window. This effectively makes each instruction a self-contained task profile — text, images, and which tool categories are needed.
+**Tool toggles persist with instructions** — Each saved instruction stores its Desktop and Browser checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
+
+**Model parameters persist with instructions** — Each saved instruction also stores the current model, temperature, and thinking settings (enabled, effort level, token budget). Loading an instruction from the dropdown immediately restores these model parameters to the main toolbar. This effectively makes each instruction a self-contained task profile — text, images, tool categories, and model configuration — so different tasks can target different models and settings.
 
 When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
 
@@ -550,9 +552,10 @@ The **Call #N** counter badges are hidden only when all three of Activity, Debug
 
 #### App State Persistence
 
-- Last-used instruction name, model, temperature, thinking settings, and window geometry are saved to `agent_state.json`
-- On startup, the app restores all settings and the last instruction (including its images and Desktop/Browser toggles) automatically
-- **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to the default `1050x930`
+- Last-used instruction name, model, temperature, thinking settings, main window geometry, and editor window geometry are saved to `agent_state.json`
+- On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser toggles, and model parameters) automatically
+- The **Agent Instruction Editor** window remembers its size and position across sessions — resizing or moving the editor persists to `agent_state.json` and is restored the next time the editor is opened
+- **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to defaults so windows are never lost off-screen
 
 #### Rate-Limit Retry
 
@@ -611,7 +614,7 @@ The application is a single-file (~3,030 lines) tkinter app structured around th
 - **UI Layout** — Grid-based layout with 5 rows: model + temperature + thinking toolbar (row 0), chat save entry with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Agent Instruction and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4). Image attachment and Desktop/Browser tool toggles are managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images and Desktop/Browser toggle state), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, and model parameters), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences and editor window geometry, and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Adding a new tool requires the same three changes as SelfBot: schema, `do_<name>()` method, and dispatch wiring in `stream_worker()`
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s

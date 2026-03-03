@@ -1,11 +1,12 @@
 {
-  "last_instruction_name": "TEST_Inject",
+  "last_instruction_name": "Weather_Agent",
   "last_model": "claude-haiku-4-5-20251001",
-  "temperature": 1.0,
-  "thinking_enabled": true,
-  "thinking_effort": "max",
+  "temperature": 0.0,
+  "thinking_enabled": false,
+  "thinking_effort": "high",
   "thinking_budget": 8192,
-  "geometry": "986x1345+1498+6",
+  "geometry": "778x794+1636+151",
   "screen_width": 2560,
-  "screen_height": 1600
+  "screen_height": 1600,
+  "editor_geometry": "1058x761+349+167"
 }
