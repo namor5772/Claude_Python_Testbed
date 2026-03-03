@@ -86,6 +86,8 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **State persistence** — `agent_state.json` stores last instruction name, model, temperature, thinking settings, and window geometry. Periodic auto-save every 5 seconds.
 
+**Chat saving is opt-in** — Chats are only saved (on close or by the periodic auto-save) if the user has typed a name in the "Save Chat as" entry. If the field is blank, no chat file is created.
+
 **No dual-instance support** — Strictly single-instance. No mutex, no lock file, no cross-instance message passing.
 
 **API retry logic** — Same as SelfBot: up to 10 retries with exponential backoff capped at 60s (429) or 90s (529).
