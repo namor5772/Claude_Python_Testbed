@@ -1,11 +1,12 @@
 # Claude Python Testbed
 
-A repo containing various Python scripts written using Claude Code. The two main applications are a full-featured Claude chatbot with dual-instance self-chatting (SelfBot.py) and an autonomous task agent that loops until a job is done (MyAgent.py).
+A repo containing various Python scripts written using Claude Code. The two main applications are a full-featured Claude chatbot with dual-instance self-chatting (SelfBot.py) and an autonomous task agent that loops until a job is done (MyAgent.py). There is also a standalone browser automation utility for extracting bank transaction data (Account_Activity_WBC.py).
 
 ## Contents
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Autonomous Claude agent GUI application (see details below)
+- **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
@@ -630,3 +631,64 @@ The application is a single-file (~3,030 lines) tkinter app structured around th
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
 - **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected, but only if the user has typed a name in the Save Chat entry (blank = no save). `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat (if named), cleans up browser connections, then destroys the window
+
+---
+
+## Account_Activity_WBC.py — Bank Transaction Extractor
+
+A standalone browser automation utility that extracts transaction history from the Westpac (WBC) online banking account activity page. It connects to Microsoft Edge via CDP, clicks the "Display more" button repeatedly to load all transactions, then scrapes the transaction table and exports it as both raw HTML and a structured CSV file.
+
+### How It Works
+
+1. **Open Edge** — Launch Edge with remote debugging enabled: `& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --remote-debugging-port=9222`
+2. **Navigate to the account activity page** in Edge and log in
+3. **Run the app** — Launch `Account_Activity_WBC.py`. It connects to Edge via CDP on port 9222
+4. **Configure** — Set the button text to match (default: "Display more"), number of clicks, and delay between clicks
+5. **Press Start** — The app finds the button across all open tabs, clicks it the specified number of times, then extracts the transaction data
+
+### Features
+
+- **Auto-tab detection** — Searches all open Edge tabs for one containing the target button text, so you don't need to have the correct tab focused
+- **Configurable parameters** — Button text, click count, and inter-click delay are all adjustable in the UI
+- **Responsive cancellation** — The Stop button halts the click loop within 200ms by breaking the delay into small chunks
+- **DOM stabilisation** — After all clicks, waits for the transaction row count to stabilise (up to 30 seconds) before extracting, ensuring all dynamically loaded rows are captured
+- **Chunked HTML extraction** — Reads the transaction `<tbody>` in 50-row chunks via JavaScript to avoid Playwright's string truncation limits on large DOMs
+- **Dual output** — Saves raw HTML to `Account_Activity_WBC.txt` and a parsed CSV to `Account_Activity_WBC.csv`
+- **CSV format** — Five columns: Date, Description, Debit, Credit, Balance — parsed from WBC's Knockout.js-bound HTML using regex
+
+### Output Files
+
+| File | Description |
+|---|---|
+| `Account_Activity_WBC.txt` | Raw `<tbody>` HTML from the transaction table |
+| `Account_Activity_WBC.csv` | Parsed transactions: Date, Description, Debit, Credit, Balance |
+
+Both files are written to the project directory and are gitignored (they contain personal banking data).
+
+### UI
+
+A compact tkinter window with:
+
+| Control | Description |
+|---|---|
+| **Button text** | The text of the "load more" button to click (default: "Display more") |
+| **Clicks** | Number of times to click the button (default: 5) |
+| **Delay (sec)** | Seconds to wait between clicks (default: 3) |
+| **Start / Stop** | Begin or cancel the click-and-extract process |
+| **Status log** | Color-coded log area: green for success, red for errors, grey for info |
+
+### Prerequisites
+
+- Microsoft Edge must be running with `--remote-debugging-port=9222`
+- The Westpac account activity page must be open and logged in
+- Python packages: `playwright` (connects via CDP — no `playwright install` needed)
+
+### Running
+
+```bash
+# Activate the virtual environment
+source .venv/Scripts/activate
+
+# Run the application
+python Account_Activity_WBC.py
+```
