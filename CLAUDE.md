@@ -16,6 +16,9 @@ source .venv/Scripts/activate && python SelfBot.py
 # Activate venv and run MyAgent
 source .venv/Scripts/activate && python MyAgent.py
 
+# Activate venv and run Account Activity extractor
+source .venv/Scripts/activate && python Account_Activity_WBC.py
+
 # Kill any running instances before relaunching (Windows)
 taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/null
 ```
@@ -24,6 +27,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
 - `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3030 lines); fire-and-forget task runner with an agentic tool-use loop
+- `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
 - `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)
@@ -33,6 +37,8 @@ There are no tests, linter, or build steps — these are single-file testbed app
 - `agent_state.json` — Persistent settings for MyAgent (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
 - `selfbot_auto_msg.json` — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
+- `Account_Activity_WBC.txt` — Raw transaction HTML extracted by Account_Activity_WBC.py (created at runtime, gitignored)
+- `Account_Activity_WBC.csv` — Parsed transaction CSV exported by Account_Activity_WBC.py (created at runtime, gitignored)
 - `LaunchSelfBot.bat` — Launcher that starts both SelfBot instances side by side with focus on instance 1
 - `LaunchMyAgent.bat` — Launcher for MyAgent
 - `selfbot_position.ps1` — PowerShell helper used by the SelfBot launcher to position and focus windows
@@ -94,6 +100,20 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **API retry logic** — Same as SelfBot: up to 10 retries with exponential backoff capped at 60s (429) or 90s (529).
 
+## Architecture (Account_Activity_WBC.py)
+
+**Single class design** — Same as the other apps: the `App` class contains all UI, browser automation, HTML parsing, and CSV export logic.
+
+**Browser connection** — Connects to Edge via CDP on port 9222 using Playwright. Searches all open tabs for one containing the target button text. Does not auto-launch Edge — requires the user to start Edge with `--remote-debugging-port=9222` beforehand.
+
+**Threading model** — The click-and-extract loop runs in a background daemon thread (`_click_worker`). A `queue.Queue` passes status messages (info, success, error, done) to the main thread, polled every 50ms via `root.after()`.
+
+**HTML extraction** — After clicking, waits for the DOM row count to stabilise (polling every 1s, up to 30s), then reads the `<tbody data-bind="foreach: PastTransactions()">` element in 50-row JavaScript chunks to avoid Playwright string truncation.
+
+**CSV conversion** — `_convert_html_to_csv()` uses regex to parse WBC's Knockout.js-bound HTML: date from `displayDateOnly` bindings, description from `text: Description` bindings, debit/credit from `IsDebit` conditional blocks, and balance from `account-activity-runningbalance` spans.
+
+**No state persistence** — Unlike SelfBot and MyAgent, this app has no state file. All parameters are set in the UI each run.
+
 ## Portability
 - No hardcoded paths — the project works when cloned to any directory on any Windows PC
 - `LaunchSelfBot.bat` uses `%~dp0` (resolves to its own directory at runtime)
@@ -106,4 +126,4 @@ There are no tests, linter, or build steps — these are single-file testbed app
 ## Conventions
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
-- Single-file architecture: SelfBot changes go in `SelfBot.py`, agent changes go in `MyAgent.py`
+- Single-file architecture: SelfBot changes go in `SelfBot.py`, agent changes go in `MyAgent.py`, bank extractor changes go in `Account_Activity_WBC.py`

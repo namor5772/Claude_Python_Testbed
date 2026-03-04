@@ -8,5 +8,14 @@ __pycache__/
 app_state.json
 agent_instructions.json
 
+# Account Activity output files
+Account_Activity_WBC.csv
+Account_Activity_WBC.txt
+Account_Activity_WBC_backup.csv
+Account_Activity_WBC_backup.txt
+
+# IDE settings
+.vscode/
+
 # Claude Code config
 .claude/
