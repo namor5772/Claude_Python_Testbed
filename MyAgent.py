@@ -2600,7 +2600,7 @@ class App:
             msg_text.config(state="disabled")
 
             tk.Label(
-                dlg, text="Your response:", font=("Arial", 10), anchor="w",
+                dlg, text="Your response (Ctrl+Enter for newline):", font=("Arial", 10), anchor="w",
             ).grid(row=2, column=0, sticky="w", padx=15, pady=(10, 2))
 
             resp_frame = tk.Frame(dlg)
@@ -2637,7 +2637,13 @@ class App:
                 event.set()
                 dlg.destroy()
 
+            def on_newline(ev=None):
+                resp_text.insert(tk.INSERT, "\n")
+                return "break"
+
             resp_text.bind("<Return>", on_inject)
+            resp_text.bind("<Control-Return>", on_newline)
+            resp_text.bind("<Control-KP_Enter>", on_newline)
             dlg.protocol("WM_DELETE_WINDOW", on_close)
 
             # Restore saved geometry or center over main window
