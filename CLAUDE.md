@@ -26,7 +26,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3450 lines); fire-and-forget task runner with an agentic tool-use loop
+- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3700 lines); fire-and-forget task runner with an agentic tool-use loop, supports both Anthropic and OpenAI providers
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
@@ -80,13 +80,15 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Single class design** — Same as SelfBot: the `App` class contains all UI, API, tool execution, and persistence logic.
 
-**Agentic loop** — `stream_worker()` runs a `while True:` loop: sends messages to the API, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
+**Dual-provider support** — A Provider combobox on the model toolbar switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary only via `_messages_to_openai()`, `_tools_to_openai()`, and `_stream_openai()`. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers. Provider selection is saved per-instruction and in `agent_state.json`. The provider combobox is locked (disabled) while the agent is running.
+
+**Agentic loop** — `stream_worker()` runs a `while True:` loop: dispatches to `_stream_anthropic_call()` or `_stream_openai_call()` based on the provider, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
 
 **Tool system** — Identical three-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) and `_get_tools()` assembler, plus a `user_prompt` core tool that pauses the loop and shows a modal dialog to collect user input. Tool dispatch is handled by the `_execute_tool()` helper method. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless.
 
 **Parallel tool execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering.
 
-**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int, skill_modes: {skill_name: mode_string}}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states, model parameters (model, temperature, thinking settings), and skill modes are saved per-instruction and restored on load. Skills not present in the snapshot default to disabled; deleted skills are silently skipped.
+**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, provider: str, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int, skill_modes: {skill_name: mode_string}}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states, model parameters (model, temperature, thinking settings), and skill modes are saved per-instruction and restored on load. Skills not present in the snapshot default to disabled; deleted skills are silently skipped.
 
 **Editor draft/commit model** — The instruction editor works on temporary copies (`_editor_images`, `_editor_desktop`, `_editor_browser`). Changes are only committed to live state on SAVE (persists to disk) or Apply (session-only). Closing the editor with [X] discards uncommitted changes. Model params and skill modes are restored immediately on instruction selection (like live state), matching the pattern of being environment-level settings rather than draft state.
 
@@ -94,7 +96,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **PowerShell Safety dialog** — The "PS Safety" button opens a dialog listing all `POWERSHELL_CONFIRM` patterns as checkboxes. Checked = confirmation required (default), unchecked = bypass confirmation and show a `⚠ Confirm bypassed` warning in the output window instead. Disabled patterns are persisted in `agent_state.json` as `disabled_confirm_patterns`. The bypass warning uses the `"warning"` queue message type which always displays regardless of the Activity checkbox.
 
-**State persistence** — `agent_state.json` stores last instruction name, model, temperature, thinking settings, window geometry, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns. Periodic auto-save every 5 seconds. Dialog geometries are also flushed to disk immediately when the dialog closes (editor close, Apply, or prompt/confirm dismiss).
+**State persistence** — `agent_state.json` stores provider, last instruction name, model, temperature, thinking settings, window geometry, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns. Periodic auto-save every 5 seconds. Dialog geometries are also flushed to disk immediately when the dialog closes (editor close, Apply, or prompt/confirm dismiss).
 
 **Chat saving is opt-in** — Chats are only saved (on close or by the periodic auto-save) if the user has typed a name in the "Save Chat as" entry. If the field is blank, no chat file is created.
 
