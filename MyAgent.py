@@ -680,7 +680,10 @@ EFFORT_LEVELS = ["low", "medium", "high", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 OPENAI_FALLBACK_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
-OPENAI_REASONING_PREFIXES = ("o3", "o4", "gpt-5")
+OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+# Model families that support the Responses API (gpt-3.5, gpt-4 base/turbo do not)
+OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
+                             "o1", "o3", "o4")
 PROVIDERS = ["Anthropic", "OpenAI"]
 DEFAULT_GEOMETRY = "1050x930"
 
@@ -811,7 +814,9 @@ class App:
 
         # Initialize API clients for available providers
         self.client = anthropic.Anthropic() if self._has_anthropic else None
-        self.openai_client = openai.OpenAI() if self._has_openai else None
+        self.openai_client = openai.OpenAI(
+            timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
+        ) if self._has_openai else None
         self.provider = "Anthropic" if self._has_anthropic else "OpenAI"
         self._openai_model_display_names = {}
         self.messages = []
@@ -1107,6 +1112,16 @@ class App:
             self._update_thinking_strength_options()
             if self.thinking_enabled:
                 self._on_thinking_toggled()
+            else:
+                # Reasoning model with thinking off: disable temp for OpenAI
+                # (reasoning models don't accept temperature)
+                if self.provider == "OpenAI" and self._is_openai_reasoning_model():
+                    self._temp_label.config(state="disabled")
+                    self._temp_spin.config(state="disabled")
+                else:
+                    self._temp_label.config(state="normal")
+                    self._temp_spin.config(state="normal")
+                self._thinking_strength_combo.config(state="disabled")
         self._save_last_state()
 
     def _on_temp_changed(self):
@@ -1145,12 +1160,15 @@ class App:
                 self._model_id_list = self.available_models
                 display_names = [self._get_display_name(mid) for mid in self._model_id_list]
                 self._model_combo["values"] = display_names
-        # Restore model
+        # Restore model (fall back to first available if saved model doesn't match provider)
         model_key = "last_model" if state_file else "model"
         model = entry.get(model_key, "")
         if model and model in self.available_models:
             self.model = model
             self._model_var.set(self._get_display_name(model))
+        elif self.available_models:
+            self.model = self.available_models[0]
+            self._model_var.set(self._get_display_name(self.model))
         # Restore temperature
         temp = entry.get("temperature")
         if temp is not None:
@@ -1167,6 +1185,9 @@ class App:
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
                 self._thinking_check.config(state="disabled")
+                self._thinking_strength_combo.config(state="disabled")
+                self._temp_label.config(state="normal")
+                self._temp_spin.config(state="normal")
             else:
                 self._thinking_check.config(state="normal")
                 if support == "adaptive":
@@ -1186,8 +1207,13 @@ class App:
             self._update_thinking_strength_options()
             self._thinking_strength_combo.config(state="readonly")
         else:
-            self._temp_label.config(state="normal")
-            self._temp_spin.config(state="normal")
+            # OpenAI reasoning models don't accept temperature even with thinking off
+            if self.provider == "OpenAI" and self._is_openai_reasoning_model():
+                self._temp_label.config(state="disabled")
+                self._temp_spin.config(state="disabled")
+            else:
+                self._temp_label.config(state="normal")
+                self._temp_spin.config(state="normal")
             self._thinking_strength_combo.config(state="disabled")
         self._save_last_state()
 
@@ -1907,35 +1933,21 @@ class App:
             return list(OPENAI_FALLBACK_MODELS)
         try:
             response = self.openai_client.models.list()
-            # Only include model families with reliable tool-calling support
-            chat_prefixes = ("gpt-4", "gpt-5", "o3", "o4")
-            exclude_keywords = ("realtime", "audio", "tts", "whisper", "dall-e",
-                                "embedding", "moderation", "instruct", "search",
-                                "preview", "codex")
             model_ids = []
             for m in response.data:
                 mid = m.id
-                if not any(mid.startswith(p) for p in chat_prefixes):
+                # Skip non-chat model types
+                if any(skip in mid for skip in ("embedding", "audio", "search",
+                                                "realtime", "preview",
+                                                "transcribe", "tts")):
                     continue
-                if any(kw in mid for kw in exclude_keywords):
-                    continue
-                # Exclude legacy models with small context windows
-                if mid.startswith("gpt-3.5") or mid == "gpt-4":
-                    continue
-                # Exclude superseded older models
-                if mid.startswith("gpt-4-turbo"):
-                    continue
-                # Exclude nano models (too small for agentic reasoning)
-                if mid.endswith("-nano"):
-                    continue
-                # Exclude -pro models (streaming unverified)
-                if mid.endswith("-pro"):
-                    continue
-                # Exclude dated snapshots (e.g. gpt-4-0613, gpt-4o-2024-05-13)
-                if re.search(r'-\d{4}(-\d{2}(-\d{2})?)?$', mid):
-                    continue
-                model_ids.append(mid)
+                # Include only Responses API compatible models
+                if mid.startswith(OPENAI_RESPONSES_PREFIXES):
+                    model_ids.append(mid)
             model_ids.sort()
+            print(f"\n=== {len(model_ids)} OpenAI Models ===")
+            for i, mid in enumerate(model_ids, 1):
+                print(f"{i}: {mid}")
             self._openai_model_display_names = {mid: mid for mid in model_ids}
             return model_ids if model_ids else list(OPENAI_FALLBACK_MODELS)
         except Exception:
@@ -3629,6 +3641,14 @@ class App:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
                     self._stream_responses(api_kwargs, label_emitted)
                 break  # success
+            except openai.APITimeoutError:
+                if attempt < max_retries - 1:
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"Stream timeout (no data for 120s) — retrying (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                else:
+                    raise
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
                     wait = min(2 ** attempt * 5, 60)
