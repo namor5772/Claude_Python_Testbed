@@ -179,6 +179,8 @@ The `run_powershell` tool uses a two-tier safety system to prevent accidental da
 
 **Safe commands** (e.g., `Get-Process`, `Get-ChildItem`, `hostname`, `dir`) run freely without interruption.
 
+> **Note (MyAgent only):** The **PS Safety** button opens a dialog where individual Tier 2 patterns can be unchecked to bypass their confirmation dialog. Bypassed patterns still display a `⚠ Confirm bypassed (pattern: ...)` warning in the output window (always visible, regardless of the Activity checkbox). Disabled patterns are persisted across restarts in `agent_state.json`. See the MyAgent section below for details.
+
 #### Image Attachments
 - Click **Attach Images** to select one or more image files (PNG, JPG, JPEG, GIF, WEBP)
 - Attached images are shown as a purple indicator below the input field (click to clear)
@@ -558,8 +560,18 @@ Six checkboxes on the main window control what is shown in the output display an
 | **Show Thinking** | Extended thinking blocks in amber/gold italic text |
 | **Desktop** | Enables the 13 desktop automation tools (also settable per-instruction in the editor) |
 | **Browser** | Enables the 11 browser automation tools (also settable per-instruction in the editor) |
+| **PS Safety** button | Opens a dialog to selectively disable individual PowerShell confirmation patterns (see below) |
 
 The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
+
+#### PS Safety — Deselectable Confirm Patterns
+
+The **PS Safety** button (next to the Browser checkbox) opens a dialog listing all 24 `POWERSHELL_CONFIRM` patterns as checkboxes:
+
+- **Checked** (default) — the pattern requires a confirmation dialog before execution, as normal
+- **Unchecked** — the confirmation dialog is bypassed; the command runs immediately and a `⚠ Confirm bypassed (pattern: ...)` warning is displayed in the output window
+
+The bypass warning always appears regardless of the Activity checkbox state. Disabled patterns and the dialog's position/size are persisted in `agent_state.json` across restarts.
 
 #### App State Persistence
 
@@ -586,7 +598,7 @@ The window is 1050x930 (default). Grid layout with 5 rows:
 | **Row 1** | Chat toolbar: Save Chat as entry, START button (green), STOP button (red) |
 | **Row 2** | Chat display: read-only text area with scrollbar, colour-coded output |
 | **Row 3** | Button bar: Agent Instruction, Skills buttons |
-| **Row 4** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser |
+| **Row 4** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser, PS Safety button |
 
 **Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
@@ -625,10 +637,10 @@ The application is a single-file (~3,030 lines) tkinter app structured around th
 - **UI Layout** — Grid-based layout with 5 rows: model + temperature + thinking toolbar (row 0), chat save entry with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Agent Instruction and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4). Image attachment and Desktop/Browser tool toggles are managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, and model parameters), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences and dialog geometries (editor, prompt dialog, confirm dialog), and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, and model parameters), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns, and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
-- **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
+- **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot, plus a **PS Safety** dialog that allows individual confirm patterns to be disabled. Disabled patterns bypass the confirmation dialog and emit a `"warning"` queue message (always displayed, not gated by the Activity checkbox). Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
 - **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected, but only if the user has typed a name in the Save Chat entry (blank = no save). `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat (if named), cleans up browser connections, then destroys the window
 
