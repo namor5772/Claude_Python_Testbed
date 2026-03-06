@@ -457,16 +457,17 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | Control | Description |
 |---|---|
 | **Instruction Name** entry | Name for saving/loading instructions |
-| **SAVE** button | Save the instruction (text, images, tool toggles, model parameters) to disk and make it the active instruction |
+| **SAVE** button | Save the instruction (text, images, tool toggles, model parameters, skill modes) to disk and make it the active instruction |
 | **DELETE** button | Remove the named instruction from disk |
 | **CLEAR** button | Reset the editor — clears text, images, and tool toggles |
 | **Load Instruction** dropdown | Select a previously saved instruction — populates the editor fields for preview |
 | **Text editor** | Multi-line area for writing the task description |
 | **Attach Images** button | Select image files to attach to the instruction |
 | **Remove Selected** button | Delete selected images from the image list |
-| **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
 | **Desktop** checkbox | Enable/disable the 13 desktop automation tools for this instruction |
 | **Browser** checkbox | Enable/disable the 11 browser automation tools for this instruction |
+| **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
+| **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
 | **Apply** button | Make the instruction active for this session (no disk write) and close the editor |
 
 **Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
@@ -482,7 +483,9 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Tool toggles persist with instructions** — Each saved instruction stores its Desktop and Browser checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
 
-**Model parameters persist with instructions** — Each saved instruction also stores the current model, temperature, and thinking settings (enabled, effort level, token budget). Loading an instruction from the dropdown immediately restores these model parameters to the main toolbar. This effectively makes each instruction a self-contained task profile — text, images, tool categories, and model configuration — so different tasks can target different models and settings.
+**Model parameters persist with instructions** — Each saved instruction also stores the current model, temperature, and thinking settings (enabled, effort level, token budget). Loading an instruction from the dropdown immediately restores these model parameters to the main toolbar.
+
+**Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled. This effectively makes each instruction a self-contained task profile — text, images, tool categories, model configuration, and skills environment — so different tasks can target different models, settings, and skill sets.
 
 When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
 
@@ -530,6 +533,8 @@ Results are slotted back into their original API-requested order regardless of e
 
 Shared with SelfBot — both apps read from the same `skills.json` file. The three-mode system (disabled, enabled, on-demand) works identically. See the SelfBot.py Skills System section above for full details.
 
+The **Skills** button is located in the **Agent Instruction Editor** (not on the main window), since skill modes are saved and restored per-instruction. Opening the Skills Manager from the editor makes it clear that the skills configuration is part of the instruction's environment.
+
 #### Image Attachments
 
 - Image management is integrated into the **Agent Instruction Editor** — click **Attach Images** to select files (PNG, JPG, JPEG, GIF, WEBP)
@@ -550,7 +555,7 @@ Chat saving is opt-in — there is no manual SAVE button, and **no chat is saved
 
 #### Display Toggles
 
-Six checkboxes on the main window control what is shown in the output display and which tools are available (all default to **off**):
+Four checkboxes on the main window control what is shown in the output display (all default to **off**), plus a PS Safety button:
 
 | Checkbox | What it controls |
 |---|---|
@@ -558,9 +563,9 @@ Six checkboxes on the main window control what is shown in the output display an
 | **Tool Calls** | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
 | **Activity** | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
 | **Show Thinking** | Extended thinking blocks in amber/gold italic text |
-| **Desktop** | Enables the 13 desktop automation tools (also settable per-instruction in the editor) |
-| **Browser** | Enables the 11 browser automation tools (also settable per-instruction in the editor) |
 | **PS Safety** button | Opens a dialog to selectively disable individual PowerShell confirmation patterns (see below) |
+
+Desktop and Browser tool toggles are managed per-instruction inside the Agent Instruction Editor.
 
 The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
 
@@ -590,15 +595,14 @@ Closing the window stops the agentic loop, waits for any in-flight API streaming
 
 ### UI Layout
 
-The window is 1050x930 (default). Grid layout with 5 rows:
+The window is 1050x930 (default). Grid layout with 4 rows:
 
 | Row | Contents |
 |---|---|
 | **Row 0** | Model toolbar: Model dropdown, Temp spinbox, Thinking checkbox, Strength combobox |
-| **Row 1** | Chat toolbar: Save Chat as entry, START button (green), STOP button (red) |
+| **Row 1** | Chat toolbar: Agent Instruction button, Save Chat as entry, START button (green), STOP button (red) |
 | **Row 2** | Chat display: read-only text area with scrollbar, colour-coded output |
-| **Row 3** | Button bar: Agent Instruction, Skills buttons |
-| **Row 4** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser, PS Safety button |
+| **Row 3** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, PS Safety button |
 
 **Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
@@ -632,12 +636,12 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 ### Architecture
 
-The application is a single-file (~3,030 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+The application is a single-file (~3,450 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
-- **UI Layout** — Grid-based layout with 5 rows: model + temperature + thinking toolbar (row 0), chat save entry with START/STOP buttons (row 1), chat display + scrollbar (row 2), button bar with Agent Instruction and Skills buttons (row 3), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 4). Image attachment and Desktop/Browser tool toggles are managed inside the Agent Instruction editor window
+- **UI Layout** — Grid-based layout with 4 rows: model + temperature + thinking toolbar (row 0), chat toolbar with Agent Instruction button, save-chat entry, and START/STOP buttons (row 1), chat display + scrollbar (row 2), checkbox row with Debug/Tool Calls/Activity/Show Thinking toggles and PS Safety button (row 3). Image attachments, Desktop/Browser tool toggles, and the Skills button are managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, and model parameters), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns, and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, model parameters, and skill modes), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns, and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot, plus a **PS Safety** dialog that allows individual confirm patterns to be disabled. Disabled patterns bypass the confirmation dialog and emit a `"warning"` queue message (always displayed, not gated by the Activity checkbox). Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`

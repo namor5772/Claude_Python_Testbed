@@ -819,6 +819,7 @@ class App:
         self.thinking_budget = 8192
         self.instruction_editor_window = None
         self.skills_editor_window = None
+        self._skills_refresh_list = None
         self.skills = self._load_skills()
         self.available_models = self._fetch_available_models()
 
@@ -847,8 +848,6 @@ class App:
         self.root.grid_rowconfigure(1, weight=0)
         self.root.grid_rowconfigure(2, weight=1)
         self.root.grid_rowconfigure(3, weight=0)
-        self.root.grid_rowconfigure(4, weight=0)
-        self.root.grid_rowconfigure(5, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=0)
 
@@ -902,6 +901,11 @@ class App:
         # Row 1: Chat toolbar — Save + START/STOP
         chat_toolbar = tk.Frame(self.root)
         chat_toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(5, 0))
+
+        self.instruction_button = tk.Button(
+            chat_toolbar, text="Agent Instruction", command=self.open_instruction_editor,
+        )
+        self.instruction_button.pack(side=tk.LEFT, padx=(0, 15))
 
         tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
@@ -978,33 +982,9 @@ class App:
             font=("Consolas", 9, "bold italic")
         )
 
-        # Row 3: Button bar
-        button_frame = tk.Frame(self.root)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=(0, 5))
-
-        self.instruction_button = tk.Button(
-            button_frame, text="Agent Instruction", command=self.open_instruction_editor, width=16
-        )
-        self.instruction_button.pack(side=tk.LEFT, padx=(5, 5))
-
-        on_count = sum(1 for s in self.skills.values() if s.get("mode") == "enabled")
-        od_count = sum(1 for s in self.skills.values() if s.get("mode") == "on_demand")
-        if on_count and od_count:
-            skills_label = f"Skills ({on_count}+{od_count})"
-        elif on_count:
-            skills_label = f"Skills ({on_count})"
-        elif od_count:
-            skills_label = f"Skills (0+{od_count})"
-        else:
-            skills_label = "Skills"
-        self.skills_button = tk.Button(
-            button_frame, text=skills_label, command=self.open_skills_editor, padx=10
-        )
-        self.skills_button.pack(side=tk.LEFT, padx=(5, 5))
-
-        # Row 4: Checkbox row
+        # Row 3: Checkbox row
         checkbox_frame = tk.Frame(self.root)
-        checkbox_frame.grid(row=4, column=0, columnspan=2, pady=(0, 5))
+        checkbox_frame.grid(row=3, column=0, columnspan=2, pady=(0, 5))
 
         self.debug_toggle = tk.Checkbutton(
             checkbox_frame, text="Debug", variable=self.debug_enabled,
@@ -1228,6 +1208,7 @@ class App:
                 ]
                 self.desktop_enabled.set(entry.get("desktop", False))
                 self.browser_enabled.set(entry.get("browser", False))
+                self._restore_skill_modes(entry)
                 self._update_title()
                 # Use instruction's model params if saved
                 if "model" in entry:
@@ -1392,6 +1373,12 @@ class App:
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
+        self.skills_button = tk.Button(
+            img_frame, text="Skills", command=self.open_skills_editor, padx=10
+        )
+        self.skills_button.pack(side=tk.LEFT, padx=(15, 0))
+        self._update_skills_button()
+
         self._instr_image_listbox = tk.Listbox(
             win, height=4, font=("Arial", 9), foreground="#6a1b9a",
             selectmode=tk.EXTENDED,
@@ -1471,6 +1458,7 @@ class App:
             "thinking_enabled": self.thinking_enabled,
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
+            "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
         }
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
@@ -1521,6 +1509,7 @@ class App:
             self._editor_desktop.set(entry.get("desktop", False))
             self._editor_browser.set(entry.get("browser", False))
             self._restore_model_params(entry)
+            self._restore_skill_modes(entry)
             self._refresh_image_listbox()
 
     def _apply_instruction(self):
@@ -1534,6 +1523,11 @@ class App:
         self.browser_enabled.set(self._editor_browser.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
+        # Restore skill modes from whichever instruction is loaded in editor
+        instructions = self._load_saved_instructions()
+        instr_name = self.agent_instruction_name
+        if instr_name and instr_name in instructions:
+            self._restore_skill_modes(instructions[instr_name])
         self._update_title()
         # Capture geometry before destroying so periodic saves don't overwrite it
         try:
@@ -1569,6 +1563,21 @@ class App:
         with open(SKILLS_FILE, "w", encoding="utf-8") as f:
             json.dump(self.skills, f, indent=2, ensure_ascii=False)
 
+    def _restore_skill_modes(self, entry):
+        saved = entry.get("skill_modes", {})
+        if not saved:
+            return
+        for sname in self.skills:
+            mode = saved.get(sname, "disabled")  # new skills default to disabled
+            if mode in ("disabled", "enabled", "on_demand"):
+                self.skills[sname]["mode"] = mode
+        self._save_skills()
+        self._update_skills_button()
+        # Refresh Skills Manager listbox if open
+        if (self.skills_editor_window and self.skills_editor_window.winfo_exists()
+                and self._skills_refresh_list):
+            self._skills_refresh_list()
+
     def _update_skills_button(self):
         on_count = sum(1 for s in self.skills.values() if s.get("mode") == "enabled")
         od_count = sum(1 for s in self.skills.values() if s.get("mode") == "on_demand")
@@ -1580,7 +1589,10 @@ class App:
             label = f"Skills (0+{od_count})"
         else:
             label = "Skills"
-        self.skills_button.config(text=label)
+        try:
+            self.skills_button.config(text=label)
+        except (AttributeError, tk.TclError):
+            pass  # Button doesn't exist yet or editor is closed
 
     def _build_system_prompt(self):
         parts = [self.system_prompt]
@@ -1607,7 +1619,10 @@ class App:
         win = tk.Toplevel(self.root)
         win.title("Skills Manager")
         win.geometry("750x500")
-        win.transient(self.root)
+        parent = (self.instruction_editor_window
+                  if self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
+                  else self.root)
+        win.transient(parent)
         self.skills_editor_window = win
 
         top = tk.Frame(win)
@@ -1686,6 +1701,8 @@ class App:
                     skill_listbox.itemconfig(i, fg="#2e7d32")
                 elif mode == "on_demand":
                     skill_listbox.itemconfig(i, fg="#1565c0")
+
+        self._skills_refresh_list = refresh_list
 
         def on_select(event):
             sel = skill_listbox.curselection()

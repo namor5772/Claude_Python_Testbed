@@ -5,14 +5,15 @@
   "thinking_enabled": false,
   "thinking_effort": "high",
   "thinking_budget": 8192,
-  "geometry": "800x1220+1747+0",
+  "geometry": "793x1220+1754+0",
   "screen_width": 2560,
   "screen_height": 1600,
-  "editor_geometry": "993x761+644+90",
+  "editor_geometry": "993x761+1262+180",
   "prompt_dialog_geometry": "559x418+1987+985",
   "confirm_dialog_geometry": "714x415+271+247",
   "ps_safety_dialog_geometry": "495x918+1240+1",
   "disabled_confirm_patterns": [
-    "\\bOut-File\\b"
+    "\\bOut-File\\b",
+    "\\bStart-Process\\b"
   ]
 }
