@@ -1030,18 +1030,6 @@ class App:
         )
         self.thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
-        self.desktop_toggle = tk.Checkbutton(
-            checkbox_frame, text="Desktop", variable=self.desktop_enabled,
-            font=("Arial", 9),
-        )
-        self.desktop_toggle.pack(side=tk.LEFT, padx=(5, 0))
-
-        self.browser_toggle = tk.Checkbutton(
-            checkbox_frame, text="Browser", variable=self.browser_enabled,
-            font=("Arial", 9),
-        )
-        self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
-
         tk.Button(
             checkbox_frame, text="PS Safety", font=("Arial", 8),
             command=self._open_ps_safety_dialog, relief="groove", padx=4, pady=0,
