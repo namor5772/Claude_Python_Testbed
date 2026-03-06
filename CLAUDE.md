@@ -92,7 +92,9 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Threading model** — Same as SelfBot: background daemon thread for API calls, `queue.Queue` for events, main thread polls every 50ms via `root.after()`.
 
-**State persistence** — `agent_state.json` stores last instruction name, model, temperature, thinking settings, window geometry, and dialog geometries (editor, prompt dialog, confirm dialog). Periodic auto-save every 5 seconds. Dialog geometries are also flushed to disk immediately when the dialog closes (editor close, Apply, or prompt/confirm dismiss).
+**PowerShell Safety dialog** — The "PS Safety" button opens a dialog listing all `POWERSHELL_CONFIRM` patterns as checkboxes. Checked = confirmation required (default), unchecked = bypass confirmation and show a `⚠ Confirm bypassed` warning in the output window instead. Disabled patterns are persisted in `agent_state.json` as `disabled_confirm_patterns`. The bypass warning uses the `"warning"` queue message type which always displays regardless of the Activity checkbox.
+
+**State persistence** — `agent_state.json` stores last instruction name, model, temperature, thinking settings, window geometry, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns. Periodic auto-save every 5 seconds. Dialog geometries are also flushed to disk immediately when the dialog closes (editor close, Apply, or prompt/confirm dismiss).
 
 **Chat saving is opt-in** — Chats are only saved (on close or by the periodic auto-save) if the user has typed a name in the "Save Chat as" entry. If the field is blank, no chat file is created.
 
