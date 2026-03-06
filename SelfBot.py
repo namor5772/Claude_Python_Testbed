@@ -3027,6 +3027,11 @@ class App:
 
     def do_browser_open(self, url):
         try:
+            self._cleanup_browser()
+            subprocess.run(
+                ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
             page = self._ensure_browser()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             return f"Navigated to {url} — page title: {page.title()}"
@@ -3467,12 +3472,21 @@ class App:
                                             region = (inp["x"], inp["y"], inp["width"], inp["height"])
                                         result = self.do_screenshot(region)
                                     elif block.name == "mouse_click":
-                                        self.queue.put({"type": "tool_info", "content": f"Clicking at ({inp.get('x')}, {inp.get('y')})...\n"})
-                                        result = self.do_mouse_click(
-                                            inp["x"], inp["y"],
-                                            button=inp.get("button", "left"),
-                                            clicks=inp.get("clicks", 1),
-                                        )
+                                        cx, cy = inp.get("x"), inp.get("y")
+                                        if cx is None or cy is None:
+                                            coord = inp.get("coordinate")
+                                            if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+                                                cx, cy = coord[0], coord[1]
+                                            else:
+                                                result = f"mouse_click error: missing x/y coordinates. Got: {inp}"
+                                                cx = cy = None
+                                        if cx is not None:
+                                            self.queue.put({"type": "tool_info", "content": f"Clicking at ({cx}, {cy})...\n"})
+                                            result = self.do_mouse_click(
+                                                cx, cy,
+                                                button=inp.get("button", "left"),
+                                                clicks=inp.get("clicks", 1),
+                                            )
                                     elif block.name == "type_text":
                                         text = inp.get("text", "")
                                         preview = text[:50] + "..." if len(text) > 50 else text
@@ -3509,20 +3523,28 @@ class App:
                                         self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
                                         result = self.do_wait_for_window(title, timeout=timeout)
                                     elif block.name == "read_screen_text":
-                                        self.queue.put({"type": "tool_info", "content": f"OCR region ({inp.get('x')},{inp.get('y')} {inp.get('width')}x{inp.get('height')})...\n"})
-                                        result = self.do_read_screen_text(inp["x"], inp["y"], inp["width"], inp["height"])
+                                        rx, ry, rw, rh = inp.get("x"), inp.get("y"), inp.get("width"), inp.get("height")
+                                        if None in (rx, ry, rw, rh):
+                                            result = f"read_screen_text error: missing region parameters. Got: {inp}"
+                                        else:
+                                            self.queue.put({"type": "tool_info", "content": f"OCR region ({rx},{ry} {rw}x{rh})...\n"})
+                                            result = self.do_read_screen_text(rx, ry, rw, rh)
                                     elif block.name == "find_image_on_screen":
                                         path = inp.get("image_path", "")
                                         self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
                                         result = self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
                                     elif block.name == "mouse_drag":
-                                        self.queue.put({"type": "tool_info", "content": f"Dragging ({inp.get('start_x')},{inp.get('start_y')}) to ({inp.get('end_x')},{inp.get('end_y')})...\n"})
-                                        result = self.do_mouse_drag(
-                                            inp["start_x"], inp["start_y"],
-                                            inp["end_x"], inp["end_y"],
-                                            duration=inp.get("duration", 0.5),
-                                            button=inp.get("button", "left"),
-                                        )
+                                        sx, sy = inp.get("start_x"), inp.get("start_y")
+                                        ex, ey = inp.get("end_x"), inp.get("end_y")
+                                        if None in (sx, sy, ex, ey):
+                                            result = f"mouse_drag error: missing coordinates. Got: {inp}"
+                                        else:
+                                            self.queue.put({"type": "tool_info", "content": f"Dragging ({sx},{sy}) to ({ex},{ey})...\n"})
+                                            result = self.do_mouse_drag(
+                                                sx, sy, ex, ey,
+                                                duration=inp.get("duration", 0.5),
+                                                button=inp.get("button", "left"),
+                                            )
                             elif block.name in ("browser_open", "browser_navigate",
                                                   "browser_click", "browser_fill",
                                                   "browser_get_text", "browser_run_js",
