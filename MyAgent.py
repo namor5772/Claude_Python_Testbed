@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from html.parser import HTMLParser
 import anthropic
+import openai
 from ddgs import DDGS
 import httpx
 import threading
@@ -677,6 +678,11 @@ ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
 MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
+OPENAI_FALLBACK_MODELS = ["gpt-4.1", "gpt-4.1-mini", "o4-mini", "gpt-4.1-nano"]
+OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
+OPENAI_MAX_TOKENS = 8192
+OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
+PROVIDERS = ["Anthropic", "OpenAI"]
 DEFAULT_GEOMETRY = "1050x930"
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -774,6 +780,17 @@ def extract_text_from_html(html):
     return extractor.get_text()
 
 
+class _ToolBlock:
+    """Thin wrapper so OpenAI dict-based tool blocks expose the same
+    .name, .id, .input attribute interface as Anthropic's Pydantic objects."""
+
+    def __init__(self, name, id, input):
+        self.name = name
+        self.id = id
+        self.input = input
+        self.type = "tool_use"
+
+
 # ── Main Application ────────────────────────────────────────────────────────
 
 class App:
@@ -782,17 +799,22 @@ class App:
         self.root.title("Claude Agent")
         self.root.geometry(DEFAULT_GEOMETRY)
 
-        # Check for API key
-        if not os.environ.get("ANTHROPIC_API_KEY"):
+        # Check for at least one API key
+        self._has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        self._has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+        if not self._has_anthropic and not self._has_openai:
             messagebox.showerror(
                 "API Key Missing",
-                "Please set the ANTHROPIC_API_KEY environment variable.",
+                "Please set at least one of ANTHROPIC_API_KEY or OPENAI_API_KEY.",
             )
             self.root.destroy()
             return
 
-        # Initialize API client and state
-        self.client = anthropic.Anthropic()
+        # Initialize API clients for available providers
+        self.client = anthropic.Anthropic() if self._has_anthropic else None
+        self.openai_client = openai.OpenAI() if self._has_openai else None
+        self.provider = "Anthropic" if self._has_anthropic else "OpenAI"
+        self._openai_model_display_names = {}
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False
@@ -812,7 +834,7 @@ class App:
         self._page = None
         self._edge_process = None
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self.model = DEFAULT_MODEL
+        self.model = DEFAULT_MODEL if self.provider == "Anthropic" else OPENAI_DEFAULT_MODEL
         self.temperature = 1.0
         self.thinking_enabled = False
         self.thinking_effort = "high"
@@ -821,7 +843,7 @@ class App:
         self.skills_editor_window = None
         self._skills_refresh_list = None
         self.skills = self._load_skills()
-        self.available_models = self._fetch_available_models()
+        self.available_models = self._fetch_models_for_provider()
 
         self._current_response_text = ""
         self._current_thinking_text = ""
@@ -855,12 +877,24 @@ class App:
         model_toolbar = tk.Frame(self.root)
         model_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
 
+        # Provider combobox
+        available_providers = [p for p in PROVIDERS
+                               if (p == "Anthropic" and self._has_anthropic)
+                               or (p == "OpenAI" and self._has_openai)]
+        self._provider_var = tk.StringVar(value=self.provider)
+        self._provider_combo = ttk.Combobox(
+            model_toolbar, textvariable=self._provider_var, state="readonly",
+            font=("Arial", 9), width=10, values=available_providers,
+        )
+        self._provider_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
+
         tk.Label(model_toolbar, text="Model", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self._model_id_list = self.available_models
         display_names = [
-            self._model_display_names.get(mid, mid) for mid in self._model_id_list
+            self._get_display_name(mid) for mid in self._model_id_list
         ]
-        current_display = self._model_display_names.get(self.model, self.model)
+        current_display = self._get_display_name(self.model)
         self._model_var = tk.StringVar(value=current_display)
         self._model_combo = ttk.Combobox(
             model_toolbar, textvariable=self._model_var, state="readonly",
@@ -1030,10 +1064,35 @@ class App:
             self._model_display_names = {}
             return list(FALLBACK_MODELS)
 
+    def _on_provider_changed(self, event=None):
+        """Handle provider combobox selection change."""
+        new_provider = self._provider_var.get()
+        if new_provider == self.provider:
+            return
+        self.provider = new_provider
+        # Refresh model list for the new provider
+        self.available_models = self._fetch_models_for_provider()
+        self._model_id_list = self.available_models
+        display_names = [self._get_display_name(mid) for mid in self._model_id_list]
+        self._model_combo["values"] = display_names
+        # Select default model for new provider
+        if new_provider == "OpenAI":
+            default = OPENAI_DEFAULT_MODEL
+        else:
+            default = DEFAULT_MODEL
+        if default in self.available_models:
+            self.model = default
+        elif self.available_models:
+            self.model = self.available_models[0]
+        self._model_var.set(self._get_display_name(self.model))
+        self._on_model_selected()
+        self._update_title()
+        self._save_last_state()
+
     def _on_model_selected(self, event=None):
         selected_display = self._model_var.get()
         for mid in self._model_id_list:
-            if self._model_display_names.get(mid, mid) == selected_display:
+            if self._get_display_name(mid) == selected_display:
                 self.model = mid
                 break
         support = self._model_supports_thinking()
@@ -1062,6 +1121,8 @@ class App:
 
     def _model_supports_thinking(self, model_id=None):
         mid = model_id or self.model
+        if self.provider == "OpenAI":
+            return "adaptive" if self._is_openai_reasoning_model(mid) else None
         if mid in ADAPTIVE_THINKING_MODELS:
             return "adaptive"
         for prefix in MANUAL_THINKING_PREFIXES:
@@ -1070,13 +1131,27 @@ class App:
         return None
 
     def _restore_model_params(self, entry, state_file=False):
-        """Restore model, temperature, and thinking settings from an instruction entry or state file."""
+        """Restore provider, model, temperature, and thinking settings from an instruction entry or state file."""
+        # Restore provider first (model list depends on it)
+        provider_key = "provider"
+        saved_provider = entry.get(provider_key, "Anthropic")
+        if saved_provider != self.provider:
+            # Only switch if we have the key for that provider
+            can_switch = (saved_provider == "Anthropic" and self._has_anthropic) or \
+                         (saved_provider == "OpenAI" and self._has_openai)
+            if can_switch:
+                self.provider = saved_provider
+                self._provider_var.set(saved_provider)
+                self.available_models = self._fetch_models_for_provider()
+                self._model_id_list = self.available_models
+                display_names = [self._get_display_name(mid) for mid in self._model_id_list]
+                self._model_combo["values"] = display_names
         # Restore model
         model_key = "last_model" if state_file else "model"
         model = entry.get(model_key, "")
         if model and model in self.available_models:
             self.model = model
-            self._model_var.set(self._model_display_names.get(model, model))
+            self._model_var.set(self._get_display_name(model))
         # Restore temperature
         temp = entry.get("temperature")
         if temp is not None:
@@ -1120,7 +1195,10 @@ class App:
     def _update_thinking_strength_options(self):
         support = self._model_supports_thinking()
         if support == "adaptive":
-            values = list(EFFORT_LEVELS)
+            if self.provider == "OpenAI":
+                values = ["low", "medium", "high"]
+            else:
+                values = list(EFFORT_LEVELS)
             self._thinking_strength_combo["values"] = values
             if self._thinking_strength_var.get() not in values:
                 self._thinking_strength_var.set(self.thinking_effort if self.thinking_effort in values else "high")
@@ -1146,15 +1224,17 @@ class App:
         self._save_last_state()
 
     def _update_title(self):
+        tag = " [OpenAI]" if self.provider == "OpenAI" else ""
         if self.agent_instruction_name:
-            self.root.title(f"Claude Agent — {self.agent_instruction_name}")
+            self.root.title(f"Claude Agent{tag} — {self.agent_instruction_name}")
         else:
-            self.root.title("Claude Agent")
+            self.root.title(f"Claude Agent{tag}")
 
     # ── State Persistence ───────────────────────────────────────────────
 
     def _save_last_state(self):
         state = {
+            "provider": self.provider,
             "last_instruction_name": self.agent_instruction_name,
             "last_model": self.model,
             "temperature": self.temperature,
@@ -1453,6 +1533,7 @@ class App:
             ],
             "desktop": self.desktop_enabled.get(),
             "browser": self.browser_enabled.get(),
+            "provider": self.provider,
             "model": self.model,
             "temperature": self.temperature,
             "thinking_enabled": self.thinking_enabled,
@@ -1610,6 +1691,243 @@ class App:
                 f"Call `get_skill` with the skill name when you need its content."
             )
         return "\n\n".join(parts)
+
+    # ── OpenAI Translation Helpers ─────────────────────────────────────
+
+    def _get_display_name(self, model_id):
+        """Get display name for a model, provider-aware."""
+        if self.provider == "OpenAI":
+            return self._openai_model_display_names.get(model_id, model_id)
+        return self._model_display_names.get(model_id, model_id)
+
+    def _tools_to_openai(self, tools):
+        """Convert Anthropic tool schemas to OpenAI function-calling format."""
+        result = []
+        for tool in tools:
+            result.append({
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+                },
+            })
+        return result
+
+    def _messages_to_openai(self, messages, system_prompt):
+        """Convert internal Anthropic-format messages to OpenAI chat format."""
+        result = [{"role": "system", "content": system_prompt}]
+
+        for msg in messages:
+            role = msg["role"]
+            content = msg.get("content")
+
+            if role == "user":
+                if isinstance(content, str):
+                    result.append({"role": "user", "content": content})
+                elif isinstance(content, list):
+                    # Check if this is a tool_result list
+                    has_tool_result = any(
+                        (isinstance(b, dict) and b.get("type") == "tool_result") for b in content
+                    )
+                    if has_tool_result:
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                tc_content = block.get("content", "")
+                                # Handle content that is a list (e.g. with image blocks)
+                                if isinstance(tc_content, list):
+                                    parts = []
+                                    for part in tc_content:
+                                        if isinstance(part, dict) and part.get("type") == "image":
+                                            src = part.get("source", {})
+                                            data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                                            parts.append({
+                                                "type": "image_url",
+                                                "image_url": {"url": data_url},
+                                            })
+                                        elif isinstance(part, dict) and part.get("type") == "text":
+                                            parts.append({"type": "text", "text": part.get("text", "")})
+                                        else:
+                                            parts.append({"type": "text", "text": str(part)})
+                                    result.append({
+                                        "role": "tool",
+                                        "tool_call_id": block.get("tool_use_id", ""),
+                                        "content": parts,
+                                    })
+                                else:
+                                    result.append({
+                                        "role": "tool",
+                                        "tool_call_id": block.get("tool_use_id", ""),
+                                        "content": str(tc_content) if tc_content else "",
+                                    })
+                    else:
+                        # User message with text + images
+                        parts = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                if block.get("type") == "text":
+                                    parts.append({"type": "text", "text": block.get("text", "")})
+                                elif block.get("type") == "image":
+                                    src = block.get("source", {})
+                                    data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                                    parts.append({
+                                        "type": "image_url",
+                                        "image_url": {"url": data_url},
+                                    })
+                            elif isinstance(block, str):
+                                parts.append({"type": "text", "text": block})
+                        result.append({"role": "user", "content": parts})
+
+            elif role == "assistant":
+                if isinstance(content, str):
+                    result.append({"role": "assistant", "content": content})
+                elif isinstance(content, list):
+                    # Collect text and tool_use blocks
+                    text_parts = []
+                    tool_calls = []
+                    for block in content:
+                        # Handle both Pydantic objects and dicts
+                        btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+                        if btype == "text":
+                            t = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else "")
+                            if t:
+                                text_parts.append(t)
+                        elif btype == "tool_use":
+                            bid = getattr(block, "id", None) or (block.get("id") if isinstance(block, dict) else "")
+                            bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
+                            binput = getattr(block, "input", None) or (block.get("input") if isinstance(block, dict) else {})
+                            tool_calls.append({
+                                "id": bid,
+                                "type": "function",
+                                "function": {
+                                    "name": bname,
+                                    "arguments": json.dumps(binput),
+                                },
+                            })
+                        # Skip thinking/redacted_thinking blocks
+                    assistant_msg = {"role": "assistant"}
+                    combined_text = "\n".join(text_parts)
+                    if tool_calls:
+                        assistant_msg["content"] = combined_text or None
+                        assistant_msg["tool_calls"] = tool_calls
+                    else:
+                        assistant_msg["content"] = combined_text
+                    result.append(assistant_msg)
+
+        return result
+
+    def _stream_openai(self, api_kwargs, label_emitted):
+        """Stream an OpenAI chat completion, accumulating text and tool calls.
+        Returns (full_text, stop_reason, content_blocks, had_thinking, label_emitted)."""
+        full_text = ""
+        had_thinking = False
+        tool_calls_acc = {}  # index -> {id, name, arguments_str}
+        in_thinking = False
+
+        response = self.openai_client.chat.completions.create(**api_kwargs)
+
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            finish_reason = chunk.choices[0].finish_reason
+
+            # Handle reasoning_content for o-series models
+            reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+            if reasoning:
+                if not in_thinking:
+                    in_thinking = True
+                    had_thinking = True
+                    self.queue.put({"type": "thinking_start"})
+                self.queue.put({"type": "thinking_delta", "content": reasoning})
+
+            # Handle regular content
+            if delta.content:
+                if in_thinking:
+                    self.queue.put({"type": "thinking_end"})
+                    in_thinking = False
+                if not label_emitted:
+                    self.queue.put({"type": "label"})
+                    label_emitted = True
+                full_text += delta.content
+                self.queue.put({"type": "text_delta", "content": delta.content})
+
+            # Handle tool calls (incremental)
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
+                    if tc.id:
+                        tool_calls_acc[idx]["id"] = tc.id
+                    if tc.function:
+                        if tc.function.name:
+                            tool_calls_acc[idx]["name"] = tc.function.name
+                        if tc.function.arguments:
+                            tool_calls_acc[idx]["arguments"] += tc.function.arguments
+
+        # End any open thinking block
+        if in_thinking:
+            self.queue.put({"type": "thinking_end"})
+
+        # Determine stop reason
+        stop_reason = "end_turn"
+        if tool_calls_acc:
+            stop_reason = "tool_use"
+
+        # Build content blocks in Anthropic-like format
+        content_blocks = []
+        if full_text:
+            content_blocks.append({"type": "text", "text": full_text})
+        for idx in sorted(tool_calls_acc.keys()):
+            tc = tool_calls_acc[idx]
+            try:
+                parsed_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+            except json.JSONDecodeError:
+                parsed_args = {"_raw": tc["arguments"]}
+            content_blocks.append({
+                "type": "tool_use",
+                "id": tc["id"],
+                "name": tc["name"],
+                "input": parsed_args,
+            })
+
+        return full_text, stop_reason, content_blocks, had_thinking, label_emitted
+
+    def _fetch_openai_models(self):
+        """Fetch available OpenAI chat models."""
+        if not self.openai_client:
+            return list(OPENAI_FALLBACK_MODELS)
+        try:
+            response = self.openai_client.models.list()
+            chat_prefixes = ("gpt-4", "gpt-3.5", "o1", "o3", "o4", "chatgpt")
+            exclude_keywords = ("realtime", "audio", "tts", "whisper", "dall-e",
+                                "embedding", "moderation", "instruct", "search")
+            model_ids = []
+            for m in response.data:
+                mid = m.id
+                if not any(mid.startswith(p) for p in chat_prefixes):
+                    continue
+                if any(kw in mid for kw in exclude_keywords):
+                    continue
+                model_ids.append(mid)
+            model_ids.sort()
+            self._openai_model_display_names = {mid: mid for mid in model_ids}
+            return model_ids if model_ids else list(OPENAI_FALLBACK_MODELS)
+        except Exception:
+            self._openai_model_display_names = {}
+            return list(OPENAI_FALLBACK_MODELS)
+
+    def _fetch_models_for_provider(self):
+        """Fetch models for the current provider."""
+        if self.provider == "OpenAI":
+            return self._fetch_openai_models()
+        return self._fetch_available_models()
+
+    def _is_openai_reasoning_model(self, model_id=None):
+        """Check if the model is an OpenAI reasoning model (o-series)."""
+        mid = model_id or self.model
+        return any(mid.startswith(p) for p in OPENAI_REASONING_PREFIXES)
 
     def open_skills_editor(self):
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
@@ -1841,6 +2159,7 @@ class App:
             "messages": self._serialize_messages(),
             "system_prompt": self.system_prompt,
             "agent_instruction_name": self.agent_instruction_name,
+            "provider": self.provider,
             "model": self.model,
             "temperature": self.temperature,
             "thinking_enabled": self.thinking_enabled,
@@ -1989,6 +2308,7 @@ class App:
         self.streaming = True
         self._start_button.config(state="disabled")
         self._stop_button.config(state="normal")
+        self._provider_combo.config(state="disabled")
 
         thread = threading.Thread(
             target=self.stream_worker, args=(list(self.messages),), daemon=True
@@ -2897,24 +3217,52 @@ class App:
             if isinstance(content, list):
                 _truncate_images(content)
 
-        payload = {
-            "model": self.model,
-            "stream": True,
-            "system": self._build_system_prompt(),
-            "tools": self._get_tools(),
-            "messages": display_msgs,
-        }
-        if self.thinking_enabled:
-            support = self._model_supports_thinking()
-            payload["max_tokens"] = MAX_TOKENS_THINKING
-            if support == "adaptive":
-                payload["thinking"] = {"type": "adaptive"}
-                payload["output_config"] = {"effort": self.thinking_effort}
-            elif support == "manual":
-                payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+        if self.provider == "OpenAI":
+            system_prompt = self._build_system_prompt()
+            tools = self._get_tools()
+            openai_tools = self._tools_to_openai(tools) if tools else None
+            openai_messages = self._messages_to_openai(display_msgs, system_prompt)
+            # Truncate image_url data in OpenAI messages
+            for msg in openai_messages:
+                c = msg.get("content")
+                if isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and part.get("type") == "image_url":
+                            url = part.get("image_url", {}).get("url", "")
+                            if url.startswith("data:"):
+                                part["image_url"]["url"] = url[:60] + "...[truncated]"
+            payload = {
+                "model": self.model,
+                "stream": True,
+                "messages": openai_messages,
+                "max_completion_tokens": OPENAI_MAX_TOKENS,
+            }
+            if openai_tools:
+                payload["tools"] = openai_tools
+            is_reasoning = self._is_openai_reasoning_model()
+            if is_reasoning and self.thinking_enabled:
+                payload["reasoning"] = {"effort": self.thinking_effort}
+            elif not is_reasoning:
+                payload["temperature"] = self.temperature
         else:
-            payload["max_tokens"] = MAX_TOKENS
-            payload["temperature"] = self.temperature
+            payload = {
+                "model": self.model,
+                "stream": True,
+                "system": self._build_system_prompt(),
+                "tools": self._get_tools(),
+                "messages": display_msgs,
+            }
+            if self.thinking_enabled:
+                support = self._model_supports_thinking()
+                payload["max_tokens"] = MAX_TOKENS_THINKING
+                if support == "adaptive":
+                    payload["thinking"] = {"type": "adaptive"}
+                    payload["output_config"] = {"effort": self.thinking_effort}
+                elif support == "manual":
+                    payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+            else:
+                payload["max_tokens"] = MAX_TOKENS
+                payload["temperature"] = self.temperature
         return json.dumps(payload, indent=2)
 
     def _get_tools(self):
@@ -3140,6 +3488,137 @@ class App:
         else:
             return f"Unknown tool: {block.name}"
 
+    def _stream_anthropic_call(self, messages, max_retries, label_emitted):
+        """Execute one Anthropic API call with streaming and retry logic.
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
+        full_text = ""
+        had_thinking = False
+
+        api_kwargs = {
+            "model": self.model,
+            "system": self._build_system_prompt(),
+            "messages": messages,
+            "tools": self._get_tools(),
+        }
+        if self.thinking_enabled:
+            support = self._model_supports_thinking()
+            api_kwargs["max_tokens"] = MAX_TOKENS_THINKING
+            if support == "adaptive":
+                api_kwargs["thinking"] = {"type": "adaptive"}
+                api_kwargs["output_config"] = {"effort": self.thinking_effort}
+            elif support == "manual":
+                api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+        else:
+            api_kwargs["max_tokens"] = MAX_TOKENS
+            api_kwargs["temperature"] = self.temperature
+
+        for attempt in range(max_retries):
+            try:
+                with self.client.messages.stream(**api_kwargs) as stream:
+                    in_thinking = False
+                    for event in stream:
+                        if event.type == "content_block_start":
+                            block = event.content_block
+                            if hasattr(block, "type") and block.type == "thinking":
+                                in_thinking = True
+                                had_thinking = True
+                                self.queue.put({"type": "thinking_start"})
+                            elif hasattr(block, "type") and block.type == "text":
+                                if had_thinking and in_thinking:
+                                    self.queue.put({"type": "thinking_end"})
+                                    in_thinking = False
+                                if not label_emitted:
+                                    self.queue.put({"type": "label"})
+                                    label_emitted = True
+                        elif event.type == "content_block_delta":
+                            delta = event.delta
+                            if hasattr(delta, "type") and delta.type == "thinking_delta":
+                                self.queue.put({"type": "thinking_delta", "content": delta.thinking})
+                            elif hasattr(delta, "type") and delta.type == "text_delta":
+                                full_text += delta.text
+                                self.queue.put({"type": "text_delta", "content": delta.text})
+                        elif event.type == "content_block_stop":
+                            if in_thinking:
+                                self.queue.put({"type": "thinking_end"})
+                                in_thinking = False
+                    final_message = stream.get_final_message()
+                break  # success
+            except anthropic.RateLimitError as e:
+                if attempt < max_retries - 1:
+                    wait = min(2 ** attempt * 5, 60)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                    full_text = ""
+                else:
+                    raise
+            except anthropic.APIStatusError as e:
+                if e.status_code == 529 and attempt < max_retries - 1:
+                    wait = min(2 ** attempt * 10, 90)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                    full_text = ""
+                else:
+                    raise
+
+        return final_message.stop_reason, final_message.content, full_text, had_thinking, label_emitted
+
+    def _stream_openai_call(self, messages, max_retries, label_emitted):
+        """Execute one OpenAI API call with streaming and retry logic.
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
+        system_prompt = self._build_system_prompt()
+        tools = self._get_tools()
+        openai_tools = self._tools_to_openai(tools) if tools else None
+        openai_messages = self._messages_to_openai(messages, system_prompt)
+        is_reasoning = self._is_openai_reasoning_model()
+
+        api_kwargs = {
+            "model": self.model,
+            "messages": openai_messages,
+            "stream": True,
+            "max_completion_tokens": OPENAI_MAX_TOKENS,
+        }
+        if openai_tools:
+            api_kwargs["tools"] = openai_tools
+        if is_reasoning:
+            if self.thinking_enabled:
+                api_kwargs["reasoning"] = {"effort": self.thinking_effort}
+        else:
+            api_kwargs["temperature"] = self.temperature
+
+        for attempt in range(max_retries):
+            try:
+                full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
+                    self._stream_openai(api_kwargs, label_emitted)
+                break  # success
+            except openai.RateLimitError:
+                if attempt < max_retries - 1:
+                    wait = min(2 ** attempt * 5, 60)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                else:
+                    raise
+            except openai.APIError as e:
+                if attempt < max_retries - 1 and getattr(e, 'status_code', 0) >= 500:
+                    wait = min(2 ** attempt * 10, 90)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                else:
+                    raise
+
+        return stop_reason, content_blocks, full_text, had_thinking, label_emitted
+
     def stream_worker(self, messages):
         try:
             # Sync temperature from spinbox
@@ -3165,93 +3644,34 @@ class App:
                 self.queue.put({"type": "call_counter", "content": call_num})
                 self.queue.put({"type": "debug", "content": payload_text})
 
-                full_text = ""
-                had_thinking = False
                 max_retries = 10
 
-                api_kwargs = {
-                    "model": self.model,
-                    "system": self._build_system_prompt(),
-                    "messages": messages,
-                    "tools": self._get_tools(),
-                }
-                if self.thinking_enabled:
-                    support = self._model_supports_thinking()
-                    api_kwargs["max_tokens"] = MAX_TOKENS_THINKING
-                    if support == "adaptive":
-                        api_kwargs["thinking"] = {"type": "adaptive"}
-                        api_kwargs["output_config"] = {"effort": self.thinking_effort}
-                    elif support == "manual":
-                        api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+                # Dispatch to provider-specific streaming
+                if self.provider == "OpenAI":
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
+                        self._stream_openai_call(messages, max_retries, label_emitted)
                 else:
-                    api_kwargs["max_tokens"] = MAX_TOKENS
-                    api_kwargs["temperature"] = self.temperature
-
-                for attempt in range(max_retries):
-                    try:
-                        with self.client.messages.stream(**api_kwargs) as stream:
-                            in_thinking = False
-                            for event in stream:
-                                if event.type == "content_block_start":
-                                    block = event.content_block
-                                    if hasattr(block, "type") and block.type == "thinking":
-                                        in_thinking = True
-                                        had_thinking = True
-                                        self.queue.put({"type": "thinking_start"})
-                                    elif hasattr(block, "type") and block.type == "text":
-                                        if had_thinking and in_thinking:
-                                            self.queue.put({"type": "thinking_end"})
-                                            in_thinking = False
-                                        if not label_emitted:
-                                            self.queue.put({"type": "label"})
-                                            label_emitted = True
-                                elif event.type == "content_block_delta":
-                                    delta = event.delta
-                                    if hasattr(delta, "type") and delta.type == "thinking_delta":
-                                        self.queue.put({"type": "thinking_delta", "content": delta.thinking})
-                                    elif hasattr(delta, "type") and delta.type == "text_delta":
-                                        full_text += delta.text
-                                        self.queue.put({"type": "text_delta", "content": delta.text})
-                                elif event.type == "content_block_stop":
-                                    if in_thinking:
-                                        self.queue.put({"type": "thinking_end"})
-                                        in_thinking = False
-                            final_message = stream.get_final_message()
-                        break  # success
-                    except anthropic.RateLimitError as e:
-                        if attempt < max_retries - 1:
-                            wait = min(2 ** attempt * 5, 60)
-                            self.queue.put({
-                                "type": "tool_info",
-                                "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                            })
-                            time.sleep(wait)
-                            full_text = ""
-                        else:
-                            raise
-                    except anthropic.APIStatusError as e:
-                        if e.status_code == 529 and attempt < max_retries - 1:
-                            wait = min(2 ** attempt * 10, 90)
-                            self.queue.put({
-                                "type": "tool_info",
-                                "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                            })
-                            time.sleep(wait)
-                            full_text = ""
-                        else:
-                            raise
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
+                        self._stream_anthropic_call(messages, max_retries, label_emitted)
 
                 if self.stop_requested:
                     self.queue.put({"type": "tool_info", "content": "Agent stopped by user.\n"})
                     break
 
-                if final_message.stop_reason == "tool_use":
-                    messages.append({"role": "assistant", "content": final_message.content})
+                if stop_reason == "tool_use":
+                    messages.append({"role": "assistant", "content": content_blocks})
+
+                    # Wrap OpenAI dict blocks in _ToolBlock for uniform attribute access
+                    if self.provider == "OpenAI":
+                        tool_blocks = [
+                            _ToolBlock(b["name"], b["id"], b["input"])
+                            for b in content_blocks if isinstance(b, dict) and b.get("type") == "tool_use"
+                        ]
+                    else:
+                        tool_blocks = [b for b in content_blocks if b.type == "tool_use"]
 
                     # -- Parallel-safe tools (network I/O, pure lookups) --
                     PARALLEL_SAFE = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
-
-                    tool_blocks = [b for b in final_message.content if b.type == "tool_use"]
 
                     # Log all tool calls up front
                     for block in tool_blocks:
@@ -3406,6 +3826,7 @@ class App:
                     self.streaming = False
                     self._start_button.config(state="normal")
                     self._stop_button.config(state="disabled")
+                    self._provider_combo.config(state="readonly")
                 elif msg["type"] == "error":
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(
@@ -3416,6 +3837,7 @@ class App:
                     self.streaming = False
                     self._start_button.config(state="normal")
                     self._stop_button.config(state="disabled")
+                    self._provider_combo.config(state="readonly")
         except queue.Empty:
             pass
         self.root.after(50, self.check_queue)

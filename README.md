@@ -5,7 +5,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 ## Contents
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
-- **MyAgent.py** — Autonomous Claude agent GUI application (see details below)
+- **MyAgent.py** — Autonomous AI agent GUI application supporting Anthropic and OpenAI providers (see details below)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
@@ -345,12 +345,13 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser) de
 
 - Windows 10/11
 - Python 3 with tkinter (included in standard library)
-- An Anthropic API key set as the `ANTHROPIC_API_KEY` environment variable
+- At least one of `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` environment variables (MyAgent supports both; SelfBot requires Anthropic)
 
 #### Python Dependencies
 
 ```
 anthropic
+openai
 ddgs
 httpx
 opencv-python
@@ -379,10 +380,11 @@ source .venv/Scripts/activate   # Git Bash
 # or: .venv\Scripts\activate    # CMD / PowerShell
 
 # Install dependencies
-pip install anthropic ddgs httpx opencv-python Pillow playwright pyautogui pygetwindow pyperclip winocr
+pip install anthropic openai ddgs httpx opencv-python Pillow playwright pyautogui pygetwindow pyperclip winocr
 
-# Set your API key (or add to your environment permanently)
+# Set your API key(s) (or add to your environment permanently)
 export ANTHROPIC_API_KEY="your-key-here"
+export OPENAI_API_KEY="your-key-here"      # optional, for MyAgent OpenAI support
 ```
 
 The `.venv` directory is gitignored and must be recreated on each machine. All runtime files (`app_state.json`, `skills.json`, `saved_chats/`, etc.) are created automatically on first run.
@@ -431,16 +433,16 @@ The application is a single-file tkinter app structured around the `App` class:
 
 ---
 
-## MyAgent.py — Autonomous Claude Task Agent
+## MyAgent.py — Autonomous AI Task Agent
 
-A fire-and-forget autonomous task runner built with tkinter that connects to the Anthropic API. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Agent Instruction** (a task description, optionally with images), press **START**, and Claude autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"Claude Agent"**.
+A fire-and-forget autonomous task runner built with tkinter that supports both **Anthropic** (Claude) and **OpenAI** (GPT-4.1, o4-mini, etc.) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Agent Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"Claude Agent"** (with **"[OpenAI]"** appended when using the OpenAI provider).
 
 ### How the Agentic Loop Works
 
 1. **Configure** — Write or load an Agent Instruction describing the task (e.g., "Search for today's top tech news and summarise it", "Check disk space and clean up temp files"). Optionally attach reference images.
 2. **Press START** — The instruction is injected as the first user message and a background thread begins the agentic loop.
 3. **Loop** — `stream_worker()` runs a `while True:` loop:
-   - Sends the full message history to the Anthropic API via streaming.
+   - Sends the full message history to the selected API provider via streaming.
    - Streams the response token-by-token into the display.
    - If the API returns `stop_reason: "tool_use"`: executes all requested tools with **parallel execution** for network I/O tools (including `user_prompt`, which pauses the loop to show a dialog and wait for user input), appends the results to the conversation, and **loops again** (next API call with updated history).
    - If the API returns `stop_reason: "end_turn"`: the task is complete — the loop exits.
@@ -457,7 +459,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | Control | Description |
 |---|---|
 | **Instruction Name** entry | Name for saving/loading instructions |
-| **SAVE** button | Save the instruction (text, images, tool toggles, model parameters, skill modes) to disk and make it the active instruction |
+| **SAVE** button | Save the instruction (text, images, tool toggles, provider, model parameters, skill modes) to disk and make it the active instruction |
 | **DELETE** button | Remove the named instruction from disk |
 | **CLEAR** button | Reset the editor — clears text, images, and tool toggles |
 | **Load Instruction** dropdown | Select a previously saved instruction — populates the editor fields for preview |
@@ -483,24 +485,32 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Tool toggles persist with instructions** — Each saved instruction stores its Desktop and Browser checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
 
-**Model parameters persist with instructions** — Each saved instruction also stores the current model, temperature, and thinking settings (enabled, effort level, token budget). Loading an instruction from the dropdown immediately restores these model parameters to the main toolbar.
+**Provider and model parameters persist with instructions** — Each saved instruction stores the provider (Anthropic or OpenAI), model, temperature, and thinking settings. Loading an instruction from the dropdown immediately restores the provider, refreshes the model list, and sets the model and thinking parameters on the main toolbar.
 
-**Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled. This effectively makes each instruction a self-contained task profile — text, images, tool categories, model configuration, and skills environment — so different tasks can target different models, settings, and skill sets.
+**Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled. This effectively makes each instruction a self-contained task profile — text, images, tool categories, provider, model configuration, and skills environment — so different tasks can target different providers, models, settings, and skill sets.
 
 When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
 
 A "Default" instruction is automatically created on first run if missing. Old-format instruction files (plain string values) are auto-migrated to the new dict format that includes image data.
 
-#### Model Selection, Temperature & Extended Thinking
+#### Provider Selection & Model Selection
 
-Identical to SelfBot.py — a **Model** dropdown fetches available Claude models live from the Anthropic API on startup (falling back to a hardcoded list), a **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox with **Strength** combobox enables extended thinking.
+A **Provider** combobox on the model toolbar switches between **Anthropic** and **OpenAI**. Only providers with valid API keys are shown (set `ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY`). The provider combobox is **locked (disabled) while the agent is running** to prevent mid-run changes.
 
-| Model type | Thinking mode | Strength control |
-|---|---|---|
-| **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
-| **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+When switching providers, the **Model** dropdown refreshes with available models for that provider:
+- **Anthropic** — Fetches models live from the Anthropic API (falls back to Claude Sonnet 4.5, Opus 4.6, Haiku 4.5)
+- **OpenAI** — Fetches chat-compatible models from the OpenAI API (falls back to GPT-4.1, GPT-4.1-mini, o4-mini, GPT-4.1-nano)
 
-All model, temperature, and thinking settings are persisted across sessions in `agent_state.json`.
+A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox with **Strength** combobox enables extended thinking/reasoning.
+
+| Provider | Model type | Thinking mode | Strength control |
+|---|---|---|---|
+| Anthropic | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
+| Anthropic | **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+| OpenAI | **Reasoning** (o1, o3, o4 series) | `reasoning: {effort: ...}` | Effort level: low, medium, high |
+| OpenAI | **Standard** (GPT-4.1, etc.) | Not supported | N/A |
+
+Provider, model, temperature, and thinking settings are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
 
 #### Tool Use
 
@@ -580,8 +590,8 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 
 #### App State Persistence
 
-- Last-used instruction name, model, temperature, thinking settings, main window geometry, and dialog geometries are saved to `agent_state.json`
-- On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser toggles, and model parameters) automatically
+- Provider, last-used instruction name, model, temperature, thinking settings, main window geometry, and dialog geometries are saved to `agent_state.json`
+- On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser toggles, provider, and model parameters) automatically
 - **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), and **PowerShell Confirm** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to `agent_state.json` and is restored the next time that dialog is opened
 - **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to defaults so windows are never lost off-screen
 
@@ -599,7 +609,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 
 | Row | Contents |
 |---|---|
-| **Row 0** | Model toolbar: Model dropdown, Temp spinbox, Thinking checkbox, Strength combobox |
+| **Row 0** | Model toolbar: Provider dropdown, Model dropdown, Temp spinbox, Thinking checkbox, Strength combobox |
 | **Row 1** | Chat toolbar: Agent Instruction button, Save Chat as entry, START button (green), STOP button (red) |
 | **Row 2** | Chat display: read-only text area with scrollbar, colour-coded output |
 | **Row 3** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, PS Safety button |
@@ -620,7 +630,8 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 | **State file** | `app_state.json` / `app_state_2.json` | `agent_state.json` |
 | **Instruction file** | `system_prompts.json` | `agent_instructions.json` |
 | **Chat loading** | Save and load chats | Save only (no load-back into UI) |
-| **Window title** | "Claude SelfBot" | "Claude Agent" |
+| **API providers** | Anthropic only | Anthropic + OpenAI (switchable via Provider combobox) |
+| **Window title** | "Claude SelfBot" | "Claude Agent" (+ "[OpenAI]" when using OpenAI) |
 
 ### Running
 
@@ -636,12 +647,13 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 ### Architecture
 
-The application is a single-file (~3,450 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+The application is a single-file (~3,700 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
-- **UI Layout** — Grid-based layout with 4 rows: model + temperature + thinking toolbar (row 0), chat toolbar with Agent Instruction button, save-chat entry, and START/STOP buttons (row 1), chat display + scrollbar (row 2), checkbox row with Debug/Tool Calls/Activity/Show Thinking toggles and PS Safety button (row 3). Image attachments, Desktop/Browser tool toggles, and the Skills button are managed inside the Agent Instruction editor window
+- **UI Layout** — Grid-based layout with 4 rows: provider + model + temperature + thinking toolbar (row 0), chat toolbar with Agent Instruction button, save-chat entry, and START/STOP buttons (row 1), chat display + scrollbar (row 2), checkbox row with Debug/Tool Calls/Activity/Show Thinking toggles and PS Safety button (row 3). Image attachments, Desktop/Browser tool toggles, and the Skills button are managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
-- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that sends messages to the API, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, model parameters, and skill modes), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns, and `skills.json` (shared with SelfBot) for the skills library
+- **Dual-Provider Support** — A Provider combobox switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary via `_messages_to_openai()`, `_tools_to_openai()`, and `_stream_openai()`. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers
+- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()` or `_stream_openai_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser toggle state, provider, model parameters, and skill modes), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` for user preferences, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns, and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Three global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot, plus a **PS Safety** dialog that allows individual confirm patterns to be disabled. Disabled patterns bypass the confirmation dialog and emit a `"warning"` queue message (always displayed, not gated by the Activity checkbox). Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
