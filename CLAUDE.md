@@ -26,7 +26,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3030 lines); fire-and-forget task runner with an agentic tool-use loop
+- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3450 lines); fire-and-forget task runner with an agentic tool-use loop
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
@@ -86,9 +86,9 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Parallel tool execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering.
 
-**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states and model parameters (model, temperature, thinking settings) are saved per-instruction and restored on load.
+**Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int, skill_modes: {skill_name: mode_string}}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states, model parameters (model, temperature, thinking settings), and skill modes are saved per-instruction and restored on load. Skills not present in the snapshot default to disabled; deleted skills are silently skipped.
 
-**Editor draft/commit model** — The instruction editor works on temporary copies (`_editor_images`, `_editor_desktop`, `_editor_browser`). Changes are only committed to live state on SAVE (persists to disk) or Apply (session-only). Closing the editor with [X] discards uncommitted changes.
+**Editor draft/commit model** — The instruction editor works on temporary copies (`_editor_images`, `_editor_desktop`, `_editor_browser`). Changes are only committed to live state on SAVE (persists to disk) or Apply (session-only). Closing the editor with [X] discards uncommitted changes. Model params and skill modes are restored immediately on instruction selection (like live state), matching the pattern of being environment-level settings rather than draft state.
 
 **Threading model** — Same as SelfBot: background daemon thread for API calls, `queue.Queue` for events, main thread polls every 50ms via `root.after()`.
 
