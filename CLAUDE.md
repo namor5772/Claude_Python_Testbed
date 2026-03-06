@@ -82,6 +82,10 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Dual-provider support** — A Provider combobox on the model toolbar switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary only via `_messages_to_responses()`, `_tools_to_responses()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, and `function_call`/`function_call_output` items instead of Chat Completions. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers. Provider selection is saved per-instruction and in `agent_state.json`. The provider combobox is locked (disabled) while the agent is running.
 
+**OpenAI model filtering** — `_fetch_openai_models()` filters the API model list to Responses API compatible families only via `OPENAI_RESPONSES_PREFIXES`: `gpt-4o`, `gpt-4.1`, `gpt-4.5`, `gpt-5`, `o1`, `o3`, `o4`. Non-chat model types (embedding, audio, search, realtime, preview, transcribe, tts) are skipped first. Legacy models (gpt-3.5-turbo, base gpt-4, gpt-4-turbo) are excluded as they don't support the Responses API. `OPENAI_REASONING_PREFIXES` (`o1`, `o3`, `o4`, `gpt-5`) determines which models get `reasoning` params instead of `temperature`. The OpenAI client uses `httpx.Timeout(600.0, connect=10.0, read=120.0)` to prevent indefinite hangs on unresponsive models.
+
+**Temperature/thinking UI gating** — OpenAI reasoning models don't accept `temperature`, so the Temp spinner stays disabled for these models even when thinking is unchecked. This is enforced in `_on_thinking_toggled()`, `_on_model_selected()`, and `_restore_model_params()`. Anthropic models always allow temperature when thinking is off.
+
 **Agentic loop** — `stream_worker()` runs a `while True:` loop: dispatches to `_stream_anthropic_call()` or `_stream_responses_call()` based on the provider, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
 
 **Tool system** — Identical three-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`) and `_get_tools()` assembler, plus a `user_prompt` core tool that pauses the loop and shows a modal dialog to collect user input. Tool dispatch is handled by the `_execute_tool()` helper method. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless.
@@ -102,7 +106,9 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **No dual-instance support** — Strictly single-instance. No mutex, no lock file, no cross-instance message passing.
 
-**API retry logic** — Same as SelfBot: up to 10 retries with exponential backoff capped at 60s (429) or 90s (529).
+**API retry logic** — Same as SelfBot: up to 10 retries with exponential backoff capped at 60s (429) or 90s (529). OpenAI additionally catches `APITimeoutError` (from the 120s read timeout) and retries immediately without backoff.
+
+**State restore fallback** — `_restore_model_params()` validates that the saved model exists in the saved provider's model list. If mismatched (e.g., Anthropic model saved with OpenAI provider due to a race in auto-save), falls back to the first available model for that provider.
 
 ## Architecture (Account_Activity_WBC.py)
 

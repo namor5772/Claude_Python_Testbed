@@ -499,7 +499,7 @@ A **Provider** combobox on the model toolbar switches between **Anthropic** and 
 
 When switching providers, the **Model** dropdown refreshes with available models for that provider:
 - **Anthropic** — Fetches models live from the Anthropic API (falls back to Claude Sonnet 4.5, Opus 4.6, Haiku 4.5)
-- **OpenAI** — Fetches models from the OpenAI API via the Responses API (falls back to GPT-5, GPT-5-mini, GPT-4.1, GPT-4.1-mini, o4-mini)
+- **OpenAI** — Fetches models from the OpenAI API, filtered to Responses API compatible families only: `gpt-4o`, `gpt-4.1`, `gpt-4.5`, `gpt-5`, `o1`, `o3`, `o4` (falls back to GPT-5, GPT-5-mini, GPT-4.1, GPT-4.1-mini, o4-mini). Legacy models (gpt-3.5-turbo, base gpt-4, gpt-4-turbo) are excluded as they don't support the Responses API
 
 A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox with **Strength** combobox enables extended thinking/reasoning.
 
@@ -507,8 +507,10 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 |---|---|---|---|
 | Anthropic | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
 | Anthropic | **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
-| OpenAI | **Reasoning** (o3, o4, gpt-5 series) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: low, medium, high |
-| OpenAI | **Standard** (GPT-4.1, etc.) | Not supported | N/A |
+| OpenAI | **Reasoning** (o1, o3, o4, gpt-5 series) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: low, medium, high |
+| OpenAI | **Standard** (GPT-4o, GPT-4.1, etc.) | Not supported | N/A |
+
+**Temperature and thinking controls are model-aware** — OpenAI reasoning models (o1/o3/o4/gpt-5) don't accept a `temperature` parameter, so the Temp spinner stays disabled for these models even when thinking is unchecked. Standard OpenAI models show the Temp spinner normally. This is enforced across all code paths: model selection, thinking toggle, and state restore.
 
 Provider, model, temperature, and thinking settings are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
 
@@ -591,13 +593,15 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 #### App State Persistence
 
 - Provider, last-used instruction name, model, temperature, thinking settings, main window geometry, and dialog geometries are saved to `agent_state.json`
-- On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser toggles, provider, and model parameters) automatically
+- On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
 - **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), and **PowerShell Confirm** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to `agent_state.json` and is restored the next time that dialog is opened
 - **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to defaults so windows are never lost off-screen
 
 #### Rate-Limit Retry
 
 API calls automatically retry up to 10 times on transient errors with exponential backoff. Rate-limit errors (HTTP 429) use backoff capped at 60 seconds. Overload errors (HTTP 529) use backoff capped at 90 seconds. Retry status messages appear in the output as grey italicised lines.
+
+**OpenAI stream timeout** — The OpenAI client is configured with a 120-second read timeout (`httpx.Timeout(600.0, connect=10.0, read=120.0)`). If no data arrives for 2 minutes during streaming, the connection is aborted and retried. This prevents the app from hanging indefinitely on unresponsive models. Timeout errors (`APITimeoutError`) are retried immediately (no backoff) since the issue is typically a dropped connection rather than server overload.
 
 #### Graceful Shutdown
 
