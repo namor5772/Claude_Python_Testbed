@@ -678,10 +678,9 @@ ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
 MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
-OPENAI_FALLBACK_MODELS = ["gpt-4.1", "gpt-4.1-mini", "o4-mini", "gpt-4.1-nano"]
+OPENAI_FALLBACK_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
-OPENAI_MAX_TOKENS = 8192
-OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4")
+OPENAI_REASONING_PREFIXES = ("o3", "o4", "gpt-5")
 PROVIDERS = ["Anthropic", "OpenAI"]
 DEFAULT_GEOMETRY = "1050x930"
 
@@ -1700,23 +1699,29 @@ class App:
             return self._openai_model_display_names.get(model_id, model_id)
         return self._model_display_names.get(model_id, model_id)
 
-    def _tools_to_openai(self, tools):
-        """Convert Anthropic tool schemas to OpenAI function-calling format."""
+    def _tools_to_responses(self, tools):
+        """Convert Anthropic tool schemas to OpenAI Responses API format."""
         result = []
         for tool in tools:
             result.append({
                 "type": "function",
-                "function": {
-                    "name": tool["name"],
-                    "description": tool.get("description", ""),
-                    "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
-                },
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+                "strict": False,
             })
         return result
 
-    def _messages_to_openai(self, messages, system_prompt):
-        """Convert internal Anthropic-format messages to OpenAI chat format."""
-        result = [{"role": "system", "content": system_prompt}]
+    def _messages_to_responses(self, messages):
+        """Convert internal Anthropic-format messages to Responses API input format.
+
+        Key differences from Chat Completions:
+        - No system message (system prompt moves to 'instructions' parameter)
+        - User images use input_text/input_image content types
+        - Assistant tool calls become top-level function_call items
+        - Tool results become top-level function_call_output items
+        """
+        result = []
 
         for msg in messages:
             role = msg["role"]
@@ -1734,6 +1739,7 @@ class App:
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
                                 tc_content = block.get("content", "")
+                                call_id = block.get("tool_use_id", "")
                                 # Handle content that is a list (e.g. with image blocks)
                                 if isinstance(tc_content, list):
                                     parts = []
@@ -1742,23 +1748,23 @@ class App:
                                             src = part.get("source", {})
                                             data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
                                             parts.append({
-                                                "type": "image_url",
-                                                "image_url": {"url": data_url},
+                                                "type": "input_image",
+                                                "image_url": data_url,
                                             })
                                         elif isinstance(part, dict) and part.get("type") == "text":
-                                            parts.append({"type": "text", "text": part.get("text", "")})
+                                            parts.append({"type": "input_text", "text": part.get("text", "")})
                                         else:
-                                            parts.append({"type": "text", "text": str(part)})
+                                            parts.append({"type": "input_text", "text": str(part)})
                                     result.append({
-                                        "role": "tool",
-                                        "tool_call_id": block.get("tool_use_id", ""),
-                                        "content": parts,
+                                        "type": "function_call_output",
+                                        "call_id": call_id,
+                                        "output": parts,
                                     })
                                 else:
                                     result.append({
-                                        "role": "tool",
-                                        "tool_call_id": block.get("tool_use_id", ""),
-                                        "content": str(tc_content) if tc_content else "",
+                                        "type": "function_call_output",
+                                        "call_id": call_id,
+                                        "output": str(tc_content) if tc_content else "",
                                     })
                     else:
                         # User message with text + images
@@ -1766,25 +1772,25 @@ class App:
                         for block in content:
                             if isinstance(block, dict):
                                 if block.get("type") == "text":
-                                    parts.append({"type": "text", "text": block.get("text", "")})
+                                    parts.append({"type": "input_text", "text": block.get("text", "")})
                                 elif block.get("type") == "image":
                                     src = block.get("source", {})
                                     data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
                                     parts.append({
-                                        "type": "image_url",
-                                        "image_url": {"url": data_url},
+                                        "type": "input_image",
+                                        "image_url": data_url,
                                     })
                             elif isinstance(block, str):
-                                parts.append({"type": "text", "text": block})
+                                parts.append({"type": "input_text", "text": block})
                         result.append({"role": "user", "content": parts})
 
             elif role == "assistant":
                 if isinstance(content, str):
-                    result.append({"role": "assistant", "content": content})
+                    result.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
                 elif isinstance(content, list):
-                    # Collect text and tool_use blocks
+                    # Collect text and tool_use blocks separately
                     text_parts = []
-                    tool_calls = []
+                    func_calls = []
                     for block in content:
                         # Handle both Pydantic objects and dicts
                         btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
@@ -1796,75 +1802,76 @@ class App:
                             bid = getattr(block, "id", None) or (block.get("id") if isinstance(block, dict) else "")
                             bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
                             binput = getattr(block, "input", None) or (block.get("input") if isinstance(block, dict) else {})
-                            tool_calls.append({
-                                "id": bid,
-                                "type": "function",
-                                "function": {
-                                    "name": bname,
-                                    "arguments": json.dumps(binput),
-                                },
+                            func_calls.append({
+                                "type": "function_call",
+                                "call_id": bid,
+                                "name": bname,
+                                "arguments": json.dumps(binput),
                             })
                         # Skip thinking/redacted_thinking blocks
-                    assistant_msg = {"role": "assistant"}
                     combined_text = "\n".join(text_parts)
-                    if tool_calls:
-                        assistant_msg["content"] = combined_text or None
-                        assistant_msg["tool_calls"] = tool_calls
-                    else:
-                        assistant_msg["content"] = combined_text
-                    result.append(assistant_msg)
+                    if combined_text:
+                        result.append({"role": "assistant", "content": [{"type": "output_text", "text": combined_text}]})
+                    # Function calls are top-level items in Responses API
+                    result.extend(func_calls)
 
         return result
 
-    def _stream_openai(self, api_kwargs, label_emitted):
-        """Stream an OpenAI chat completion, accumulating text and tool calls.
+    def _stream_responses(self, api_kwargs, label_emitted):
+        """Stream an OpenAI Responses API call, accumulating text and tool calls.
         Returns (full_text, stop_reason, content_blocks, had_thinking, label_emitted)."""
         full_text = ""
         had_thinking = False
-        tool_calls_acc = {}  # index -> {id, name, arguments_str}
+        tool_calls_acc = {}  # output_index -> {call_id, name, arguments}
         in_thinking = False
 
-        response = self.openai_client.chat.completions.create(**api_kwargs)
+        with self.openai_client.responses.stream(**api_kwargs) as stream:
+            for event in stream:
+                # Reasoning summary deltas (thinking)
+                if event.type == "response.reasoning_summary_text.delta":
+                    if not in_thinking:
+                        in_thinking = True
+                        had_thinking = True
+                        self.queue.put({"type": "thinking_start"})
+                    self.queue.put({"type": "thinking_delta", "content": event.delta})
 
-        for chunk in response:
-            if not chunk.choices:
-                continue
-            delta = chunk.choices[0].delta
-            finish_reason = chunk.choices[0].finish_reason
+                elif event.type == "response.reasoning_summary_part.done":
+                    if in_thinking:
+                        self.queue.put({"type": "thinking_end"})
+                        in_thinking = False
 
-            # Handle reasoning_content for o-series models
-            reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-            if reasoning:
-                if not in_thinking:
-                    in_thinking = True
-                    had_thinking = True
-                    self.queue.put({"type": "thinking_start"})
-                self.queue.put({"type": "thinking_delta", "content": reasoning})
+                # Regular text content
+                elif event.type == "response.output_text.delta":
+                    if in_thinking:
+                        self.queue.put({"type": "thinking_end"})
+                        in_thinking = False
+                    if not label_emitted:
+                        self.queue.put({"type": "label"})
+                        label_emitted = True
+                    full_text += event.delta
+                    self.queue.put({"type": "text_delta", "content": event.delta})
 
-            # Handle regular content
-            if delta.content:
-                if in_thinking:
-                    self.queue.put({"type": "thinking_end"})
-                    in_thinking = False
-                if not label_emitted:
-                    self.queue.put({"type": "label"})
-                    label_emitted = True
-                full_text += delta.content
-                self.queue.put({"type": "text_delta", "content": delta.content})
+                # New output item — capture function call name and call_id
+                elif event.type == "response.output_item.added":
+                    item = getattr(event, "item", None)
+                    if item and getattr(item, "type", None) == "function_call":
+                        tool_calls_acc[event.output_index] = {
+                            "call_id": item.call_id,
+                            "name": item.name,
+                            "arguments": "",
+                        }
 
-            # Handle tool calls (incremental)
-            if delta.tool_calls:
-                for tc in delta.tool_calls:
-                    idx = tc.index
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {"id": "", "name": "", "arguments": ""}
-                    if tc.id:
-                        tool_calls_acc[idx]["id"] = tc.id
-                    if tc.function:
-                        if tc.function.name:
-                            tool_calls_acc[idx]["name"] = tc.function.name
-                        if tc.function.arguments:
-                            tool_calls_acc[idx]["arguments"] += tc.function.arguments
+                # Function call argument chunks
+                elif event.type == "response.function_call_arguments.delta":
+                    idx = event.output_index
+                    if idx in tool_calls_acc:
+                        tool_calls_acc[idx]["arguments"] += event.delta
+
+                # Function call arguments complete
+                elif event.type == "response.function_call_arguments.done":
+                    idx = event.output_index
+                    if idx in tool_calls_acc:
+                        tool_calls_acc[idx]["arguments"] = event.arguments
 
         # End any open thinking block
         if in_thinking:
@@ -1887,7 +1894,7 @@ class App:
                 parsed_args = {"_raw": tc["arguments"]}
             content_blocks.append({
                 "type": "tool_use",
-                "id": tc["id"],
+                "id": tc["call_id"],
                 "name": tc["name"],
                 "input": parsed_args,
             })
@@ -1895,20 +1902,37 @@ class App:
         return full_text, stop_reason, content_blocks, had_thinking, label_emitted
 
     def _fetch_openai_models(self):
-        """Fetch available OpenAI chat models."""
+        """Fetch available OpenAI chat models suitable for agentic tool use."""
         if not self.openai_client:
             return list(OPENAI_FALLBACK_MODELS)
         try:
             response = self.openai_client.models.list()
-            chat_prefixes = ("gpt-4", "gpt-3.5", "o1", "o3", "o4", "chatgpt")
+            # Only include model families with reliable tool-calling support
+            chat_prefixes = ("gpt-4", "gpt-5", "o3", "o4")
             exclude_keywords = ("realtime", "audio", "tts", "whisper", "dall-e",
-                                "embedding", "moderation", "instruct", "search")
+                                "embedding", "moderation", "instruct", "search",
+                                "preview", "codex")
             model_ids = []
             for m in response.data:
                 mid = m.id
                 if not any(mid.startswith(p) for p in chat_prefixes):
                     continue
                 if any(kw in mid for kw in exclude_keywords):
+                    continue
+                # Exclude legacy models with small context windows
+                if mid.startswith("gpt-3.5") or mid == "gpt-4":
+                    continue
+                # Exclude superseded older models
+                if mid.startswith("gpt-4-turbo"):
+                    continue
+                # Exclude nano models (too small for agentic reasoning)
+                if mid.endswith("-nano"):
+                    continue
+                # Exclude -pro models (streaming unverified)
+                if mid.endswith("-pro"):
+                    continue
+                # Exclude dated snapshots (e.g. gpt-4-0613, gpt-4o-2024-05-13)
+                if re.search(r'-\d{4}(-\d{2}(-\d{2})?)?$', mid):
                     continue
                 model_ids.append(mid)
             model_ids.sort()
@@ -1925,8 +1949,11 @@ class App:
         return self._fetch_available_models()
 
     def _is_openai_reasoning_model(self, model_id=None):
-        """Check if the model is an OpenAI reasoning model (o-series)."""
+        """Check if the model is an OpenAI reasoning model (o-series or gpt-5+)."""
         mid = model_id or self.model
+        # gpt-5.x-chat-* variants are non-reasoning "instant" models
+        if "-chat" in mid:
+            return False
         return any(mid.startswith(p) for p in OPENAI_REASONING_PREFIXES)
 
     def open_skills_editor(self):
@@ -3220,28 +3247,35 @@ class App:
         if self.provider == "OpenAI":
             system_prompt = self._build_system_prompt()
             tools = self._get_tools()
-            openai_tools = self._tools_to_openai(tools) if tools else None
-            openai_messages = self._messages_to_openai(display_msgs, system_prompt)
-            # Truncate image_url data in OpenAI messages
-            for msg in openai_messages:
-                c = msg.get("content")
+            responses_tools = self._tools_to_responses(tools) if tools else None
+            responses_input = self._messages_to_responses(display_msgs)
+            # Truncate input_image data in Responses API input
+            for item in responses_input:
+                c = item.get("content")
                 if isinstance(c, list):
                     for part in c:
-                        if isinstance(part, dict) and part.get("type") == "image_url":
-                            url = part.get("image_url", {}).get("url", "")
-                            if url.startswith("data:"):
-                                part["image_url"]["url"] = url[:60] + "...[truncated]"
+                        if isinstance(part, dict) and part.get("type") == "input_image":
+                            url = part.get("image_url", "")
+                            if isinstance(url, str) and url.startswith("data:"):
+                                part["image_url"] = url[:60] + "...[truncated]"
+                # Also truncate images in function_call_output
+                if item.get("type") == "function_call_output" and isinstance(item.get("output"), list):
+                    for part in item["output"]:
+                        if isinstance(part, dict) and part.get("type") == "input_image":
+                            url = part.get("image_url", "")
+                            if isinstance(url, str) and url.startswith("data:"):
+                                part["image_url"] = url[:60] + "...[truncated]"
             payload = {
                 "model": self.model,
-                "stream": True,
-                "messages": openai_messages,
-                "max_completion_tokens": OPENAI_MAX_TOKENS,
+                "input": responses_input,
+                "instructions": system_prompt,
+                "store": False,
             }
-            if openai_tools:
-                payload["tools"] = openai_tools
+            if responses_tools:
+                payload["tools"] = responses_tools
             is_reasoning = self._is_openai_reasoning_model()
             if is_reasoning and self.thinking_enabled:
-                payload["reasoning"] = {"effort": self.thinking_effort}
+                payload["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
             elif not is_reasoning:
                 payload["temperature"] = self.temperature
         else:
@@ -3568,33 +3602,32 @@ class App:
 
         return final_message.stop_reason, final_message.content, full_text, had_thinking, label_emitted
 
-    def _stream_openai_call(self, messages, max_retries, label_emitted):
-        """Execute one OpenAI API call with streaming and retry logic.
+    def _stream_responses_call(self, messages, max_retries, label_emitted):
+        """Execute one OpenAI Responses API call with streaming and retry logic.
         Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
-        openai_tools = self._tools_to_openai(tools) if tools else None
-        openai_messages = self._messages_to_openai(messages, system_prompt)
+        responses_tools = self._tools_to_responses(tools) if tools else None
+        responses_input = self._messages_to_responses(messages)
         is_reasoning = self._is_openai_reasoning_model()
 
         api_kwargs = {
             "model": self.model,
-            "messages": openai_messages,
-            "stream": True,
-            "max_completion_tokens": OPENAI_MAX_TOKENS,
+            "input": responses_input,
+            "instructions": system_prompt,
+            "store": False,
         }
-        if openai_tools:
-            api_kwargs["tools"] = openai_tools
-        if is_reasoning:
-            if self.thinking_enabled:
-                api_kwargs["reasoning"] = {"effort": self.thinking_effort}
-        else:
+        if responses_tools:
+            api_kwargs["tools"] = responses_tools
+        if is_reasoning and self.thinking_enabled:
+            api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+        elif not is_reasoning:
             api_kwargs["temperature"] = self.temperature
 
         for attempt in range(max_retries):
             try:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
-                    self._stream_openai(api_kwargs, label_emitted)
+                    self._stream_responses(api_kwargs, label_emitted)
                 break  # success
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
@@ -3649,7 +3682,7 @@ class App:
                 # Dispatch to provider-specific streaming
                 if self.provider == "OpenAI":
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
-                        self._stream_openai_call(messages, max_retries, label_emitted)
+                        self._stream_responses_call(messages, max_retries, label_emitted)
                 else:
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
