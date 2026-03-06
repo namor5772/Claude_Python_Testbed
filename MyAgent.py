@@ -806,6 +806,7 @@ class App:
         self.show_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
+        self._disabled_confirm_patterns = set()
         self._playwright = None
         self._browser = None
         self._page = None
@@ -946,6 +947,9 @@ class App:
             "image_info", foreground="#6a1b9a", font=("Arial", 10, "italic")
         )
         self.chat_display.tag_config(
+            "warning", foreground="#e65100", font=("Arial", 10, "italic")
+        )
+        self.chat_display.tag_config(
             "debug", foreground="#b06000", font=("Consolas", 9)
         )
         self.chat_display.tag_config(
@@ -1037,6 +1041,11 @@ class App:
             font=("Arial", 9),
         )
         self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        tk.Button(
+            checkbox_frame, text="PS Safety", font=("Arial", 8),
+            command=self._open_ps_safety_dialog, relief="groove", padx=4, pady=0,
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
     # ── Model / Thinking Helpers ────────────────────────────────────────
 
@@ -1200,6 +1209,11 @@ class App:
         confirm_geo = getattr(self, '_last_confirm_dialog_geometry', None)
         if confirm_geo:
             state["confirm_dialog_geometry"] = confirm_geo
+        ps_safety_geo = getattr(self, '_last_ps_safety_geometry', None)
+        if ps_safety_geo:
+            state["ps_safety_dialog_geometry"] = ps_safety_geo
+        if self._disabled_confirm_patterns:
+            state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
         with open(AGENT_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -1254,6 +1268,11 @@ class App:
         confirm_geo = state.get("confirm_dialog_geometry")
         if confirm_geo:
             self._last_confirm_dialog_geometry = confirm_geo
+        ps_safety_geo = state.get("ps_safety_dialog_geometry")
+        if ps_safety_geo:
+            self._last_ps_safety_geometry = ps_safety_geo
+        disabled = state.get("disabled_confirm_patterns", [])
+        self._disabled_confirm_patterns = set(disabled)
 
     def _periodic_save(self):
         try:
@@ -2015,16 +2034,79 @@ class App:
         except Exception as e:
             return f"Error fetching URL: {e}"
 
+    def _open_ps_safety_dialog(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.title("PowerShell Safety — Confirm Patterns")
+        dlg.transient(self.root)
+        dlg.resizable(True, True)
+
+        tk.Label(
+            dlg, text="Checked patterns require confirmation before execution.\n"
+                       "Uncheck a pattern to bypass the confirmation dialog.",
+            font=("Arial", 9), justify="left",
+        ).pack(padx=15, pady=(12, 6), anchor="w")
+
+        # Use a Text widget with embedded checkbuttons for reliable scrolling
+        text_frame = tk.Frame(dlg)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 5))
+        scrollbar = tk.Scrollbar(text_frame, orient="vertical")
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget = tk.Text(
+            text_frame, wrap="none", cursor="arrow",
+            yscrollcommand=scrollbar.set, highlightthickness=0,
+            borderwidth=1, relief="sunken",
+        )
+        scrollbar.config(command=text_widget.yview)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        for pattern in POWERSHELL_CONFIRM:
+            var = tk.BooleanVar(value=pattern not in self._disabled_confirm_patterns)
+            cb = tk.Checkbutton(
+                text_widget, text=pattern, variable=var, font=("Consolas", 9),
+                anchor="w", bg="white", activebackground="white",
+                command=lambda p=pattern, v=var: self._toggle_confirm_pattern(p, v),
+            )
+            text_widget.window_create("end", window=cb, stretch=True)
+            text_widget.insert("end", "\n")
+
+        text_widget.configure(state="disabled")
+
+        def _on_close():
+            self._last_ps_safety_geometry = dlg.geometry()
+            self._save_last_state()
+            dlg.destroy()
+
+        # Restore / persist dialog geometry
+        saved_geo = getattr(self, '_last_ps_safety_geometry', None)
+        if saved_geo:
+            dlg.geometry(saved_geo)
+        else:
+            w, h = 560, 1100
+            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            dlg.geometry(f"{w}x{h}+{x}+{y}")
+
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
+
+    def _toggle_confirm_pattern(self, pattern, var):
+        if var.get():
+            self._disabled_confirm_patterns.discard(pattern)
+        else:
+            self._disabled_confirm_patterns.add(pattern)
+        self._save_last_state()
+
     def _check_powershell_safety(self, command):
         for pattern in POWERSHELL_BLOCKED:
             if re.search(pattern, command, re.IGNORECASE):
                 return "blocked", f"BLOCKED: Command matches dangerous pattern ({pattern})"
         for pattern in POWERSHELL_CONFIRM:
             if re.search(pattern, command, re.IGNORECASE):
+                if pattern in self._disabled_confirm_patterns:
+                    return "skipped", pattern
                 return "confirm", pattern
         return "safe", ""
 
-    def _request_confirmation(self, command):
+    def _request_confirmation(self, command, matched_pattern=""):
         event = threading.Event()
         result_holder = [False]
 
@@ -2035,18 +2117,28 @@ class App:
             dlg.grab_set()
             dlg.resizable(True, True)
 
-            dlg.grid_rowconfigure(1, weight=1)
+            row = 0
             dlg.grid_columnconfigure(0, weight=1)
 
             tk.Label(
                 dlg, text="The following command requires your approval:",
                 font=("Arial", 10), wraplength=450, justify="left",
-            ).grid(row=0, column=0, sticky="w", padx=15, pady=(15, 5))
+            ).grid(row=row, column=0, sticky="w", padx=15, pady=(15, 5))
+            row += 1
 
+            if matched_pattern:
+                tk.Label(
+                    dlg, text=f"Triggered by:  {matched_pattern}",
+                    font=("Consolas", 9), fg="#cc3300", wraplength=450, justify="left",
+                ).grid(row=row, column=0, sticky="w", padx=15, pady=(0, 5))
+                row += 1
+
+            dlg.grid_rowconfigure(row, weight=1)
             text_frame = tk.Frame(dlg)
-            text_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=5)
+            text_frame.grid(row=row, column=0, sticky="nsew", padx=15, pady=5)
             text_frame.grid_rowconfigure(0, weight=1)
             text_frame.grid_columnconfigure(0, weight=1)
+            row += 1
 
             cmd_text = tk.Text(
                 text_frame, wrap=tk.WORD, font=("Consolas", 10),
@@ -2061,10 +2153,11 @@ class App:
 
             tk.Label(
                 dlg, text="Allow execution?", font=("Arial", 10),
-            ).grid(row=2, column=0, pady=(5, 5))
+            ).grid(row=row, column=0, pady=(5, 5))
+            row += 1
 
             btn_frame = tk.Frame(dlg)
-            btn_frame.grid(row=3, column=0, pady=(0, 15))
+            btn_frame.grid(row=row, column=0, pady=(0, 15))
 
             def _capture_geo():
                 try:
@@ -2209,8 +2302,10 @@ class App:
         safety, info = self._check_powershell_safety(command)
         if safety == "blocked":
             return info
-        if safety == "confirm":
-            if not self._request_confirmation(command):
+        if safety == "skipped":
+            self.queue.put({"type": "warning", "content": f"\u26a0 Confirm bypassed (pattern: {info})\n"})
+        elif safety == "confirm":
+            if not self._request_confirmation(command, info):
                 return "Command was rejected by the user."
         try:
             result = subprocess.run(
@@ -2597,6 +2692,11 @@ class App:
 
     def do_browser_open(self, url):
         try:
+            self._cleanup_browser()
+            subprocess.run(
+                ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
             page = self._ensure_browser()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             return f"Navigated to {url} — page title: {page.title()}"
@@ -2899,9 +2999,16 @@ class App:
                     region = (inp["x"], inp["y"], inp["width"], inp["height"])
                 return self.do_screenshot(region)
             elif block.name == "mouse_click":
-                self.queue.put({"type": "tool_info", "content": f"Clicking at ({inp.get('x')}, {inp.get('y')})...\n"})
+                cx, cy = inp.get("x"), inp.get("y")
+                if cx is None or cy is None:
+                    coord = inp.get("coordinate")
+                    if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+                        cx, cy = coord[0], coord[1]
+                    else:
+                        return f"mouse_click error: missing x/y coordinates. Got: {inp}"
+                self.queue.put({"type": "tool_info", "content": f"Clicking at ({cx}, {cy})...\n"})
                 return self.do_mouse_click(
-                    inp["x"], inp["y"],
+                    cx, cy,
                     button=inp.get("button", "left"),
                     clicks=inp.get("clicks", 1),
                 )
@@ -2941,17 +3048,23 @@ class App:
                 self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
                 return self.do_wait_for_window(title, timeout=timeout)
             elif block.name == "read_screen_text":
-                self.queue.put({"type": "tool_info", "content": f"OCR region ({inp.get('x')},{inp.get('y')} {inp.get('width')}x{inp.get('height')})...\n"})
-                return self.do_read_screen_text(inp["x"], inp["y"], inp["width"], inp["height"])
+                rx, ry, rw, rh = inp.get("x"), inp.get("y"), inp.get("width"), inp.get("height")
+                if None in (rx, ry, rw, rh):
+                    return f"read_screen_text error: missing region parameters. Got: {inp}"
+                self.queue.put({"type": "tool_info", "content": f"OCR region ({rx},{ry} {rw}x{rh})...\n"})
+                return self.do_read_screen_text(rx, ry, rw, rh)
             elif block.name == "find_image_on_screen":
                 path = inp.get("image_path", "")
                 self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
                 return self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
             elif block.name == "mouse_drag":
-                self.queue.put({"type": "tool_info", "content": f"Dragging ({inp.get('start_x')},{inp.get('start_y')}) to ({inp.get('end_x')},{inp.get('end_y')})...\n"})
+                sx, sy = inp.get("start_x"), inp.get("start_y")
+                ex, ey = inp.get("end_x"), inp.get("end_y")
+                if None in (sx, sy, ex, ey):
+                    return f"mouse_drag error: missing coordinates. Got: {inp}"
+                self.queue.put({"type": "tool_info", "content": f"Dragging ({sx},{sy}) to ({ex},{ey})...\n"})
                 return self.do_mouse_drag(
-                    inp["start_x"], inp["start_y"],
-                    inp["end_x"], inp["end_y"],
+                    sx, sy, ex, ey,
                     duration=inp.get("duration", 0.5),
                     button=inp.get("button", "left"),
                 )
@@ -3274,6 +3387,11 @@ class App:
                 elif msg["type"] == "tool_info":
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, msg["content"], "tool_info")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "warning":
+                    self.chat_display.config(state="normal")
+                    self.chat_display.insert(tk.END, msg["content"], "warning")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "complete":
