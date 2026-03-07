@@ -461,11 +461,16 @@ python MyAgent.py
 # Auto-load an instruction and start the agent
 python MyAgent.py -l "Weather_Agent3"
 
+# Auto-load and run headless (no main window, auto-closes on completion)
+python MyAgent.py -l "Weather_Agent3" --headless
+
 # Show usage help
 python MyAgent.py --help
 ```
 
-When launched with `-l`, the app restores window geometry and display settings normally, then loads the named instruction (text, images, tool toggles, provider, model, skill modes) and calls START automatically. If the instruction name is not found, an error dialog lists all available instruction names.
+When launched with `-l`, the app restores window geometry and display settings normally, then loads the named instruction (text, images, tool toggles, provider, model, skill modes) and calls START automatically. The "Save Chat as" entry is auto-populated with `"{InstructionName}_{timestamp}"` so output is always captured. If the instruction name is not found, an error dialog lists all available instruction names.
+
+**Headless mode** — Adding `--headless` hides the main window (`root.withdraw()`). Dialogs (`user_prompt`, PS confirmation) still appear as standalone floating windows when needed. The process auto-closes after the agent loop completes. Designed for orchestrator patterns where a parent MyAgent spawns child instances via `run_powershell`.
 
 ### Features
 
@@ -485,11 +490,12 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **Remove Selected** button | Delete selected images from the image list |
 | **Desktop** checkbox | Enable/disable the 13 desktop automation tools for this instruction |
 | **Browser** checkbox | Enable/disable the 11 browser automation tools for this instruction |
+| **Meta** checkbox | Enable/disable the 2 meta-agent tools (`manage_instructions`, `manage_skills`) for this instruction |
 | **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
 | **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
 | **Apply** button | Make the instruction active for this session (no disk write) and close the editor |
 
-**Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
+**Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser/Meta toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
 
 | Action | Makes it active | Saves to disk | Closes editor |
 |---|---|---|---|
@@ -500,7 +506,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Images persist with instructions** — When you save a named instruction, any attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
 
-**Tool toggles persist with instructions** — Each saved instruction stores its Desktop and Browser checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
+**Tool toggles persist with instructions** — Each saved instruction stores its Desktop, Browser, and Meta checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
 
 **Provider and model parameters persist with instructions** — Each saved instruction stores the provider (Anthropic or OpenAI), model, temperature, and thinking settings. Loading an instruction from the dropdown immediately restores the provider, refreshes the model list, and sets the model and thinking parameters on the main toolbar.
 
@@ -533,13 +539,15 @@ Provider, model, temperature, and thinking settings are all persisted across ses
 
 #### Tool Use
 
-MyAgent has twenty-nine built-in tools (the same twenty-eight as SelfBot plus `user_prompt`) and the dynamic `get_skill` tool, organised into the same three categories:
+MyAgent has thirty-one built-in tools and the dynamic `get_skill` tool, organised into four categories:
 
 **Core Tools (always available):** `web_search`, `fetch_webpage`, `run_powershell`, `csv_search`, `user_prompt`
 
 **Desktop Tools (enabled via Desktop checkbox):** `screenshot`, `mouse_click`, `type_text`, `press_key`, `mouse_scroll`, `open_application`, `find_window`, `clipboard_read`, `clipboard_write`, `wait_for_window`, `read_screen_text`, `find_image_on_screen`, `mouse_drag`
 
 **Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
+
+**Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills` — CRUD operations for the agent's own instruction library and shared skills library. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions (changes apply to future runs, not the current one). `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). Both tools modify shared state and are not parallel-safe.
 
 **User Interaction Tool:**
 - **user_prompt** — Pauses the agentic loop and displays a modal dialog to the user with the agent's message, then waits for the user to type a response. This is the **only** way the agent can get user input mid-task (e.g., asking the user to log in, approve an action, or make a choice). The system prompt strongly instructs Claude to always use this tool rather than outputting a question as plain text (which would end the turn and exit the loop). The user types their response and presses **Enter** to submit (or **Ctrl+Enter** to insert a newline for multi-line responses), or dismisses the dialog (via [X]) to return a default "no response" message. The user's injected response is echoed in the chat display as "You: [text]" so the conversation flow is visible, and the agent's follow-up response gets a fresh "Agent:" heading
