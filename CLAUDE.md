@@ -16,6 +16,9 @@ source .venv/Scripts/activate && python SelfBot.py
 # Activate venv and run MyAgent
 source .venv/Scripts/activate && python MyAgent.py
 
+# Activate venv and run MyAgent with auto-launch instruction
+source .venv/Scripts/activate && python MyAgent.py -l "Instruction Name"
+
 # Activate venv and run Account Activity extractor
 source .venv/Scripts/activate && python Account_Activity_WBC.py
 
@@ -26,7 +29,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~3700 lines); fire-and-forget task runner with an agentic tool-use loop, supports both Anthropic and OpenAI providers
+- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~4000 lines); fire-and-forget task runner with an agentic tool-use loop, supports both Anthropic and OpenAI providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
@@ -80,11 +83,11 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Single class design** — Same as SelfBot: the `App` class contains all UI, API, tool execution, and persistence logic.
 
-**Dual-provider support** — A Provider combobox on the model toolbar switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary only via `_messages_to_responses()`, `_tools_to_responses()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, and `function_call`/`function_call_output` items instead of Chat Completions. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers. Provider selection is saved per-instruction and in `agent_state.json`. The provider combobox is locked (disabled) while the agent is running.
+**Dual-provider support** — A Provider combobox in the instruction editor switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary only via `_messages_to_responses()`, `_tools_to_responses()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, and `function_call`/`function_call_output` items instead of Chat Completions. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers. Provider selection is saved per-instruction and in `agent_state.json`. The Agent Instruction button is disabled while the agent is running (preventing model/provider changes).
 
 **OpenAI model filtering** — `_fetch_openai_models()` filters the API model list to Responses API compatible families only via `OPENAI_RESPONSES_PREFIXES`: `gpt-4o`, `gpt-4.1`, `gpt-4.5`, `gpt-5`, `o1`, `o3`, `o4`. Non-chat model types (embedding, audio, search, realtime, preview, transcribe, tts) are skipped first. Legacy models (gpt-3.5-turbo, base gpt-4, gpt-4-turbo) are excluded as they don't support the Responses API. `OPENAI_REASONING_PREFIXES` (`o1`, `o3`, `o4`, `gpt-5`) determines which models get `reasoning` params instead of `temperature`. The OpenAI client uses `httpx.Timeout(600.0, connect=10.0, read=120.0)` to prevent indefinite hangs on unresponsive models.
 
-**Temperature/thinking UI gating** — OpenAI reasoning models don't accept `temperature`, so the Temp spinner stays disabled for these models even when thinking is unchecked. This is enforced in `_on_thinking_toggled()`, `_on_model_selected()`, and `_restore_model_params()`. Anthropic models always allow temperature when thinking is off.
+**Temperature/thinking UI gating** — OpenAI reasoning models don't accept `temperature`, so the Temp spinner stays disabled for these models even when thinking is unchecked. This is enforced in `_on_thinking_toggled()`, `_on_model_selected()`, and `_restore_model_params()`. All these methods use `_has_model_widgets()` guards since model controls only exist while the editor is open. Anthropic models always allow temperature when thinking is off.
 
 **Agentic loop** — `stream_worker()` runs a `while True:` loop: dispatches to `_stream_anthropic_call()` or `_stream_responses_call()` based on the provider, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
 
@@ -94,13 +97,15 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Agent Instructions** — Stored in `agent_instructions.json` as `{name: {text: str, images: [{data, media_type, filename}], desktop: bool, browser: bool, provider: str, model: str, temperature: float, thinking_enabled: bool, thinking_effort: str, thinking_budget: int, skill_modes: {skill_name: mode_string}}}`. Images are embedded as base64 and re-attached when loading an instruction. Desktop/Browser tool toggle states, model parameters (model, temperature, thinking settings), and skill modes are saved per-instruction and restored on load. Skills not present in the snapshot default to disabled; deleted skills are silently skipped.
 
-**Editor draft/commit model** — The instruction editor works on temporary copies (`_editor_images`, `_editor_desktop`, `_editor_browser`). Changes are only committed to live state on SAVE (persists to disk) or Apply (session-only). Closing the editor with [X] discards uncommitted changes. Model params and skill modes are restored immediately on instruction selection (like live state), matching the pattern of being environment-level settings rather than draft state.
+**Editor draft/commit model** — The instruction editor works on temporary copies (`_editor_images`, `_editor_desktop`, `_editor_browser`). Changes are only committed to live state on SAVE (persists to disk) or Apply (session-only). Closing the editor with [X] discards uncommitted changes. Model params and skill modes are restored immediately on instruction selection (like live state), matching the pattern of being environment-level settings rather than draft state. Model/provider widgets (Provider combo, Model combo, Temp, Thinking) are created inside the editor dialog and only exist while it's open. Widget references are set to `None` on close/Apply so `_has_model_widgets()` guards skip widget updates. A read-only `_model_info_label` on the main toolbar shows the current provider and model at all times.
 
 **Threading model** — Same as SelfBot: background daemon thread for API calls, `queue.Queue` for events, main thread polls every 50ms via `root.after()`.
 
 **PowerShell Safety dialog** — The "PS Safety" button opens a dialog listing all `POWERSHELL_CONFIRM` patterns as checkboxes. Checked = confirmation required (default), unchecked = bypass confirmation and show a `⚠ Confirm bypassed` warning in the output window instead. Disabled patterns are persisted in `agent_state.json` as `disabled_confirm_patterns`. The bypass warning uses the `"warning"` queue message type which always displays regardless of the Activity checkbox.
 
-**State persistence** — `agent_state.json` stores provider, last instruction name, model, temperature, thinking settings, window geometry, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns. Periodic auto-save every 5 seconds. Dialog geometries are also flushed to disk immediately when the dialog closes (editor close, Apply, or prompt/confirm dismiss).
+**Command-line launch** — `python MyAgent.py -l "Name"` auto-loads a saved instruction and starts the agent. Uses `argparse` for `-l`/`--load`. The instruction is loaded via `_auto_launch()`, scheduled as `root.after(100)` to ensure UI is initialized, which then schedules `_start_agent` via `root.after(200)` to allow a full event loop cycle between state setup and agent start. Shows an error dialog listing available names if the instruction is not found.
+
+**State persistence** — `agent_state.json` stores provider, last instruction name, model, temperature, thinking settings, display checkbox states (debug, tool calls, activity, show thinking), window geometry, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns. Periodic auto-save every 5 seconds. Dialog geometries are also flushed to disk immediately when the dialog closes (editor close, Apply, or prompt/confirm dismiss).
 
 **Chat saving is opt-in** — Chats are only saved (on close or by the periodic auto-save) if the user has typed a name in the "Save Chat as" entry. If the field is blank, no chat file is created.
 
