@@ -156,6 +156,77 @@ TOOLS = [
     },
 ]
 
+# Meta-agent tools (manage instructions and skills on disk)
+META_TOOLS = [
+    {
+        "name": "manage_instructions",
+        "description": (
+            "Manage the saved agent instruction library on disk for use by future agent "
+            "instances. Does NOT change the currently-running instruction. Actions: list "
+            "(show all), read (full detail), create (new), update (modify), delete (remove)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "create", "update", "delete"],
+                    "description": "The operation to perform",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Instruction name (required for all except list)",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Instruction content (required for create, optional for update)",
+                },
+                "desktop": {
+                    "type": "boolean",
+                    "description": "Enable desktop tools (default false on create)",
+                },
+                "browser": {
+                    "type": "boolean",
+                    "description": "Enable browser tools (default false on create)",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "manage_skills",
+        "description": (
+            "Manage the shared skills library on disk. Skills can be injected into system "
+            "prompts (enabled), retrieved on demand (on_demand), or inactive (disabled). "
+            "Actions: list, read, create, update, delete."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "create", "update", "delete"],
+                    "description": "The operation to perform",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Skill name (required for all except list)",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Skill text content (required for create, optional for update)",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["disabled", "enabled", "on_demand"],
+                    "description": "Skill mode (default: disabled on create)",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+]
+
 # Desktop automation tool definitions (pyautogui-based)
 DESKTOP_TOOLS = [
     {
@@ -731,6 +802,14 @@ DEFAULT_SYSTEM_PROMPT = (
     "• browser_select — select an option from a dropdown.\n"
     "• browser_get_elements — get info about matching elements.\n\n"
 
+    "META TOOLS (available when Meta is enabled):\n"
+    "• manage_instructions — CRUD operations on the saved agent instruction library "
+    "(list/read/create/update/delete). Changes are saved to disk for future agent runs, "
+    "not the currently-running instruction.\n"
+    "• manage_skills — CRUD operations on the shared skills library "
+    "(list/read/create/update/delete). Skills can be enabled (injected into system prompt), "
+    "on_demand (retrieved via get_skill tool), or disabled.\n\n"
+
     "GUIDELINES:\n"
     "• Execute the task autonomously — chain tools together without hesitation.\n"
     "• When multiple tools can achieve a goal, chain them together without asking.\n"
@@ -796,8 +875,9 @@ class _ToolBlock:
 # ── Main Application ────────────────────────────────────────────────────────
 
 class App:
-    def __init__(self, root, launch_instruction=None):
+    def __init__(self, root, launch_instruction=None, headless=False):
         self.root = root
+        self._headless = headless
         self.root.title("Claude Agent")
         self.root.geometry(DEFAULT_GEOMETRY)
 
@@ -832,6 +912,7 @@ class App:
         self.show_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
+        self.meta_enabled = tk.BooleanVar(value=False)
         self._disabled_confirm_patterns = set()
         self._playwright = None
         self._browser = None
@@ -866,6 +947,9 @@ class App:
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        if self._headless:
+            self.root.withdraw()
 
         # Auto-launch instruction from -l command-line argument
         self._launch_instruction = launch_instruction
@@ -1381,10 +1465,14 @@ class App:
         ]
         self.desktop_enabled.set(entry.get("desktop", False))
         self.browser_enabled.set(entry.get("browser", False))
+        self.meta_enabled.set(entry.get("meta", False))
         if "model" in entry:
             self._restore_model_params(entry)
         self._restore_skill_modes(entry)
         self._update_model_info_label()
+        auto_name = f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}"
+        self.chat_name_entry.delete(0, tk.END)
+        self.chat_name_entry.insert(0, auto_name)
         self.root.after(200, self._start_agent)
 
     # ── Agent Instruction Editor ────────────────────────────────────────
@@ -1417,6 +1505,96 @@ class App:
     def _save_instructions_to_disk(self, instructions):
         with open(INSTRUCTIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(instructions, f, indent=2, ensure_ascii=False)
+
+    def do_manage_instructions(self, params):
+        """CRUD operations on the saved instruction library."""
+        action = params.get("action", "")
+        name = params.get("name", "")
+        instructions = self._load_saved_instructions()
+
+        if action == "list":
+            if not instructions:
+                return "No saved instructions."
+            lines = []
+            for n, entry in sorted(instructions.items()):
+                provider = entry.get("provider", "Anthropic")
+                model = entry.get("model", "")
+                desktop = "desktop" if entry.get("desktop") else ""
+                browser = "browser" if entry.get("browser") else ""
+                flags = " ".join(f for f in [desktop, browser] if f)
+                preview = entry.get("text", "")[:100].replace("\n", " ")
+                lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
+            return "\n".join(lines)
+
+        if not name:
+            return "Error: 'name' is required for this action."
+
+        if action == "read":
+            if name not in instructions:
+                return f"Error: Instruction '{name}' not found."
+            entry = instructions[name]
+            info = {
+                "name": name,
+                "text": entry.get("text", ""),
+                "desktop": entry.get("desktop", False),
+                "browser": entry.get("browser", False),
+                "provider": entry.get("provider", "Anthropic"),
+                "model": entry.get("model", ""),
+                "image_count": len(entry.get("images", [])),
+            }
+            return json.dumps(info, indent=2)
+
+        elif action == "create":
+            if name in instructions:
+                return f"Error: Instruction '{name}' already exists. Use 'update' to modify it."
+            text = params.get("text", "")
+            if not text:
+                return "Error: 'text' is required when creating an instruction."
+            entry = {
+                "text": text,
+                "images": [],
+                "desktop": params.get("desktop", False),
+                "browser": params.get("browser", False),
+                "provider": self.provider,
+                "model": self.model,
+                "temperature": self.temperature,
+                "thinking_enabled": self.thinking_enabled,
+                "thinking_effort": self.thinking_effort,
+                "thinking_budget": self.thinking_budget,
+                "skill_modes": {sn: sd["mode"] for sn, sd in self.skills.items()},
+            }
+            instructions[name] = entry
+            self._save_instructions_to_disk(instructions)
+            return f"Instruction '{name}' created successfully."
+
+        elif action == "update":
+            if name not in instructions:
+                return f"Error: Instruction '{name}' not found. Use 'create' to add it."
+            text = params.get("text")
+            desktop = params.get("desktop")
+            browser = params.get("browser")
+            if text is None and desktop is None and browser is None:
+                return "Error: At least one of 'text', 'desktop', or 'browser' must be provided for update."
+            entry = instructions[name]
+            if text is not None:
+                entry["text"] = text
+            if desktop is not None:
+                entry["desktop"] = desktop
+            if browser is not None:
+                entry["browser"] = browser
+            self._save_instructions_to_disk(instructions)
+            return f"Instruction '{name}' updated successfully."
+
+        elif action == "delete":
+            if name not in instructions:
+                return f"Error: Instruction '{name}' not found."
+            del instructions[name]
+            self._save_instructions_to_disk(instructions)
+            if self.agent_instruction_name == name:
+                self.agent_instruction_name = ""
+            return f"Instruction '{name}' deleted."
+
+        return f"Error: Unknown action '{action}'."
 
     def open_instruction_editor(self):
         if self.instruction_editor_window and self.instruction_editor_window.winfo_exists():
@@ -1545,12 +1723,17 @@ class App:
 
         self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get())
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
+        self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
         tk.Checkbutton(
             img_frame, text="Desktop", variable=self._editor_desktop,
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(15, 0))
         tk.Checkbutton(
             img_frame, text="Browser", variable=self._editor_browser,
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT, padx=(5, 0))
+        tk.Checkbutton(
+            img_frame, text="Meta", variable=self._editor_meta,
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
@@ -1629,6 +1812,7 @@ class App:
         self.pending_images = list(self._editor_images)
         self.desktop_enabled.set(self._editor_desktop.get())
         self.browser_enabled.set(self._editor_browser.get())
+        self.meta_enabled.set(self._editor_meta.get())
         self.agent_instruction = text
         self.agent_instruction_name = name
         # Persist to disk
@@ -1641,6 +1825,7 @@ class App:
             ],
             "desktop": self.desktop_enabled.get(),
             "browser": self.browser_enabled.get(),
+            "meta": self.meta_enabled.get(),
             "provider": self.provider,
             "model": self.model,
             "temperature": self.temperature,
@@ -1679,6 +1864,7 @@ class App:
         self._editor_images.clear()
         self._editor_desktop.set(False)
         self._editor_browser.set(False)
+        self._editor_meta.set(False)
         # Reset model controls to defaults
         if self._has_anthropic:
             default_provider = "Anthropic"
@@ -1714,6 +1900,7 @@ class App:
             ]
             self._editor_desktop.set(entry.get("desktop", False))
             self._editor_browser.set(entry.get("browser", False))
+            self._editor_meta.set(entry.get("meta", False))
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
             self._refresh_image_listbox()
@@ -1727,6 +1914,7 @@ class App:
         self.pending_images = list(self._editor_images)
         self.desktop_enabled.set(self._editor_desktop.get())
         self.browser_enabled.set(self._editor_browser.get())
+        self.meta_enabled.set(self._editor_meta.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
         # Restore skill modes from whichever instruction is loaded in editor
@@ -1775,6 +1963,80 @@ class App:
     def _save_skills(self):
         with open(SKILLS_FILE, "w", encoding="utf-8") as f:
             json.dump(self.skills, f, indent=2, ensure_ascii=False)
+
+    def do_manage_skills(self, params):
+        """CRUD operations on the shared skills library."""
+        action = params.get("action", "")
+        name = params.get("name", "")
+
+        if action == "list":
+            if not self.skills:
+                return "No skills defined."
+            lines = []
+            for sn, sd in sorted(self.skills.items()):
+                mode = sd.get("mode", "disabled")
+                preview = sd.get("content", "")[:100].replace("\n", " ")
+                lines.append(f"• {sn}  [{mode}]\n  {preview}...")
+            return "\n".join(lines)
+
+        if not name:
+            return "Error: 'name' is required for this action."
+
+        if action == "read":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            sd = self.skills[name]
+            return json.dumps({"name": name, "content": sd.get("content", ""), "mode": sd.get("mode", "disabled")}, indent=2)
+
+        elif action == "create":
+            if name in self.skills:
+                return f"Error: Skill '{name}' already exists. Use 'update' to modify it."
+            content = params.get("content", "")
+            if not content:
+                return "Error: 'content' is required when creating a skill."
+            mode = params.get("mode", "disabled")
+            if mode not in ("disabled", "enabled", "on_demand"):
+                return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
+            self.skills[name] = {"content": content, "mode": mode}
+            self._save_skills()
+            self._post_skill_ui_refresh()
+            return f"Skill '{name}' created successfully."
+
+        elif action == "update":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found. Use 'create' to add it."
+            content = params.get("content")
+            mode = params.get("mode")
+            if content is None and mode is None:
+                return "Error: At least one of 'content' or 'mode' must be provided for update."
+            if mode is not None and mode not in ("disabled", "enabled", "on_demand"):
+                return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
+            if content is not None:
+                self.skills[name]["content"] = content
+            if mode is not None:
+                self.skills[name]["mode"] = mode
+            self._save_skills()
+            self._post_skill_ui_refresh()
+            return f"Skill '{name}' updated successfully."
+
+        elif action == "delete":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            del self.skills[name]
+            self._save_skills()
+            self._post_skill_ui_refresh()
+            return f"Skill '{name}' deleted."
+
+        return f"Error: Unknown action '{action}'."
+
+    def _post_skill_ui_refresh(self):
+        """Thread-safe refresh of Skills button and Skills Manager listbox."""
+        def _refresh():
+            self._update_skills_button()
+            if (self.skills_editor_window and self.skills_editor_window.winfo_exists()
+                    and self._skills_refresh_list):
+                self._skills_refresh_list()
+        self.root.after(0, _refresh)
 
     def _restore_skill_modes(self, entry):
         saved = entry.get("skill_modes", {})
@@ -2581,8 +2843,12 @@ class App:
         def ask():
             dlg = tk.Toplevel(self.root)
             dlg.title("PowerShell — Confirm Command")
-            dlg.transient(self.root)
-            dlg.grab_set()
+            if not self._headless:
+                dlg.transient(self.root)
+                dlg.grab_set()
+            else:
+                dlg.lift()
+                dlg.focus_force()
             dlg.resizable(True, True)
 
             row = 0
@@ -2674,8 +2940,12 @@ class App:
         def ask():
             dlg = tk.Toplevel(self.root)
             dlg.title("Agent Request")
-            dlg.transient(self.root)
-            dlg.grab_set()
+            if not self._headless:
+                dlg.transient(self.root)
+                dlg.grab_set()
+            else:
+                dlg.lift()
+                dlg.focus_force()
             dlg.resizable(True, True)
 
             dlg.grid_rowconfigure(1, weight=1)
@@ -3439,6 +3709,8 @@ class App:
             tools.extend(desktop)
         if self.browser_enabled.get():
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
+        if self.meta_enabled.get():
+            tools.extend(copy.deepcopy(META_TOOLS))
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
             tools.append({
@@ -3641,6 +3913,14 @@ class App:
                 return self.skills[skill_name]["content"]
             else:
                 return f"Skill not found or not on-demand: {skill_name}"
+        elif block.name == "manage_instructions":
+            action = block.input.get("action", "")
+            self.queue.put({"type": "tool_info", "content": f"manage_instructions: {action}\n"})
+            return self.do_manage_instructions(block.input)
+        elif block.name == "manage_skills":
+            action = block.input.get("action", "")
+            self.queue.put({"type": "tool_info", "content": f"manage_skills: {action}\n"})
+            return self.do_manage_skills(block.input)
         else:
             return f"Unknown tool: {block.name}"
 
@@ -3898,6 +4178,8 @@ class App:
             self.messages = messages
             self.messages.append({"role": "assistant", "content": full_text})
             self.queue.put({"type": "complete"})
+            if self._headless:
+                self.root.after(500, self._on_close)
 
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
@@ -4036,7 +4318,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Claude Agent — autonomous task runner")
     parser.add_argument("-l", "--load", metavar="NAME",
                         help="Load an instruction by name and auto-start the agent")
+    parser.add_argument("--headless", action="store_true",
+                        help="Run without main window (dialogs still shown when needed)")
     args = parser.parse_args()
     root = tk.Tk()
-    app = App(root, launch_instruction=args.load)
+    app = App(root, launch_instruction=args.load, headless=args.headless)
     root.mainloop()
