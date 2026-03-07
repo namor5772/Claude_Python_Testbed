@@ -440,7 +440,7 @@ A fire-and-forget autonomous task runner built with tkinter that supports both *
 ### How the Agentic Loop Works
 
 1. **Configure** — Write or load an Agent Instruction describing the task (e.g., "Search for today's top tech news and summarise it", "Check disk space and clean up temp files"). Optionally attach reference images.
-2. **Press START** — The instruction is injected as the first user message and a background thread begins the agentic loop.
+2. **Press START** (or use `-l` from the command line) — The instruction is injected as the first user message and a background thread begins the agentic loop.
 3. **Loop** — `stream_worker()` runs a `while True:` loop:
    - Sends the full message history to the selected API provider via streaming.
    - Streams the response token-by-token into the display.
@@ -449,6 +449,23 @@ A fire-and-forget autonomous task runner built with tkinter that supports both *
 4. **Press STOP** (optional) — Halts the loop cleanly at the top of the next iteration or after the current API call finishes.
 
 There is **no fixed iteration limit** — the agent runs until Claude decides it is done or the user hits STOP. Each iteration displays a **Call #N** counter badge so you can track how many API round-trips have occurred.
+
+### Command-Line Launch
+
+MyAgent supports a `-l` / `--load` argument to auto-load a saved instruction and immediately start the agent — useful for scripting and automation without manual GUI interaction:
+
+```bash
+# Normal launch (GUI only)
+python MyAgent.py
+
+# Auto-load an instruction and start the agent
+python MyAgent.py -l "Weather_Agent3"
+
+# Show usage help
+python MyAgent.py --help
+```
+
+When launched with `-l`, the app restores window geometry and display settings normally, then loads the named instruction (text, images, tool toggles, provider, model, skill modes) and calls START automatically. If the instruction name is not found, an error dialog lists all available instruction names.
 
 ### Features
 
@@ -567,7 +584,7 @@ Chat saving is opt-in — there is no manual SAVE button, and **no chat is saved
 
 #### Display Toggles
 
-Four checkboxes on the main window control what is shown in the output display (all default to **off**), plus a PS Safety button:
+Four checkboxes on the main window control what is shown in the output display (all default to **off** on first run, then **persist across sessions** via `agent_state.json`), plus a PS Safety button:
 
 | Checkbox | What it controls |
 |---|---|
@@ -592,7 +609,7 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 
 #### App State Persistence
 
-- Provider, last-used instruction name, model, temperature, thinking settings, main window geometry, and dialog geometries are saved to `agent_state.json`
+- Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking), main window geometry, and dialog geometries are saved to `agent_state.json`
 - On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
 - **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), and **PowerShell Confirm** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to `agent_state.json` and is restored the next time that dialog is opened
 - **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to defaults so windows are never lost off-screen

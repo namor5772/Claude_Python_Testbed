@@ -796,7 +796,7 @@ class _ToolBlock:
 # ── Main Application ────────────────────────────────────────────────────────
 
 class App:
-    def __init__(self, root):
+    def __init__(self, root, launch_instruction=None):
         self.root = root
         self.root.title("Claude Agent")
         self.root.geometry(DEFAULT_GEOMETRY)
@@ -867,83 +867,46 @@ class App:
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # Auto-launch instruction from -l command-line argument
+        self._launch_instruction = launch_instruction
+        if self._launch_instruction:
+            self.root.after(100, self._auto_launch)
+
     # ── UI Setup ────────────────────────────────────────────────────────
 
     def setup_ui(self):
         self.root.grid_rowconfigure(0, weight=0)
-        self.root.grid_rowconfigure(1, weight=0)
-        self.root.grid_rowconfigure(2, weight=1)
-        self.root.grid_rowconfigure(3, weight=0)
+        self.root.grid_rowconfigure(1, weight=1)
+        self.root.grid_rowconfigure(2, weight=0)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_columnconfigure(1, weight=0)
 
-        # Row 0: Model selection toolbar
-        model_toolbar = tk.Frame(self.root)
-        model_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
-
-        # Provider combobox
-        available_providers = [p for p in PROVIDERS
-                               if (p == "Anthropic" and self._has_anthropic)
-                               or (p == "OpenAI" and self._has_openai)]
+        # Initialize StringVars for model controls (widgets created in editor)
         self._provider_var = tk.StringVar(value=self.provider)
-        self._provider_combo = ttk.Combobox(
-            model_toolbar, textvariable=self._provider_var, state="readonly",
-            font=("Arial", 9), width=10, values=available_providers,
-        )
-        self._provider_combo.pack(side=tk.LEFT, padx=(0, 10))
-        self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
-
-        tk.Label(model_toolbar, text="Model", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self._model_id_list = self.available_models
-        display_names = [
-            self._get_display_name(mid) for mid in self._model_id_list
-        ]
-        current_display = self._get_display_name(self.model)
-        self._model_var = tk.StringVar(value=current_display)
-        self._model_combo = ttk.Combobox(
-            model_toolbar, textvariable=self._model_var, state="readonly",
-            font=("Arial", 9), width=28
-        )
-        self._model_combo["values"] = display_names
-        self._model_combo.pack(side=tk.LEFT, padx=(0, 10))
-        self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
-
-        self._temp_label = tk.Label(model_toolbar, text="Temp", font=("Arial", 10))
-        self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+        self._model_var = tk.StringVar(value=self._get_display_name(self.model))
         self._temp_var = tk.DoubleVar(value=self.temperature)
-        self._temp_spin = tk.Spinbox(
-            model_toolbar, textvariable=self._temp_var,
-            from_=0.0, to=1.0, increment=0.1,
-            width=5, font=("Arial", 10), format="%.1f",
-            command=self._on_temp_changed,
-        )
-        self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
-        self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
-        self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
-
         self._thinking_var = tk.BooleanVar(value=False)
-        self._thinking_check = tk.Checkbutton(
-            model_toolbar, text="Thinking", variable=self._thinking_var,
-            font=("Arial", 10), command=self._on_thinking_toggled,
-        )
-        self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
-
         self._thinking_strength_var = tk.StringVar(value="high")
-        self._thinking_strength_combo = ttk.Combobox(
-            model_toolbar, textvariable=self._thinking_strength_var, state="disabled",
-            font=("Arial", 9), width=6,
-        )
-        self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
-        self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
 
-        # Row 1: Chat toolbar — Save + START/STOP
+        # No model widgets until editor is opened
+        self._provider_combo = None
+        self._model_combo = None
+        self._temp_label = None
+        self._temp_spin = None
+        self._thinking_check = None
+        self._thinking_strength_combo = None
+
+        # Row 0: Chat toolbar — Instruction + model info + Save + START/STOP
         chat_toolbar = tk.Frame(self.root)
-        chat_toolbar.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(5, 0))
+        chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
 
         self.instruction_button = tk.Button(
             chat_toolbar, text="Agent Instruction", command=self.open_instruction_editor,
         )
-        self.instruction_button.pack(side=tk.LEFT, padx=(0, 15))
+        self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._update_model_info_label()
 
         tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
@@ -962,14 +925,14 @@ class App:
         )
         self._start_button.pack(side=tk.RIGHT, padx=(5, 0))
 
-        # Row 2: Chat display
+        # Row 1: Chat display
         self.chat_display = tk.Text(
             self.root, wrap=tk.WORD, state="disabled", font=("Arial", 11)
         )
-        self.chat_display.grid(row=2, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        self.chat_display.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=10)
 
         scrollbar = tk.Scrollbar(self.root, command=self.chat_display.yview)
-        scrollbar.grid(row=2, column=1, sticky="ns", pady=10, padx=(0, 10))
+        scrollbar.grid(row=1, column=1, sticky="ns", pady=10, padx=(0, 10))
         self.chat_display.config(yscrollcommand=scrollbar.set)
 
         # Text tags for styling
@@ -1020,9 +983,9 @@ class App:
             font=("Consolas", 9, "bold italic")
         )
 
-        # Row 3: Checkbox row
+        # Row 2: Checkbox row
         checkbox_frame = tk.Frame(self.root)
-        checkbox_frame.grid(row=3, column=0, columnspan=2, pady=(0, 5))
+        checkbox_frame.grid(row=2, column=0, columnspan=2, pady=(0, 5))
 
         self.debug_toggle = tk.Checkbutton(
             checkbox_frame, text="Debug", variable=self.debug_enabled,
@@ -1068,6 +1031,14 @@ class App:
             self._model_display_names = {}
             return list(FALLBACK_MODELS)
 
+    def _has_model_widgets(self):
+        """Return True if the editor model widgets currently exist."""
+        return self._model_combo is not None
+
+    def _update_model_info_label(self):
+        """Update the title bar with current provider/model info."""
+        self._update_title()
+
     def _on_provider_changed(self, event=None):
         """Handle provider combobox selection change."""
         new_provider = self._provider_var.get()
@@ -1078,7 +1049,8 @@ class App:
         self.available_models = self._fetch_models_for_provider()
         self._model_id_list = self.available_models
         display_names = [self._get_display_name(mid) for mid in self._model_id_list]
-        self._model_combo["values"] = display_names
+        if self._has_model_widgets():
+            self._model_combo["values"] = display_names
         # Select default model for new provider
         if new_provider == "OpenAI":
             default = OPENAI_DEFAULT_MODEL
@@ -1090,7 +1062,7 @@ class App:
             self.model = self.available_models[0]
         self._model_var.set(self._get_display_name(self.model))
         self._on_model_selected()
-        self._update_title()
+        self._update_model_info_label()
         self._save_last_state()
 
     def _on_model_selected(self, event=None):
@@ -1100,28 +1072,33 @@ class App:
                 self.model = mid
                 break
         support = self._model_supports_thinking()
-        if support is None:
-            self._thinking_var.set(False)
-            self.thinking_enabled = False
-            self._thinking_check.config(state="disabled")
-            self._thinking_strength_combo.config(state="disabled")
-            self._temp_label.config(state="normal")
-            self._temp_spin.config(state="normal")
-        else:
-            self._thinking_check.config(state="normal")
-            self._update_thinking_strength_options()
-            if self.thinking_enabled:
-                self._on_thinking_toggled()
-            else:
-                # Reasoning model with thinking off: disable temp for OpenAI
-                # (reasoning models don't accept temperature)
-                if self.provider == "OpenAI" and self._is_openai_reasoning_model():
-                    self._temp_label.config(state="disabled")
-                    self._temp_spin.config(state="disabled")
-                else:
-                    self._temp_label.config(state="normal")
-                    self._temp_spin.config(state="normal")
+        if self._has_model_widgets():
+            if support is None:
+                self._thinking_var.set(False)
+                self.thinking_enabled = False
+                self._thinking_check.config(state="disabled")
                 self._thinking_strength_combo.config(state="disabled")
+                self._temp_label.config(state="normal")
+                self._temp_spin.config(state="normal")
+            else:
+                self._thinking_check.config(state="normal")
+                self._update_thinking_strength_options()
+                if self.thinking_enabled:
+                    self._on_thinking_toggled()
+                else:
+                    if self.provider == "OpenAI" and self._is_openai_reasoning_model():
+                        self._temp_label.config(state="disabled")
+                        self._temp_spin.config(state="disabled")
+                    else:
+                        self._temp_label.config(state="normal")
+                        self._temp_spin.config(state="normal")
+                    self._thinking_strength_combo.config(state="disabled")
+        else:
+            # No widgets — just update state
+            if support is None:
+                self._thinking_var.set(False)
+                self.thinking_enabled = False
+        self._update_model_info_label()
         self._save_last_state()
 
     def _on_temp_changed(self):
@@ -1146,11 +1123,11 @@ class App:
 
     def _restore_model_params(self, entry, state_file=False):
         """Restore provider, model, temperature, and thinking settings from an instruction entry or state file."""
+        has_widgets = self._has_model_widgets()
         # Restore provider first (model list depends on it)
         provider_key = "provider"
         saved_provider = entry.get(provider_key, "Anthropic")
         if saved_provider != self.provider:
-            # Only switch if we have the key for that provider
             can_switch = (saved_provider == "Anthropic" and self._has_anthropic) or \
                          (saved_provider == "OpenAI" and self._has_openai)
             if can_switch:
@@ -1159,7 +1136,8 @@ class App:
                 self.available_models = self._fetch_models_for_provider()
                 self._model_id_list = self.available_models
                 display_names = [self._get_display_name(mid) for mid in self._model_id_list]
-                self._model_combo["values"] = display_names
+                if has_widgets:
+                    self._model_combo["values"] = display_names
         # Restore model (fall back to first available if saved model doesn't match provider)
         model_key = "last_model" if state_file else "model"
         model = entry.get(model_key, "")
@@ -1184,12 +1162,14 @@ class App:
             if support is None:
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
-                self._thinking_check.config(state="disabled")
-                self._thinking_strength_combo.config(state="disabled")
-                self._temp_label.config(state="normal")
-                self._temp_spin.config(state="normal")
+                if has_widgets:
+                    self._thinking_check.config(state="disabled")
+                    self._thinking_strength_combo.config(state="disabled")
+                    self._temp_label.config(state="normal")
+                    self._temp_spin.config(state="normal")
             else:
-                self._thinking_check.config(state="normal")
+                if has_widgets:
+                    self._thinking_check.config(state="normal")
                 if support == "adaptive":
                     self._thinking_strength_var.set(self.thinking_effort)
                 elif support == "manual":
@@ -1198,26 +1178,29 @@ class App:
                             self._thinking_strength_var.set(k)
                             break
                 self._on_thinking_toggled()
+        self._update_model_info_label()
 
     def _on_thinking_toggled(self):
         self.thinking_enabled = self._thinking_var.get()
-        if self.thinking_enabled:
-            self._temp_label.config(state="disabled")
-            self._temp_spin.config(state="disabled")
-            self._update_thinking_strength_options()
-            self._thinking_strength_combo.config(state="readonly")
-        else:
-            # OpenAI reasoning models don't accept temperature even with thinking off
-            if self.provider == "OpenAI" and self._is_openai_reasoning_model():
+        if self._has_model_widgets():
+            if self.thinking_enabled:
                 self._temp_label.config(state="disabled")
                 self._temp_spin.config(state="disabled")
+                self._update_thinking_strength_options()
+                self._thinking_strength_combo.config(state="readonly")
             else:
-                self._temp_label.config(state="normal")
-                self._temp_spin.config(state="normal")
-            self._thinking_strength_combo.config(state="disabled")
+                if self.provider == "OpenAI" and self._is_openai_reasoning_model():
+                    self._temp_label.config(state="disabled")
+                    self._temp_spin.config(state="disabled")
+                else:
+                    self._temp_label.config(state="normal")
+                    self._temp_spin.config(state="normal")
+                self._thinking_strength_combo.config(state="disabled")
         self._save_last_state()
 
     def _update_thinking_strength_options(self):
+        if not self._has_model_widgets():
+            return
         support = self._model_supports_thinking()
         if support == "adaptive":
             if self.provider == "OpenAI":
@@ -1249,11 +1232,12 @@ class App:
         self._save_last_state()
 
     def _update_title(self):
-        tag = " [OpenAI]" if self.provider == "OpenAI" else ""
+        model_display = self._get_display_name(self.model)
+        model_info = f"{self.provider} / {model_display}"
         if self.agent_instruction_name:
-            self.root.title(f"Claude Agent{tag} — {self.agent_instruction_name}")
+            self.root.title(f"Claude Agent — {self.agent_instruction_name}  [{model_info}]")
         else:
-            self.root.title(f"Claude Agent{tag}")
+            self.root.title(f"Claude Agent  [{model_info}]")
 
     # ── State Persistence ───────────────────────────────────────────────
 
@@ -1287,6 +1271,11 @@ class App:
             state["ps_safety_dialog_geometry"] = ps_safety_geo
         if self._disabled_confirm_patterns:
             state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
+        # Display checkboxes
+        state["show_activity"] = self.show_activity.get()
+        state["show_thinking"] = self.show_thinking.get()
+        state["debug_enabled"] = self.debug_enabled.get()
+        state["tool_calls_enabled"] = self.tool_calls_enabled.get()
         with open(AGENT_STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -1314,7 +1303,7 @@ class App:
                 self.desktop_enabled.set(entry.get("desktop", False))
                 self.browser_enabled.set(entry.get("browser", False))
                 self._restore_skill_modes(entry)
-                self._update_title()
+                self._update_model_info_label()
                 # Use instruction's model params if saved
                 if "model" in entry:
                     self._restore_model_params(entry)
@@ -1347,6 +1336,15 @@ class App:
             self._last_ps_safety_geometry = ps_safety_geo
         disabled = state.get("disabled_confirm_patterns", [])
         self._disabled_confirm_patterns = set(disabled)
+        # Restore display checkboxes
+        if "show_activity" in state:
+            self.show_activity.set(state["show_activity"])
+        if "show_thinking" in state:
+            self.show_thinking.set(state["show_thinking"])
+        if "debug_enabled" in state:
+            self.debug_enabled.set(state["debug_enabled"])
+        if "tool_calls_enabled" in state:
+            self.tool_calls_enabled.set(state["tool_calls_enabled"])
 
     def _periodic_save(self):
         try:
@@ -1362,6 +1360,32 @@ class App:
             except Exception:
                 pass
         self.root.after(5000, self._periodic_save)
+
+    def _auto_launch(self):
+        """Auto-load an instruction by name and start the agent (from -l arg)."""
+        name = self._launch_instruction
+        instructions = self._load_saved_instructions()
+        if name not in instructions:
+            messagebox.showerror(
+                "Instruction Not Found",
+                f"No saved instruction named '{name}'.\n\n"
+                f"Available: {', '.join(sorted(instructions)) or '(none)'}",
+            )
+            return
+        entry = instructions[name]
+        self.agent_instruction = entry["text"]
+        self.agent_instruction_name = name
+        self.pending_images = [
+            (img["data"], img["media_type"], img["filename"])
+            for img in entry.get("images", [])
+        ]
+        self.desktop_enabled.set(entry.get("desktop", False))
+        self.browser_enabled.set(entry.get("browser", False))
+        if "model" in entry:
+            self._restore_model_params(entry)
+        self._restore_skill_modes(entry)
+        self._update_model_info_label()
+        self.root.after(200, self._start_agent)
 
     # ── Agent Instruction Editor ────────────────────────────────────────
 
@@ -1411,9 +1435,9 @@ class App:
             if sw == getattr(self, '_editor_screen_width', sw) and sh == getattr(self, '_editor_screen_height', sh):
                 win.geometry(editor_geo)
             else:
-                win.geometry("650x580")
+                win.geometry("700x640")
         else:
-            win.geometry("650x580")
+            win.geometry("700x640")
         win.protocol("WM_DELETE_WINDOW", lambda: self._on_editor_close(win))
         self.instruction_editor_window = win
 
@@ -1456,9 +1480,61 @@ class App:
         instr_scrollbar.grid(row=2, column=5, sticky="ns", pady=(5, 5), padx=(0, 5))
         self._instr_text.config(yscrollcommand=instr_scrollbar.set)
 
-        # Row 3: Image management + tool toggles
+        # Row 3: Model / provider controls
+        model_frame = tk.Frame(win)
+        model_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+
+        available_providers = [p for p in PROVIDERS
+                               if (p == "Anthropic" and self._has_anthropic)
+                               or (p == "OpenAI" and self._has_openai)]
+        self._provider_combo = ttk.Combobox(
+            model_frame, textvariable=self._provider_var, state="readonly",
+            font=("Arial", 9), width=10, values=available_providers,
+        )
+        self._provider_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
+
+        tk.Label(model_frame, text="Model", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        display_names = [self._get_display_name(mid) for mid in self._model_id_list]
+        self._model_combo = ttk.Combobox(
+            model_frame, textvariable=self._model_var, state="readonly",
+            font=("Arial", 9), width=28
+        )
+        self._model_combo["values"] = display_names
+        self._model_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
+
+        self._temp_label = tk.Label(model_frame, text="Temp", font=("Arial", 10))
+        self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+        self._temp_spin = tk.Spinbox(
+            model_frame, textvariable=self._temp_var,
+            from_=0.0, to=1.0, increment=0.1,
+            width=5, font=("Arial", 10), format="%.1f",
+            command=self._on_temp_changed,
+        )
+        self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
+        self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
+        self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
+
+        self._thinking_check = tk.Checkbutton(
+            model_frame, text="Thinking", variable=self._thinking_var,
+            font=("Arial", 10), command=self._on_thinking_toggled,
+        )
+        self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+
+        self._thinking_strength_combo = ttk.Combobox(
+            model_frame, textvariable=self._thinking_strength_var, state="disabled",
+            font=("Arial", 9), width=6,
+        )
+        self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
+
+        # Apply current thinking/temp widget states
+        self._on_model_selected()
+
+        # Row 4: Image management + tool toggles
         img_frame = tk.Frame(win)
-        img_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        img_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         tk.Button(
             img_frame, text="Attach Images", command=self.attach_image, width=14
@@ -1489,17 +1565,17 @@ class App:
             selectmode=tk.EXTENDED,
         )
         self._instr_image_listbox.grid(
-            row=4, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 5)
+            row=5, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 5)
         )
         img_list_scrollbar = tk.Scrollbar(win, command=self._instr_image_listbox.yview)
-        img_list_scrollbar.grid(row=4, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
+        img_list_scrollbar.grid(row=5, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
         self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
 
-        # Row 5: Apply button
+        # Row 6: Apply button
         tk.Button(
             win, text="Apply", command=self._apply_instruction,
             font=("Arial", 10, "bold"), width=16
-        ).grid(row=5, column=0, columnspan=5, pady=(5, 10))
+        ).grid(row=6, column=0, columnspan=5, pady=(5, 10))
 
         # Grid weights
         win.grid_columnconfigure(1, weight=1)
@@ -1524,6 +1600,13 @@ class App:
         except Exception:
             pass
         win.destroy()
+        # Nullify model widget references so guards work correctly
+        self._provider_combo = None
+        self._model_combo = None
+        self._temp_label = None
+        self._temp_spin = None
+        self._thinking_check = None
+        self._thinking_strength_combo = None
         try:
             self._save_last_state()
         except Exception:
@@ -1569,7 +1652,7 @@ class App:
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
         self._instr_combo_var.set(name)
-        self._update_title()
+        self._update_model_info_label()
         self._save_last_state()
 
     def _delete_instruction(self):
@@ -1596,6 +1679,23 @@ class App:
         self._editor_images.clear()
         self._editor_desktop.set(False)
         self._editor_browser.set(False)
+        # Reset model controls to defaults
+        if self._has_anthropic:
+            default_provider = "Anthropic"
+            default_model = DEFAULT_MODEL
+        else:
+            default_provider = "OpenAI"
+            default_model = OPENAI_DEFAULT_MODEL
+        self._provider_var.set(default_provider)
+        if default_provider != self.provider:
+            self._on_provider_changed()
+        else:
+            self._model_var.set(self._get_display_name(default_model))
+            self._on_model_selected()
+        self._temp_var.set(1.0)
+        self._on_temp_changed()
+        self._thinking_var.set(False)
+        self._on_thinking_toggled()
         self._refresh_image_listbox()
 
     def _on_instruction_selected(self, event):
@@ -1634,7 +1734,7 @@ class App:
         instr_name = self.agent_instruction_name
         if instr_name and instr_name in instructions:
             self._restore_skill_modes(instructions[instr_name])
-        self._update_title()
+        self._update_model_info_label()
         # Capture geometry before destroying so periodic saves don't overwrite it
         try:
             self._last_editor_geometry = self.instruction_editor_window.geometry()
@@ -1644,6 +1744,13 @@ class App:
             pass
         self._save_last_state()
         self.instruction_editor_window.destroy()
+        # Nullify model widget references so guards work correctly
+        self._provider_combo = None
+        self._model_combo = None
+        self._temp_label = None
+        self._temp_spin = None
+        self._thinking_check = None
+        self._thinking_strength_combo = None
 
     # ── Skills System ───────────────────────────────────────────────────
 
@@ -1945,9 +2052,6 @@ class App:
                 if mid.startswith(OPENAI_RESPONSES_PREFIXES):
                     model_ids.append(mid)
             model_ids.sort()
-            print(f"\n=== {len(model_ids)} OpenAI Models ===")
-            for i, mid in enumerate(model_ids, 1):
-                print(f"{i}: {mid}")
             self._openai_model_display_names = {mid: mid for mid in model_ids}
             return model_ids if model_ids else list(OPENAI_FALLBACK_MODELS)
         except Exception:
@@ -2347,7 +2451,7 @@ class App:
         self.streaming = True
         self._start_button.config(state="disabled")
         self._stop_button.config(state="normal")
-        self._provider_combo.config(state="disabled")
+        self.instruction_button.config(state="disabled")
 
         thread = threading.Thread(
             target=self.stream_worker, args=(list(self.messages),), daemon=True
@@ -3885,7 +3989,7 @@ class App:
                     self.streaming = False
                     self._start_button.config(state="normal")
                     self._stop_button.config(state="disabled")
-                    self._provider_combo.config(state="readonly")
+                    self.instruction_button.config(state="normal")
                 elif msg["type"] == "error":
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(
@@ -3896,8 +4000,10 @@ class App:
                     self.streaming = False
                     self._start_button.config(state="normal")
                     self._stop_button.config(state="disabled")
-                    self._provider_combo.config(state="readonly")
+                    self.instruction_button.config(state="normal")
         except queue.Empty:
+            pass
+        except Exception:
             pass
         self.root.after(50, self.check_queue)
 
@@ -3924,8 +4030,13 @@ class App:
 
 
 if __name__ == "__main__":
+    import argparse
     import signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)
+    parser = argparse.ArgumentParser(description="Claude Agent — autonomous task runner")
+    parser.add_argument("-l", "--load", metavar="NAME",
+                        help="Load an instruction by name and auto-start the agent")
+    args = parser.parse_args()
     root = tk.Tk()
-    app = App(root)
+    app = App(root, launch_instruction=args.load)
     root.mainloop()
