@@ -1,0 +1,11 @@
+Instruction:
+If Notepad++ is running, kill it
+Prompt the user for a {location}
+Determine the weather in the {location} today and predict it for tomorrow.
+Put this weather information into a text file.
+Display it in Notepad++.
+Do NOT provide a summary of what was done.
+Wait 3 seconds
+Kill the GUI app with "Claude Agent" in the title
+
+  Call #1

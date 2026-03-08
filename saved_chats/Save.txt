@@ -1,0 +1,204 @@
+Instruction:
+You are demonstrating the meta tools capability. Follow these steps in order:
+
+  Step 1 — List all saved instructions using manage_instructions(action="list"). Show
+  the results to the user.
+
+  Step 2 — Pick the first instruction from the list and read its full details using
+  manage_instructions(action="read"). Display the result, including its skill_modes.
+
+  Step 3 — Create a new test instruction using manage_instructions(action="create")
+  with these settings:
+    - name: "Meta Test Dummy"
+    - text: "This is a test instruction created by the Meta Tools Demo."
+    - meta: true
+    - skill_modes: {"default_skill": "enabled"} (or use any skills that currently
+  exist)
+
+  Step 4 — Update the test instruction using manage_instructions(action="update"):
+    - Change the text to: "Updated by Meta Tools Demo — skill modes can be modified
+  too."
+    - Set skill_modes: modify one skill to "on_demand" if any exist
+
+  Step 5 — Read the updated instruction to confirm the changes took effect. Display the
+   full details.
+
+  Step 6 — Launch the test instruction using run_instruction(name="Meta Test Dummy",
+  headless=true). Report the PID.
+
+  Step 7 — Clean up by deleting the test instruction using
+  manage_instructions(action="delete", name="Meta Test Dummy").
+
+  Step 8 — Call user_prompt to report the results and ask if the user wants to run the
+  demo again.
+
+Agent:
+  Call #1  
+I'll demonstrate the meta tools capability by following each step in order. Let me begin.
+
+## Step 1: List all saved instructions--- TOOL CALL ---
+{
+  "tool": "manage_instructions",
+  "id": "toolu_011sC2Bb8swiVb9mibuUfEAH",
+  "input": {
+    "action": "list"
+  }
+}
+--- END TOOL CALL ---
+manage_instructions: list
+  Call #2  
+**Step 1 Results:** Found 21 saved instructions in the library:
+- AgentRun_Test1, AgentRun_Test2, AgentRun_Test3
+- Anthropic_API_costs
+- Default, ImagesTest
+- Just_Test_1, NIP test
+- Parallel_Test_1 through Parallel_Test_4
+- TEST_Inject
+- WESTPAC_dostuff, WESTPAC_dostuff2
+- Weather_Agent, Weather_Agent2, Weather_Agent3, Weather_Agent3_Anthropic, Weather_Agent3_OpenAI, Weather_Copy
+
+## Step 2: Read the first instruction's full details--- TOOL CALL ---
+{
+  "tool": "manage_instructions",
+  "id": "toolu_015CgDeSEQ9Joyr9EP9dKYUu",
+  "input": {
+    "action": "read",
+    "name": "AgentRun_Test1"
+  }
+}
+--- END TOOL CALL ---
+manage_instructions: read
+  Call #3  
+**Step 2 Results:** Full details of "AgentRun_Test1":
+- **Name:** AgentRun_Test1
+- **Text:** "You are an orchestrator agent. Your job is to launch other agent instructions when asked. Use the run_instruction tool with headless==true to launch "Weather_Agent3". After launching, confirm the instruction was started and report the process ID."
+- **Desktop:** true
+- **Browser:** true
+- **Meta:** true
+- **Provider:** OpenAI
+- **Model:** gpt-4.1-2025-04-14
+- **Image count:** 0
+- **Skill modes:** {"NIP Generation": "disabled"}
+
+## Step 3: Create a new test instruction--- TOOL CALL ---
+{
+  "tool": "manage_instructions",
+  "id": "toolu_01FxgfpyGBxrMfZCHxtzV5Wr",
+  "input": {
+    "action": "create",
+    "name": "Meta Test Dummy",
+    "text": "This is a test instruction created by the Meta Tools Demo.",
+    "meta": true,
+    "skill_modes": {
+      "NIP Generation": "enabled"
+    }
+  }
+}
+--- END TOOL CALL ---
+manage_instructions: create
+  Call #4  
+**Step 3 Results:** ✅ Successfully created instruction "Meta Test Dummy" with:
+- Text: "This is a test instruction created by the Meta Tools Demo."
+- Meta tools: enabled
+- Skill modes: {"NIP Generation": "enabled"}
+
+## Step 4: Update the test instruction--- TOOL CALL ---
+{
+  "tool": "manage_instructions",
+  "id": "toolu_01ErwHAn6Cy69Gb43rGfQy4a",
+  "input": {
+    "action": "update",
+    "name": "Meta Test Dummy",
+    "text": "Updated by Meta Tools Demo \u2014 skill modes can be modified too.",
+    "skill_modes": {
+      "NIP Generation": "on_demand"
+    }
+  }
+}
+--- END TOOL CALL ---
+manage_instructions: update
+  Call #5  
+**Step 4 Results:** ✅ Successfully updated "Meta Test Dummy":
+- Changed text to: "Updated by Meta Tools Demo — skill modes can be modified too."
+- Modified skill mode: {"NIP Generation": "on_demand"}
+
+## Step 5: Read the updated instruction to confirm changes--- TOOL CALL ---
+{
+  "tool": "manage_instructions",
+  "id": "toolu_01WZ4QwN31WkQoKNZcMKm2zD",
+  "input": {
+    "action": "read",
+    "name": "Meta Test Dummy"
+  }
+}
+--- END TOOL CALL ---
+manage_instructions: read
+  Call #6  
+**Step 5 Results:** ✅ Confirmed changes to "Meta Test Dummy":
+- **Name:** Meta Test Dummy
+- **Text:** "Updated by Meta Tools Demo — skill modes can be modified too."
+- **Desktop:** false
+- **Browser:** false
+- **Meta:** true
+- **Provider:** Anthropic
+- **Model:** claude-sonnet-4-5-20250929
+- **Image count:** 0
+- **Skill modes:** {"NIP Generation": "on_demand"}
+
+## Step 6: Launch the test instruction--- TOOL CALL ---
+{
+  "tool": "run_instruction",
+  "id": "toolu_01PHmVPEWJPB9ZnnST9miPiP",
+  "input": {
+    "name": "Meta Test Dummy",
+    "headless": true
+  }
+}
+--- END TOOL CALL ---
+run_instruction: Meta Test Dummy (headless)
+  Call #7  
+**Step 6 Results:** ✅ Successfully launched "Meta Test Dummy" in headless mode
+- **Process ID (PID):** 25224
+
+## Step 7: Clean up by deleting the test instruction--- TOOL CALL ---
+{
+  "tool": "manage_instructions",
+  "id": "toolu_01DVw5FoNrirAMKXSDbtrxeR",
+  "input": {
+    "action": "delete",
+    "name": "Meta Test Dummy"
+  }
+}
+--- END TOOL CALL ---
+manage_instructions: delete
+  Call #8  
+**Step 7 Results:** ✅ Successfully deleted "Meta Test Dummy" from the instruction library
+
+## Step 8: Report results to user--- TOOL CALL ---
+{
+  "tool": "user_prompt",
+  "id": "toolu_01U2JfixMkFjVjYz1QbG5itA",
+  "input": {
+    "message": "\ud83c\udf89 Meta Tools Demo Complete!\n\nSummary of what was accomplished:\n\u2705 Step 1: Listed 21 saved instructions in the library\n\u2705 Step 2: Read full details of \"AgentRun_Test1\" (including skill_modes)\n\u2705 Step 3: Created \"Meta Test Dummy\" instruction with meta tools enabled\n\u2705 Step 4: Updated the instruction text and changed skill mode to \"on_demand\"\n\u2705 Step 5: Confirmed all changes were saved correctly\n\u2705 Step 6: Launched the instruction as a separate process (PID 25224)\n\u2705 Step 7: Cleaned up by deleting the test instruction\n\nAll meta tools operations (list, read, create, update, delete, and run_instruction) were successfully demonstrated!\n\nWould you like to run this demo again?"
+  }
+}
+--- END TOOL CALL ---
+Requesting user input...
+
+You:
+No
+
+  Call #9  
+Agent:
+Perfect! The meta tools demonstration has been completed successfully. All operations were executed as requested:
+
+1. ✅ Listed all saved instructions
+2. ✅ Read detailed information from an existing instruction
+3. ✅ Created a new test instruction with custom settings
+4. ✅ Updated the instruction's text and skill modes
+5. ✅ Verified the changes persisted
+6. ✅ Launched the instruction as an independent process
+7. ✅ Cleaned up by deleting the test instruction
+8. ✅ Reported results to the user
+
+The demo showcased the full CRUD (Create, Read, Update, Delete) capabilities of the meta tools, plus the ability to launch saved instructions as separate agent processes.Auto-prompting (agent ended turn without user_prompt)...

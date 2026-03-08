@@ -1,0 +1,18 @@
+Instruction:
+Updated by Meta Tools Demo — skill modes can be modified too.
+
+Agent:
+  Call #1  
+I understand! Thank you for the update. It looks like you're demonstrating that the Meta Tools now support modifying skill modes as well.
+
+To confirm my understanding, the `manage_instructions` and `manage_skills` tools can now work with skill modes:
+
+- **manage_instructions**: Can set `skill_modes` parameter when creating or updating instructions, mapping skill names to modes ('disabled', 'enabled', or 'on_demand')
+- **manage_skills**: Can set the `mode` parameter when creating or updating individual skills
+
+This gives much more granular control over which skills are:
+- **enabled** - injected into the system prompt (always available)
+- **on_demand** - retrieved via get_skill tool when needed (like the "NIP Generation" skill currently available)
+- **disabled** - inactive
+
+Is there a specific task you'd like me to help you with using these Meta Tools capabilities, or would you like me to demonstrate managing instructions and skills with different modes?

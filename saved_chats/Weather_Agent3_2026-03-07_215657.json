@@ -1,0 +1,238 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "If Notepad++ is running, kill it\nPrompt the user for a {location}\nDetermine the weather in the {location} today and predict it for tomorrow.\nPut this weather information into a text file.\nDisplay it in Notepad++.\nDo NOT provide a summary of what was done.\nWait 3 seconds\nKill the GUI app with \"Claude Agent\" in the title"
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_kB0kB7L6Bg2iWh7rGwfA1sWY",
+          "name": "run_powershell",
+          "input": {
+            "command": "Get-Process notepad++ -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_kB0kB7L6Bg2iWh7rGwfA1sWY",
+          "content": "[Exit code: 1]"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_VT2J44do8FdTcTm4d8Us26Qw",
+          "name": "user_prompt",
+          "input": {
+            "message": "Enter a location (city, region, or ZIP) to get today’s weather and tomorrow’s forecast:"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_VT2J44do8FdTcTm4d8Us26Qw",
+          "content": "Adelaide NSW Australia"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_bcRPz48D7eHR7IUkTdY5Pfdn",
+          "name": "fetch_webpage",
+          "input": {
+            "url": "https://wttr.in/Adelaide%2C%20NSW%2C%20Australia?format=j1"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_bcRPz48D7eHR7IUkTdY5Pfdn",
+          "content": "{\n    \"current_condition\": [\n        {\n            \"FeelsLikeC\": \"26\",\n            \"FeelsLikeF\": \"78\",\n            \"cloudcover\": \"100\",\n            \"humidity\": \"89\",\n            \"localObsDateTime\": \"2026-03-07 09:57 PM\",\n            \"observation_time\": \"10:57 AM\",\n            \"precipInches\": \"0.1\",\n            \"precipMM\": \"2.9\",\n            \"pressure\": \"1012\",\n            \"pressureInches\": \"30\",\n            \"temp_C\": \"23\",\n            \"temp_F\": \"74\",\n            \"uvIndex\": \"1\",\n            \"visibility\": \"10\",\n            \"visibilityMiles\": \"6\",\n            \"weatherCode\": \"122\",\n            \"weatherDesc\": [\n                {\n                    \"value\": \"Overcast\"\n                }\n            ],\n            \"weatherIconUrl\": [\n                {\n                    \"value\": \"\"\n                }\n            ],\n            \"winddir16Point\": \"SE\",\n            \"winddirDegree\": \"133\",\n            \"windspeedKmph\": \"9\",\n            \"windspeedMiles\": \"5\"\n        }\n    ],\n    \"nearest_area\": [\n        {\n            \"areaName\": [\n                {\n                    \"value\": \"Macquarie Park\"\n                }\n            ],\n            \"country\": [\n                {\n                    \"value\": \"Australia\"\n                }\n            ],\n            \"latitude\": \"-33.777\",\n            \"longitude\": \"151.124\",\n            \"population\": \"7000\",\n            \"region\": [\n                {\n                    \"value\": \"New South Wales\"\n                }\n            ],\n            \"weatherUrl\": [\n                {\n                    \"value\": \"\"\n                }\n            ]\n        }\n    ],\n    \"request\": [\n        {\n            \"query\": \"Lat -33.78 and Lon 151.11\",\n            \"type\": \"LatLon\"\n        }\n    ],\n    \"weather\": [\n        {\n            \"astronomy\": [\n                {\n                    \"moon_illumination\": \"87\",\n                    \"moon_phase\": \"Waning Gibbous\",\n                    \"moonrise\": \"09:07 PM\",\n                    \"moonset\": \"10:11 AM\",\n                    \"sunrise\": \"06:48 AM\",\n                    \"sunset\": \"07:25 PM\"\n                }\n            ],\n            \"avgtempC\": \"25\",\n            \"avgtempF\": \"76\",\n            \"date\": \"2026-03-07\",\n            \"hourly\": [\n                {\n                    \"DewPointC\": \"22\",\n                    \"DewPointF\": \"71\",\n                    \"FeelsLikeC\": \"26\",\n                    \"FeelsLikeF\": \"78\",\n                    \"HeatIndexC\": \"26\",\n                    \"HeatIndexF\": \"78\",\n                    \"WindChillC\": \"23\",\n                    \"WindChillF\": \"74\",\n                    \"WindGustKmph\": \"14\",\n                    \"WindGustMiles\": \"8\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"10\",\n                    \"chanceofovercast\": \"31\",\n                    \"chanceofrain\": \"0\",\n                    \"chanceofremdry\": \"88\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"78\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"41\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"91\",\n                    \"precipInches\": \"0.0\",\n                    \"precipMM\": \"0.0\",\n                    \"pressure\": \"1014\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"23\",\n                    \"tempF\": \"74\",\n                    \"time\": \"0\",\n                    \"uvIndex\": \"1\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"116\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Partly Cloudy \"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"NE\",\n                    \"winddirDegree\": \"56\",\n                    \"windspeedKmph\": \"9\",\n                    \"windspeedMiles\": \"6\"\n                },\n                {\n                    \"DewPointC\": \"22\",\n                    \"DewPointF\": \"71\",\n                    \"FeelsLikeC\": \"25\",\n                    \"FeelsLikeF\": \"77\",\n                    \"HeatIndexC\": \"25\",\n                    \"HeatIndexF\": \"77\",\n                    \"WindChillC\": \"23\",\n                    \"WindChillF\": \"73\",\n                    \"WindGustKmph\": \"10\",\n                    \"WindGustMiles\": \"6\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"0\",\n                    \"chanceofovercast\": \"81\",\n                    \"chanceofrain\": \"84\",\n                    \"chanceofremdry\": \"0\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"0\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"53\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"93\",\n                    \"precipInches\": \"0.0\",\n                    \"precipMM\": \"0.0\",\n                    \"pressure\": \"1012\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"23\",\n                    \"tempF\": \"73\",\n                    \"time\": \"300\",\n                    \"uvIndex\": \"1\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"176\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Patchy rain nearby\"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"NE\",\n                    \"winddirDegree\": \"50\",\n                    \"windspeedKmph\": \"7\",\n                    \"windspeedMiles\": \"4\"\n                },\n                {\n                    \"DewPointC\": \"21\",\n                    \"DewPointF\": \"70\",\n                    \"FeelsLikeC\": \"22\",\n                    \"FeelsLikeF\": \"71\",\n                    \"HeatIndexC\": \"24\",\n                    \"HeatIndexF\": \"76\",\n                    \"WindChillC\": \"22\",\n                    \"WindChillF\": \"71\",\n                    \"WindGustKmph\": \"10\",\n                    \"WindGustMiles\": \"6\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"0\",\n                    \"chanceofovercast\": \"83\",\n                    \"chanceofrain\": \"0\",\n                    \"chanceofremdry\": \"90\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"12\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"50\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"94\",\n                    \"precipInches\": \"0.0\",\n                    \"precipMM\": \"0.0\",\n                    \"pressure\": \"1012\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"22\",\n                    \"tempF\": \"71\",\n                    \"time\": \"600\",\n                    \"uvIndex\": \"1\",\n                    \"visibility\": \"2\",\n                    \"visibilityMiles\": \"1\",\n                    \"weatherCode\": \"143\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Mist\"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"NNE\",\n                    \"winddirDegree\": \"33\",\n                    \"windspeedKmph\": \"6\",\n                    \"windspeedMiles\": \"4\"\n                },\n                {\n                    \"DewPointC\": \"21\",\n                    \"DewPointF\": \"69\",\n                    \"FeelsLikeC\": \"27\",\n                    \"FeelsLikeF\": \"80\",\n                    \"HeatIndexC\": \"27\",\n                    \"HeatIndexF\": \"80\",\n                    \"WindChillC\": \"25\",\n                    \"WindChillF\": \"76\",\n                    \"WindGustKmph\": \"8\",\n                    \"WindGustMiles\": \"5\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"15\",\n                    \"chanceofovercast\": \"89\",\n                    \"chanceofrain\": \"0\",\n                    \"chanceofremdry\": \"90\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"10\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"76\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"79\",\n                    \"precipInches\": \"0.0\",\n                    \"precipMM\": \"0.0\",\n                    \"pressure\": \"1012\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"25\",\n                    \"tempF\": \"76\",\n                    \"time\": \"900\",\n                    \"uvIndex\": \"6\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"119\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Cloudy \"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"NNE\",\n                    \"winddirDegree\": \"27\",\n                    \"windspeedKmph\": \"7\",\n                    \"windspeedMiles\": \"4\"\n                },\n                {\n                    \"DewPointC\": \"20\",\n                    \"DewPointF\": \"68\",\n                    \"FeelsLikeC\": \"31\",\n                    \"FeelsLikeF\": \"88\",\n                    \"HeatIndexC\": \"31\",\n                    \"HeatIndexF\": \"88\",\n                    \"WindChillC\": \"29\",\n                    \"WindChillF\": \"84\",\n                    \"WindGustKmph\": \"11\",\n                    \"WindGustMiles\": \"7\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"100\",\n                    \"chanceofovercast\": \"0\",\n                    \"chanceofrain\": \"0\",\n                    \"chanceofremdry\": \"83\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"93\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"18\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"59\",\n                    \"precipInches\": \"0.0\",\n                    \"precipMM\": \"0.0\",\n                    \"pressure\": \"1012\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"29\",\n                    \"tempF\": \"84\",\n                    \"time\": \"1200\",\n                    \"uvIndex\": \"8\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"113\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Sunny\"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"NE\",\n                    \"winddirDegree\": \"56\",\n                    \"windspeedKmph\": \"9\",\n                    \"windspeedMiles\": \"6\"\n                },\n                {\n                    \"DewPointC\": \"20\",\n                    \"DewPointF\": \"68\",\n                    \"FeelsLikeC\": \"32\",\n                    \"FeelsLikeF\": \"89\",\n                    \"HeatIndexC\": \"32\",\n                    \"HeatIndexF\": \"89\",\n                    \"WindChillC\": \"29\",\n                    \"WindChillF\": \"85\",\n                    \"WindGustKmph\": \"21\",\n                    \"WindGustMiles\": \"13\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"99\",\n                    \"chanceofovercast\": \"0\",\n                    \"chanceofrain\": \"0\",\n                    \"chanceofremdry\": \"93\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"93\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"15\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"58\",\n                    \"precipInches\": \"0.0\",\n                    \"precipMM\": \"0.0\",\n                    \"pressure\": \"1008\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"29\",\n                    \"tempF\": \"85\",\n                    \"time\": \"1500\",\n                    \"uvIndex\": \"8\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"113\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Sunny\"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"E\",\n                    \"winddirDegree\": \"86\",\n                    \"windspeedKmph\": \"18\",\n                    \"windspeedMiles\": \"11\"\n                },\n                {\n                    \"DewPointC\": \"21\",\n                    \"DewPointF\": \"71\",\n                    \"FeelsLikeC\": \"26\",\n                    \"FeelsLikeF\": \"79\",\n                    \"HeatIndexC\": \"26\",\n                    \"HeatIndexF\": \"79\",\n                    \"WindChillC\": \"24\",\n                    \"WindChillF\": \"76\",\n                    \"WindGustKmph\": \"6\",\n                    \"WindGustMiles\": \"4\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"30\",\n                    \"chanceofovercast\": \"89\",\n                    \"chanceofrain\": \"100\",\n                    \"chanceofremdry\": \"0\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"0\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"85\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"84\",\n                    \"precipInches\": \"0.1\",\n                    \"precipMM\": \"1.9\",\n                    \"pressure\": \"1010\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"24\",\n                    \"tempF\": \"76\",\n                    \"time\": \"1800\",\n                    \"uvIndex\": \"6\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"353\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Light rain shower\"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"NNE\",\n                    \"winddirDegree\": \"24\",\n                    \"windspeedKmph\": \"5\",\n                    \"windspeedMiles\": \"3\"\n                },\n                {\n                    \"DewPointC\": \"21\",\n                    \"DewPointF\": \"69\",\n                    \"FeelsLikeC\": \"25\",\n                    \"FeelsLikeF\": \"77\",\n                    \"HeatIndexC\": \"25\",\n                    \"HeatIndexF\": \"77\",\n                    \"WindChillC\": \"22\",\n                    \"WindChillF\": \"72\",\n                    \"WindGustKmph\": \"16\",\n                    \"WindGustMiles\": \"10\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"0\",\n                    \"chanceofovercast\": \"93\",\n                    \"chanceofrain\": \"100\",\n                    \"chanceofremdry\": \"0\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"0\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"100\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"89\",\n                    \"precipInches\": \"0.1\",\n                    \"precipMM\": \"2.9\",\n                    \"pressure\": \"1012\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"23\",\n                    \"tempF\": \"74\",\n                    \"time\": \"2100\",\n                    \"uvIndex\": \"1\",\n                    \"visibility\": \"10\",\n                    \"visibilityMiles\": \"6\",\n                    \"weatherCode\": \"122\",\n                    \"weatherDesc\": [\n                        {\n                            \"value\": \"Overcast\"\n                        }\n                    ],\n                    \"weatherIconUrl\": [\n                        {\n                            \"value\": \"\"\n                        }\n                    ],\n                    \"winddir16Point\": \"SE\",\n                    \"winddirDegree\": \"133\",\n                    \"windspeedKmph\": \"9\",\n                    \"windspeedMiles\": \"5\"\n                }\n            ],\n            \"maxtempC\": \"30\",\n            \"maxtempF\": \"86\",\n            \"mintempC\": \"22\",\n            \"mintempF\": \"71\",\n            \"sunHour\": \"12.0\",\n            \"totalSnow_cm\": \"0.0\",\n            \"uvIndex\": \"6\"\n        },\n        {\n            \"astronomy\": [\n                {\n                    \"moon_illumination\": \"80\",\n                    \"moon_phase\": \"Waning Gibbous\",\n                    \"moonrise\": \"09:38 PM\",\n                    \"moonset\": \"11:12 AM\",\n                    \"sunrise\": \"06:49 AM\",\n                    \"sunset\": \"07:24 PM\"\n                }\n            ],\n            \"avgtempC\": \"21\",\n            \"avgtempF\": \"70\",\n            \"date\": \"2026-03-08\",\n            \"hourly\": [\n                {\n                    \"DewPointC\": \"20\",\n                    \"DewPointF\": \"68\",\n                    \"FeelsLikeC\": \"21\",\n                    \"FeelsLikeF\": \"71\",\n                    \"HeatIndexC\": \"24\",\n                    \"HeatIndexF\": \"76\",\n                    \"WindChillC\": \"21\",\n                    \"WindChillF\": \"71\",\n                    \"WindGustKmph\": \"14\",\n                    \"WindGustMiles\": \"8\",\n                    \"chanceoffog\": \"0\",\n                    \"chanceoffrost\": \"0\",\n                    \"chanceofhightemp\": \"0\",\n                    \"chanceofovercast\": \"90\",\n                    \"chanceofrain\": \"100\",\n                    \"chanceofremdry\": \"0\",\n                    \"chanceofsnow\": \"0\",\n                    \"chanceofsunshine\": \"0\",\n                    \"chanceofthunder\": \"0\",\n                    \"chanceofwindy\": \"0\",\n                    \"cloudcover\": \"52\",\n                    \"diffRad\": \"0.0\",\n                    \"humidity\": \"92\",\n                    \"precipInches\": \"0.1\",\n                    \"precipMM\": \"3.1\",\n                    \"pressure\": \"1013\",\n                    \"pressureInches\": \"30\",\n                    \"shortRad\": \"0.0\",\n                    \"tempC\": \"21\",\n                    \"tempF\": \"71\",\n                    \"time\": \"0\",\n                    \"uvIndex\": \"1\",\n                    \"visibility\": \"7\",\n                    \"visibilityMiles\": \"4\",\n                    \"weatherCode\": \"356\",\n                    \"weatherDesc\": [\n                  \n\n[Content truncated...]"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_KVN5lQrt8Xxey8tb2vCgj7wD",
+          "name": "run_powershell",
+          "input": {
+            "command": "$location = 'Adelaide NSW Australia'\n$encLoc = [uri]::EscapeDataString($location)\n$url = \"https://wttr.in/$encLoc?format=j1\"\n$data = Invoke-RestMethod -Uri $url -Method Get\n\n$today = $data.weather[0]\n$tomorrow = $data.weather[1]\n$current = $data.current_condition[0]\n\nfunction Get-Midday($w) {\n  # Prefer 1200; fall back to closest.\n  $h = $w.hourly | Where-Object { $_.time -eq '1200' } | Select-Object -First 1\n  if (-not $h) { $h = $w.hourly | Select-Object -First 1 }\n  return $h\n}\n\n$todayMid = Get-Midday $today\n$tomMid = Get-Midday $tomorrow\n\n$nearest = $data.nearest_area[0]\n$resolved = \"{0}, {1}, {2}\" -f $nearest.areaName[0].value, $nearest.region[0].value, $nearest.country[0].value\n\n$obsTime = $current.localObsDateTime\n\n$txt = @()\n$txt += \"Weather for: $location\"\n$txt += \"Resolved as: $resolved\"\n$txt += \"Observed (local): $obsTime\"\n$txt += \"\"\n$txt += \"TODAY ($($today.date))\"\n$txt += \"Current: $($current.weatherDesc[0].value), $($current.temp_C)°C (feels $($current.FeelsLikeC)°C)\"\n$txt += \"Wind: $($current.windspeedKmph) km/h $($current.winddir16Point); Humidity: $($current.humidity)%\"\n$txt += \"High/Low: $($today.maxtempC)°C / $($today.mintempC)°C\"\n$txt += \"Midday outlook: $($todayMid.weatherDesc[0].value); chance of rain: $($todayMid.chanceofrain)%\"\n$txt += \"\"\n$txt += \"TOMORROW ($($tomorrow.date))\"\n$txt += \"High/Low: $($tomorrow.maxtempC)°C / $($tomorrow.mintempC)°C\"\n$txt += \"Midday outlook: $($tomMid.weatherDesc[0].value); chance of rain: $($tomMid.chanceofrain)%\"\n\n$outFile = Join-Path $env:TEMP (\"weather_{0}.txt\" -f (($location -replace '[^A-Za-z0-9]+','_').Trim('_')))\n$txt -join \"`r`n\" | Set-Content -Path $outFile -Encoding UTF8\n$outFile"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_KVN5lQrt8Xxey8tb2vCgj7wD",
+          "content": "C:\\Users\\grobl\\AppData\\Local\\Temp\\weather_Adelaide_NSW_Australia.txt\n\nSTDERR:\nCannot index into a null array.\nAt line:6 char:1\n+ $today = $data.weather[0]\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:7 char:1\n+ $tomorrow = $data.weather[1]\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:8 char:1\n+ $current = $data.current_condition[0]\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:20 char:1\n+ $nearest = $data.nearest_area[0]\n+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:21 char:1\n+ $resolved = \"{0}, {1}, {2}\" -f $nearest.areaName[0].value, \n$nearest.r ...\n+ \n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:31 char:21\n+ $txt += \"Current: $($current.weatherDesc[0].value), \n$($current.temp_C ...\n+                     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:34 char:28\n+ $txt += \"Midday outlook: $($todayMid.weatherDesc[0].value); chance \nof ...\n+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray\n \nCannot index into a null array.\nAt line:38 char:28\n+ $txt += \"Midday outlook: $($tomMid.weatherDesc[0].value); chance \nof r ...\n+                            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : InvalidOperation: (:) [], RuntimeExcep \n   tion\n    + FullyQualifiedErrorId : NullArray"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_9OttFAeL5336okGA5HSfJ3lM",
+          "name": "run_powershell",
+          "input": {
+            "command": "$location='Adelaide NSW Australia'; $enc=[uri]::EscapeDataString($location); $url=\"https://wttr.in/$enc?format=j1\"; $resp=Invoke-WebRequest -Uri $url -UseBasicParsing; $resp.StatusCode; $resp.Headers['Content-Type']; $resp.Content.Substring(0,[Math]::Min(500,$resp.Content.Length))"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_9OttFAeL5336okGA5HSfJ3lM",
+          "content": "200\ntext/plain; charset=utf-8\nWeather report: =j1\n\n  \u001b[38;5;226m    \\   /    \u001b[0m Sunny\n  \u001b[38;5;226m     .-.     \u001b[0m \u001b[38;5;118m+13\u001b[0m(\u001b[38;5;082m11\u001b[0m) øC\u001b[0m     \n  \u001b[38;5;226m  ? (   ) ?  \u001b[0m \u001b[1m?\u001b[0m \u001b[38;5;220m19\u001b[0m km/h\u001b[0m      \n  \u001b[38;5;226m     `-'     \u001b[0m 10 km\u001b[0m          \n  \u001b[38;5;226m    /   \\    \u001b[0m 0.0 mm\u001b[0m         \n                                                       ÚÄÄÄÄÄÄÄÄÄÄÄÄÄ¿                                                       \nÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´  S"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_NaBmLT5xAaeMIpvpCYrAV2Ps",
+          "name": "run_powershell",
+          "input": {
+            "command": "$location='Adelaide NSW Australia'; $enc=[uri]::EscapeDataString($location); $url=\"https://wttr.in/$enc?format=j1\"; $headers=@{'Accept'='application/json';'User-Agent'='curl/8.0.0'}; $r=Invoke-WebRequest -Uri $url -Headers $headers -UseBasicParsing; $r.Headers['Content-Type']; $r.Content.Substring(0,[Math]::Min(200,$r.Content.Length))"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_NaBmLT5xAaeMIpvpCYrAV2Ps",
+          "content": "text/plain; charset=utf-8\nWeather report: =j1\n\n  \u001b[38;5;226m    \\   /    \u001b[0m Sunny\n  \u001b[38;5;226m     .-.     \u001b[0m \u001b[38;5;118m+13\u001b[0m(\u001b[38;5;082m11\u001b[0m) øC\u001b[0m     \n  \u001b[38;5;226m  ? (   ) ?  \u001b[0m \u001b[1m?\u001b[0m \u001b[38;5;220m19\u001b[0m km"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_AnujtoQA9jfIXpJAI7ImvVy0",
+          "name": "run_powershell",
+          "input": {
+            "command": "$location='Adelaide NSW Australia'\n\n# 1) Geocode via Open-Meteo\n$geoUrl = 'https://geocoding-api.open-meteo.com/v1/search?name=' + [uri]::EscapeDataString($location) + '&count=1&language=en&format=json'\n$geo = Invoke-RestMethod -Uri $geoUrl -Method Get\nif (-not $geo.results -or $geo.results.Count -lt 1) { throw \"Could not geocode location: $location\" }\n$r = $geo.results[0]\n$lat = [double]$r.latitude\n$lon = [double]$r.longitude\n$resolved = @($r.name, $r.admin1, $r.country) -ne $null -join ', '\n\n# 2) Forecast\n$wxUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + $lat + '&longitude=' + $lon + '&current=temperature_2m,weathercode,wind_speed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto'\n$wx = Invoke-RestMethod -Uri $wxUrl -Method Get\n\nfunction WmoDesc([int]$code) {\n  switch ($code) {\n    0 {'Clear sky'}\n    1 {'Mainly clear'}\n    2 {'Partly cloudy'}\n    3 {'Overcast'}\n    45 {'Fog'}\n    48 {'Rime fog'}\n    51 {'Light drizzle'}\n    53 {'Moderate drizzle'}\n    55 {'Dense drizzle'}\n    56 {'Light freezing drizzle'}\n    57 {'Dense freezing drizzle'}\n    61 {'Slight rain'}\n    63 {'Moderate rain'}\n    65 {'Heavy rain'}\n    66 {'Light freezing rain'}\n    67 {'Heavy freezing rain'}\n    71 {'Slight snow'}\n    73 {'Moderate snow'}\n    75 {'Heavy snow'}\n    77 {'Snow grains'}\n    80 {'Slight rain showers'}\n    81 {'Moderate rain showers'}\n    82 {'Violent rain showers'}\n    85 {'Slight snow showers'}\n    86 {'Heavy snow showers'}\n    95 {'Thunderstorm'}\n    96 {'Thunderstorm with slight hail'}\n    99 {'Thunderstorm with heavy hail'}\n    default {\"Weather code $code\"}\n  }\n}\n\n$dates = $wx.daily.time\nif (-not $dates -or $dates.Count -lt 2) { throw 'Daily forecast missing.' }\n\n$todayDate = $dates[0]\n$tomorrowDate = $dates[1]\n\n$todayCode = [int]$wx.daily.weathercode[0]\n$tomCode   = [int]$wx.daily.weathercode[1]\n\n$todayMax = $wx.daily.temperature_2m_max[0]\n$todayMin = $wx.daily.temperature_2m_min[0]\n$todayPop = $wx.daily.precipitation_probability_max[0]\n\n$tomMax = $wx.daily.temperature_2m_max[1]\n$tomMin = $wx.daily.temperature_2m_min[1]\n$tomPop = $wx.daily.precipitation_probability_max[1]\n\n$curTemp = $wx.current.temperature_2m\n$curWind = $wx.current.wind_speed_10m\n$curCode = [int]$wx.current.weathercode\n\n$lines = @()\n$lines += \"Weather for: $location\"\n$lines += \"Resolved as: $resolved\"\n$lines += \"Timezone: $($wx.timezone)\"\n$lines += ''\n$lines += \"CURRENT\"\n$lines += \"- $([DateTime]::Now.ToString('yyyy-MM-dd HH:mm')): $(WmoDesc $curCode), ${curTemp}$($wx.current_units.temperature_2m), wind ${curWind}$($wx.current_units.wind_speed_10m)\"\n$lines += ''\n$lines += \"TODAY ($todayDate)\"\n$lines += \"- Outlook: $(WmoDesc $todayCode)\"\n$lines += \"- High/Low: ${todayMax}$($wx.daily_units.temperature_2m_max) / ${todayMin}$($wx.daily_units.temperature_2m_min)\"\n$lines += \"- Precipitation probability (max): ${todayPop}$($wx.daily_units.precipitation_probability_max)\"\n$lines += ''\n$lines += \"TOMORROW ($tomorrowDate)\"\n$lines += \"- Outlook: $(WmoDesc $tomCode)\"\n$lines += \"- High/Low: ${tomMax}$($wx.daily_units.temperature_2m_max) / ${tomMin}$($wx.daily_units.temperature_2m_min)\"\n$lines += \"- Precipitation probability (max): ${tomPop}$($wx.daily_units.precipitation_probability_max)\"\n\n$outFile = Join-Path $env:TEMP (\"weather_{0}.txt\" -f (($location -replace '[^A-Za-z0-9]+','_').Trim('_')))\n$lines -join \"`r`n\" | Set-Content -Path $outFile -Encoding UTF8\n\n$outFile"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_AnujtoQA9jfIXpJAI7ImvVy0",
+          "content": "STDERR:\nCould not geocode location: Adelaide NSW Australia\nAt line:6 char:55\n+ ... esults.Count -lt 1) { throw \"Could not geocode location: \n$location\" }\n+                           \n~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~\n    + CategoryInfo          : OperationStopped: (Could not geoco...e \n    NSW Australia:String) [], RuntimeException\n    + FullyQualifiedErrorId : Could not geocode location: Adelaide N \n   SW Australia\n \n\n[Exit code: 1]"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_tHqm6CiXiRShZiIALPNZzf3b",
+          "name": "run_powershell",
+          "input": {
+            "command": "$location='Adelaide NSW Australia'\n\n$stateMap = @{\n  'NSW'='New South Wales'\n  'VIC'='Victoria'\n  'QLD'='Queensland'\n  'SA'='South Australia'\n  'WA'='Western Australia'\n  'TAS'='Tasmania'\n  'NT'='Northern Territory'\n  'ACT'='Australian Capital Territory'\n}\n\nfunction Geocode([string]$q){\n  $u='https://geocoding-api.open-meteo.com/v1/search?name='+[uri]::EscapeDataString($q)+'&count=5&language=en&format=json'\n  try { Invoke-RestMethod -Uri $u -Method Get } catch { $null }\n}\n\n$geo = Geocode $location\nif (-not $geo -or -not $geo.results) {\n  # try without common state abbreviations\n  $q2 = ($location -split '\\s+' | Where-Object { -not $stateMap.ContainsKey($_.ToUpper()) }) -join ' '\n  $geo = Geocode $q2\n  if (-not $geo -or -not $geo.results) {\n    $geo = Geocode (($location -split '\\s+')[0])\n  }\n}\nif (-not $geo -or -not $geo.results) { throw \"Could not geocode location: $location\" }\n\n$wantState = $null\nforeach($k in $stateMap.Keys){ if ($location.ToUpper().Contains($k)) { $wantState = $stateMap[$k]; break } }\n\n$best = $null\nif ($wantState) {\n  $best = $geo.results | Where-Object { $_.admin1 -eq $wantState -and $_.country_code -eq 'AU' } | Select-Object -First 1\n}\nif (-not $best) {\n  $best = $geo.results | Where-Object { $_.country_code -eq 'AU' } | Select-Object -First 1\n}\nif (-not $best) { $best = $geo.results | Select-Object -First 1 }\n\n$lat=[double]$best.latitude\n$lon=[double]$best.longitude\n$resolved = @($best.name,$best.admin1,$best.country) -ne $null -join ', '\n\n$wxUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + $lat + '&longitude=' + $lon + '&current=temperature_2m,weathercode,wind_speed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto'\n$wx = Invoke-RestMethod -Uri $wxUrl -Method Get\n\nfunction WmoDesc([int]$code) {\n  switch ($code) {\n    0 {'Clear sky'}\n    1 {'Mainly clear'}\n    2 {'Partly cloudy'}\n    3 {'Overcast'}\n    45 {'Fog'}\n    48 {'Rime fog'}\n    51 {'Light drizzle'}\n    53 {'Moderate drizzle'}\n    55 {'Dense drizzle'}\n    56 {'Light freezing drizzle'}\n    57 {'Dense freezing drizzle'}\n    61 {'Slight rain'}\n    63 {'Moderate rain'}\n    65 {'Heavy rain'}\n    66 {'Light freezing rain'}\n    67 {'Heavy freezing rain'}\n    71 {'Slight snow'}\n    73 {'Moderate snow'}\n    75 {'Heavy snow'}\n    77 {'Snow grains'}\n    80 {'Slight rain showers'}\n    81 {'Moderate rain showers'}\n    82 {'Violent rain showers'}\n    85 {'Slight snow showers'}\n    86 {'Heavy snow showers'}\n    95 {'Thunderstorm'}\n    96 {'Thunderstorm with slight hail'}\n    99 {'Thunderstorm with heavy hail'}\n    default {\"Weather code $code\"}\n  }\n}\n\n$dates = $wx.daily.time\nif (-not $dates -or $dates.Count -lt 2) { throw 'Daily forecast missing.' }\n\n$todayDate = $dates[0]\n$tomorrowDate = $dates[1]\n\n$todayCode = [int]$wx.daily.weathercode[0]\n$tomCode   = [int]$wx.daily.weathercode[1]\n\n$todayMax = $wx.daily.temperature_2m_max[0]\n$todayMin = $wx.daily.temperature_2m_min[0]\n$todayPop = $wx.daily.precipitation_probability_max[0]\n\n$tomMax = $wx.daily.temperature_2m_max[1]\n$tomMin = $wx.daily.temperature_2m_min[1]\n$tomPop = $wx.daily.precipitation_probability_max[1]\n\n$curTemp = $wx.current.temperature_2m\n$curWind = $wx.current.wind_speed_10m\n$curCode = [int]$wx.current.weathercode\n\n$lines = @()\n$lines += \"Weather for: $location\"\n$lines += \"Resolved as: $resolved\"\n$lines += \"Timezone: $($wx.timezone)\"\n$lines += ''\n$lines += \"CURRENT\"\n$lines += \"- $(WmoDesc $curCode), ${curTemp}$($wx.current_units.temperature_2m), wind ${curWind}$($wx.current_units.wind_speed_10m)\"\n$lines += ''\n$lines += \"TODAY ($todayDate)\"\n$lines += \"- Outlook: $(WmoDesc $todayCode)\"\n$lines += \"- High/Low: ${todayMax}$($wx.daily_units.temperature_2m_max) / ${todayMin}$($wx.daily_units.temperature_2m_min)\"\n$lines += \"- Precip. probability (max): ${todayPop}$($wx.daily_units.precipitation_probability_max)\"\n$lines += ''\n$lines += \"TOMORROW ($tomorrowDate)\"\n$lines += \"- Outlook: $(WmoDesc $tomCode)\"\n$lines += \"- High/Low: ${tomMax}$($wx.daily_units.temperature_2m_max) / ${tomMin}$($wx.daily_units.temperature_2m_min)\"\n$lines += \"- Precip. probability (max): ${tomPop}$($wx.daily_units.precipitation_probability_max)\"\n\n$outFile = Join-Path $env:TEMP (\"weather_{0}.txt\" -f (($location -replace '[^A-Za-z0-9]+','_').Trim('_')))\n$lines -join \"`r`n\" | Set-Content -Path $outFile -Encoding UTF8\n\n$outFile\n"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_tHqm6CiXiRShZiIALPNZzf3b",
+          "content": "C:\\Users\\grobl\\AppData\\Local\\Temp\\weather_Adelaide_NSW_Australia.txt"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_gh5IU9OxCo34bMHu9OJEdWIa",
+          "name": "open_application",
+          "input": {
+            "name": "notepad++",
+            "args": "C:\\Users\\grobl\\AppData\\Local\\Temp\\weather_Adelaide_NSW_Australia.txt"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "call_gh5IU9OxCo34bMHu9OJEdWIa",
+          "content": "Opened notepad++ with C:\\Users\\grobl\\AppData\\Local\\Temp\\weather_Adelaide_NSW_Australia.txt (command: start notepad++ \"C:\\Users\\grobl\\AppData\\Local\\Temp\\weather_Adelaide_NSW_Australia.txt\")"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "tool_use",
+          "id": "call_17k4lXlY5hzYd43jqiCgi43V",
+          "name": "run_powershell",
+          "input": {
+            "command": "Start-Sleep -Seconds 3"
+          }
+        }
+      ]
+    }
+  ],
+  "system_prompt": "You are an autonomous AI agent with access to a rich set of tools. Your task is given in the first user message — execute it fully and proactively.\n\nCORE TOOLS (always available):\n• web_search — search the web for current information.\n• fetch_webpage — fetch and read a specific URL.\n• run_powershell — execute PowerShell commands on the local Windows PC.\n• csv_search — search a delimited text file for records by column heading and value.\n• user_prompt — ask the user a question and wait for their reply. This is the ONLY way to get user input.\n\nDESKTOP TOOLS (available when Desktop is enabled):\n• screenshot — capture the screen. Always take a screenshot FIRST before clicking or typing.\n• mouse_click — click at specific coordinates from the screenshot.\n• type_text — type text at the current cursor position.\n• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n• mouse_scroll — scroll up or down.\n• open_application — launch apps by name or path.\n• find_window — find and optionally activate windows by title.\n• clipboard_read / clipboard_write — read/write the Windows clipboard.\n• wait_for_window — wait until a window appears.\n• read_screen_text — OCR a screen region to extract text.\n• find_image_on_screen — find a reference image on screen.\n• mouse_drag — drag the mouse from one point to another.\n\nBROWSER TOOLS (available when Browser is enabled):\n• browser_open — connect to Edge with real profile and navigate to a URL.\n• browser_navigate — go to a new URL.\n• browser_click — click an element by CSS selector or visible text.\n• browser_fill — fill a form field by CSS selector.\n• browser_get_text — read text content from the page or element.\n• browser_run_js — execute JavaScript on the page.\n• browser_screenshot — take a screenshot of the browser page.\n• browser_close — disconnect from the browser.\n• browser_wait_for — wait for an element to appear.\n• browser_select — select an option from a dropdown.\n• browser_get_elements — get info about matching elements.\n\nMETA TOOLS (available when Meta is enabled):\n• manage_instructions — CRUD operations on the saved agent instruction library (list/read/create/update/delete). Changes are saved to disk for future agent runs, not the currently-running instruction.\n• manage_skills — CRUD operations on the shared skills library (list/read/create/update/delete). Skills can be enabled (injected into system prompt), on_demand (retrieved via get_skill tool), or disabled.\n\nGUIDELINES:\n• Execute the task autonomously — chain tools together without hesitation.\n• When multiple tools can achieve a goal, chain them together without asking.\n• For desktop automation: screenshot first, then act on what you see.\n• For browser tasks: use browser tools (not desktop tools) for precision.\n• CRITICAL: If you need user input, confirmation, or action, or your output ends with a question — you MUST call the user_prompt tool. NEVER just output text and stop. Outputting a question or request as plain text ends your turn and the user has no way to respond. The ONLY way to get a reply from the user is user_prompt.\n• If you genuinely can't complete a step, explain what went wrong.\n• When the task is complete, summarise what you did.",
+  "agent_instruction_name": "Weather_Agent3",
+  "provider": "OpenAI",
+  "model": "gpt-5.2",
+  "temperature": 0.0,
+  "thinking_enabled": true,
+  "thinking_effort": "high",
+  "thinking_budget": 8192,
+  "name": "Weather_Agent3_2026-03-07_215657"
+}

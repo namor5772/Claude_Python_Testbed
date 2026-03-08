@@ -1,0 +1,252 @@
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "You are demonstrating the meta tools capability. Follow these steps in order:\n\n  Step 1 — List all saved instructions using manage_instructions(action=\"list\"). Show\n  the results to the user.\n\n  Step 2 — Pick the first instruction from the list and read its full details using\n  manage_instructions(action=\"read\"). Display the result, including its skill_modes.\n\n  Step 3 — Create a new test instruction using manage_instructions(action=\"create\")\n  with these settings:\n    - name: \"Meta Test Dummy\"\n    - text: \"This is a test instruction created by the Meta Tools Demo.\"\n    - meta: true\n    - skill_modes: {\"default_skill\": \"enabled\"} (or use any skills that currently\n  exist)\n\n  Step 4 — Update the test instruction using manage_instructions(action=\"update\"):\n    - Change the text to: \"Updated by Meta Tools Demo — skill modes can be modified\n  too.\"\n    - Set skill_modes: modify one skill to \"on_demand\" if any exist\n\n  Step 5 — Read the updated instruction to confirm the changes took effect. Display the\n   full details.\n\n  Step 6 — Launch the test instruction using run_instruction(name=\"Meta Test Dummy\",\n  headless=true). Report the PID.\n\n  Step 7 — Clean up by deleting the test instruction using\n  manage_instructions(action=\"delete\", name=\"Meta Test Dummy\").\n\n  Step 8 — Call user_prompt to report the results and ask if the user wants to run the\n  demo again."
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll demonstrate the meta tools capability by following each step in order. Let me begin.\n\n## Step 1: List all saved instructions"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_011sC2Bb8swiVb9mibuUfEAH",
+          "name": "manage_instructions",
+          "input": {
+            "action": "list"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_011sC2Bb8swiVb9mibuUfEAH",
+          "content": "• AgentRun_Test1  [OpenAI/gpt-4.1-2025-04-14] [desktop browser meta]\n  You are an orchestrator agent. Your job is to launch other agent instructions when asked. Use the ru...\n• AgentRun_Test2  [Anthropic/claude-sonnet-4-5-20250929] [desktop browser meta]\n  You are an instruction library manager. Your job is to help the user organise their saved agent inst...\n• AgentRun_Test3  [Anthropic/claude-sonnet-4-5-20250929] [desktop browser meta]\n  You are demonstrating the meta tools capability. Follow these steps in order:    Step 1 — List all s...\n• Anthropic_API_costs  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  go to https://platform.claude.com/ Let me login Go to the Cost page Wait for 10 seconds Export the C...\n• Default  [Anthropic/] [desktop browser]\n  In under 300 words tell me as much as you can about what is on this Laptop...\n• ImagesTest  [Anthropic/]\n  Describe the two attached pictures...\n• Just_Test_1  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  call user_prompt tool after every non-tool use reply Tell me about what is on this laptop. Do a web ...\n• NIP test  [Anthropic/] [desktop browser]\n  IMPORTANT: Before doing anything else, call the get_skill tool to retrieve the 'NIP Generation' skil...\n• Parallel_Test_1  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  Search the web for the following three topics simultaneously and summarize each in under 50 words:  ...\n• Parallel_Test_2  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  Fetch these three web pages and compare their main content:   - https://docs.python.org/3/whatsnew/3...\n• Parallel_Test_3  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  Research the current weather API options available for free use. Search the web for \"free weather AP...\n• Parallel_Test_4  [OpenAI/gpt-5] [desktop browser]\n  I need a competitive analysis. Search the web for each of these and give me a one-paragraph summary ...\n• TEST_Inject  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  you MUST call the user_prompt tool after every non-tool use reply. ALWAYS request my input again....\n• WESTPAC_dostuff  [Anthropic/] [desktop browser]\n  Open the Westpac website. Do that in a new instance of the browser.  Prompt me for the Login & Passw...\n• WESTPAC_dostuff2  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  Open the Westpac website. Do that in a new instance of the browser.  Prompt me for the Login & Passw...\n• Weather_Agent  [Anthropic/claude-haiku-4-5-20251001] [desktop browser]\n  Determine the weather in Wilton NSW today predict it for tomorrow. Put this weather information into...\n• Weather_Agent2  [Anthropic/claude-haiku-4-5-20251001]\n  Determine the weather in Moruya NSW today predict it for tomorrow. Put this weather information into...\n• Weather_Agent3  [Anthropic/claude-sonnet-4-5-20250929] [desktop browser meta]\n  If Notepad++ is running, kill it Prompt the user for a {location} Determine the weather in the {loca...\n• Weather_Agent3_Anthropic  [Anthropic/claude-haiku-4-5-20251001]\n  Determine the weather in Moruya NSW today predict it for tomorrow. Put this weather information into...\n• Weather_Agent3_OpenAI  [OpenAI/gpt-5-mini]\n  Determine the weather in Crooked Corner NSW today predict it for tomorrow. Put this weather informat...\n• Weather_Copy  [OpenAI/gpt-4.1-2025-04-14] [desktop browser meta]\n  If Notepad++ is running, kill it Prompt the user for a {location} Determine the weather in the {loca..."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 1 Results:** Found 21 saved instructions in the library:\n- AgentRun_Test1, AgentRun_Test2, AgentRun_Test3\n- Anthropic_API_costs\n- Default, ImagesTest\n- Just_Test_1, NIP test\n- Parallel_Test_1 through Parallel_Test_4\n- TEST_Inject\n- WESTPAC_dostuff, WESTPAC_dostuff2\n- Weather_Agent, Weather_Agent2, Weather_Agent3, Weather_Agent3_Anthropic, Weather_Agent3_OpenAI, Weather_Copy\n\n## Step 2: Read the first instruction's full details"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_015CgDeSEQ9Joyr9EP9dKYUu",
+          "name": "manage_instructions",
+          "input": {
+            "action": "read",
+            "name": "AgentRun_Test1"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_015CgDeSEQ9Joyr9EP9dKYUu",
+          "content": "{\n  \"name\": \"AgentRun_Test1\",\n  \"text\": \"You are an orchestrator agent.\\nYour job is to launch other agent instructions when asked.\\nUse the run_instruction tool with headless==true to launch \\\"Weather_Agent3\\\".\\nAfter launching, confirm the instruction was started and report the process ID.\",\n  \"desktop\": true,\n  \"browser\": true,\n  \"meta\": true,\n  \"provider\": \"OpenAI\",\n  \"model\": \"gpt-4.1-2025-04-14\",\n  \"image_count\": 0,\n  \"skill_modes\": {\n    \"NIP Generation\": \"disabled\"\n  }\n}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 2 Results:** Full details of \"AgentRun_Test1\":\n- **Name:** AgentRun_Test1\n- **Text:** \"You are an orchestrator agent. Your job is to launch other agent instructions when asked. Use the run_instruction tool with headless==true to launch \"Weather_Agent3\". After launching, confirm the instruction was started and report the process ID.\"\n- **Desktop:** true\n- **Browser:** true\n- **Meta:** true\n- **Provider:** OpenAI\n- **Model:** gpt-4.1-2025-04-14\n- **Image count:** 0\n- **Skill modes:** {\"NIP Generation\": \"disabled\"}\n\n## Step 3: Create a new test instruction"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01FxgfpyGBxrMfZCHxtzV5Wr",
+          "name": "manage_instructions",
+          "input": {
+            "action": "create",
+            "name": "Meta Test Dummy",
+            "text": "This is a test instruction created by the Meta Tools Demo.",
+            "meta": true,
+            "skill_modes": {
+              "NIP Generation": "enabled"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01FxgfpyGBxrMfZCHxtzV5Wr",
+          "content": "Instruction 'Meta Test Dummy' created successfully."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 3 Results:** ✅ Successfully created instruction \"Meta Test Dummy\" with:\n- Text: \"This is a test instruction created by the Meta Tools Demo.\"\n- Meta tools: enabled\n- Skill modes: {\"NIP Generation\": \"enabled\"}\n\n## Step 4: Update the test instruction"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01ErwHAn6Cy69Gb43rGfQy4a",
+          "name": "manage_instructions",
+          "input": {
+            "action": "update",
+            "name": "Meta Test Dummy",
+            "text": "Updated by Meta Tools Demo — skill modes can be modified too.",
+            "skill_modes": {
+              "NIP Generation": "on_demand"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01ErwHAn6Cy69Gb43rGfQy4a",
+          "content": "Instruction 'Meta Test Dummy' updated successfully."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 4 Results:** ✅ Successfully updated \"Meta Test Dummy\":\n- Changed text to: \"Updated by Meta Tools Demo — skill modes can be modified too.\"\n- Modified skill mode: {\"NIP Generation\": \"on_demand\"}\n\n## Step 5: Read the updated instruction to confirm changes"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01WZ4QwN31WkQoKNZcMKm2zD",
+          "name": "manage_instructions",
+          "input": {
+            "action": "read",
+            "name": "Meta Test Dummy"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01WZ4QwN31WkQoKNZcMKm2zD",
+          "content": "{\n  \"name\": \"Meta Test Dummy\",\n  \"text\": \"Updated by Meta Tools Demo \\u2014 skill modes can be modified too.\",\n  \"desktop\": false,\n  \"browser\": false,\n  \"meta\": true,\n  \"provider\": \"Anthropic\",\n  \"model\": \"claude-sonnet-4-5-20250929\",\n  \"image_count\": 0,\n  \"skill_modes\": {\n    \"NIP Generation\": \"on_demand\"\n  }\n}"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 5 Results:** ✅ Confirmed changes to \"Meta Test Dummy\":\n- **Name:** Meta Test Dummy\n- **Text:** \"Updated by Meta Tools Demo — skill modes can be modified too.\"\n- **Desktop:** false\n- **Browser:** false\n- **Meta:** true\n- **Provider:** Anthropic\n- **Model:** claude-sonnet-4-5-20250929\n- **Image count:** 0\n- **Skill modes:** {\"NIP Generation\": \"on_demand\"}\n\n## Step 6: Launch the test instruction"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01PHmVPEWJPB9ZnnST9miPiP",
+          "name": "run_instruction",
+          "input": {
+            "name": "Meta Test Dummy",
+            "headless": true
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01PHmVPEWJPB9ZnnST9miPiP",
+          "content": "Launched instruction 'Meta Test Dummy' in headless mode (PID 25224)."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 6 Results:** ✅ Successfully launched \"Meta Test Dummy\" in headless mode\n- **Process ID (PID):** 25224\n\n## Step 7: Clean up by deleting the test instruction"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01DVw5FoNrirAMKXSDbtrxeR",
+          "name": "manage_instructions",
+          "input": {
+            "action": "delete",
+            "name": "Meta Test Dummy"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01DVw5FoNrirAMKXSDbtrxeR",
+          "content": "Instruction 'Meta Test Dummy' deleted."
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "**Step 7 Results:** ✅ Successfully deleted \"Meta Test Dummy\" from the instruction library\n\n## Step 8: Report results to user"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_01U2JfixMkFjVjYz1QbG5itA",
+          "name": "user_prompt",
+          "input": {
+            "message": "🎉 Meta Tools Demo Complete!\n\nSummary of what was accomplished:\n✅ Step 1: Listed 21 saved instructions in the library\n✅ Step 2: Read full details of \"AgentRun_Test1\" (including skill_modes)\n✅ Step 3: Created \"Meta Test Dummy\" instruction with meta tools enabled\n✅ Step 4: Updated the instruction text and changed skill mode to \"on_demand\"\n✅ Step 5: Confirmed all changes were saved correctly\n✅ Step 6: Launched the instruction as a separate process (PID 25224)\n✅ Step 7: Cleaned up by deleting the test instruction\n\nAll meta tools operations (list, read, create, update, delete, and run_instruction) were successfully demonstrated!\n\nWould you like to run this demo again?"
+          }
+        }
+      ]
+    },
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_01U2JfixMkFjVjYz1QbG5itA",
+          "content": "No"
+        }
+      ]
+    },
+    {
+      "role": "assistant",
+      "content": "Perfect! The meta tools demonstration has been completed successfully. All operations were executed as requested:\n\n1. ✅ Listed all saved instructions\n2. ✅ Read detailed information from an existing instruction\n3. ✅ Created a new test instruction with custom settings\n4. ✅ Updated the instruction's text and skill modes\n5. ✅ Verified the changes persisted\n6. ✅ Launched the instruction as an independent process\n7. ✅ Cleaned up by deleting the test instruction\n8. ✅ Reported results to the user\n\nThe demo showcased the full CRUD (Create, Read, Update, Delete) capabilities of the meta tools, plus the ability to launch saved instructions as separate agent processes."
+    }
+  ],
+  "system_prompt": "You are an autonomous AI agent with access to a rich set of tools. Your task is given in the first user message — execute it fully and proactively.\n\nCORE TOOLS (always available):\n• web_search — search the web for current information.\n• fetch_webpage — fetch and read a specific URL.\n• run_powershell — execute PowerShell commands on the local Windows PC.\n• csv_search — search a delimited text file for records by column heading and value.\n• user_prompt — ask the user a question and wait for their reply. This is the ONLY way to get user input.\n\nDESKTOP TOOLS (available when Desktop is enabled):\n• screenshot — capture the screen. Always take a screenshot FIRST before clicking or typing.\n• mouse_click — click at specific coordinates from the screenshot.\n• type_text — type text at the current cursor position.\n• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n• mouse_scroll — scroll up or down.\n• open_application — launch apps by name or path.\n• find_window — find and optionally activate windows by title.\n• clipboard_read / clipboard_write — read/write the Windows clipboard.\n• wait_for_window — wait until a window appears.\n• read_screen_text — OCR a screen region to extract text.\n• find_image_on_screen — find a reference image on screen.\n• mouse_drag — drag the mouse from one point to another.\n\nBROWSER TOOLS (available when Browser is enabled):\n• browser_open — connect to Edge with real profile and navigate to a URL.\n• browser_navigate — go to a new URL.\n• browser_click — click an element by CSS selector or visible text.\n• browser_fill — fill a form field by CSS selector.\n• browser_get_text — read text content from the page or element.\n• browser_run_js — execute JavaScript on the page.\n• browser_screenshot — take a screenshot of the browser page.\n• browser_close — disconnect from the browser.\n• browser_wait_for — wait for an element to appear.\n• browser_select — select an option from a dropdown.\n• browser_get_elements — get info about matching elements.\n\nMETA TOOLS (available when Meta is enabled):\n• manage_instructions — CRUD operations on the saved agent instruction library (list/read/create/update/delete). Changes are saved to disk for future agent runs, not the currently-running instruction.\n• manage_skills — CRUD operations on the shared skills library (list/read/create/update/delete). Skills can be enabled (injected into system prompt), on_demand (retrieved via get_skill tool), or disabled.\n• run_instruction — launch a saved instruction as a separate agent process. Runs independently (fire-and-forget). Defaults to headless mode; set headless=false to show the agent window.\n\nGUIDELINES:\n• Execute the task autonomously — chain tools together without hesitation.\n• When multiple tools can achieve a goal, chain them together without asking.\n• For desktop automation: screenshot first, then act on what you see.\n• For browser tasks: use browser tools (not desktop tools) for precision.\n• CRITICAL: If you need user input, confirmation, or action, or your output ends with a question — you MUST call the user_prompt tool. NEVER just output text and stop. Outputting a question or request as plain text ends your turn and the user has no way to respond. The ONLY way to get a reply from the user is user_prompt.\n• If you genuinely can't complete a step, explain what went wrong.\n• When the task is complete, summarise what you did.",
+  "agent_instruction_name": "AgentRun_Test3",
+  "provider": "Anthropic",
+  "model": "claude-sonnet-4-5-20250929",
+  "temperature": 0.0,
+  "thinking_enabled": false,
+  "thinking_effort": "low",
+  "thinking_budget": 8192,
+  "name": "Save"
+}
