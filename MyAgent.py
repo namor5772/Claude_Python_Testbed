@@ -189,6 +189,22 @@ META_TOOLS = [
                     "type": "boolean",
                     "description": "Enable browser tools (default false on create)",
                 },
+                "meta": {
+                    "type": "boolean",
+                    "description": "Enable meta tools (default false on create)",
+                },
+                "skill_modes": {
+                    "type": "object",
+                    "description": (
+                        "Map of skill names to modes: 'disabled', 'enabled', or 'on_demand'. "
+                        "On create, defaults to current skill modes. On update, only listed "
+                        "skills are changed — omitted skills keep their current mode."
+                    ),
+                    "additionalProperties": {
+                        "type": "string",
+                        "enum": ["disabled", "enabled", "on_demand"],
+                    },
+                },
             },
             "required": ["action"],
         },
@@ -223,6 +239,28 @@ META_TOOLS = [
                 },
             },
             "required": ["action"],
+        },
+    },
+    {
+        "name": "run_instruction",
+        "description": (
+            "Launch a saved agent instruction as a separate MyAgent process. "
+            "The child process runs independently and returns immediately. "
+            "Use manage_instructions(action='list') first to see available names."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name of the saved instruction to launch",
+                },
+                "headless": {
+                    "type": "boolean",
+                    "description": "Run without a GUI window (default true). Set false to show the agent window.",
+                },
+            },
+            "required": ["name"],
         },
     },
 ]
@@ -808,7 +846,10 @@ DEFAULT_SYSTEM_PROMPT = (
     "not the currently-running instruction.\n"
     "• manage_skills — CRUD operations on the shared skills library "
     "(list/read/create/update/delete). Skills can be enabled (injected into system prompt), "
-    "on_demand (retrieved via get_skill tool), or disabled.\n\n"
+    "on_demand (retrieved via get_skill tool), or disabled.\n"
+    "• run_instruction — launch a saved instruction as a separate agent process. "
+    "Runs independently (fire-and-forget). Defaults to headless mode; set headless=false "
+    "to show the agent window.\n\n"
 
     "GUIDELINES:\n"
     "• Execute the task autonomously — chain tools together without hesitation.\n"
@@ -1386,6 +1427,7 @@ class App:
                 ]
                 self.desktop_enabled.set(entry.get("desktop", False))
                 self.browser_enabled.set(entry.get("browser", False))
+                self.meta_enabled.set(entry.get("meta", False))
                 self._restore_skill_modes(entry)
                 self._update_model_info_label()
                 # Use instruction's model params if saved
@@ -1521,7 +1563,8 @@ class App:
                 model = entry.get("model", "")
                 desktop = "desktop" if entry.get("desktop") else ""
                 browser = "browser" if entry.get("browser") else ""
-                flags = " ".join(f for f in [desktop, browser] if f)
+                meta = "meta" if entry.get("meta") else ""
+                flags = " ".join(f for f in [desktop, browser, meta] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
                 lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
             return "\n".join(lines)
@@ -1538,9 +1581,11 @@ class App:
                 "text": entry.get("text", ""),
                 "desktop": entry.get("desktop", False),
                 "browser": entry.get("browser", False),
+                "meta": entry.get("meta", False),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
                 "image_count": len(entry.get("images", [])),
+                "skill_modes": entry.get("skill_modes", {}),
             }
             return json.dumps(info, indent=2)
 
@@ -1555,13 +1600,15 @@ class App:
                 "images": [],
                 "desktop": params.get("desktop", False),
                 "browser": params.get("browser", False),
+                "meta": params.get("meta", False),
                 "provider": self.provider,
                 "model": self.model,
                 "temperature": self.temperature,
                 "thinking_enabled": self.thinking_enabled,
                 "thinking_effort": self.thinking_effort,
                 "thinking_budget": self.thinking_budget,
-                "skill_modes": {sn: sd["mode"] for sn, sd in self.skills.items()},
+                "skill_modes": params.get("skill_modes",
+                               {sn: sd["mode"] for sn, sd in self.skills.items()}),
             }
             instructions[name] = entry
             self._save_instructions_to_disk(instructions)
@@ -1573,8 +1620,10 @@ class App:
             text = params.get("text")
             desktop = params.get("desktop")
             browser = params.get("browser")
-            if text is None and desktop is None and browser is None:
-                return "Error: At least one of 'text', 'desktop', or 'browser' must be provided for update."
+            meta = params.get("meta")
+            skill_modes = params.get("skill_modes")
+            if text is None and desktop is None and browser is None and meta is None and skill_modes is None:
+                return "Error: At least one of 'text', 'desktop', 'browser', 'meta', or 'skill_modes' must be provided for update."
             entry = instructions[name]
             if text is not None:
                 entry["text"] = text
@@ -1582,6 +1631,12 @@ class App:
                 entry["desktop"] = desktop
             if browser is not None:
                 entry["browser"] = browser
+            if meta is not None:
+                entry["meta"] = meta
+            if skill_modes is not None:
+                existing = entry.get("skill_modes", {})
+                existing.update(skill_modes)
+                entry["skill_modes"] = existing
             self._save_instructions_to_disk(instructions)
             return f"Instruction '{name}' updated successfully."
 
@@ -2028,6 +2083,38 @@ class App:
             return f"Skill '{name}' deleted."
 
         return f"Error: Unknown action '{action}'."
+
+    def do_run_instruction(self, params):
+        """Launch a saved instruction as a separate MyAgent process."""
+        name = params.get("name", "")
+        headless = params.get("headless", True)
+
+        if not name:
+            return "Error: 'name' is required."
+
+        # Verify instruction exists
+        instructions = self._load_saved_instructions()
+        if name not in instructions:
+            available = ", ".join(sorted(instructions.keys())) if instructions else "(none)"
+            return f"Error: Instruction '{name}' not found. Available: {available}"
+
+        # Build command to launch a new MyAgent process
+        script_path = os.path.join(_BASE_DIR, "MyAgent.py")
+        cmd = [sys.executable, script_path, "-l", name]
+        if headless:
+            cmd.append("--headless")
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=_BASE_DIR,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            mode = "headless" if headless else "GUI"
+            return f"Launched instruction '{name}' in {mode} mode (PID {proc.pid})."
+        except Exception as e:
+            return f"Error launching instruction '{name}': {e}"
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of Skills button and Skills Manager listbox."""
@@ -2716,7 +2803,7 @@ class App:
         self.instruction_button.config(state="disabled")
 
         thread = threading.Thread(
-            target=self.stream_worker, args=(list(self.messages),), daemon=True
+            target=self.stream_worker, args=(self.messages,), daemon=True
         )
         thread.start()
 
@@ -3921,6 +4008,12 @@ class App:
             action = block.input.get("action", "")
             self.queue.put({"type": "tool_info", "content": f"manage_skills: {action}\n"})
             return self.do_manage_skills(block.input)
+        elif block.name == "run_instruction":
+            name = block.input.get("name", "")
+            headless = block.input.get("headless", True)
+            mode = "headless" if headless else "GUI"
+            self.queue.put({"type": "tool_info", "content": f"run_instruction: {name} ({mode})\n"})
+            return self.do_run_instruction(block.input)
         else:
             return f"Unknown tool: {block.name}"
 
@@ -4172,11 +4265,25 @@ class App:
 
                     messages.append({"role": "user", "content": tool_results_ordered})
                 else:
-                    # Normal end_turn — agent is done
+                    # Normal end_turn — check if instruction expects interactivity
+                    # If the instruction mentions user_prompt, the model likely forgot
+                    # to call it. Auto-inject a user_prompt to keep the loop alive.
+                    if "user_prompt" in self.agent_instruction:
+                        self.queue.put({"type": "tool_info",
+                                        "content": "Auto-prompting (agent ended turn without user_prompt)...\n"})
+                        auto_response = self.do_user_prompt(
+                            "The agent ended its turn. What would you like to do next? (Leave blank to stop)")
+                        if not auto_response.strip():
+                            break
+                        messages.append({"role": "assistant", "content": full_text})
+                        messages.append({"role": "user", "content": [
+                            {"type": "text", "text": auto_response},
+                        ]})
+                        label_emitted = False
+                        continue
                     break
 
-            self.messages = messages
-            self.messages.append({"role": "assistant", "content": full_text})
+            messages.append({"role": "assistant", "content": full_text})
             self.queue.put({"type": "complete"})
             if self._headless:
                 self.root.after(500, self._on_close)
