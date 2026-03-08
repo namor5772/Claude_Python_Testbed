@@ -1,0 +1,14 @@
+Instruction:
+If Notepad++ is running, kill it
+Prompt the user for a {location}
+Determine the weather in the {location} today and predict it for the next four days.
+If you open a browser window to help you, kill the process afterwards.
+Put this weather information into a text file.
+Display it in Notepad++.
+Do NOT provide a summary of what was done.
+Wait 3 seconds
+Kill the GUI app with "Claude Agent - Weather_Agent3" in the title
+
+
+You:
+Binda NSW

@@ -116,7 +116,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Chat saving is opt-in** — Chats are only saved (on close or by the periodic auto-save) if the user has typed a name in the "Save Chat as" entry. If the field is blank, no chat file is created.
 
-**No dual-instance support** — Strictly single-instance. No mutex, no lock file, no cross-instance message passing.
+**Multi-instance support** — Multiple instances can run simultaneously. Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock` containing the PID). Instance 1 uses `agent_state.json`, instance 2+ use `agent_state_N.json` for independent geometry, settings, and confirm pattern persistence. Stale locks (crashed processes) are detected via `ctypes.windll.kernel32.OpenProcess` and reclaimed automatically. The title bar shows `Claude Agent (N)` for instance 2+. Lock files are cleaned up on graceful close.
 
 **API retry logic** — Same as SelfBot: up to 10 retries with exponential backoff capped at 60s (429) or 90s (529). OpenAI additionally catches `APITimeoutError` (from the 120s read timeout) and retries immediately without backoff.
 

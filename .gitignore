@@ -6,7 +6,9 @@ __pycache__/
 
 # Runtime data
 app_state.json
+agent_state*.json
 agent_instructions.json
+agent_lock_*.lock
 
 # Account Activity output files
 Account_Activity_WBC.csv

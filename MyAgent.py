@@ -799,7 +799,8 @@ DEFAULT_GEOMETRY = "1050x930"
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INSTRUCTIONS_FILE = os.path.join(_BASE_DIR, "agent_instructions.json")
 CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
-AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")
+AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
+AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
 SKILLS_FILE = os.path.join(_BASE_DIR, "skills.json")
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -932,6 +933,15 @@ class App:
             )
             self.root.destroy()
             return
+
+        # Claim an instance number via lock files
+        self._instance_num = self._claim_instance_number()
+        if self._instance_num == 1:
+            self._state_file = AGENT_STATE_FILE
+        else:
+            self._state_file = os.path.join(_BASE_DIR, f"agent_state_{self._instance_num}.json")
+        if self._instance_num > 1:
+            self.root.title(f"Claude Agent ({self._instance_num})")
 
         # Initialize API clients for available providers
         self.client = anthropic.Anthropic() if self._has_anthropic else None
@@ -1359,10 +1369,70 @@ class App:
     def _update_title(self):
         model_display = self._get_display_name(self.model)
         model_info = f"{self.provider} / {model_display}"
+        inst_num = getattr(self, '_instance_num', 1)
+        suffix = f" ({inst_num})" if inst_num > 1 else ""
         if self.agent_instruction_name:
-            self.root.title(f"Claude Agent — {self.agent_instruction_name}  [{model_info}]")
+            self.root.title(f"Claude Agent{suffix} — {self.agent_instruction_name}  [{model_info}]")
         else:
-            self.root.title(f"Claude Agent  [{model_info}]")
+            self.root.title(f"Claude Agent{suffix}  [{model_info}]")
+
+    # ── Instance Management ────────────────────────────────────────────
+
+    @staticmethod
+    def _is_pid_alive(pid):
+        """Check if a process with the given PID is still running (Windows-compatible)."""
+        try:
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
+        except Exception:
+            # Fallback for non-Windows
+            try:
+                os.kill(pid, 0)
+                return True
+            except OSError:
+                return False
+
+    def _claim_instance_number(self):
+        """Claim the lowest available instance number via lock files.
+        Each instance writes a lock file containing its PID. Stale locks
+        (where the PID no longer exists) are cleaned up automatically."""
+        for num in range(1, 100):
+            lock_path = f"{AGENT_LOCK_PREFIX}{num}.lock"
+            if os.path.exists(lock_path):
+                # Check if the owning process is still alive
+                try:
+                    with open(lock_path, "r") as f:
+                        pid = int(f.read().strip())
+                    if self._is_pid_alive(pid):
+                        continue  # process alive, slot taken
+                except (ValueError, OSError):
+                    pass  # stale lock, reclaim it
+            # Claim this slot
+            try:
+                with open(lock_path, "w") as f:
+                    f.write(str(os.getpid()))
+                self._lock_path = lock_path
+                return num
+            except OSError:
+                continue
+        # Fallback — shouldn't happen
+        self._lock_path = None
+        return 1
+
+    def _release_instance_lock(self):
+        """Remove this instance's lock file."""
+        lock_path = getattr(self, '_lock_path', None)
+        if lock_path and os.path.exists(lock_path):
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
 
     # ── State Persistence ───────────────────────────────────────────────
 
@@ -1401,14 +1471,14 @@ class App:
         state["show_thinking"] = self.show_thinking.get()
         state["debug_enabled"] = self.debug_enabled.get()
         state["tool_calls_enabled"] = self.tool_calls_enabled.get()
-        with open(AGENT_STATE_FILE, "w", encoding="utf-8") as f:
+        with open(self._state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
     def _load_last_state(self):
-        if not os.path.exists(AGENT_STATE_FILE):
+        if not os.path.exists(self._state_file):
             return
         try:
-            with open(AGENT_STATE_FILE, "r", encoding="utf-8") as f:
+            with open(self._state_file, "r", encoding="utf-8") as f:
                 state = json.load(f)
         except (json.JSONDecodeError, OSError):
             return
@@ -4415,6 +4485,7 @@ class App:
         self._save_last_state()
         self._auto_save_on_close()
         self._cleanup_browser()
+        self._release_instance_lock()
         self.root.destroy()
 
 
