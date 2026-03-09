@@ -3369,6 +3369,7 @@ class App:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             output = ""
             if result.stdout:
@@ -3556,7 +3557,7 @@ class App:
                 cmd = name
             if args:
                 cmd = f'{cmd} "{args}"'
-            subprocess.Popen(cmd, shell=True)
+            subprocess.Popen(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
             return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"
         except Exception as e:
             return f"Error opening {name}: {e}"
@@ -3752,6 +3753,7 @@ class App:
             subprocess.run(
                 ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
             )
             page = self._ensure_browser()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
