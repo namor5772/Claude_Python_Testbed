@@ -784,8 +784,10 @@ DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
 ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
-MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5")
+MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
+ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
+ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 OPENAI_FALLBACK_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
@@ -975,6 +977,7 @@ class App:
         self.thinking_enabled = False
         self.thinking_effort = "high"
         self.thinking_budget = 8192
+        self.thinking_mode = "off"  # off/adaptive/low/medium/high/max (for adaptive models)
         self.instruction_editor_window = None
         self.skills_editor_window = None
         self._skills_refresh_list = None
@@ -1023,6 +1026,7 @@ class App:
         self._temp_var = tk.DoubleVar(value=self.temperature)
         self._thinking_var = tk.BooleanVar(value=False)
         self._thinking_strength_var = tk.StringVar(value="high")
+        self._thinking_mode_var = tk.StringVar(value="Off")
 
         # No model widgets until editor is opened
         self._provider_combo = None
@@ -1031,6 +1035,7 @@ class App:
         self._temp_spin = None
         self._thinking_check = None
         self._thinking_strength_combo = None
+        self._thinking_mode_combo = None
 
         # Row 0: Chat toolbar — Instruction + model info + Save + START/STOP
         chat_toolbar = tk.Frame(self.root)
@@ -1146,10 +1151,6 @@ class App:
         )
         self.thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
-        tk.Button(
-            checkbox_frame, text="PS Safety", font=("Arial", 8),
-            command=self._open_ps_safety_dialog, relief="groove", padx=4, pady=0,
-        ).pack(side=tk.LEFT, padx=(8, 0))
 
     # ── Model / Thinking Helpers ────────────────────────────────────────
 
@@ -1208,14 +1209,28 @@ class App:
                 break
         support = self._model_supports_thinking()
         if self._has_model_widgets():
-            if support is None:
-                self._thinking_var.set(False)
-                self.thinking_enabled = False
-                self._thinking_check.config(state="disabled")
-                self._thinking_strength_combo.config(state="disabled")
-                self._temp_label.config(state="normal")
-                self._temp_spin.config(state="normal")
-            else:
+            if support == "adaptive" and self.provider != "OpenAI":
+                # Adaptive model (Anthropic): show mode combo, hide checkbox + strength
+                self._thinking_check.pack_forget()
+                self._thinking_strength_combo.pack_forget()
+                self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+                # Populate values: Max only for Opus 4.6
+                if self.model == "claude-opus-4-6":
+                    self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
+                else:
+                    self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
+                    if self._thinking_mode_var.get() == "Max":
+                        self._thinking_mode_var.set("High")
+                        self._on_thinking_mode_changed()
+                # Sync state from thinking_mode
+                self._on_thinking_mode_changed()
+            elif support is not None:
+                # Manual thinking model or OpenAI reasoning: show checkbox + strength, hide mode combo
+                self._thinking_mode_label.pack_forget()
+                self._thinking_mode_combo.pack_forget()
+                self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
                 self._thinking_check.config(state="normal")
                 self._update_thinking_strength_options()
                 if self.thinking_enabled:
@@ -1228,11 +1243,25 @@ class App:
                         self._temp_label.config(state="normal")
                         self._temp_spin.config(state="normal")
                     self._thinking_strength_combo.config(state="disabled")
+            else:
+                # No thinking support: hide mode combo, disable checkbox + strength
+                self._thinking_mode_label.pack_forget()
+                self._thinking_mode_combo.pack_forget()
+                self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+                self._thinking_var.set(False)
+                self.thinking_enabled = False
+                self.thinking_mode = "off"
+                self._thinking_check.config(state="disabled")
+                self._thinking_strength_combo.config(state="disabled")
+                self._temp_label.config(state="normal")
+                self._temp_spin.config(state="normal")
         else:
             # No widgets — just update state
             if support is None:
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
+                self.thinking_mode = "off"
         self._update_model_info_label()
         self._save_last_state()
 
@@ -1292,19 +1321,27 @@ class App:
             self.thinking_enabled = entry["thinking_enabled"]
             self.thinking_effort = entry.get("thinking_effort", "high")
             self.thinking_budget = entry.get("thinking_budget", 8192)
+            # Restore thinking_mode with backward compat from old entries
+            if "thinking_mode" in entry:
+                self.thinking_mode = entry["thinking_mode"]
+            elif self.thinking_enabled:
+                # Old format: map thinking_enabled + thinking_effort → thinking_mode
+                self.thinking_mode = self.thinking_effort  # low/medium/high/max
+            else:
+                self.thinking_mode = "off"
             self._thinking_var.set(self.thinking_enabled)
+            self._thinking_mode_var.set(self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
             support = self._model_supports_thinking()
             if support is None:
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
-                if has_widgets:
-                    self._thinking_check.config(state="disabled")
-                    self._thinking_strength_combo.config(state="disabled")
-                    self._temp_label.config(state="normal")
-                    self._temp_spin.config(state="normal")
+                self.thinking_mode = "off"
+                self._thinking_mode_var.set("Off")
+            elif support == "adaptive" and self.provider != "OpenAI":
+                # Adaptive model: _on_model_selected will show/hide correct widgets
+                pass
             else:
-                if has_widgets:
-                    self._thinking_check.config(state="normal")
+                # Manual or OpenAI: restore strength combo
                 if support == "adaptive":
                     self._thinking_strength_var.set(self.thinking_effort)
                 elif support == "manual":
@@ -1312,6 +1349,10 @@ class App:
                         if v == self.thinking_budget:
                             self._thinking_strength_var.set(k)
                             break
+            # Let _on_model_selected handle widget visibility and state
+            if has_widgets:
+                self._on_model_selected()
+            else:
                 self._on_thinking_toggled()
         self._update_model_info_label()
 
@@ -1366,6 +1407,31 @@ class App:
             self.thinking_budget = BUDGET_PRESETS.get(val, 8192)
         self._save_last_state()
 
+    def _on_thinking_mode_changed(self):
+        """Handle adaptive thinking mode combobox selection."""
+        val = self._thinking_mode_var.get()
+        mode = val.lower()  # "off", "adaptive", "low", "medium", "high", "max"
+        self.thinking_mode = mode
+        if mode == "off":
+            self.thinking_enabled = False
+            self._thinking_var.set(False)
+        else:
+            self.thinking_enabled = True
+            self._thinking_var.set(True)
+            if mode == "adaptive":
+                self.thinking_effort = "high"  # internal default, but not sent to API
+            else:
+                self.thinking_effort = mode
+        # Update temp spinner
+        if self._has_model_widgets():
+            if mode == "off":
+                self._temp_label.config(state="normal")
+                self._temp_spin.config(state="normal")
+            else:
+                self._temp_label.config(state="disabled")
+                self._temp_spin.config(state="disabled")
+        self._save_last_state()
+
     def _update_title(self):
         model_display = self._get_display_name(self.model)
         model_info = f"{self.provider} / {model_display}"
@@ -1380,16 +1446,29 @@ class App:
 
     @staticmethod
     def _is_pid_alive(pid):
-        """Check if a process with the given PID is still running (Windows-compatible)."""
+        """Check if a process with the given PID is still running AND is a Python process."""
         try:
             import ctypes
+            from ctypes import wintypes
             kernel32 = ctypes.windll.kernel32
+            psapi = ctypes.windll.psapi
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            if handle:
-                kernel32.CloseHandle(handle)
+            PROCESS_VM_READ = 0x0010
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, pid
+            )
+            if not handle:
+                return False
+            try:
+                # Get the executable name of the process
+                buf = ctypes.create_unicode_buffer(260)
+                if psapi.GetModuleBaseNameW(handle, None, buf, 260):
+                    exe_name = buf.value.lower()
+                    return exe_name in ("python.exe", "pythonw.exe")
+                # If we can't get the name, fall back to alive-only check
                 return True
-            return False
+            finally:
+                kernel32.CloseHandle(handle)
         except Exception:
             # Fallback for non-Windows
             try:
@@ -1436,6 +1515,27 @@ class App:
 
     # ── State Persistence ───────────────────────────────────────────────
 
+    @staticmethod
+    def _sanitize_geometry(geo, screen_w, screen_h, min_w=200, min_h=150):
+        """Validate a geometry string; return DEFAULT_GEOMETRY if unusable.
+
+        Rejects windows that are too small or positioned entirely off-screen.
+        """
+        import re
+        m = re.match(r'(\d+)x(\d+)\+(-?\d+)\+(-?\d+)', geo)
+        if not m:
+            return DEFAULT_GEOMETRY
+        w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        if w < min_w or h < min_h:
+            return DEFAULT_GEOMETRY
+        # At least 50px of the window must be visible on-screen
+        visible_margin = 50
+        if x + w < visible_margin or x > screen_w - visible_margin:
+            return DEFAULT_GEOMETRY
+        if y + h < visible_margin or y > screen_h - visible_margin:
+            return DEFAULT_GEOMETRY
+        return geo
+
     def _save_last_state(self):
         state = {
             "provider": self.provider,
@@ -1445,6 +1545,7 @@ class App:
             "thinking_enabled": self.thinking_enabled,
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
+            "thinking_mode": self.thinking_mode,
             "geometry": self.root.geometry(),
             "screen_width": self.root.winfo_screenwidth(),
             "screen_height": self.root.winfo_screenheight(),
@@ -1464,8 +1565,6 @@ class App:
         ps_safety_geo = getattr(self, '_last_ps_safety_geometry', None)
         if ps_safety_geo:
             state["ps_safety_dialog_geometry"] = ps_safety_geo
-        if self._disabled_confirm_patterns:
-            state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
         # Display checkboxes
         state["show_activity"] = self.show_activity.get()
         state["show_thinking"] = self.show_thinking.get()
@@ -1499,6 +1598,7 @@ class App:
                 self.browser_enabled.set(entry.get("browser", False))
                 self.meta_enabled.set(entry.get("meta", False))
                 self._restore_skill_modes(entry)
+                self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
                 self._update_model_info_label()
                 # Use instruction's model params if saved
                 if "model" in entry:
@@ -1513,6 +1613,7 @@ class App:
             sw = state.get("screen_width")
             sh = state.get("screen_height")
             if sw == self.root.winfo_screenwidth() and sh == self.root.winfo_screenheight():
+                geo = self._sanitize_geometry(geo, sw, sh)
                 self.root.geometry(geo)
         # Restore editor geometry for next time the editor is opened
         editor_geo = state.get("editor_geometry")
@@ -1530,8 +1631,6 @@ class App:
         ps_safety_geo = state.get("ps_safety_dialog_geometry")
         if ps_safety_geo:
             self._last_ps_safety_geometry = ps_safety_geo
-        disabled = state.get("disabled_confirm_patterns", [])
-        self._disabled_confirm_patterns = set(disabled)
         # Restore display checkboxes
         if "show_activity" in state:
             self.show_activity.set(state["show_activity"])
@@ -1581,6 +1680,7 @@ class App:
         if "model" in entry:
             self._restore_model_params(entry)
         self._restore_skill_modes(entry)
+        self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
         self._update_model_info_label()
         auto_name = f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}"
         self.chat_name_entry.delete(0, tk.END)
@@ -1677,8 +1777,10 @@ class App:
                 "thinking_enabled": self.thinking_enabled,
                 "thinking_effort": self.thinking_effort,
                 "thinking_budget": self.thinking_budget,
+                "thinking_mode": self.thinking_mode,
                 "skill_modes": params.get("skill_modes",
                                {sn: sd["mode"] for sn, sd in self.skills.items()}),
+                "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
             }
             instructions[name] = entry
             self._save_instructions_to_disk(instructions)
@@ -1736,7 +1838,7 @@ class App:
             sw = self.root.winfo_screenwidth()
             sh = self.root.winfo_screenheight()
             if sw == getattr(self, '_editor_screen_width', sw) and sh == getattr(self, '_editor_screen_height', sh):
-                win.geometry(editor_geo)
+                win.geometry(self._sanitize_geometry(editor_geo, sw, sh, min_w=400, min_h=300))
             else:
                 win.geometry("700x640")
         else:
@@ -1770,7 +1872,7 @@ class App:
             win, textvariable=self._instr_combo_var, state="readonly",
             font=("Arial", 10), width=28
         )
-        self._instr_combo.grid(row=1, column=1, columnspan=2, padx=5, pady=5, sticky="ew")
+        self._instr_combo.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self._instr_combo.bind("<<ComboboxSelected>>", self._on_instruction_selected)
         self._refresh_instruction_list()
 
@@ -1832,6 +1934,20 @@ class App:
         self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
 
+        # Adaptive thinking mode combobox (replaces checkbox + strength for adaptive models)
+        self._thinking_mode_label = tk.Label(model_frame, text="Thinking", font=("Arial", 10))
+        self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
+        self._thinking_mode_combo = ttk.Combobox(
+            model_frame, textvariable=self._thinking_mode_var, state="readonly",
+            font=("Arial", 9), width=8,
+        )
+        self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
+        self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
+
+        # Sync adaptive thinking mode var from state before applying widget states
+        self._thinking_mode_var.set(self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
+
         # Apply current thinking/temp widget states
         self._on_model_selected()
 
@@ -1867,6 +1983,12 @@ class App:
         )
         self.skills_button.pack(side=tk.LEFT, padx=(15, 0))
         self._update_skills_button()
+
+        self.ps_safety_button = tk.Button(
+            img_frame, text="PS Safety", command=self._open_ps_safety_dialog, padx=10
+        )
+        self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
+        self._update_ps_safety_button()
 
         self._instr_image_listbox = tk.Listbox(
             win, height=4, font=("Arial", 9), foreground="#6a1b9a",
@@ -1915,6 +2037,9 @@ class App:
         self._temp_spin = None
         self._thinking_check = None
         self._thinking_strength_combo = None
+        self._thinking_mode_combo = None
+        self._thinking_mode_label = None
+        self.ps_safety_button = None
         try:
             self._save_last_state()
         except Exception:
@@ -1957,7 +2082,9 @@ class App:
             "thinking_enabled": self.thinking_enabled,
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
+            "thinking_mode": self.thinking_mode,
             "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
+            "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
         }
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
@@ -1990,6 +2117,8 @@ class App:
         self._editor_desktop.set(False)
         self._editor_browser.set(False)
         self._editor_meta.set(False)
+        self._disabled_confirm_patterns = set()
+        self._update_ps_safety_button()
         # Reset model controls to defaults
         if self._has_anthropic:
             default_provider = "Anthropic"
@@ -2006,6 +2135,8 @@ class App:
         self._temp_var.set(1.0)
         self._on_temp_changed()
         self._thinking_var.set(False)
+        self.thinking_mode = "off"
+        self._thinking_mode_var.set("Off")
         self._on_thinking_toggled()
         self._refresh_image_listbox()
 
@@ -2028,6 +2159,8 @@ class App:
             self._editor_meta.set(entry.get("meta", False))
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
+            self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
+            self._update_ps_safety_button()
             self._refresh_image_listbox()
 
     def _apply_instruction(self):
@@ -2064,6 +2197,9 @@ class App:
         self._temp_spin = None
         self._thinking_check = None
         self._thinking_strength_combo = None
+        self._thinking_mode_combo = None
+        self._thinking_mode_label = None
+        self.ps_safety_button = None
 
     # ── Skills System ───────────────────────────────────────────────────
 
@@ -2223,6 +2359,14 @@ class App:
             label = "Skills"
         try:
             self.skills_button.config(text=label)
+        except (AttributeError, tk.TclError):
+            pass  # Button doesn't exist yet or editor is closed
+
+    def _update_ps_safety_button(self):
+        n = len(self._disabled_confirm_patterns)
+        label = f"PS Safety ({n} bypassed)" if n else "PS Safety"
+        try:
+            self.ps_safety_button.config(text=label)
         except (AttributeError, tk.TclError):
             pass  # Button doesn't exist yet or editor is closed
 
@@ -2727,6 +2871,7 @@ class App:
             "thinking_enabled": self.thinking_enabled,
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
+            "thinking_mode": self.thinking_mode,
         })
         txt_path = os.path.join(CHATS_DIR, self._sanitize_filename(name, '.txt'))
         try:
@@ -2922,9 +3067,12 @@ class App:
             return f"Error fetching URL: {e}"
 
     def _open_ps_safety_dialog(self):
-        dlg = tk.Toplevel(self.root)
+        parent = self.instruction_editor_window if (
+            self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
+        ) else self.root
+        dlg = tk.Toplevel(parent)
         dlg.title("PowerShell Safety — Confirm Patterns")
-        dlg.transient(self.root)
+        dlg.transient(parent)
         dlg.resizable(True, True)
 
         tk.Label(
@@ -2966,11 +3114,13 @@ class App:
         # Restore / persist dialog geometry
         saved_geo = getattr(self, '_last_ps_safety_geometry', None)
         if saved_geo:
-            dlg.geometry(saved_geo)
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            dlg.geometry(self._sanitize_geometry(saved_geo, sw, sh))
         else:
             w, h = 560, 1100
-            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            x = parent.winfo_x() + (parent.winfo_width() - w) // 2
+            y = parent.winfo_y() + (parent.winfo_height() - h) // 2
             dlg.geometry(f"{w}x{h}+{x}+{y}")
 
         dlg.protocol("WM_DELETE_WINDOW", _on_close)
@@ -2980,6 +3130,7 @@ class App:
             self._disabled_confirm_patterns.discard(pattern)
         else:
             self._disabled_confirm_patterns.add(pattern)
+        self._update_ps_safety_button()
         self._save_last_state()
 
     def _check_powershell_safety(self, command):
@@ -3076,7 +3227,9 @@ class App:
             # Restore saved geometry or center over main window
             saved_geo = getattr(self, '_last_confirm_dialog_geometry', None)
             if saved_geo:
-                dlg.geometry(saved_geo)
+                sw = self.root.winfo_screenwidth()
+                sh = self.root.winfo_screenheight()
+                dlg.geometry(self._sanitize_geometry(saved_geo, sw, sh))
             else:
                 dlg.update_idletasks()
                 w = max(dlg.winfo_reqwidth(), 500)
@@ -3180,7 +3333,9 @@ class App:
             # Restore saved geometry or center over main window
             saved_geo = getattr(self, '_last_prompt_dialog_geometry', None)
             if saved_geo:
-                dlg.geometry(saved_geo)
+                sw = self.root.winfo_screenwidth()
+                sh = self.root.winfo_screenheight()
+                dlg.geometry(self._sanitize_geometry(saved_geo, sw, sh))
             else:
                 dlg.update_idletasks()
                 w = max(dlg.winfo_reqwidth(), 500)
@@ -3840,7 +3995,8 @@ class App:
                 payload["max_tokens"] = MAX_TOKENS_THINKING
                 if support == "adaptive":
                     payload["thinking"] = {"type": "adaptive"}
-                    payload["output_config"] = {"effort": self.thinking_effort}
+                    if self.thinking_mode not in ("off", "adaptive"):
+                        payload["output_config"] = {"effort": self.thinking_mode}
                 elif support == "manual":
                     payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             else:
@@ -4104,7 +4260,8 @@ class App:
             api_kwargs["max_tokens"] = MAX_TOKENS_THINKING
             if support == "adaptive":
                 api_kwargs["thinking"] = {"type": "adaptive"}
-                api_kwargs["output_config"] = {"effort": self.thinking_effort}
+                if self.thinking_mode not in ("off", "adaptive"):
+                    api_kwargs["output_config"] = {"effort": self.thinking_mode}
             elif support == "manual":
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:

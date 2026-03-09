@@ -493,6 +493,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **Browser** checkbox | Enable/disable the 11 browser automation tools for this instruction |
 | **Meta** checkbox | Enable/disable the 3 meta-agent tools (`manage_instructions`, `manage_skills`, `run_instruction`) for this instruction |
 | **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
+| **PS Safety** button | Open the PowerShell Safety dialog to selectively bypass individual confirmation patterns; the button label shows a count when patterns are bypassed (e.g., `PS Safety (3 bypassed)`) |
 | **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
 | **Apply** button | Make the instruction active for this session (no disk write) and close the editor |
 
@@ -511,7 +512,9 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Provider and model parameters persist with instructions** — Each saved instruction stores the provider (Anthropic or OpenAI), model, temperature, and thinking settings. Loading an instruction from the dropdown immediately restores the provider, refreshes the model list, and sets the model and thinking parameters on the main toolbar.
 
-**Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled. This effectively makes each instruction a self-contained task profile — text, images, tool categories, provider, model configuration, and skills environment — so different tasks can target different providers, models, settings, and skill sets.
+**Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled.
+
+**PS Safety patterns persist with instructions** — Each saved instruction stores its set of disabled PowerShell confirmation patterns. Loading an instruction restores these bypass settings, and the PS Safety button label updates to show how many patterns are bypassed. This effectively makes each instruction a self-contained task profile — text, images, tool categories, provider, model configuration, skills environment, and PS Safety overrides — so different tasks can target different providers, models, settings, and skill sets.
 
 When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
 
@@ -529,12 +532,14 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 
 | Provider | Model type | Thinking mode | Strength control |
 |---|---|---|---|
-| Anthropic | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
-| Anthropic | **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+| Anthropic | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Thinking mode combobox: Off, Adaptive, Low, Medium, High, Max (Max only for Opus 4.6) |
+| Anthropic | **Manual** (Opus 4.5, Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
 | OpenAI | **Reasoning** (o1, o3, o4, gpt-5 series) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: low, medium, high |
 | OpenAI | **Standard** (GPT-4o, GPT-4.1, etc.) | Not supported | N/A |
 
-**Temperature and thinking controls are model-aware** — OpenAI reasoning models (o1/o3/o4/gpt-5) don't accept a `temperature` parameter, so the Temp spinner stays disabled for these models even when thinking is unchecked. Standard OpenAI models show the Temp spinner normally. This is enforced across all code paths: model selection, thinking toggle, and state restore.
+**Adaptive thinking mode** — For Anthropic adaptive models, the checkbox and strength combobox are replaced by a single **Thinking** mode combobox with values: Off, Adaptive, Low, Medium, High, Max. "Off" disables thinking entirely. "Adaptive" sends `thinking: {type: "adaptive"}` without an explicit effort level (the API decides). Low/Medium/High/Max send `output_config: {effort: ...}` alongside adaptive thinking. "Max" is only available for Opus 4.6. For manual and OpenAI models, the standard checkbox + strength controls are shown instead. The UI dynamically switches between these two control styles when changing models.
+
+**Temperature and thinking controls are model-aware** — OpenAI reasoning models (o1/o3/o4/gpt-5) don't accept a `temperature` parameter, so the Temp spinner stays disabled for these models even when thinking is unchecked. Standard OpenAI models show the Temp spinner normally. When thinking is enabled (any mode except Off), temperature controls are disabled for all providers. This is enforced across all code paths: model selection, thinking toggle, and state restore.
 
 Provider, model, temperature, and thinking settings are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
 
@@ -593,7 +598,7 @@ Chat saving is opt-in — there is no manual SAVE button, and **no chat is saved
 
 #### Display Toggles
 
-Four checkboxes on the main window control what is shown in the output display (all default to **off** on first run, then **persist across sessions** via `agent_state.json`), plus a PS Safety button:
+Four checkboxes on the main window control what is shown in the output display (all default to **off** on first run, then **persist across sessions** via `agent_state.json`):
 
 | Checkbox | What it controls |
 |---|---|
@@ -601,28 +606,27 @@ Four checkboxes on the main window control what is shown in the output display (
 | **Tool Calls** | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
 | **Activity** | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
 | **Show Thinking** | Extended thinking blocks in amber/gold italic text |
-| **PS Safety** button | Opens a dialog to selectively disable individual PowerShell confirmation patterns (see below) |
 
-Desktop and Browser tool toggles are managed per-instruction inside the Agent Instruction Editor.
+Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction inside the Agent Instruction Editor.
 
 The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
 
 #### PS Safety — Deselectable Confirm Patterns
 
-The **PS Safety** button (next to the Browser checkbox) opens a dialog listing all 24 `POWERSHELL_CONFIRM` patterns as checkboxes:
+The **PS Safety** button (inside the Agent Instruction Editor, next to the Skills button) opens a dialog listing all 24 `POWERSHELL_CONFIRM` patterns as checkboxes:
 
 - **Checked** (default) — the pattern requires a confirmation dialog before execution, as normal
 - **Unchecked** — the confirmation dialog is bypassed; the command runs immediately and a `⚠ Confirm bypassed (pattern: ...)` warning is displayed in the output window
 
-The bypass warning always appears regardless of the Activity checkbox state. Disabled patterns and the dialog's position/size are persisted in `agent_state.json` across restarts.
+The bypass warning always appears regardless of the Activity checkbox state. Disabled patterns are saved per-instruction in `agent_instructions.json` (so different tasks can have different safety overrides). The dialog's position/size is persisted in `agent_state.json` across restarts. The PS Safety button label shows a count when patterns are bypassed (e.g., `PS Safety (3 bypassed)`).
 
 #### App State Persistence
 
-- **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes, disabled confirm patterns) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` and reclaimed. The title bar shows `Claude Agent (N)` for instance 2+
+- **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (confirms the PID belongs to `python.exe` or `pythonw.exe`, not a recycled PID from an unrelated process). The title bar shows `Claude Agent (N)` for instance 2+
 - Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking), main window geometry, and dialog geometries are saved per instance
 - On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser/Meta toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
 - **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), and **PowerShell Confirm** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened
-- **Display safety check** — saved screen dimensions are compared against the current display; if the resolution has changed, geometry falls back to defaults so windows are never lost off-screen
+- **Geometry sanitization** — All persisted window and dialog geometries (main window, editor, prompt dialog, confirm dialog, PS Safety dialog) are validated on restore via `_sanitize_geometry()`. Windows that are too small (below 200x150), positioned entirely off-screen, or have fewer than 50 visible pixels on the current display are reset to defaults. This prevents windows from becoming invisible after monitor changes, resolution switches, or corrupted state files. The saved screen resolution is also checked — if it has changed, geometry falls back to defaults
 
 #### Rate-Limit Retry
 
@@ -640,10 +644,9 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 
 | Row | Contents |
 |---|---|
-| **Row 0** | Model toolbar: Provider dropdown, Model dropdown, Temp spinbox, Thinking checkbox, Strength combobox |
-| **Row 1** | Chat toolbar: Agent Instruction button, Save Chat as entry, START button (green), STOP button (red) |
-| **Row 2** | Chat display: read-only text area with scrollbar, colour-coded output |
-| **Row 3** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, PS Safety button |
+| **Row 0** | Chat toolbar: Agent Instruction button, model info label, Save Chat as entry, START button (green), STOP button (red) |
+| **Row 1** | Chat display: read-only text area with scrollbar, colour-coded output |
+| **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking |
 
 **Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
@@ -678,13 +681,13 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 ### Architecture
 
-The application is a single-file (~3,700 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+The application is a single-file (~4,600 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
-- **UI Layout** — Grid-based layout with 4 rows: provider + model + temperature + thinking toolbar (row 0), chat toolbar with Agent Instruction button, save-chat entry, and START/STOP buttons (row 1), chat display + scrollbar (row 2), checkbox row with Debug/Tool Calls/Activity/Show Thinking toggles and PS Safety button (row 3). Image attachments, Desktop/Browser tool toggles, and the Skills button are managed inside the Agent Instruction editor window
+- **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Dual-Provider Support** — A Provider combobox switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary via `_messages_to_responses()`, `_tools_to_responses()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, and top-level `function_call`/`function_call_output` items. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()` or `_stream_responses_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button. An **auto-prompt safety net** keeps interactive instructions alive: if the instruction text mentions `user_prompt` but the model ends its turn without calling it, the agent automatically injects a `user_prompt` dialog asking the user what to do next (submitting an empty response exits the loop)
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser/Meta toggle state, provider, model parameters, and skill modes), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` (instance 1) or `agent_state_N.json` (instance N) for user preferences, dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and disabled confirm patterns, and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser/Meta toggle state, provider, model parameters, skill modes, and disabled PS Safety confirm patterns), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` (instance 1) or `agent_state_N.json` (instance N) for user preferences and dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Four global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, `META_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
 - **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot, plus a **PS Safety** dialog that allows individual confirm patterns to be disabled. Disabled patterns bypass the confirmation dialog and emit a `"warning"` queue message (always displayed, not gated by the Activity checkbox). Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
