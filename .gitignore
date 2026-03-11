@@ -9,6 +9,7 @@ app_state.json
 agent_state*.json
 agent_instructions.json
 agent_lock_*.lock
+saved_chats/
 
 # Account Activity output files
 Account_Activity_WBC.csv
