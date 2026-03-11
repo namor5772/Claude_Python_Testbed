@@ -783,6 +783,12 @@ FALLBACK_MODELS = [
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
+# Models with lower max output token limits than MAX_TOKENS
+MODEL_MAX_OUTPUT_TOKENS = {
+    "claude-3-haiku-20240307": 4096,
+    "claude-3-opus-20240229": 4096,
+    "claude-3-sonnet-20240229": 4096,
+}
 ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
 MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
@@ -2863,6 +2869,7 @@ class App:
             return
         self._save_chat_file(name, {
             "messages": self._serialize_messages(),
+            "tools": self._get_tools(),
             "system_prompt": self.system_prompt,
             "agent_instruction_name": self.agent_instruction_name,
             "provider": self.provider,
@@ -3992,9 +3999,10 @@ class App:
                 "tools": self._get_tools(),
                 "messages": display_msgs,
             }
+            model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
             if self.thinking_enabled:
                 support = self._model_supports_thinking()
-                payload["max_tokens"] = MAX_TOKENS_THINKING
+                payload["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
                 if support == "adaptive":
                     payload["thinking"] = {"type": "adaptive"}
                     if self.thinking_mode not in ("off", "adaptive"):
@@ -4002,7 +4010,7 @@ class App:
                 elif support == "manual":
                     payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             else:
-                payload["max_tokens"] = MAX_TOKENS
+                payload["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
                 payload["temperature"] = self.temperature
         return json.dumps(payload, indent=2)
 
@@ -4257,9 +4265,10 @@ class App:
             "messages": messages,
             "tools": self._get_tools(),
         }
+        model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
         if self.thinking_enabled:
             support = self._model_supports_thinking()
-            api_kwargs["max_tokens"] = MAX_TOKENS_THINKING
+            api_kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
             if support == "adaptive":
                 api_kwargs["thinking"] = {"type": "adaptive"}
                 if self.thinking_mode not in ("off", "adaptive"):
@@ -4267,7 +4276,7 @@ class App:
             elif support == "manual":
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
-            api_kwargs["max_tokens"] = MAX_TOKENS
+            api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
             api_kwargs["temperature"] = self.temperature
 
         for attempt in range(max_retries):

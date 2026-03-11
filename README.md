@@ -45,7 +45,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 | **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
 
 - When thinking is enabled, the **temperature controls are greyed out** (the API does not allow temperature with thinking)
-- `max_tokens` is automatically raised from 8,192 to 32,768 when thinking is active
+- `max_tokens` is automatically raised from 8,192 to 32,768 when thinking is active. Models with lower output token limits (Claude 3 Haiku/Opus/Sonnet at 4,096) are automatically capped via the `MODEL_MAX_OUTPUT_TOKENS` lookup
 - The strength combobox automatically switches between effort levels and budget presets when you change models
 - Switching to a model that doesn't support thinking disables the checkbox and re-enables temperature
 - Thinking settings (`thinking_enabled`, `thinking_effort`, `thinking_budget`) are persisted in `app_state.json` and saved/restored with each chat

@@ -650,10 +650,18 @@ FALLBACK_MODELS = [
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
+# Models with lower max output token limits than MAX_TOKENS
+MODEL_MAX_OUTPUT_TOKENS = {
+    "claude-3-haiku-20240307": 4096,
+    "claude-3-opus-20240229": 4096,
+    "claude-3-sonnet-20240229": 4096,
+}
 ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
 MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
+ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
+ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
 DEFAULT_GEOMETRY = "1050x930"
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -800,6 +808,7 @@ class App:
         self.thinking_enabled = False
         self.thinking_effort = "high"
         self.thinking_budget = 8192
+        self.thinking_mode = "off"
         self.prompt_editor_window = None
         self.skills_editor_window = None
         self.skills = self._load_skills()
@@ -906,8 +915,19 @@ class App:
         self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
 
-        tk.Button(model_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.LEFT, padx=(10, 5))
-        tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.LEFT, padx=(5, 0))
+        # Adaptive thinking mode combobox (hidden by default, shown for adaptive models)
+        self._thinking_mode_var = tk.StringVar(value="Off")
+        self._thinking_mode_label = tk.Label(model_toolbar, text="Thinking", font=("Arial", 10))
+        self._thinking_mode_combo = ttk.Combobox(
+            model_toolbar, textvariable=self._thinking_mode_var, state="readonly",
+            font=("Arial", 9), width=8,
+        )
+        self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
+        self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
+        # Not packed yet — _on_model_selected() will show/hide as needed
+
+        tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.RIGHT, padx=(5, 0))
+        tk.Button(model_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.RIGHT, padx=(10, 5))
 
         # Names toolbar (row 0)
         names_toolbar = tk.Frame(self.root)
@@ -1140,18 +1160,41 @@ class App:
                 break
         # Update thinking controls for new model
         support = self._model_supports_thinking()
-        if support is None:
+        if support == "adaptive":
+            # Hide checkbox + strength, show mode combobox
+            self._thinking_check.pack_forget()
+            self._thinking_strength_combo.pack_forget()
+            self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
+            self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+            # Set values with/without Max based on model
+            if "opus-4-6" in self.model:
+                self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
+            else:
+                self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
+                if self._thinking_mode_var.get() == "Max":
+                    self._thinking_mode_var.set("High")
+            self._on_thinking_mode_changed()
+        elif support == "manual":
+            # Hide mode combobox, show checkbox + strength
+            self._thinking_mode_label.pack_forget()
+            self._thinking_mode_combo.pack_forget()
+            self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+            self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+            self._thinking_check.config(state="normal")
+            self._update_thinking_strength_options()
+            self._on_thinking_toggled()
+        else:
+            # Non-thinking model — hide mode combobox, show checkbox + strength disabled
+            self._thinking_mode_label.pack_forget()
+            self._thinking_mode_combo.pack_forget()
+            self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+            self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
             self._thinking_var.set(False)
             self.thinking_enabled = False
             self._thinking_check.config(state="disabled")
             self._thinking_strength_combo.config(state="disabled")
             self._temp_label.config(state="normal")
             self._temp_spin.config(state="normal")
-        else:
-            self._thinking_check.config(state="normal")
-            self._update_thinking_strength_options()
-            if self.thinking_enabled:
-                self._on_thinking_toggled()
         self._save_last_state()
 
     def _on_temp_changed(self):
@@ -1183,6 +1226,27 @@ class App:
             self._temp_label.config(state="normal")
             self._temp_spin.config(state="normal")
             self._thinking_strength_combo.config(state="disabled")
+        self._save_last_state()
+
+    def _on_thinking_mode_changed(self):
+        val = self._thinking_mode_var.get()
+        if val == "Off":
+            self.thinking_enabled = False
+            self.thinking_mode = "off"
+            self._temp_label.config(state="normal")
+            self._temp_spin.config(state="normal")
+        elif val == "Adaptive":
+            self.thinking_enabled = True
+            self.thinking_mode = "adaptive"
+            self.thinking_effort = "adaptive"
+            self._temp_label.config(state="disabled")
+            self._temp_spin.config(state="disabled")
+        else:
+            self.thinking_enabled = True
+            self.thinking_mode = val.lower()
+            self.thinking_effort = val.lower()
+            self._temp_label.config(state="disabled")
+            self._temp_spin.config(state="disabled")
         self._save_last_state()
 
     def _update_thinking_strength_options(self):
@@ -1264,22 +1328,20 @@ class App:
         self.thinking_enabled = state.get("thinking_enabled", False)
         self.thinking_effort = state.get("thinking_effort", "high")
         self.thinking_budget = state.get("thinking_budget", 8192)
-        self._thinking_var.set(self.thinking_enabled)
-        support = self._model_supports_thinking()
-        if support is None:
-            self._thinking_var.set(False)
-            self.thinking_enabled = False
-            self._thinking_check.config(state="disabled")
+        # Derive thinking_mode from persisted fields
+        if self.thinking_enabled:
+            self.thinking_mode = self.thinking_effort
         else:
-            self._thinking_check.config(state="normal")
-            if support == "adaptive":
-                self._thinking_strength_var.set(self.thinking_effort)
-            elif support == "manual":
-                for k, v in BUDGET_PRESETS.items():
-                    if v == self.thinking_budget:
-                        self._thinking_strength_var.set(k)
-                        break
-            self._on_thinking_toggled()
+            self.thinking_mode = "off"
+        self._thinking_var.set(self.thinking_enabled)
+        self._thinking_mode_var.set(self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
+        support = self._model_supports_thinking()
+        if support == "manual":
+            for k, v in BUDGET_PRESETS.items():
+                if v == self.thinking_budget:
+                    self._thinking_strength_var.set(k)
+                    break
+        self._on_model_selected()
         # Restore delay setting
         saved_delay = state.get("delay_seconds")
         if saved_delay is not None:
@@ -1908,6 +1970,7 @@ class App:
         save_name = self._save_name(name)
         self._save_chat_file(save_name, {
             "messages": self._serialize_messages(),
+            "tools": self._get_tools(),
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
             "model": self.model,
@@ -1957,25 +2020,20 @@ class App:
         self.thinking_enabled = chat_data.get("thinking_enabled", False)
         self.thinking_effort = chat_data.get("thinking_effort", "high")
         self.thinking_budget = chat_data.get("thinking_budget", 8192)
-        self._thinking_var.set(self.thinking_enabled)
-        support = self._model_supports_thinking()
-        if support is None:
-            self._thinking_var.set(False)
-            self.thinking_enabled = False
-            self._thinking_check.config(state="disabled")
-            self._thinking_strength_combo.config(state="disabled")
-            self._temp_label.config(state="normal")
-            self._temp_spin.config(state="normal")
+        # Derive thinking_mode from persisted fields
+        if self.thinking_enabled:
+            self.thinking_mode = self.thinking_effort
         else:
-            self._thinking_check.config(state="normal")
-            if support == "adaptive":
-                self._thinking_strength_var.set(self.thinking_effort)
-            elif support == "manual":
-                for k, v in BUDGET_PRESETS.items():
-                    if v == self.thinking_budget:
-                        self._thinking_strength_var.set(k)
-                        break
-            self._on_thinking_toggled()
+            self.thinking_mode = "off"
+        self._thinking_var.set(self.thinking_enabled)
+        self._thinking_mode_var.set(self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
+        support = self._model_supports_thinking()
+        if support == "manual":
+            for k, v in BUDGET_PRESETS.items():
+                if v == self.thinking_budget:
+                    self._thinking_strength_var.set(k)
+                    break
+        self._on_model_selected()
         self._update_title()
         self._save_last_state()
         self.chat_name_entry.delete(0, tk.END)
@@ -2941,6 +2999,7 @@ class App:
         save_name = self._save_name(name)
         self._save_chat_file(save_name, {
             "messages": self._serialize_messages(),
+            "tools": self._get_tools(),
             "system_prompt": self.system_prompt,
             "system_prompt_name": self.system_prompt_name,
             "model": self.model,
@@ -3258,16 +3317,18 @@ class App:
             "tools": self._get_tools(),
             "messages": display_msgs,
         }
+        model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
         if self.thinking_enabled:
             support = self._model_supports_thinking()
-            payload["max_tokens"] = MAX_TOKENS_THINKING
+            payload["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
             if support == "adaptive":
                 payload["thinking"] = {"type": "adaptive"}
-                payload["output_config"] = {"effort": self.thinking_effort}
+                if self.thinking_mode not in ("off", "adaptive"):
+                    payload["output_config"] = {"effort": self.thinking_mode}
             elif support == "manual":
                 payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
-            payload["max_tokens"] = MAX_TOKENS
+            payload["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
             payload["temperature"] = self.temperature
         return json.dumps(payload, indent=2)
 
@@ -3342,16 +3403,18 @@ class App:
                     "messages": messages,
                     "tools": self._get_tools(),
                 }
+                model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
                 if self.thinking_enabled:
                     support = self._model_supports_thinking()
-                    api_kwargs["max_tokens"] = MAX_TOKENS_THINKING
+                    api_kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
                     if support == "adaptive":
                         api_kwargs["thinking"] = {"type": "adaptive"}
-                        api_kwargs["output_config"] = {"effort": self.thinking_effort}
+                        if self.thinking_mode not in ("off", "adaptive"):
+                            api_kwargs["output_config"] = {"effort": self.thinking_mode}
                     elif support == "manual":
                         api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
                 else:
-                    api_kwargs["max_tokens"] = MAX_TOKENS
+                    api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
                     api_kwargs["temperature"] = self.temperature
 
                 for attempt in range(max_retries):
