@@ -1,0 +1,7 @@
+anthropic
+openai
+ddgs
+httpx
+pyautogui
+pygetwindow
+Pillow

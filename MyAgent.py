@@ -1452,7 +1452,10 @@ class App:
 
     @staticmethod
     def _is_pid_alive(pid):
-        """Check if a process with the given PID is still running AND is a Python process."""
+        """Check if a process with the given PID is a running MyAgent.py instance.
+        Verifies both that the executable is Python and that its command line
+        contains 'MyAgent.py', so other Python processes (VS Code, Claude Code)
+        don't falsely hold lock slots."""
         try:
             import ctypes
             from ctypes import wintypes
@@ -1470,11 +1473,25 @@ class App:
                 buf = ctypes.create_unicode_buffer(260)
                 if psapi.GetModuleBaseNameW(handle, None, buf, 260):
                     exe_name = buf.value.lower()
-                    return exe_name in ("python.exe", "pythonw.exe")
-                # If we can't get the name, fall back to alive-only check
-                return True
+                    if exe_name not in ("python.exe", "pythonw.exe"):
+                        return False
+                else:
+                    return False
             finally:
                 kernel32.CloseHandle(handle)
+            # Verify command line contains MyAgent.py
+            try:
+                import subprocess as _sp
+                result = _sp.run(
+                    ["wmic", "process", "where", f"ProcessId={pid}",
+                     "get", "CommandLine", "/value"],
+                    capture_output=True, text=True, timeout=5,
+                    creationflags=0x08000000,  # CREATE_NO_WINDOW
+                )
+                return "MyAgent.py" in result.stdout
+            except Exception:
+                # If we can't check command line, accept the exe name match
+                return True
         except Exception:
             # Fallback for non-Windows
             try:

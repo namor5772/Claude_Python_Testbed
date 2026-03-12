@@ -7,6 +7,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Autonomous AI agent GUI application supporting Anthropic and OpenAI providers (see details below)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
+- **requirements.txt** — Python dependencies for pip install
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
@@ -381,7 +382,7 @@ source .venv/Scripts/activate   # Git Bash
 # or: .venv\Scripts\activate    # CMD / PowerShell
 
 # Install dependencies
-pip install anthropic openai ddgs httpx opencv-python Pillow playwright pyautogui pygetwindow pyperclip winocr
+pip install -r requirements.txt
 
 # Set your API key(s) (or add to your environment permanently)
 export ANTHROPIC_API_KEY="your-key-here"
