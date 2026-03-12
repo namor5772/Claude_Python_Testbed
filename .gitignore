@@ -4,13 +4,6 @@
 # Python bytecode
 __pycache__/
 
-# Runtime data
-app_state.json
-agent_state*.json
-agent_instructions.json
-agent_lock_*.lock
-saved_chats/
-
 # Account Activity output files
 Account_Activity_WBC.csv
 Account_Activity_WBC.txt
@@ -19,6 +12,9 @@ Account_Activity_WBC_backup.txt
 
 # IDE settings
 .vscode/
+
+# Agent output files
+output/
 
 # Claude Code config
 .claude/
