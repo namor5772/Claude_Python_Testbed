@@ -1,0 +1,4 @@
+
+C:\Users\grobl\ClonedPojects\Claude_Python_Testbed\.venv\Scripts\python.exe C:\Users\grobl\ClonedPojects\Claude_Python_Testbed\MyAgent.py -l Weather_Agent3
+C:\Users\grobl\ClonedPojects\Claude_Python_Testbed\.venv\Scripts\python.exe C:\Users\grobl\ClonedPojects\Claude_Python_Testbed\MyAgent.py -l Parallel_Test_4
+C:\Users\grobl\ClonedPojects\Claude_Python_Testbed\.venv\Scripts\python.exe C:\Users\grobl\ClonedPojects\Claude_Python_Testbed\MyAgent.py -l Just_Test_1
