@@ -17,4 +17,5 @@ Account_Activity_WBC_backup.txt
 output/
 
 # Claude Code config
-.claude/
+.claude/*
+!.claude/skills/
