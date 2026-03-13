@@ -51,7 +51,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 - The strength combobox automatically switches between effort levels and budget presets when you change models
 - Switching to a model that doesn't support thinking disables the checkbox and re-enables temperature
 - Thinking settings (`thinking_enabled`, `thinking_effort`, `thinking_budget`) are persisted in `app_state.json` and saved/restored with each chat
-- Thinking and redacted_thinking blocks are preserved during tool-use loops (required by the API for reasoning continuity) but stripped when serializing chats for persistence
+- Thinking and redacted_thinking blocks are preserved during tool-use loops (required by the API for reasoning continuity) but stripped when serializing chats for persistence unless the **Save Thinking** checkbox is enabled (see below)
 
 #### Chat Interface
 - **Streaming responses** — Claude's replies are streamed token-by-token into the chat display for a real-time feel
@@ -205,7 +205,7 @@ Two toolbars at the top of the window provide model selection and conversation m
 | **Load Chat** dropdown | Chat toolbar | Select a previously saved chat — restores conversation, system prompt, and model |
 
 Saved chats include:
-- The full message history (serialised to JSON, with base64 image data stripped and replaced with `[Image was attached]` placeholders to keep file sizes small; thinking blocks are stripped during serialisation)
+- The full message history (serialised to JSON, with base64 image data stripped and replaced with `[Image was attached]` placeholders to keep file sizes small; thinking blocks are stripped during serialisation unless the **Save Thinking** checkbox is enabled)
 - The system prompt text that was active during the chat
 - The system prompt name for easy identification
 - The model that was in use
@@ -262,6 +262,12 @@ API calls automatically retry on rate-limit (HTTP 429) and overload (HTTP 529) e
 - When checked, thinking blocks are displayed in amber/gold italic text before the response
 - When unchecked (the default), thinking blocks are suppressed from the display (the API still generates them, they are just hidden)
 - This is independent of the model toolbar **Thinking** checkbox, which controls whether the API generates thinking blocks at all
+
+#### Save Thinking
+- Toggle the **Save Thinking** checkbox to include thinking and redacted_thinking blocks in saved chat JSON files
+- When enabled, Anthropic thinking blocks (including signatures) are preserved in the saved chat, allowing loaded chats to continue with full reasoning context intact
+- When disabled (the default), thinking blocks are stripped during serialisation to keep saved chat files smaller
+- **OpenAI note:** OpenAI reasoning models only expose reasoning *summaries* (not the full internal reasoning), and these summaries are never sent back to the API on continuation. For OpenAI models, reasoning summaries are display-only — visible in the output window (and captured in the `.txt` export if Show Thinking is checked) but not stored in the messages. The Save Thinking toggle has no effect for OpenAI models
 
 ### Dual-Instance Self-Chatting
 
@@ -342,7 +348,7 @@ Both user and assistant messages display their content on the line below the lab
 
 #### Default Checkbox States
 
-All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Desktop, Browser) default to **off** on startup.
+All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Desktop, Browser) default to **off** on startup.
 
 ### Requirements
 
@@ -421,7 +427,7 @@ python SelfBot.py
 
 The application is a single-file tkinter app structured around the `App` class:
 
-- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar with SAVE button (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
+- **UI Layout** — Grid-based layout with 7 rows: model + temperature + thinking toolbar with DELETE/NEW CHAT buttons (row 0), chat save/load toolbar with SAVE button (row 1), chat display + scrollbar (row 2), input field (row 3), button bar with Attach Images, System Prompt, and Skills buttons (row 4), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking/Desktop/Browser toggles (row 5), and attachment indicator (row 6)
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, labels, tool info, errors) back to the main thread. When thinking is enabled, the stream worker uses raw event iteration (`content_block_start`, `content_block_delta`, `content_block_stop`) instead of `text_stream` to handle both thinking and text blocks
 - **Queue Polling** — The main thread polls the queue every 50ms via `root.after()` and updates the chat display accordingly
 - **Persistence** — JSON-based storage handles different concerns: `system_prompts.json` for the prompt library, individual `.json` files in `saved_chats/` for conversation history (one file per chat), `app_state.json` for user preferences, and `skills.json` for the skills library
@@ -608,6 +614,7 @@ Four checkboxes on the main window control what is shown in the output display (
 | **Tool Calls** | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
 | **Activity** | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
 | **Show Thinking** | Extended thinking blocks in amber/gold italic text |
+| **Save Thinking** | Preserve thinking blocks in saved chat JSON for reasoning continuity on reload |
 
 Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction inside the Agent Instruction Editor.
 
@@ -625,7 +632,7 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 #### App State Persistence
 
 - **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (confirms the PID belongs to `python.exe` or `pythonw.exe`, not a recycled PID from an unrelated process). The title bar shows `Claude Agent (N)` for instance 2+
-- Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking), main window geometry, and dialog geometries are saved per instance
+- Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking, Save Thinking), main window geometry, and dialog geometries are saved per instance
 - On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser/Meta toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
 - **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), and **PowerShell Confirm** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened
 - **Geometry sanitization** — All persisted window and dialog geometries (main window, editor, prompt dialog, confirm dialog, PS Safety dialog) are validated on restore via `_sanitize_geometry()`. Windows that are too small (below 200x150), positioned entirely off-screen, or have fewer than 50 visible pixels on the current display are reset to defaults. This prevents windows from becoming invisible after monitor changes, resolution switches, or corrupted state files. The saved screen resolution is also checked — if it has changed, geometry falls back to defaults
@@ -648,7 +655,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 |---|---|
 | **Row 0** | Chat toolbar: Agent Instruction button, model info label, Save Chat as entry, START button (green), STOP button (red) |
 | **Row 1** | Chat display: read-only text area with scrollbar, colour-coded output |
-| **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking |
+| **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Save Thinking |
 
 **Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
@@ -685,7 +692,7 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 The application is a single-file (~4,600 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
-- **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
+- **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`
 - **Dual-Provider Support** — A Provider combobox switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary via `_messages_to_responses()`, `_tools_to_responses()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, and top-level `function_call`/`function_call_output` items. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()` or `_stream_responses_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button. An **auto-prompt safety net** keeps interactive instructions alive: if the instruction text mentions `user_prompt` but the model ends its turn without calling it, the agent automatically injects a `user_prompt` dialog asking the user what to do next (submitting an empty response exits the loop)

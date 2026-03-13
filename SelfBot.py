@@ -795,6 +795,7 @@ class App:
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
         self.show_thinking = tk.BooleanVar(value=False)
+        self.save_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self._playwright = None
@@ -1116,6 +1117,12 @@ class App:
         )
         self.thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+        self.save_thinking_toggle = tk.Checkbutton(
+            checkbox_frame, text="Save Thinking", variable=self.save_thinking,
+            font=("Arial", 9),
+        )
+        self.save_thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
         self.desktop_toggle = tk.Checkbutton(
             checkbox_frame, text="Desktop", variable=self.desktop_enabled,
             font=("Arial", 9),
@@ -1348,6 +1355,9 @@ class App:
                     self._thinking_strength_var.set(k)
                     break
         self._on_model_selected()
+        # Restore save_thinking setting
+        if "save_thinking" in state:
+            self.save_thinking.set(state["save_thinking"])
         # Restore delay setting
         saved_delay = state.get("delay_seconds")
         if saved_delay is not None:
@@ -1456,6 +1466,7 @@ class App:
             "thinking_enabled": self.thinking_enabled,
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
+            "save_thinking": self.save_thinking.get(),
             "my_name": self.my_name_entry.get(),
             "my_friend": self.my_friend_entry.get(),
             "delay_seconds": self._delay_seconds,
@@ -1939,7 +1950,9 @@ class App:
         return block
 
     def _serialize_messages(self):
-        """Convert messages to JSON-serializable format, stripping image data, thinking, and extra fields."""
+        """Convert messages to JSON-serializable format, stripping image data and extra fields.
+        Thinking blocks are stripped unless the Save Thinking checkbox is enabled."""
+        strip_thinking = not self.save_thinking.get()
         serialized = []
         for msg in self.messages:
             content = msg["content"]
@@ -1949,12 +1962,12 @@ class App:
                 blocks = []
                 for block in content:
                     if isinstance(block, dict):
-                        if block.get("type") in ("thinking", "redacted_thinking"):
+                        if strip_thinking and block.get("type") in ("thinking", "redacted_thinking"):
                             continue
                         blocks.append(self._clean_content_block(block))
                     elif hasattr(block, "model_dump"):
                         d = block.model_dump()
-                        if d.get("type") in ("thinking", "redacted_thinking"):
+                        if strip_thinking and d.get("type") in ("thinking", "redacted_thinking"):
                             continue
                         blocks.append(self._clean_content_block(d))
                     else:

@@ -924,6 +924,7 @@ class App:
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
         self.show_thinking = tk.BooleanVar(value=False)
+        self.save_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self.meta_enabled = tk.BooleanVar(value=False)
@@ -1111,6 +1112,12 @@ class App:
             font=("Arial", 9),
         )
         self.thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.save_thinking_toggle = tk.Checkbutton(
+            checkbox_frame, text="Save Thinking", variable=self.save_thinking,
+            font=("Arial", 9),
+        )
+        self.save_thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
 
     # ── Model / Thinking Helpers ────────────────────────────────────────
@@ -1546,6 +1553,7 @@ class App:
         # Display checkboxes
         state["show_activity"] = self.show_activity.get()
         state["show_thinking"] = self.show_thinking.get()
+        state["save_thinking"] = self.save_thinking.get()
         state["debug_enabled"] = self.debug_enabled.get()
         state["tool_calls_enabled"] = self.tool_calls_enabled.get()
         with open(self._state_file, "w", encoding="utf-8") as f:
@@ -1614,6 +1622,8 @@ class App:
             self.show_activity.set(state["show_activity"])
         if "show_thinking" in state:
             self.show_thinking.set(state["show_thinking"])
+        if "save_thinking" in state:
+            self.save_thinking.set(state["save_thinking"])
         if "debug_enabled" in state:
             self.debug_enabled.set(state["debug_enabled"])
         if "tool_calls_enabled" in state:
@@ -2808,6 +2818,7 @@ class App:
         return block
 
     def _serialize_messages(self):
+        strip_thinking = not self.save_thinking.get()
         serialized = []
         for msg in self.messages:
             content = msg["content"]
@@ -2817,12 +2828,12 @@ class App:
                 blocks = []
                 for block in content:
                     if isinstance(block, dict):
-                        if block.get("type") in ("thinking", "redacted_thinking"):
+                        if strip_thinking and block.get("type") in ("thinking", "redacted_thinking"):
                             continue
                         blocks.append(self._clean_content_block(block))
                     elif hasattr(block, "model_dump"):
                         d = block.model_dump()
-                        if d.get("type") in ("thinking", "redacted_thinking"):
+                        if strip_thinking and d.get("type") in ("thinking", "redacted_thinking"):
                             continue
                         blocks.append(self._clean_content_block(d))
                     else:
