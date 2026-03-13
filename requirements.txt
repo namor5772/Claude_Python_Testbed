@@ -1,6 +1,6 @@
 anthropic
 openai
-ddgs
+duckduckgo-search
 httpx
 pyautogui
 pygetwindow
