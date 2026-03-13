@@ -1,5 +1,6 @@
 # Claude Python Testbed
 
+### CLONE IT INTO A VS CODE LOCAL REPO ##
 A repo containing various Python scripts written using Claude Code. The two main applications are a full-featured Claude chatbot with dual-instance self-chatting (SelfBot.py) and an autonomous task agent that loops until a job is done (MyAgent.py). There is also a standalone browser automation utility for extracting bank transaction data (Account_Activity_WBC.py).
 
 ## Contents
