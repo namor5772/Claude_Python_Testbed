@@ -13,9 +13,6 @@ Account_Activity_WBC_backup.txt
 # IDE settings
 .vscode/
 
-# Agent output files
-output/
-
 # Claude Code config
 .claude/*
 !.claude/skills/
