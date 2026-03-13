@@ -44,7 +44,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 | Model type | Thinking mode | Strength control |
 |---|---|---|
 | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Effort level: low, medium, high (default), max |
-| **Manual** (Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+| **Manual** (Opus 4.5, Sonnet 4.5, Haiku 4.5, Sonnet 3.5) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
 
 - When thinking is enabled, the **temperature controls are greyed out** (the API does not allow temperature with thinking)
 - `max_tokens` is automatically raised from 8,192 to 32,768 when thinking is active. Models with lower output token limits (Claude 3 Haiku/Opus/Sonnet at 4,096) are automatically capped via the `MODEL_MAX_OUTPUT_TOKENS` lookup
@@ -535,7 +535,7 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 | Provider | Model type | Thinking mode | Strength control |
 |---|---|---|---|
 | Anthropic | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Thinking mode combobox: Off, Adaptive, Low, Medium, High, Max (Max only for Opus 4.6) |
-| Anthropic | **Manual** (Opus 4.5, Sonnet 4.5, Haiku 4.5, etc.) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
+| Anthropic | **Manual** (Opus 4.5, Sonnet 4.5, Haiku 4.5, Sonnet 3.5) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
 | OpenAI | **Reasoning** (o1, o3, o4, gpt-5 series) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: low, medium, high |
 | OpenAI | **Standard** (GPT-4o, GPT-4.1, etc.) | Not supported | N/A |
 

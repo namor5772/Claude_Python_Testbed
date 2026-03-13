@@ -657,7 +657,7 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-sonnet-20240229": 4096,
 }
 ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
-MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5")
+MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
@@ -1182,7 +1182,12 @@ class App:
             self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
             self._thinking_check.config(state="normal")
             self._update_thinking_strength_options()
-            self._on_thinking_toggled()
+            if self.thinking_enabled:
+                self._on_thinking_toggled()
+            else:
+                self._temp_label.config(state="normal")
+                self._temp_spin.config(state="normal")
+                self._thinking_strength_combo.config(state="disabled")
         else:
             # Non-thinking model — hide mode combobox, show checkbox + strength disabled
             self._thinking_mode_label.pack_forget()
@@ -1191,6 +1196,7 @@ class App:
             self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
             self._thinking_var.set(False)
             self.thinking_enabled = False
+            self.thinking_mode = "off"
             self._thinking_check.config(state="disabled")
             self._thinking_strength_combo.config(state="disabled")
             self._temp_label.config(state="normal")
