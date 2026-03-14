@@ -287,7 +287,10 @@ DESKTOP_TOOLS = [
             "Click the mouse at the given (x, y) position. Take a screenshot first to identify "
             "the correct coordinates — use pixel positions as seen in the screenshot image. "
             "Coordinates are automatically mapped to the actual screen. "
-            "Supports left/right/middle button and single/double click."
+            "Supports left/right/middle button and single/double click. "
+            "NOTE: Title bar buttons (close/minimize/maximize) may not respond to clicks in some "
+            "apps like Excel. Prefer find_window with activate=true first, then press_key with "
+            "Alt+F4 (close), Alt+Space then n (minimize), or Alt+Space then x (maximize) instead."
         ),
         "input_schema": {
             "type": "object",
@@ -3467,17 +3470,24 @@ class App:
                 img = pyautogui.screenshot(region=region)
             else:
                 img = pyautogui.screenshot()
-            orig_w, orig_h = img.size
+            phys_w, phys_h = img.size
+            # Align screenshot to pyautogui's logical coordinate space so all
+            # desktop tool coordinates map directly to mouse positions.
+            if not region:
+                log_w, log_h = pyautogui.size()
+                if phys_w != log_w and log_w:
+                    img = img.resize((log_w, log_h))
+            logical_w, logical_h = img.size
             max_w = 1280
-            if orig_w > max_w:
-                ratio = orig_w / max_w
-                new_h = int(orig_h / ratio)
+            if logical_w > max_w:
+                ratio = logical_w / max_w
+                new_h = int(logical_h / ratio)
                 img = img.resize((max_w, new_h))
                 self._screenshot_scale = ratio
                 img_w, img_h = max_w, new_h
             else:
                 self._screenshot_scale = 1.0
-                img_w, img_h = orig_w, orig_h
+                img_w, img_h = logical_w, logical_h
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")

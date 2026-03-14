@@ -76,7 +76,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Skills system** — Three modes: disabled, enabled (injected into system prompt), on-demand (retrieved via `get_skill` tool). Managed through `_build_system_prompt()` and `_get_tools()`.
 
-**DPI handling** — `SetProcessDpiAwareness(2)` is called before any window creation. Screenshot coordinates are scaled via `_screenshot_scale` for mouse click mapping.
+**DPI handling** — `SetProcessDpiAwareness(2)` is called before any window creation. Screenshots are captured at physical pixel resolution then immediately resized to match `pyautogui.size()` (the logical coordinate space that mouse functions use). This ensures the screenshot image coordinates map 1:1 to pyautogui's mouse coordinates regardless of Windows display scaling. The subsequent resize to max 1280px for the API is tracked by `_screenshot_scale` which all coordinate-using tools multiply by to convert image coords back to logical screen coords.
 
 **Auto-save on close** — When closing (via [X] button or `taskkill`), all instances auto-save their chat as `.json` + `.txt` to `saved_chats/`. Uses the name from the Save Chat entry if provided, otherwise auto-generates from the first user message. Instance 2's files are suffixed with `_` via `_save_name()` to avoid collisions. A periodic auto-save every 5 seconds on all instances also protects against force-kill data loss.
 
