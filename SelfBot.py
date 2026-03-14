@@ -157,10 +157,7 @@ DESKTOP_TOOLS = [
             "Click the mouse at the given (x, y) position. Take a screenshot first to identify "
             "the correct coordinates — use pixel positions as seen in the screenshot image. "
             "Coordinates are automatically mapped to the actual screen. "
-            "Supports left/right/middle button and single/double click. "
-            "NOTE: Title bar buttons (close/minimize/maximize) may not respond to clicks in some "
-            "apps like Excel. Prefer find_window with activate=true first, then press_key with "
-            "Alt+F4 (close), Alt+Space then n (minimize), or Alt+Space then x (maximize) instead."
+            "Supports left/right/middle button and single/double click."
         ),
         "input_schema": {
             "type": "object",
