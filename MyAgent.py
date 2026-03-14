@@ -4404,6 +4404,8 @@ class App:
                     break
 
                 call_num += 1
+                if call_num > 1:
+                    self.queue.put({"type": "ensure_newline"})
                 payload_text = self._payload_for_display(messages)
                 self.queue.put({"type": "call_counter", "content": call_num})
                 self.queue.put({"type": "debug", "content": payload_text})
@@ -4519,6 +4521,14 @@ class App:
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
 
+    def _ensure_newline(self):
+        """Ensure the chat display ends with a newline so the next insert starts on a fresh line."""
+        end_pos = self.chat_display.index("end-1c")
+        if end_pos != "1.0":
+            last_char = self.chat_display.get("end-2c", "end-1c")
+            if last_char != "\n":
+                self.chat_display.insert(tk.END, "\n")
+
     def check_queue(self):
         try:
             while True:
@@ -4530,12 +4540,14 @@ class App:
                 elif msg["type"] == "call_counter":
                     tag = "call_counter" if self.debug_enabled.get() else "call_counter_subtle"
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, f"  Call #{msg['content']}  ", tag)
                     self.chat_display.insert(tk.END, "\n", "debug")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "debug":
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, "--- PAYLOAD SENT TO API ---\n", "debug_label")
                     self.chat_display.insert(tk.END, msg["content"] + "\n", "debug")
                     self.chat_display.insert(tk.END, "--- END PAYLOAD ---\n\n", "debug_label")
@@ -4545,6 +4557,7 @@ class App:
                     pass
                 elif msg["type"] == "tool_call_debug":
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, "--- TOOL CALL ---\n", "tool_debug_label")
                     self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_debug")
                     self.chat_display.insert(tk.END, "--- END TOOL CALL ---\n", "tool_debug_label")
@@ -4554,6 +4567,7 @@ class App:
                     self._current_thinking_text = ""
                     if self.show_thinking.get():
                         self.chat_display.config(state="normal")
+                        self._ensure_newline()
                         self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
                         self.chat_display.see(tk.END)
                         self.chat_display.config(state="disabled")
@@ -4573,6 +4587,7 @@ class App:
                 elif msg["type"] == "label":
                     self._current_response_text = ""
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, "Agent:\n", "assistant_label")
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "text_delta":
@@ -4583,6 +4598,7 @@ class App:
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "user_prompt_echo":
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, "\nYou:\n", "user_label")
                     self.chat_display.insert(tk.END, msg["content"] + "\n\n", "user")
                     self.chat_display.see(tk.END)
@@ -4591,13 +4607,19 @@ class App:
                     pass
                 elif msg["type"] == "tool_info":
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, msg["content"], "tool_info")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "warning":
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(tk.END, msg["content"], "warning")
                     self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "ensure_newline":
+                    self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "complete":
                     self.chat_display.config(state="normal")
@@ -4609,6 +4631,7 @@ class App:
                     self.instruction_button.config(state="normal")
                 elif msg["type"] == "error":
                     self.chat_display.config(state="normal")
+                    self._ensure_newline()
                     self.chat_display.insert(
                         tk.END, f"Error: {msg['content']}\n\n", "error"
                     )

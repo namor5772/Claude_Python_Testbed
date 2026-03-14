@@ -64,7 +64,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 2. Add a `do_<tool_name>()` method to the `App` class
 3. Wire it up in the `stream_worker()` method's tool dispatch block (`elif block.name == "..."`)
 
-**Threading model** — API calls run in a background `stream_worker` thread. A `queue.Queue` passes events (text, thinking, tool info, errors) to the main thread, polled every 50ms via `root.after()`.
+**Threading model** — API calls run in a background `stream_worker` thread. A `queue.Queue` passes events (text, thinking, tool info, errors) to the main thread, polled every 50ms via `root.after()`. `_ensure_newline()` guarantees each new output block starts on a fresh line; an `ensure_newline` queue event between loop iterations prevents text merging when Activity is off.
 
 **Thinking accumulator lifecycle** — `_current_thinking_text` is reset at `thinking_start` (not at `label`), so the accumulated thinking text survives past the label event and is available when `complete` fires to inject into the peer instance.
 
