@@ -8,6 +8,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Autonomous AI agent GUI application supporting Anthropic and OpenAI providers (see details below)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
+- **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **requirements.txt** — Python dependencies for pip install
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
@@ -17,6 +18,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **agent_state.json** — Persistent app settings for MyAgent instance 1 (created at runtime)
 - **agent_state_N.json** — Persistent settings for MyAgent instance N (created at runtime when multiple instances run)
+- **csv_editor_state.json** — Persistent settings for CSVEditor (created at runtime)
 - **skills.json** — Saved skills with content and mode, shared by both apps (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
@@ -762,4 +764,53 @@ source .venv/Scripts/activate
 
 # Run the application
 python Account_Activity_WBC.py
+```
+
+---
+
+## CSVEditor.py — Lightweight CSV Editor
+
+A simple desktop CSV editor built with tkinter. Open, edit, filter, and save CSV files with a spreadsheet-style interface using a `ttk.Treeview` widget.
+
+### Features
+
+- **Open and save CSV files** — Open any CSV file (auto-detects UTF-8 with BOM), edit in-place, or Save As to a new file
+- **Inline cell editing** — Double-click any cell to edit its value directly in the treeview
+- **Row operations** — Insert Row Above, Insert Row Below, Copy Row, and Delete Row buttons on the toolbar
+- **Column filtering** — Filter bar with two comboboxes: select a column, then pick a unique value to show only matching rows. A "Show All" button clears the filter. Filter status shows "Showing N of M rows"
+- **Unsaved changes tracking** — The title bar and status bar show a `*` indicator when changes are unsaved. Closing or opening a new file prompts to save
+- **State persistence** — Window geometry, last opened file path, and active filter (column + value) are saved to `csv_editor_state.json` and restored on next launch
+
+### UI
+
+A compact tkinter window (default 1000x600) with:
+
+| Control | Description |
+|---|---|
+| **Open CSV** | Open a CSV file |
+| **Save** | Save to the current file (or Save As if no file loaded) |
+| **Save As…** | Save to a new file path |
+| **Insert Row Above/Below** | Insert an empty row relative to the selection |
+| **Copy Row** | Duplicate the selected row below it |
+| **Delete Row** | Remove the selected row |
+| **Filter by** | Column combobox + Value combobox to filter visible rows |
+| **Show All** | Clear the active filter |
+| **Status bar** | Shows filename, modification indicator, row count, and column count |
+
+### Architecture
+
+**Single class design** — Same as the other apps: the `App` class contains all UI, file I/O, editing, filtering, and persistence logic in a single file (~405 lines).
+
+- **Treeview-based spreadsheet** — Uses `ttk.Treeview` with `show="headings"` to display the CSV as a sortable, scrollable table with horizontal and vertical scrollbars
+- **Visible index mapping** — `_visible_indices` maps tree positions to real row indices in `self.rows`, so row operations work correctly even when a filter is active
+- **No threading** — All operations are synchronous (file I/O is fast for CSV files), so no background threads are needed
+
+### Running
+
+```bash
+# Activate the virtual environment
+source .venv/Scripts/activate
+
+# Run the application
+python CSVEditor.py
 ```

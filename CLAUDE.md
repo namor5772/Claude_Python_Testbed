@@ -25,6 +25,9 @@ source .venv/Scripts/activate && python MyAgent.py -l "Instruction Name" --headl
 # Activate venv and run Account Activity extractor
 source .venv/Scripts/activate && python Account_Activity_WBC.py
 
+# Activate venv and run CSV Editor
+source .venv/Scripts/activate && python CSVEditor.py
+
 # Kill any running instances before relaunching (Windows)
 taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/null
 ```
@@ -34,6 +37,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
 - `MyAgent.py` — Single-file tkinter GUI autonomous agent (~4600 lines); fire-and-forget task runner with an agentic tool-use loop, supports both Anthropic and OpenAI providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
+- `CSVEditor.py` — Single-file tkinter GUI CSV editor (~405 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
 - `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)
@@ -41,6 +45,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 - `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
 - `agent_state.json` — Persistent settings for MyAgent (created at runtime)
+- `csv_editor_state.json` — Persistent settings for CSVEditor (created at runtime)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
 - `selfbot_auto_msg.json` — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - `Account_Activity_WBC.txt` — Raw transaction HTML extracted by Account_Activity_WBC.py (created at runtime, gitignored)
