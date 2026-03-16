@@ -1,5 +1,6 @@
 anthropic
 openai
+google-genai
 duckduckgo-search
 httpx
 pyautogui

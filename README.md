@@ -6,7 +6,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 ## Contents
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
-- **MyAgent.py** — Autonomous AI agent GUI application supporting Anthropic and OpenAI providers (see details below)
+- **MyAgent.py** — Autonomous AI agent GUI application supporting Anthropic, OpenAI, and Gemini providers (see details below)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **requirements.txt** — Python dependencies for pip install
@@ -356,7 +356,7 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Deskt
 
 - Windows 10/11
 - Python 3 with tkinter (included in standard library)
-- At least one of `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` environment variables (MyAgent supports both; SelfBot requires Anthropic)
+- At least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY` environment variables (MyAgent supports all three; SelfBot requires Anthropic)
 
 #### Python Dependencies
 
@@ -396,6 +396,7 @@ pip install -r requirements.txt
 # Set your API key(s) (or add to your environment permanently)
 export ANTHROPIC_API_KEY="your-key-here"
 export OPENAI_API_KEY="your-key-here"      # optional, for MyAgent OpenAI support
+export GEMINI_API_KEY="your-key-here"      # optional, for MyAgent Gemini support
 ```
 
 The `.venv` directory is gitignored and must be recreated on each machine. All runtime files (`app_state.json`, `skills.json`, `saved_chats/`, etc.) are created automatically on first run.
@@ -520,7 +521,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Tool toggles persist with instructions** — Each saved instruction stores its Desktop, Browser, and Meta checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
 
-**Provider and model parameters persist with instructions** — Each saved instruction stores the provider (Anthropic or OpenAI), model, temperature, and thinking settings. Loading an instruction from the dropdown immediately restores the provider, refreshes the model list, and sets the model and thinking parameters on the main toolbar.
+**Provider and model parameters persist with instructions** — Each saved instruction stores the provider (Anthropic, OpenAI, or Gemini), model, temperature, and thinking settings. Loading an instruction from the dropdown immediately restores the provider, refreshes the model list, and sets the model and thinking parameters on the main toolbar.
 
 **Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled.
 
@@ -532,11 +533,12 @@ A "Default" instruction is automatically created on first run if missing. Old-fo
 
 #### Provider Selection & Model Selection
 
-A **Provider** combobox on the model toolbar switches between **Anthropic** and **OpenAI**. Only providers with valid API keys are shown (set `ANTHROPIC_API_KEY` and/or `OPENAI_API_KEY`). The provider combobox is **locked (disabled) while the agent is running** to prevent mid-run changes.
+A **Provider** combobox on the model toolbar switches between **Anthropic**, **OpenAI**, and **Gemini**. Only providers with valid API keys are shown (set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and/or `GEMINI_API_KEY`/`GOOGLE_API_KEY`). The provider combobox is **locked (disabled) while the agent is running** to prevent mid-run changes.
 
 When switching providers, the **Model** dropdown refreshes with available models for that provider:
 - **Anthropic** — Fetches models live from the Anthropic API (falls back to Claude Sonnet 4.5, Opus 4.6, Haiku 4.5)
 - **OpenAI** — Fetches models from the OpenAI API, filtered to Responses API compatible families only: `gpt-4o`, `gpt-4.1`, `gpt-4.5`, `gpt-5`, `o1`, `o3`, `o4` (falls back to GPT-5, GPT-5-mini, GPT-4.1, GPT-4.1-mini, o4-mini). Legacy models (gpt-3.5-turbo, base gpt-4, gpt-4-turbo) are excluded as they don't support the Responses API
+- **Gemini** — Fetches models from the Gemini API, filtering out non-generative models (falls back to Gemini 2.5 Flash, 2.5 Pro, 2.0 Flash). Uses the `google-genai` unified SDK
 
 A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox with **Strength** combobox enables extended thinking/reasoning.
 
@@ -546,10 +548,12 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 | Anthropic | **Manual** (Opus 4.5, Sonnet 4.5, Haiku 4.5, Sonnet 3.5) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
 | OpenAI | **Reasoning** (o1, o3, o4, gpt-5 series) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: low, medium, high |
 | OpenAI | **Standard** (GPT-4o, GPT-4.1, etc.) | Not supported | N/A |
+| Gemini | **Thinking** (Gemini 2.5 series) | `thinking_config: {thinking_budget: N}` | Effort level: low (1K), medium (8K), high (24K) |
+| Gemini | **Standard** (Gemini 2.0, etc.) | Not supported | N/A |
 
 **Adaptive thinking mode** — For Anthropic adaptive models, the checkbox and strength combobox are replaced by a single **Thinking** mode combobox with values: Off, Adaptive, Low, Medium, High, Max. "Off" disables thinking entirely. "Adaptive" sends `thinking: {type: "adaptive"}` without an explicit effort level (the API decides). Low/Medium/High/Max send `output_config: {effort: ...}` alongside adaptive thinking. "Max" is only available for Opus 4.6. For manual and OpenAI models, the standard checkbox + strength controls are shown instead. The UI dynamically switches between these two control styles when changing models.
 
-**Temperature and thinking controls are model-aware** — OpenAI reasoning models (o1/o3/o4/gpt-5) don't accept a `temperature` parameter, so the Temp spinner stays disabled for these models even when thinking is unchecked. Standard OpenAI models show the Temp spinner normally. When thinking is enabled (any mode except Off), temperature controls are disabled for all providers. This is enforced across all code paths: model selection, thinking toggle, and state restore.
+**Temperature and thinking controls are model-aware** — OpenAI reasoning models (o1/o3/o4/gpt-5) don't accept a `temperature` parameter, so the Temp spinner stays disabled for these models even when thinking is unchecked. Standard OpenAI models show the Temp spinner normally. Gemini accepts temperature even with thinking enabled, so the Temp spinner stays active for all Gemini models. For Anthropic, when thinking is enabled (any mode except Off), temperature controls are disabled. This is enforced across all code paths: model selection, thinking toggle, and state restore.
 
 Provider, model, temperature, and thinking settings are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
 
@@ -675,7 +679,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 | **State file** | `app_state.json` / `app_state_2.json` | `agent_state.json` / `agent_state_N.json` (per instance) |
 | **Instruction file** | `system_prompts.json` | `agent_instructions.json` |
 | **Chat loading** | Save and load chats | Save only (no load-back into UI) |
-| **API providers** | Anthropic only | Anthropic + OpenAI (switchable via Provider combobox) |
+| **API providers** | Anthropic only | Anthropic + OpenAI + Gemini (switchable via Provider combobox) |
 | **Window title** | "Claude SelfBot" | "Claude Agent" (+ "[OpenAI]" when using OpenAI) |
 
 ### Running

@@ -15,6 +15,8 @@ from tkinter import messagebox, filedialog, ttk
 from html.parser import HTMLParser
 import anthropic
 import openai
+from google import genai
+from google.genai import types as genai_types
 from duckduckgo_search import DDGS
 import httpx
 import threading
@@ -801,7 +803,10 @@ OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 # Model families that support the Responses API (gpt-3.5, gpt-4 base/turbo do not)
 OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
                              "o1", "o3", "o4")
-PROVIDERS = ["Anthropic", "OpenAI"]
+GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
+GEMINI_THINKING_PREFIXES = ("gemini-2.5",)
+PROVIDERS = ["Anthropic", "OpenAI", "Gemini"]
 DEFAULT_GEOMETRY = "1050x930"
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -867,7 +872,7 @@ def extract_text_from_html(html):
 
 
 class _ToolBlock:
-    """Thin wrapper so OpenAI dict-based tool blocks expose the same
+    """Thin wrapper so OpenAI/Gemini dict-based tool blocks expose the same
     .name, .id, .input attribute interface as Anthropic's Pydantic objects."""
 
     def __init__(self, name, id, input):
@@ -889,10 +894,11 @@ class App:
         # Check for at least one API key
         self._has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self._has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-        if not self._has_anthropic and not self._has_openai:
+        self._has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        if not self._has_anthropic and not self._has_openai and not self._has_gemini:
             messagebox.showerror(
                 "API Key Missing",
-                "Please set at least one of ANTHROPIC_API_KEY or OPENAI_API_KEY.",
+                "Please set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY.",
             )
             self.root.destroy()
             return
@@ -911,8 +917,16 @@ class App:
         self.openai_client = openai.OpenAI(
             timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
         ) if self._has_openai else None
-        self.provider = "Anthropic" if self._has_anthropic else "OpenAI"
+        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        self.gemini_client = genai.Client(api_key=gemini_key) if self._has_gemini else None
+        if self._has_anthropic:
+            self.provider = "Anthropic"
+        elif self._has_openai:
+            self.provider = "OpenAI"
+        else:
+            self.provider = "Gemini"
         self._openai_model_display_names = {}
+        self._gemini_model_display_names = {}
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False
@@ -934,7 +948,7 @@ class App:
         self._page = None
         self._edge_process = None
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self.model = DEFAULT_MODEL if self.provider == "Anthropic" else OPENAI_DEFAULT_MODEL
+        self.model = DEFAULT_MODEL if self.provider == "Anthropic" else (OPENAI_DEFAULT_MODEL if self.provider == "OpenAI" else GEMINI_DEFAULT_MODEL)
         self.temperature = 1.0
         self.thinking_enabled = False
         self.thinking_effort = "high"
@@ -1158,6 +1172,8 @@ class App:
         # Select default model for new provider
         if new_provider == "OpenAI":
             default = OPENAI_DEFAULT_MODEL
+        elif new_provider == "Gemini":
+            default = GEMINI_DEFAULT_MODEL
         else:
             default = DEFAULT_MODEL
         if default in self.available_models:
@@ -1177,7 +1193,7 @@ class App:
                 break
         support = self._model_supports_thinking()
         if self._has_model_widgets():
-            if support == "adaptive" and self.provider != "OpenAI":
+            if support == "adaptive" and self.provider == "Anthropic":
                 # Adaptive model (Anthropic): show mode combo, hide checkbox + strength
                 self._thinking_check.pack_forget()
                 self._thinking_strength_combo.pack_forget()
@@ -1246,12 +1262,18 @@ class App:
         mid = model_id or self.model
         if self.provider == "OpenAI":
             return "adaptive" if self._is_openai_reasoning_model(mid) else None
+        if self.provider == "Gemini":
+            return "adaptive" if self._is_gemini_thinking_model(mid) else None
         if mid in ADAPTIVE_THINKING_MODELS:
             return "adaptive"
         for prefix in MANUAL_THINKING_PREFIXES:
             if mid.startswith(prefix):
                 return "manual"
         return None
+
+    def _is_gemini_thinking_model(self, model_id=None):
+        mid = model_id or self.model
+        return any(mid.startswith(p) for p in GEMINI_THINKING_PREFIXES)
 
     def _restore_model_params(self, entry, state_file=False):
         """Restore provider, model, temperature, and thinking settings from an instruction entry or state file."""
@@ -1261,7 +1283,8 @@ class App:
         saved_provider = entry.get(provider_key, "Anthropic")
         if saved_provider != self.provider:
             can_switch = (saved_provider == "Anthropic" and self._has_anthropic) or \
-                         (saved_provider == "OpenAI" and self._has_openai)
+                         (saved_provider == "OpenAI" and self._has_openai) or \
+                         (saved_provider == "Gemini" and self._has_gemini)
             if can_switch:
                 self.provider = saved_provider
                 self._provider_var.set(saved_provider)
@@ -1305,7 +1328,7 @@ class App:
                 self.thinking_enabled = False
                 self.thinking_mode = "off"
                 self._thinking_mode_var.set("Off")
-            elif support == "adaptive" and self.provider != "OpenAI":
+            elif support == "adaptive" and self.provider == "Anthropic":
                 # Adaptive model: _on_model_selected will show/hide correct widgets
                 pass
             else:
@@ -1328,8 +1351,13 @@ class App:
         self.thinking_enabled = self._thinking_var.get()
         if self._has_model_widgets():
             if self.thinking_enabled:
-                self._temp_label.config(state="disabled")
-                self._temp_spin.config(state="disabled")
+                # Gemini allows temperature even with thinking enabled
+                if self.provider == "Gemini":
+                    self._temp_label.config(state="normal")
+                    self._temp_spin.config(state="normal")
+                else:
+                    self._temp_label.config(state="disabled")
+                    self._temp_spin.config(state="disabled")
                 self._update_thinking_strength_options()
                 self._thinking_strength_combo.config(state="readonly")
             else:
@@ -1347,7 +1375,7 @@ class App:
             return
         support = self._model_supports_thinking()
         if support == "adaptive":
-            if self.provider == "OpenAI":
+            if self.provider in ("OpenAI", "Gemini"):
                 values = ["low", "medium", "high"]
             else:
                 values = list(EFFORT_LEVELS)
@@ -1879,7 +1907,8 @@ class App:
 
         available_providers = [p for p in PROVIDERS
                                if (p == "Anthropic" and self._has_anthropic)
-                               or (p == "OpenAI" and self._has_openai)]
+                               or (p == "OpenAI" and self._has_openai)
+                               or (p == "Gemini" and self._has_gemini)]
         self._provider_combo = ttk.Combobox(
             model_frame, textvariable=self._provider_var, state="readonly",
             font=("Arial", 9), width=10, values=available_providers,
@@ -2111,9 +2140,12 @@ class App:
         if self._has_anthropic:
             default_provider = "Anthropic"
             default_model = DEFAULT_MODEL
-        else:
+        elif self._has_openai:
             default_provider = "OpenAI"
             default_model = OPENAI_DEFAULT_MODEL
+        else:
+            default_provider = "Gemini"
+            default_model = GEMINI_DEFAULT_MODEL
         self._provider_var.set(default_provider)
         if default_provider != self.provider:
             self._on_provider_changed()
@@ -2381,6 +2413,8 @@ class App:
         """Get display name for a model, provider-aware."""
         if self.provider == "OpenAI":
             return self._openai_model_display_names.get(model_id, model_id)
+        if self.provider == "Gemini":
+            return self._gemini_model_display_names.get(model_id, model_id)
         return self._model_display_names.get(model_id, model_id)
 
     def _tools_to_responses(self, tools):
@@ -2609,10 +2643,35 @@ class App:
             self._openai_model_display_names = {}
             return list(OPENAI_FALLBACK_MODELS)
 
+    def _fetch_gemini_models(self):
+        """Fetch available Gemini generative models."""
+        if not self.gemini_client:
+            return list(GEMINI_FALLBACK_MODELS)
+        try:
+            model_ids = []
+            for m in self.gemini_client.models.list():
+                mid = m.name  # e.g. "models/gemini-2.5-flash"
+                # Strip "models/" prefix
+                if mid.startswith("models/"):
+                    mid = mid[len("models/"):]
+                # Skip non-generative models
+                if any(skip in mid for skip in ("embedding", "imagen", "aqa",
+                                                "bisheng", "text-")):
+                    continue
+                model_ids.append(mid)
+            model_ids.sort()
+            self._gemini_model_display_names = {mid: mid for mid in model_ids}
+            return model_ids if model_ids else list(GEMINI_FALLBACK_MODELS)
+        except Exception:
+            self._gemini_model_display_names = {}
+            return list(GEMINI_FALLBACK_MODELS)
+
     def _fetch_models_for_provider(self):
         """Fetch models for the current provider."""
         if self.provider == "OpenAI":
             return self._fetch_openai_models()
+        if self.provider == "Gemini":
+            return self._fetch_gemini_models()
         return self._fetch_available_models()
 
     def _is_openai_reasoning_model(self, model_id=None):
@@ -2622,6 +2681,258 @@ class App:
         if "-chat" in mid:
             return False
         return any(mid.startswith(p) for p in OPENAI_REASONING_PREFIXES)
+
+    # ── Gemini Translation Helpers ────────────────────────────────────
+
+    def _tools_to_gemini(self, tools):
+        """Convert Anthropic tool schemas to Gemini FunctionDeclaration objects."""
+        declarations = []
+        for tool in tools:
+            schema = copy.deepcopy(tool.get("input_schema", {"type": "object", "properties": {}}))
+            # Strip additionalProperties which some Gemini models reject
+            self._strip_additional_properties(schema)
+            declarations.append(genai_types.FunctionDeclaration(
+                name=tool["name"],
+                description=tool.get("description", ""),
+                parameters=schema,
+            ))
+        return declarations
+
+    def _strip_additional_properties(self, schema):
+        """Recursively strip additionalProperties from a JSON schema dict."""
+        if isinstance(schema, dict):
+            schema.pop("additionalProperties", None)
+            for v in schema.values():
+                self._strip_additional_properties(v)
+        elif isinstance(schema, list):
+            for item in schema:
+                self._strip_additional_properties(item)
+
+    def _messages_to_gemini(self, messages):
+        """Convert Anthropic-format messages to Gemini Content objects."""
+        contents = []
+        # Build tool_use_id → tool_name lookup for function responses
+        id_to_name = {}
+        for msg in messages:
+            if msg["role"] == "assistant" and isinstance(msg.get("content"), list):
+                for block in msg["content"]:
+                    btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+                    if btype == "tool_use":
+                        bid = getattr(block, "id", None) or (block.get("id") if isinstance(block, dict) else "")
+                        bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
+                        if bid and bname:
+                            id_to_name[bid] = bname
+
+        for msg in messages:
+            role = msg["role"]
+            content = msg.get("content")
+
+            if role == "user":
+                if isinstance(content, str):
+                    contents.append(genai_types.Content(
+                        role="user",
+                        parts=[genai_types.Part.from_text(text=content)],
+                    ))
+                elif isinstance(content, list):
+                    # Check if this is a tool_result list
+                    has_tool_result = any(
+                        isinstance(b, dict) and b.get("type") == "tool_result" for b in content
+                    )
+                    if has_tool_result:
+                        parts = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                tool_id = block.get("tool_use_id", "")
+                                tool_name = id_to_name.get(tool_id, "unknown")
+                                tc_content = block.get("content", "")
+                                # Extract text from content (may be string or list)
+                                if isinstance(tc_content, list):
+                                    text_parts = []
+                                    for part in tc_content:
+                                        if isinstance(part, dict) and part.get("type") == "text":
+                                            text_parts.append(part.get("text", ""))
+                                        elif isinstance(part, dict) and part.get("type") == "image":
+                                            # Gemini supports inline image data in function responses
+                                            src = part.get("source", {})
+                                            img_data = base64.b64decode(src.get("data", ""))
+                                            media_type = src.get("media_type", "image/png")
+                                            parts.append(genai_types.Part.from_bytes(
+                                                data=img_data, mime_type=media_type,
+                                            ))
+                                        else:
+                                            text_parts.append(str(part))
+                                    response_text = "\n".join(text_parts) if text_parts else ""
+                                else:
+                                    response_text = str(tc_content) if tc_content else ""
+                                parts.append(genai_types.Part.from_function_response(
+                                    name=tool_name,
+                                    response={"result": response_text},
+                                ))
+                        if parts:
+                            contents.append(genai_types.Content(role="user", parts=parts))
+                    else:
+                        # User message with text + images
+                        parts = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                if block.get("type") == "text":
+                                    parts.append(genai_types.Part.from_text(text=block.get("text", "")))
+                                elif block.get("type") == "image":
+                                    src = block.get("source", {})
+                                    img_data = base64.b64decode(src.get("data", ""))
+                                    media_type = src.get("media_type", "image/png")
+                                    parts.append(genai_types.Part.from_bytes(
+                                        data=img_data, mime_type=media_type,
+                                    ))
+                            elif isinstance(block, str):
+                                parts.append(genai_types.Part.from_text(text=block))
+                        if parts:
+                            contents.append(genai_types.Content(role="user", parts=parts))
+
+            elif role == "assistant":
+                if isinstance(content, str):
+                    contents.append(genai_types.Content(
+                        role="model",
+                        parts=[genai_types.Part.from_text(text=content)],
+                    ))
+                elif isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+                        if btype == "text":
+                            t = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else "")
+                            if t:
+                                parts.append(genai_types.Part.from_text(text=t))
+                        elif btype == "tool_use":
+                            bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
+                            binput = getattr(block, "input", None) or (block.get("input") if isinstance(block, dict) else {})
+                            parts.append(genai_types.Part.from_function_call(
+                                name=bname, args=binput,
+                            ))
+                        # Skip thinking/redacted_thinking blocks
+                    if parts:
+                        contents.append(genai_types.Content(role="model", parts=parts))
+
+        return contents
+
+    def _stream_gemini_call(self, messages, max_retries, label_emitted):
+        """Execute one Gemini API call with streaming and retry logic.
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
+        system_prompt = self._build_system_prompt()
+        tools = self._get_tools()
+        gemini_tools = [genai_types.Tool(function_declarations=self._tools_to_gemini(tools))] if tools else None
+        gemini_contents = self._messages_to_gemini(messages)
+
+        # Build config
+        config_kwargs = {
+            "system_instruction": system_prompt,
+            "temperature": self.temperature,
+        }
+        if self.thinking_enabled and self._is_gemini_thinking_model():
+            budget_map = {"low": 1024, "medium": 8192, "high": 24576}
+            budget = budget_map.get(self.thinking_effort, 8192)
+            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_budget=budget,
+            )
+        if gemini_tools:
+            config_kwargs["tools"] = gemini_tools
+
+        config = genai_types.GenerateContentConfig(**config_kwargs)
+
+        full_text = ""
+        had_thinking = False
+        tool_calls = []  # list of {name, id, input}
+
+        for attempt in range(max_retries):
+            try:
+                in_thinking = False
+                tool_index = 0
+                response_stream = self.gemini_client.models.generate_content_stream(
+                    model=self.model,
+                    contents=gemini_contents,
+                    config=config,
+                )
+                for chunk in response_stream:
+                    if self.stop_requested:
+                        break
+                    if not chunk.candidates:
+                        continue
+                    for part in chunk.candidates[0].content.parts:
+                        if getattr(part, "thought", False):
+                            # Thinking part
+                            if not in_thinking:
+                                in_thinking = True
+                                had_thinking = True
+                                self.queue.put({"type": "thinking_start"})
+                            self.queue.put({"type": "thinking_delta", "content": part.text})
+                        elif part.text is not None:
+                            # Regular text
+                            if in_thinking:
+                                self.queue.put({"type": "thinking_end"})
+                                in_thinking = False
+                            if not label_emitted:
+                                self.queue.put({"type": "label"})
+                                label_emitted = True
+                            full_text += part.text
+                            self.queue.put({"type": "text_delta", "content": part.text})
+                        elif part.function_call is not None:
+                            # Tool call
+                            if in_thinking:
+                                self.queue.put({"type": "thinking_end"})
+                                in_thinking = False
+                            fc = part.function_call
+                            tool_id = f"gemini_{fc.name}_{tool_index}"
+                            tool_index += 1
+                            tool_calls.append({
+                                "name": fc.name,
+                                "id": tool_id,
+                                "input": dict(fc.args) if fc.args else {},
+                            })
+                if in_thinking:
+                    self.queue.put({"type": "thinking_end"})
+                break  # success
+            except Exception as e:
+                err_str = str(e)
+                status = getattr(e, "code", 0) or getattr(e, "status_code", 0)
+                is_rate_limit = status == 429 or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+                is_server_error = (isinstance(status, int) and status >= 500) or "500" in err_str or "503" in err_str
+                if is_rate_limit and attempt < max_retries - 1:
+                    wait = min(2 ** attempt * 5, 60)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                    full_text = ""
+                    tool_calls = []
+                elif is_server_error and attempt < max_retries - 1:
+                    wait = min(2 ** attempt * 10, 90)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                    full_text = ""
+                    tool_calls = []
+                else:
+                    raise
+
+        # Determine stop reason
+        stop_reason = "tool_use" if tool_calls else "end_turn"
+
+        # Build content blocks in Anthropic-like dict format
+        content_blocks = []
+        if full_text:
+            content_blocks.append({"type": "text", "text": full_text})
+        for tc in tool_calls:
+            content_blocks.append({
+                "type": "tool_use",
+                "id": tc["id"],
+                "name": tc["name"],
+                "input": tc["input"],
+            })
+
+        return stop_reason, content_blocks, full_text, had_thinking, label_emitted
 
     def open_skills_editor(self):
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
@@ -4416,6 +4727,9 @@ class App:
                 if self.provider == "OpenAI":
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
                         self._stream_responses_call(messages, max_retries, label_emitted)
+                elif self.provider == "Gemini":
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
+                        self._stream_gemini_call(messages, max_retries, label_emitted)
                 else:
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
@@ -4427,8 +4741,8 @@ class App:
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})
 
-                    # Wrap OpenAI dict blocks in _ToolBlock for uniform attribute access
-                    if self.provider == "OpenAI":
+                    # Wrap dict-based blocks (OpenAI/Gemini) in _ToolBlock for uniform attribute access
+                    if self.provider in ("OpenAI", "Gemini"):
                         tool_blocks = [
                             _ToolBlock(b["name"], b["id"], b["input"])
                             for b in content_blocks if isinstance(b, dict) and b.get("type") == "tool_use"
