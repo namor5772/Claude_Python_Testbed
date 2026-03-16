@@ -2699,9 +2699,13 @@ class App:
         return declarations
 
     def _strip_additional_properties(self, schema):
-        """Recursively strip additionalProperties from a JSON schema dict."""
+        """Recursively strip additionalProperties and stringify enum values."""
         if isinstance(schema, dict):
             schema.pop("additionalProperties", None)
+            # Gemini only allows enum on STRING type properties
+            if "enum" in schema and isinstance(schema["enum"], list):
+                schema["enum"] = [str(v) for v in schema["enum"]]
+                schema["type"] = "string"
             for v in schema.values():
                 self._strip_additional_properties(v)
         elif isinstance(schema, list):
@@ -2857,7 +2861,10 @@ class App:
                         break
                     if not chunk.candidates:
                         continue
-                    for part in chunk.candidates[0].content.parts:
+                    candidate = chunk.candidates[0]
+                    if not candidate.content or not candidate.content.parts:
+                        continue
+                    for part in candidate.content.parts:
                         if getattr(part, "thought", False):
                             # Thinking part
                             if not in_thinking:
@@ -4415,7 +4422,7 @@ class App:
                 return self.do_mouse_click(
                     cx, cy,
                     button=inp.get("button", "left"),
-                    clicks=inp.get("clicks", 1),
+                    clicks=int(inp.get("clicks", 1)),
                 )
             elif block.name == "type_text":
                 text = inp.get("text", "")
@@ -4427,7 +4434,7 @@ class App:
                 self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
                 return self.do_press_key(keys)
             elif block.name == "mouse_scroll":
-                clicks_val = inp.get("clicks", 0)
+                clicks_val = int(inp.get("clicks", 0))
                 self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
                 return self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
             elif block.name == "open_application":
