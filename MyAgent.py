@@ -918,7 +918,10 @@ class App:
             timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
         ) if self._has_openai else None
         gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-        self.gemini_client = genai.Client(api_key=gemini_key) if self._has_gemini else None
+        self.gemini_client = genai.Client(
+            api_key=gemini_key,
+            http_options={"timeout": 120_000},  # 120s read timeout to prevent hung streams
+        ) if self._has_gemini else None
         if self._has_anthropic:
             self.provider = "Anthropic"
         elif self._has_openai:
@@ -2925,9 +2928,18 @@ class App:
             except Exception as e:
                 err_str = str(e)
                 status = getattr(e, "code", 0) or getattr(e, "status_code", 0)
+                is_timeout = "timed out" in err_str.lower() or "timeout" in err_str.lower() or isinstance(e, (TimeoutError, ConnectionError))
                 is_rate_limit = status == 429 or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
                 is_server_error = (isinstance(status, int) and status >= 500) or "500" in err_str or "503" in err_str
-                if is_rate_limit and attempt < max_retries - 1:
+                if is_timeout and attempt < max_retries - 1:
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"Gemini stream timed out — retrying (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    full_text = ""
+                    thinking_text = ""
+                    tool_calls = []
+                elif is_rate_limit and attempt < max_retries - 1:
                     wait = min(2 ** attempt * 5, 60)
                     self.queue.put({
                         "type": "tool_info",
