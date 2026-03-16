@@ -2803,16 +2803,32 @@ class App:
                     parts = []
                     for block in content:
                         btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
-                        if btype == "text":
+                        if btype == "gemini_thinking":
+                            # Reconstruct Gemini thinking part with thought=True
+                            t = block.get("text") if isinstance(block, dict) else ""
+                            if t:
+                                parts.append(genai_types.Part(text=t, thought=True))
+                        elif btype == "text":
                             t = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else "")
                             if t:
                                 parts.append(genai_types.Part.from_text(text=t))
                         elif btype == "tool_use":
                             bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
                             binput = getattr(block, "input", None) or (block.get("input") if isinstance(block, dict) else {})
-                            parts.append(genai_types.Part.from_function_call(
-                                name=bname, args=binput,
-                            ))
+                            # Include thought_signature if present (required by Gemini thinking models)
+                            ts = block.get("thought_signature") if isinstance(block, dict) else getattr(block, "thought_signature", None)
+                            if ts:
+                                # Ensure bytes — may be base64 string if loaded from saved chat
+                                if isinstance(ts, str):
+                                    ts = base64.b64decode(ts)
+                                parts.append(genai_types.Part(
+                                    function_call=genai_types.FunctionCall(name=bname, args=binput),
+                                    thought_signature=ts,
+                                ))
+                            else:
+                                parts.append(genai_types.Part.from_function_call(
+                                    name=bname, args=binput,
+                                ))
                         # Skip thinking/redacted_thinking blocks
                     if parts:
                         contents.append(genai_types.Content(role="model", parts=parts))
@@ -2845,6 +2861,7 @@ class App:
 
         full_text = ""
         had_thinking = False
+        thinking_text = ""  # accumulate thinking for message history
         tool_calls = []  # list of {name, id, input}
 
         for attempt in range(max_retries):
@@ -2871,6 +2888,7 @@ class App:
                                 in_thinking = True
                                 had_thinking = True
                                 self.queue.put({"type": "thinking_start"})
+                            thinking_text += part.text or ""
                             self.queue.put({"type": "thinking_delta", "content": part.text})
                         elif part.text is not None:
                             # Regular text
@@ -2890,11 +2908,17 @@ class App:
                             fc = part.function_call
                             tool_id = f"gemini_{fc.name}_{tool_index}"
                             tool_index += 1
-                            tool_calls.append({
+                            tc_entry = {
                                 "name": fc.name,
                                 "id": tool_id,
                                 "input": dict(fc.args) if fc.args else {},
-                            })
+                            }
+                            # Preserve thought_signature for thinking models (required by Gemini API)
+                            ts = getattr(part, "thought_signature", None)
+                            if ts is not None:
+                                # Keep as bytes — the SDK expects bytes when reconstructing Parts
+                                tc_entry["thought_signature"] = ts if isinstance(ts, bytes) else ts.encode("utf-8") if isinstance(ts, str) else ts
+                            tool_calls.append(tc_entry)
                 if in_thinking:
                     self.queue.put({"type": "thinking_end"})
                 break  # success
@@ -2911,6 +2935,7 @@ class App:
                     })
                     time.sleep(wait)
                     full_text = ""
+                    thinking_text = ""
                     tool_calls = []
                 elif is_server_error and attempt < max_retries - 1:
                     wait = min(2 ** attempt * 10, 90)
@@ -2920,6 +2945,7 @@ class App:
                     })
                     time.sleep(wait)
                     full_text = ""
+                    thinking_text = ""
                     tool_calls = []
                 else:
                     raise
@@ -2929,15 +2955,23 @@ class App:
 
         # Build content blocks in Anthropic-like dict format
         content_blocks = []
+        # Preserve Gemini thinking parts for message history (required for thought_signature validation)
+        if thinking_text:
+            content_blocks.append({"type": "gemini_thinking", "text": thinking_text})
         if full_text:
             content_blocks.append({"type": "text", "text": full_text})
         for tc in tool_calls:
-            content_blocks.append({
+            block = {
                 "type": "tool_use",
                 "id": tc["id"],
                 "name": tc["name"],
                 "input": tc["input"],
-            })
+            }
+            if "thought_signature" in tc:
+                ts = tc["thought_signature"]
+                # Store as base64 string for JSON serialization safety
+                block["thought_signature"] = base64.b64encode(ts).decode("ascii") if isinstance(ts, bytes) else ts
+            content_blocks.append(block)
 
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted
 
@@ -3109,7 +3143,10 @@ class App:
         if btype == "text":
             return {"type": "text", "text": block.get("text", "")}
         if btype == "tool_use":
-            return {"type": "tool_use", "id": block["id"], "name": block["name"], "input": block["input"]}
+            cleaned = {"type": "tool_use", "id": block["id"], "name": block["name"], "input": block["input"]}
+            if "thought_signature" in block:
+                cleaned["thought_signature"] = block["thought_signature"]
+            return cleaned
         if btype == "tool_result":
             cleaned = {"type": "tool_result", "tool_use_id": block["tool_use_id"]}
             if "content" in block:
