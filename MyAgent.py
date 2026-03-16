@@ -195,6 +195,37 @@ META_TOOLS = [
                     "type": "boolean",
                     "description": "Enable meta tools (default false on create)",
                 },
+                "provider": {
+                    "type": "string",
+                    "enum": ["Anthropic", "OpenAI", "Gemini"],
+                    "description": "API provider (optional for update; create inherits current)",
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model name (optional for update; create inherits current)",
+                },
+                "temperature": {
+                    "type": "number",
+                    "description": "Temperature 0.0-1.0 (optional for update; create inherits current)",
+                },
+                "thinking_enabled": {
+                    "type": "boolean",
+                    "description": "Enable thinking/reasoning (optional for update; create inherits current)",
+                },
+                "thinking_effort": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max"],
+                    "description": "Thinking effort level (optional for update; create inherits current). 'max' only valid for Anthropic Opus.",
+                },
+                "thinking_budget": {
+                    "type": "integer",
+                    "description": "Thinking token budget (optional for update; create inherits current)",
+                },
+                "thinking_mode": {
+                    "type": "string",
+                    "enum": ["off", "adaptive_low", "adaptive_medium", "adaptive_high", "adaptive_max"],
+                    "description": "Anthropic adaptive thinking mode (optional for update; create inherits current)",
+                },
                 "skill_modes": {
                     "type": "object",
                     "description": (
@@ -1773,6 +1804,11 @@ class App:
                 "meta": entry.get("meta", False),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
+                "temperature": entry.get("temperature", 1.0),
+                "thinking_enabled": entry.get("thinking_enabled", False),
+                "thinking_effort": entry.get("thinking_effort", "medium"),
+                "thinking_budget": entry.get("thinking_budget", 10000),
+                "thinking_mode": entry.get("thinking_mode", ""),
                 "image_count": len(entry.get("images", [])),
                 "skill_modes": entry.get("skill_modes", {}),
             }
@@ -1808,22 +1844,26 @@ class App:
         elif action == "update":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
-            text = params.get("text")
-            desktop = params.get("desktop")
-            browser = params.get("browser")
-            meta = params.get("meta")
-            skill_modes = params.get("skill_modes")
-            if text is None and desktop is None and browser is None and meta is None and skill_modes is None:
-                return "Error: At least one of 'text', 'desktop', 'browser', 'meta', or 'skill_modes' must be provided for update."
+            updatable = ("text", "desktop", "browser", "meta", "skill_modes",
+                         "provider", "model", "temperature",
+                         "thinking_enabled", "thinking_effort",
+                         "thinking_budget", "thinking_mode")
+            if all(params.get(k) is None for k in updatable):
+                return (
+                    "Error: At least one of 'text', 'desktop', 'browser', 'meta', "
+                    "'skill_modes', 'provider', 'model', 'temperature', "
+                    "'thinking_enabled', 'thinking_effort', 'thinking_budget', "
+                    "or 'thinking_mode' must be provided for update."
+                )
             entry = instructions[name]
-            if text is not None:
-                entry["text"] = text
-            if desktop is not None:
-                entry["desktop"] = desktop
-            if browser is not None:
-                entry["browser"] = browser
-            if meta is not None:
-                entry["meta"] = meta
+            for key in ("text", "desktop", "browser", "meta",
+                        "provider", "model", "temperature",
+                        "thinking_enabled", "thinking_effort",
+                        "thinking_budget", "thinking_mode"):
+                val = params.get(key)
+                if val is not None:
+                    entry[key] = val
+            skill_modes = params.get("skill_modes")
             if skill_modes is not None:
                 existing = entry.get("skill_modes", {})
                 existing.update(skill_modes)
