@@ -777,9 +777,11 @@ A simple desktop CSV editor built with tkinter. Open, edit, filter, and save CSV
 - **Open and save CSV files** — Open any CSV file (auto-detects UTF-8 with BOM), edit in-place, or Save As to a new file
 - **Inline cell editing** — Double-click any cell to edit its value directly in the treeview
 - **Row operations** — Insert Row Above, Insert Row Below, Copy Row, and Delete Row buttons on the toolbar
-- **Column filtering** — Filter bar with two comboboxes: select a column, then pick a unique value to show only matching rows. A "Show All" button clears the filter. Filter status shows "Showing N of M rows"
+- **3 independent filters** — Three filter rows, each with column and value comboboxes. Filters are ANDed together so you can narrow down by up to 3 columns simultaneously. A "Show All" button clears all filters. Filter status shows "Showing N of M rows (K filters active)"
+- **Date sorting** — A "Sort by Date" toggle button sorts rows by a column named "Date", auto-detecting common date formats (dd/mm/yyyy, yyyy-mm-dd, mm/dd/yyyy, etc.). Disabled when no Date column exists
 - **Unsaved changes tracking** — The title bar and status bar show a `*` indicator when changes are unsaved. Closing or opening a new file prompts to save
-- **State persistence** — Window geometry, last opened file path, and active filter (column + value) are saved to `csv_editor_state.json` and restored on next launch
+- **Styled display** — Light blue row background and light yellow column headings using the clam ttk theme
+- **State persistence** — Window geometry, last opened file path, all 3 filter states, and date sort toggle are saved to `csv_editor_state.json` and restored on next launch
 
 ### UI
 
@@ -790,16 +792,17 @@ A compact tkinter window (default 1000x600) with:
 | **Open CSV** | Open a CSV file |
 | **Save** | Save to the current file (or Save As if no file loaded) |
 | **Save As…** | Save to a new file path |
-| **Insert Row Above/Below** | Insert an empty row relative to the selection |
+| **Insert Row Above/Below** | Insert an empty row relative to the selection (inserts at top/end if no selection) |
 | **Copy Row** | Duplicate the selected row below it |
 | **Delete Row** | Remove the selected row |
-| **Filter by** | Column combobox + Value combobox to filter visible rows |
-| **Show All** | Clear the active filter |
+| **Filter 1/2/3** | Three independent column + value combobox pairs to filter visible rows (ANDed) |
+| **Show All** | Clear all active filters |
+| **Sort by Date** | Toggle date-column sorting on/off |
 | **Status bar** | Shows filename, modification indicator, row count, and column count |
 
 ### Architecture
 
-**Single class design** — Same as the other apps: the `App` class contains all UI, file I/O, editing, filtering, and persistence logic in a single file (~405 lines).
+**Single class design** — Same as the other apps: the `App` class contains all UI, file I/O, editing, filtering, and persistence logic in a single file (~470 lines).
 
 - **Treeview-based spreadsheet** — Uses `ttk.Treeview` with `show="headings"` to display the CSV as a sortable, scrollable table with horizontal and vertical scrollbars
 - **Visible index mapping** — `_visible_indices` maps tree positions to real row indices in `self.rows`, so row operations work correctly even when a filter is active

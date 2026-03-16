@@ -22,8 +22,10 @@ class App:
         self.rows = []  # list of lists
         self.modified = False
         self._visible_indices = []  # maps tree position -> index in self.rows
-        self._filter_col = None     # column index being filtered, or None
-        self._filter_val = None     # value being filtered on, or None
+        # 3 independent filters: each is (col_index_or_None, value_or_None)
+        self._filters = [(None, None), (None, None), (None, None)]
+        self._date_sort_enabled = False
+        self._date_sort_col = None  # column index of "Date" column
 
         self._build_ui()
         self._load_state()
@@ -49,34 +51,66 @@ class App:
         self._status_var = tk.StringVar(value="No file loaded")
         tk.Label(toolbar, textvariable=self._status_var, anchor=tk.E).pack(side=tk.RIGHT, padx=4)
 
-        # Filter bar
-        filter_bar = tk.Frame(self.root)
-        filter_bar.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 4))
+        # Filter rows (3 independent filters)
+        self._filter_col_vars = []
+        self._filter_col_combos = []
+        self._filter_val_vars = []
+        self._filter_val_combos = []
 
-        tk.Label(filter_bar, text="Filter by:").pack(side=tk.LEFT, padx=2)
-        self._filter_col_var = tk.StringVar()
-        self._filter_col_combo = ttk.Combobox(filter_bar, textvariable=self._filter_col_var,
-                                               state="readonly", width=20)
-        self._filter_col_combo.pack(side=tk.LEFT, padx=2)
-        self._filter_col_combo.bind("<<ComboboxSelected>>", self._on_filter_col_changed)
+        filter_container = tk.Frame(self.root)
+        filter_container.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 4))
 
-        tk.Label(filter_bar, text="Value:").pack(side=tk.LEFT, padx=2)
-        self._filter_val_var = tk.StringVar()
-        self._filter_val_combo = ttk.Combobox(filter_bar, textvariable=self._filter_val_var,
-                                               state="readonly", width=30)
-        self._filter_val_combo.pack(side=tk.LEFT, padx=2)
-        self._filter_val_combo.bind("<<ComboboxSelected>>", self._on_filter_val_changed)
+        for i in range(3):
+            row_frame = tk.Frame(filter_container)
+            row_frame.pack(side=tk.TOP, fill=tk.X, pady=1)
 
-        tk.Button(filter_bar, text="Show All", command=self._clear_filter).pack(side=tk.LEFT, padx=6)
+            tk.Label(row_frame, text=f"Filter {i+1}:").pack(side=tk.LEFT, padx=2)
+            col_var = tk.StringVar()
+            col_combo = ttk.Combobox(row_frame, textvariable=col_var,
+                                      state="readonly", width=20)
+            col_combo.pack(side=tk.LEFT, padx=2)
+            col_combo.bind("<<ComboboxSelected>>",
+                           lambda e, idx=i: self._on_filter_col_changed(idx))
+
+            tk.Label(row_frame, text="Value:").pack(side=tk.LEFT, padx=2)
+            val_var = tk.StringVar()
+            val_combo = ttk.Combobox(row_frame, textvariable=val_var,
+                                      state="readonly", width=30)
+            val_combo.pack(side=tk.LEFT, padx=2)
+            val_combo.bind("<<ComboboxSelected>>",
+                           lambda e, idx=i: self._on_filter_val_changed(idx))
+
+            self._filter_col_vars.append(col_var)
+            self._filter_col_combos.append(col_combo)
+            self._filter_val_vars.append(val_var)
+            self._filter_val_combos.append(val_combo)
+
+        # Controls row: Show All + Sort by Date + filter status
+        ctrl_frame = tk.Frame(filter_container)
+        ctrl_frame.pack(side=tk.TOP, fill=tk.X, pady=(2, 0))
+
+        tk.Button(ctrl_frame, text="Show All", command=self._clear_filter).pack(side=tk.LEFT, padx=2)
+
+        self._sort_date_btn = tk.Button(ctrl_frame, text="Sort by Date: OFF",
+                                         command=self._toggle_date_sort)
+        self._sort_date_btn.pack(side=tk.LEFT, padx=6)
 
         self._filter_status_var = tk.StringVar()
-        tk.Label(filter_bar, textvariable=self._filter_status_var, foreground="blue").pack(side=tk.LEFT, padx=4)
+        tk.Label(ctrl_frame, textvariable=self._filter_status_var, foreground="blue").pack(side=tk.LEFT, padx=4)
+
+        # Treeview style — use 'clam' theme so heading background is respected
+        style = ttk.Style()
+        style.theme_use("clam")
+        style.configure("CSV.Treeview", background="#D6EBFF", fieldbackground="#D6EBFF")
+        style.configure("CSV.Treeview.Heading", background="#FFFFB3", foreground="black")
+        style.map("CSV.Treeview.Heading", background=[("active", "#FFFF88")])
 
         # Treeview (spreadsheet)
         container = tk.Frame(self.root)
         container.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
 
-        self.tree = ttk.Treeview(container, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(container, show="headings", selectmode="browse",
+                                  style="CSV.Treeview")
         vsb = ttk.Scrollbar(container, orient=tk.VERTICAL, command=self.tree.yview)
         hsb = ttk.Scrollbar(container, orient=tk.HORIZONTAL, command=self.tree.xview)
         self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -123,13 +157,22 @@ class App:
         self.headers = lines[0]
         self.rows = lines[1:]
         self.modified = False
-        self._filter_col = None
-        self._filter_val = None
-        self._filter_col_var.set("")
-        self._filter_val_var.set("")
-        self._filter_val_combo["values"] = []
-        self._filter_col_combo["values"] = self.headers
+        self._filters = [(None, None), (None, None), (None, None)]
+        for i in range(3):
+            self._filter_col_vars[i].set("")
+            self._filter_val_vars[i].set("")
+            self._filter_val_combos[i]["values"] = []
+            self._filter_col_combos[i]["values"] = self.headers
         self._filter_status_var.set("")
+        # Detect Date column
+        self._date_sort_col = None
+        for idx, h in enumerate(self.headers):
+            if h.strip().lower() == "date":
+                self._date_sort_col = idx
+                break
+        self._date_sort_enabled = False
+        self._sort_date_btn.config(text="Sort by Date: OFF",
+                                    state=tk.NORMAL if self._date_sort_col is not None else tk.DISABLED)
         self._refresh_tree()
         self._update_status()
 
@@ -174,12 +217,24 @@ class App:
             self.tree.heading(cid, text=hdr, anchor=tk.W)
             self.tree.column(cid, width=120, minwidth=60, anchor=tk.W)
 
+        # Build list of (real_idx, row) passing all active filters
+        filtered = []
         for real_idx, row in enumerate(self.rows):
-            # Apply filter
-            if self._filter_col is not None and self._filter_val is not None:
-                cell = row[self._filter_col] if self._filter_col < len(row) else ""
-                if cell != self._filter_val:
-                    continue
+            show = True
+            for f_col, f_val in self._filters:
+                if f_col is not None and f_val is not None:
+                    cell = row[f_col] if f_col < len(row) else ""
+                    if cell != f_val:
+                        show = False
+                        break
+            if show:
+                filtered.append((real_idx, row))
+
+        # Sort by Date if enabled
+        if self._date_sort_enabled and self._date_sort_col is not None:
+            filtered = self._sort_by_date(filtered)
+
+        for real_idx, row in filtered:
             padded = row + [""] * (len(self.headers) - len(row))
             self.tree.insert("", tk.END, values=padded[:len(self.headers)])
             self._visible_indices.append(real_idx)
@@ -237,19 +292,22 @@ class App:
 
     # ── Row operations ────────────────────────────────────────────────
 
-    def _selected_index(self):
+    def _selected_index(self, require=False):
         """Returns the real index in self.rows for the selected tree item."""
         sel = self.tree.selection()
         if not sel:
-            messagebox.showinfo("No selection", "Select a row first.")
+            if require:
+                messagebox.showinfo("No selection", "Select a row first.")
             return None
         tree_idx = self.tree.index(sel[0])
         return self._visible_indices[tree_idx] if tree_idx < len(self._visible_indices) else tree_idx
 
     def _insert_row_above(self):
+        if not self.headers:
+            return
         idx = self._selected_index()
         if idx is None:
-            return
+            idx = 0  # insert at top if no selection
         empty = [""] * len(self.headers)
         self.rows.insert(idx, empty)
         self.modified = True
@@ -258,9 +316,11 @@ class App:
         self._update_status()
 
     def _insert_row_below(self):
+        if not self.headers:
+            return
         idx = self._selected_index()
         if idx is None:
-            return
+            idx = len(self.rows) - 1  # insert at end if no selection
         empty = [""] * len(self.headers)
         self.rows.insert(idx + 1, empty)
         self.modified = True
@@ -269,7 +329,7 @@ class App:
         self._update_status()
 
     def _copy_row(self):
-        idx = self._selected_index()
+        idx = self._selected_index(require=True)
         if idx is None:
             return
         copy = list(self.rows[idx])
@@ -308,43 +368,73 @@ class App:
 
     # ── Filter ─────────────────────────────────────────────────────────
 
-    def _on_filter_col_changed(self, event=None):
-        col_name = self._filter_col_var.get()
+    def _on_filter_col_changed(self, idx):
+        col_name = self._filter_col_vars[idx].get()
         if col_name not in self.headers:
             return
         col_idx = self.headers.index(col_name)
-        # Gather unique values in this column
+        # Gather unique values in this column (respecting other filters)
         values = sorted(set(
             row[col_idx] if col_idx < len(row) else "" for row in self.rows
         ))
-        self._filter_val_combo["values"] = values
-        self._filter_val_var.set("")
-        self._filter_col = None
-        self._filter_val = None
-        self._filter_status_var.set("")
+        self._filter_val_combos[idx]["values"] = values
+        self._filter_val_vars[idx].set("")
+        self._filters[idx] = (None, None)
+        self._update_filter_status()
         self._refresh_tree()
         self._update_status()
 
-    def _on_filter_val_changed(self, event=None):
-        col_name = self._filter_col_var.get()
-        val = self._filter_val_var.get()
+    def _on_filter_val_changed(self, idx):
+        col_name = self._filter_col_vars[idx].get()
+        val = self._filter_val_vars[idx].get()
         if col_name not in self.headers:
             return
-        self._filter_col = self.headers.index(col_name)
-        self._filter_val = val
+        self._filters[idx] = (self.headers.index(col_name), val)
         self._refresh_tree()
         self._update_status()
-        self._filter_status_var.set(f"Showing {len(self._visible_indices)} of {len(self.rows)} rows")
+        self._update_filter_status()
+
+    def _update_filter_status(self):
+        active = sum(1 for c, v in self._filters if c is not None and v is not None)
+        if active:
+            self._filter_status_var.set(
+                f"Showing {len(self._visible_indices)} of {len(self.rows)} rows ({active} filter{'s' if active > 1 else ''} active)")
+        else:
+            self._filter_status_var.set("")
 
     def _clear_filter(self):
-        self._filter_col = None
-        self._filter_val = None
-        self._filter_col_var.set("")
-        self._filter_val_var.set("")
-        self._filter_val_combo["values"] = []
+        self._filters = [(None, None), (None, None), (None, None)]
+        for i in range(3):
+            self._filter_col_vars[i].set("")
+            self._filter_val_vars[i].set("")
+            self._filter_val_combos[i]["values"] = []
         self._filter_status_var.set("")
         self._refresh_tree()
         self._update_status()
+
+    def _toggle_date_sort(self):
+        self._date_sort_enabled = not self._date_sort_enabled
+        self._sort_date_btn.config(
+            text=f"Sort by Date: {'ON' if self._date_sort_enabled else 'OFF'}")
+        self._refresh_tree()
+        self._update_filter_status()
+
+    def _sort_by_date(self, filtered):
+        """Sort list of (real_idx, row) by the Date column, trying common date formats."""
+        from datetime import datetime
+        col = self._date_sort_col
+        formats = ["%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y"]
+
+        def parse_date(row):
+            val = row[col].strip() if col < len(row) else ""
+            for fmt in formats:
+                try:
+                    return datetime.strptime(val, fmt)
+                except (ValueError, TypeError):
+                    continue
+            return datetime.max  # unparseable goes to end
+
+        return sorted(filtered, key=lambda pair: parse_date(pair[1]))
 
     # ── State persistence ─────────────────────────────────────────────
 
@@ -365,22 +455,45 @@ class App:
         if path and os.path.isfile(path):
             self._load_csv(path)
 
-            # Restore filter column and value (only if file loaded successfully)
-            filter_col = state.get("filter_col", "")
-            filter_val = state.get("filter_val", "")
-            if filter_col and filter_col in self.headers:
-                self._filter_col_var.set(filter_col)
-                self._on_filter_col_changed()  # populates value dropdown
-                if filter_val:
-                    self._filter_val_var.set(filter_val)
-                    self._on_filter_val_changed()  # applies the filter
+            # Restore filters (supports both old single-filter and new 3-filter state)
+            saved_filters = state.get("filters")
+            if saved_filters:
+                for i, filt in enumerate(saved_filters[:3]):
+                    fc = filt.get("col", "")
+                    fv = filt.get("val", "")
+                    if fc and fc in self.headers:
+                        self._filter_col_vars[i].set(fc)
+                        self._on_filter_col_changed(i)
+                        if fv:
+                            self._filter_val_vars[i].set(fv)
+                            self._on_filter_val_changed(i)
+            else:
+                # Legacy single-filter state
+                fc = state.get("filter_col", "")
+                fv = state.get("filter_val", "")
+                if fc and fc in self.headers:
+                    self._filter_col_vars[0].set(fc)
+                    self._on_filter_col_changed(0)
+                    if fv:
+                        self._filter_val_vars[0].set(fv)
+                        self._on_filter_val_changed(0)
+
+            # Restore date sort
+            if state.get("date_sort_enabled") and self._date_sort_col is not None:
+                self._date_sort_enabled = True
+                self._sort_date_btn.config(text="Sort by Date: ON")
+                self._refresh_tree()
+                self._update_filter_status()
 
     def _save_state(self):
         state = {
             "geometry": self.root.geometry(),
             "filepath": self.filepath,
-            "filter_col": self._filter_col_var.get(),
-            "filter_val": self._filter_val_var.get(),
+            "filters": [
+                {"col": self._filter_col_vars[i].get(), "val": self._filter_val_vars[i].get()}
+                for i in range(3)
+            ],
+            "date_sort_enabled": self._date_sort_enabled,
         }
         try:
             with open(STATE_FILE, "w", encoding="utf-8") as f:
