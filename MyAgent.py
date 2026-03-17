@@ -17,7 +17,7 @@ import anthropic
 import openai
 from google import genai
 from google.genai import types as genai_types
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import httpx
 import threading
 import queue
@@ -29,6 +29,7 @@ import csv
 import subprocess
 import re
 import io
+import socket
 import sys
 import time
 import concurrent.futures
@@ -913,27 +914,6 @@ class _ToolBlock:
         self.type = "tool_use"
 
 
-# ── Repetition Detection ────────────────────────────────────────────────────
-
-def _detect_repetition(text, min_len=50, repeats=3):
-    """Return True if the model is producing repetitive output.
-
-    Samples 50-char windows from the last 300 characters of *text* and checks
-    whether any of them appear *repeats* or more times in the full text.
-    This catches near-identical paragraphs even when they differ slightly in
-    surrounding context, as long as there's a shared 50-char exact overlap.
-    """
-    if len(text) < min_len * repeats:
-        return False
-    # Sample windows from the tail of the text, stepping by 10 chars
-    scan_depth = min(len(text) - min_len, 300)
-    for offset in range(0, scan_depth + 1, 10):
-        end = len(text) - offset
-        sample = text[end - min_len:end]
-        if text.count(sample) >= repeats:
-            return True
-    return False
-
 
 # ── Main Application ────────────────────────────────────────────────────────
 
@@ -983,6 +963,7 @@ class App:
             self.provider = "Gemini"
         self._openai_model_display_names = {}
         self._gemini_model_display_names = {}
+        self._model_display_names = {}
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False
@@ -1078,7 +1059,7 @@ class App:
         )
         self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
 
-        self._update_model_info_label()
+        self._update_title()
 
         tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
@@ -1209,10 +1190,6 @@ class App:
         """Return True if the editor model widgets currently exist."""
         return self._model_combo is not None
 
-    def _update_model_info_label(self):
-        """Update the title bar with current provider/model info."""
-        self._update_title()
-
     def _on_provider_changed(self, event=None):
         """Handle provider combobox selection change."""
         new_provider = self._provider_var.get()
@@ -1238,7 +1215,7 @@ class App:
             self.model = self.available_models[0]
         self._model_var.set(self._get_display_name(self.model))
         self._on_model_selected()
-        self._update_model_info_label()
+        self._update_title()
         self._save_last_state()
 
     def _on_model_selected(self, event=None):
@@ -1306,7 +1283,7 @@ class App:
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
                 self.thinking_mode = "off"
-        self._update_model_info_label()
+        self._update_title()
         self._save_last_state()
 
     def _on_temp_changed(self):
@@ -1407,7 +1384,7 @@ class App:
                 self._on_model_selected()
             else:
                 self._on_thinking_toggled()
-        self._update_model_info_label()
+        self._update_title()
 
     def _on_thinking_toggled(self):
         self.thinking_enabled = self._thinking_var.get()
@@ -1510,8 +1487,6 @@ class App:
         contains 'MyAgent.py', so other Python processes (VS Code, Claude Code)
         don't falsely hold lock slots."""
         try:
-            import ctypes
-            from ctypes import wintypes
             kernel32 = ctypes.windll.kernel32
             psapi = ctypes.windll.psapi
             PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -1534,8 +1509,7 @@ class App:
                 kernel32.CloseHandle(handle)
             # Verify command line contains MyAgent.py
             try:
-                import subprocess as _sp
-                result = _sp.run(
+                result = subprocess.run(
                     ["wmic", "process", "where", f"ProcessId={pid}",
                      "get", "CommandLine", "/value"],
                     capture_output=True, text=True, timeout=5,
@@ -1597,7 +1571,6 @@ class App:
 
         Rejects windows that are too small or positioned entirely off-screen.
         """
-        import re
         m = re.match(r'(\d+)x(\d+)\+(-?\d+)\+(-?\d+)', geo)
         if not m:
             return DEFAULT_GEOMETRY
@@ -1664,23 +1637,7 @@ class App:
         if instr_name:
             instructions = self._load_saved_instructions()
             if instr_name in instructions:
-                entry = instructions[instr_name]
-                self.agent_instruction = entry["text"]
-                self.agent_instruction_name = instr_name
-                self.pending_images = [
-                    (img["data"], img["media_type"], img["filename"])
-                    for img in entry.get("images", [])
-                ]
-                self.desktop_enabled.set(entry.get("desktop", False))
-                self.browser_enabled.set(entry.get("browser", False))
-                self.meta_enabled.set(entry.get("meta", False))
-                self._restore_skill_modes(entry)
-                self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
-                self._update_model_info_label()
-                # Use instruction's model params if saved
-                if "model" in entry:
-                    self._restore_model_params(entry)
-                    model_restored = True
+                model_restored = self._apply_instruction_entry(instr_name, instructions[instr_name])
         if not model_restored:
             # Fall back to state file's model params (for old instructions or no instruction)
             self._restore_model_params(state, state_file=True)
@@ -1735,6 +1692,25 @@ class App:
                 pass
         self.root.after(5000, self._periodic_save)
 
+    def _apply_instruction_entry(self, name, entry):
+        """Load an instruction entry into live state. Returns True if model params were restored."""
+        self.agent_instruction = entry["text"]
+        self.agent_instruction_name = name
+        self.pending_images = [
+            (img["data"], img["media_type"], img["filename"])
+            for img in entry.get("images", [])
+        ]
+        self.desktop_enabled.set(entry.get("desktop", False))
+        self.browser_enabled.set(entry.get("browser", False))
+        self.meta_enabled.set(entry.get("meta", False))
+        model_restored = "model" in entry
+        if model_restored:
+            self._restore_model_params(entry)
+        self._restore_skill_modes(entry)
+        self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
+        self._update_title()
+        return model_restored
+
     def _auto_launch(self):
         """Auto-load an instruction by name and start the agent (from -l arg)."""
         name = self._launch_instruction
@@ -1746,21 +1722,7 @@ class App:
                 f"Available: {', '.join(sorted(instructions)) or '(none)'}",
             )
             return
-        entry = instructions[name]
-        self.agent_instruction = entry["text"]
-        self.agent_instruction_name = name
-        self.pending_images = [
-            (img["data"], img["media_type"], img["filename"])
-            for img in entry.get("images", [])
-        ]
-        self.desktop_enabled.set(entry.get("desktop", False))
-        self.browser_enabled.set(entry.get("browser", False))
-        self.meta_enabled.set(entry.get("meta", False))
-        if "model" in entry:
-            self._restore_model_params(entry)
-        self._restore_skill_modes(entry)
-        self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
-        self._update_model_info_label()
+        self._apply_instruction_entry(name, instructions[name])
         auto_name = f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}"
         self.chat_name_entry.delete(0, tk.END)
         self.chat_name_entry.insert(0, auto_name)
@@ -2110,16 +2072,8 @@ class App:
             self._instr_combo_var.set(self.agent_instruction_name)
         self._refresh_image_listbox()
 
-    def _on_editor_close(self, win):
-        """Capture editor geometry before destroying and persist to disk."""
-        try:
-            self._last_editor_geometry = win.geometry()
-            self._editor_screen_width = self.root.winfo_screenwidth()
-            self._editor_screen_height = self.root.winfo_screenheight()
-        except Exception:
-            pass
-        win.destroy()
-        # Nullify model widget references so guards work correctly
+    def _nullify_editor_widgets(self):
+        """Clear editor widget references so _has_model_widgets() returns False."""
         self._provider_combo = None
         self._model_combo = None
         self._temp_label = None
@@ -2129,6 +2083,25 @@ class App:
         self._thinking_mode_combo = None
         self._thinking_mode_label = None
         self.ps_safety_button = None
+
+    def _capture_editor_geometry(self):
+        """Save editor window geometry for restore on next open."""
+        try:
+            self._last_editor_geometry = self.instruction_editor_window.geometry()
+            self._editor_screen_width = self.root.winfo_screenwidth()
+            self._editor_screen_height = self.root.winfo_screenheight()
+        except Exception:
+            pass
+
+    def _close_editor(self):
+        """Capture geometry, destroy the editor, and nullify widget refs."""
+        self._capture_editor_geometry()
+        self.instruction_editor_window.destroy()
+        self._nullify_editor_widgets()
+
+    def _on_editor_close(self, win):
+        """Handle editor [X] close."""
+        self._close_editor()
         try:
             self._save_last_state()
         except Exception:
@@ -2178,7 +2151,7 @@ class App:
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
         self._instr_combo_var.set(name)
-        self._update_model_info_label()
+        self._update_title()
         self._save_last_state()
 
     def _delete_instruction(self):
@@ -2272,26 +2245,9 @@ class App:
         instr_name = self.agent_instruction_name
         if instr_name and instr_name in instructions:
             self._restore_skill_modes(instructions[instr_name])
-        self._update_model_info_label()
-        # Capture geometry before destroying so periodic saves don't overwrite it
-        try:
-            self._last_editor_geometry = self.instruction_editor_window.geometry()
-            self._editor_screen_width = self.root.winfo_screenwidth()
-            self._editor_screen_height = self.root.winfo_screenheight()
-        except Exception:
-            pass
+        self._update_title()
         self._save_last_state()
-        self.instruction_editor_window.destroy()
-        # Nullify model widget references so guards work correctly
-        self._provider_combo = None
-        self._model_combo = None
-        self._temp_label = None
-        self._temp_spin = None
-        self._thinking_check = None
-        self._thinking_strength_combo = None
-        self._thinking_mode_combo = None
-        self._thinking_mode_label = None
-        self.ps_safety_button = None
+        self._close_editor()
 
     # ── Skills System ───────────────────────────────────────────────────
 
@@ -2658,15 +2614,6 @@ class App:
                         label_emitted = True
                     full_text += event.delta
                     self.queue.put({"type": "text_delta", "content": event.delta})
-                    # Detect repetition and abort stream
-                    if _detect_repetition(full_text):
-                        self.queue.put({
-                            "type": "warning",
-                            "content": "\n⚠ Repetitive output detected — truncating response.\n",
-                        })
-                        if hasattr(self, '_oai_first_content'):
-                            self._oai_first_content.set()
-                        break
 
                 # New output item — capture function call name and call_id
                 elif event.type == "response.output_item.added":
@@ -2679,6 +2626,8 @@ class App:
                             "name": item.name,
                             "arguments": "",
                         }
+                    elif item and getattr(item, "type", None) == "web_search_call":
+                        self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
 
                 # Function call argument chunks
                 elif event.type == "response.function_call_arguments.delta":
@@ -3007,12 +2956,6 @@ class App:
                                 label_emitted = True
                             full_text += part.text
                             self.queue.put({"type": "text_delta", "content": part.text})
-                            if _detect_repetition(full_text):
-                                self.queue.put({
-                                    "type": "warning",
-                                    "content": "\n⚠ Repetitive output detected — truncating response.\n",
-                                })
-                                break
                         elif part.function_call is not None:
                             # Tool call
                             if in_thinking:
@@ -4152,8 +4095,6 @@ class App:
     # ── Browser Automation (Playwright via CDP) ─────────────────────────
 
     def _ensure_browser(self):
-        import socket
-
         if self._page is not None:
             try:
                 self._page.title()
@@ -4400,7 +4341,7 @@ class App:
     def _payload_for_display(self, messages):
         display_msgs = []
         for msg in messages:
-            content = msg.get("content", msg.get("content"))
+            content = msg.get("content")
             if isinstance(content, list):
                 content = [
                     self._make_serializable(block) if not isinstance(block, dict) else block
@@ -4427,7 +4368,8 @@ class App:
         if self.provider == "OpenAI":
             system_prompt = self._build_system_prompt()
             tools = self._get_tools()
-            responses_tools = self._tools_to_responses(tools) if tools else None
+            responses_tools = self._tools_to_responses(tools) if tools else []
+            responses_tools.append({"type": "web_search_preview"})
             responses_input = self._messages_to_responses(display_msgs)
             # Truncate input_image data in Responses API input
             for item in responses_input:
@@ -4449,10 +4391,9 @@ class App:
                 "model": self.model,
                 "input": responses_input,
                 "instructions": system_prompt,
+                "tools": responses_tools,
                 "store": False,
             }
-            if responses_tools:
-                payload["tools"] = responses_tools
             is_reasoning = self._is_openai_reasoning_model()
             if is_reasoning and self.thinking_enabled:
                 payload["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
@@ -4483,6 +4424,9 @@ class App:
 
     def _get_tools(self):
         tools = copy.deepcopy(TOOLS)
+        # OpenAI uses native web_search_preview; exclude custom web tools
+        if self.provider == "OpenAI":
+            tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
         if self.desktop_enabled.get():
             desktop = copy.deepcopy(DESKTOP_TOOLS)
             screen_w, screen_h = pyautogui.size()
@@ -4773,12 +4717,6 @@ class App:
                             elif hasattr(delta, "type") and delta.type == "text_delta":
                                 full_text += delta.text
                                 self.queue.put({"type": "text_delta", "content": delta.text})
-                                if _detect_repetition(full_text):
-                                    self.queue.put({
-                                        "type": "warning",
-                                        "content": "\n⚠ Repetitive output detected — truncating response.\n",
-                                    })
-                                    break
                         elif event.type == "content_block_stop":
                             if in_thinking:
                                 self.queue.put({"type": "thinking_end"})
@@ -4815,7 +4753,8 @@ class App:
         Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
-        responses_tools = self._tools_to_responses(tools) if tools else None
+        responses_tools = self._tools_to_responses(tools) if tools else []
+        responses_tools.append({"type": "web_search_preview"})
         responses_input = self._messages_to_responses(messages)
         is_reasoning = self._is_openai_reasoning_model()
 
@@ -4823,10 +4762,9 @@ class App:
             "model": self.model,
             "input": responses_input,
             "instructions": system_prompt,
+            "tools": responses_tools,
             "store": False,
         }
-        if responses_tools:
-            api_kwargs["tools"] = responses_tools
         if is_reasoning and self.thinking_enabled:
             api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
         elif not is_reasoning:

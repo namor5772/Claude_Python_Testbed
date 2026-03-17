@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
 from html.parser import HTMLParser
 import anthropic
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 import httpx
 import threading
 import queue

@@ -65,7 +65,7 @@ A desktop chatbot application built with tkinter that connects to the Anthropic 
 The chatbot has twenty-eight built-in tools (plus a dynamic `get_skill` tool) that Claude can invoke autonomously during a conversation, organised into three categories:
 
 **Core Tools (always available):**
-- **web_search** — Searches the web via DuckDuckGo (`duckduckgo-search` library) and returns the top 5 results with titles, URLs, and snippets
+- **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
 - **fetch_webpage** — Fetches the full content of a URL using `httpx`, extracts readable text from HTML (stripping scripts, styles, and tags), and truncates to 20,000 characters
 - **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters. Uses `CREATE_NO_WINDOW` to suppress console window flashes. The tool description instructs Claude to use `Start-Process` when launching GUI applications to avoid blocking the tool loop
 - **csv_search** — Searches a delimited text file (CSV, TSV, TXT, or any delimited format) for records matching a value. The file must have a header row. Supports searching a specific column or all columns, with three match modes: `contains` (default), `exact`, and `starts_with` — all case-insensitive. The delimiter is auto-detected from file content using `csv.Sniffer` (sampling the first 8KB), or can be explicitly specified (`,`, `\t`, `|`, `;`). Results are returned as labelled key-value rows, capped at 50 matches by default (configurable via `max_results`). Output is truncated at 20,000 characters
@@ -363,7 +363,7 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Deskt
 ```
 anthropic
 openai
-duckduckgo-search
+ddgs
 httpx
 opencv-python
 Pillow
@@ -561,7 +561,7 @@ Provider, model, temperature, and thinking settings are all persisted across ses
 
 MyAgent has thirty-one built-in tools and the dynamic `get_skill` tool, organised into four categories:
 
-**Core Tools (always available):** `web_search`, `fetch_webpage`, `run_powershell`, `csv_search`, `user_prompt`
+**Core Tools (always available):** `web_search`, `fetch_webpage`, `run_powershell`, `csv_search`, `user_prompt`. When using the **OpenAI provider**, the custom `web_search` and `fetch_webpage` tools are replaced by OpenAI's native `web_search_preview` built-in tool, which handles searching and page fetching server-side with citations
 
 **Desktop Tools (enabled via Desktop checkbox):** `screenshot`, `mouse_click`, `type_text`, `press_key`, `mouse_scroll`, `open_application`, `find_window`, `clipboard_read`, `clipboard_write`, `wait_for_window`, `read_screen_text`, `find_image_on_screen`, `mouse_drag`
 
@@ -680,7 +680,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 | **Instruction file** | `system_prompts.json` | `agent_instructions.json` |
 | **Chat loading** | Save and load chats | Save only (no load-back into UI) |
 | **API providers** | Anthropic only | Anthropic + OpenAI + Gemini (switchable via Provider combobox) |
-| **Window title** | "Claude SelfBot" | "Claude Agent" (+ "[OpenAI]" when using OpenAI) |
+| **Window title** | "Claude SelfBot" | "Claude Agent" with provider/model info in title bar |
 
 ### Running
 
@@ -696,12 +696,12 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 ### Architecture
 
-The application is a single-file (~4,600 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+The application is a single-file (~5,100 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
 - **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`. An `_ensure_newline()` helper guarantees each new output block starts on a fresh line, and an `ensure_newline` queue event between loop iterations prevents consecutive response streams from merging when Activity display is off
-- **Dual-Provider Support** — A Provider combobox switches between Anthropic and OpenAI. The internal message format stays Anthropic-style; translation to/from OpenAI format happens at the API boundary via `_messages_to_responses()`, `_tools_to_responses()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, and top-level `function_call`/`function_call_output` items. The `_ToolBlock` wrapper class gives OpenAI dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for both providers
-- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()` or `_stream_responses_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button. An **auto-prompt safety net** keeps interactive instructions alive: if the instruction text mentions `user_prompt` but the model ends its turn without calling it, the agent automatically injects a `user_prompt` dialog asking the user what to do next (submitting an empty response exits the loop)
+- **Multi-Provider Support** — A Provider combobox switches between Anthropic, OpenAI, and Gemini. The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary via `_messages_to_responses()`, `_tools_to_responses()`, `_messages_to_gemini()`, `_tools_to_gemini()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, top-level `function_call`/`function_call_output` items, and native `web_search_preview` (replacing the custom DuckDuckGo-based web search and fetch tools). Gemini uses the Google GenAI SDK with streaming and thinking support. The `_ToolBlock` wrapper class gives OpenAI/Gemini dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for all providers
+- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button. An **auto-prompt safety net** keeps interactive instructions alive: if the instruction text mentions `user_prompt` but the model ends its turn without calling it, the agent automatically injects a `user_prompt` dialog asking the user what to do next (submitting an empty response exits the loop)
 - **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser/Meta toggle state, provider, model parameters, skill modes, and disabled PS Safety confirm patterns), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` (instance 1) or `agent_state_N.json` (instance N) for user preferences and dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and `skills.json` (shared with SelfBot) for the skills library
 - **Tool System** — Four global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, `META_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
