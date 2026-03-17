@@ -834,9 +834,9 @@ OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 # Model families that support the Responses API (gpt-3.5, gpt-4 base/turbo do not)
 OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
                              "o1", "o3", "o4")
-GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
-GEMINI_THINKING_PREFIXES = ("gemini-2.5",)
+GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
 PROVIDERS = ["Anthropic", "OpenAI", "Gemini"]
 DEFAULT_GEOMETRY = "1050x930"
 
@@ -911,6 +911,28 @@ class _ToolBlock:
         self.id = id
         self.input = input
         self.type = "tool_use"
+
+
+# ── Repetition Detection ────────────────────────────────────────────────────
+
+def _detect_repetition(text, min_len=50, repeats=3):
+    """Return True if the model is producing repetitive output.
+
+    Samples 50-char windows from the last 300 characters of *text* and checks
+    whether any of them appear *repeats* or more times in the full text.
+    This catches near-identical paragraphs even when they differ slightly in
+    surrounding context, as long as there's a shared 50-char exact overlap.
+    """
+    if len(text) < min_len * repeats:
+        return False
+    # Sample windows from the tail of the text, stepping by 10 chars
+    scan_depth = min(len(text) - min_len, 300)
+    for offset in range(0, scan_depth + 1, 10):
+        end = len(text) - offset
+        sample = text[end - min_len:end]
+        if text.count(sample) >= repeats:
+            return True
+    return False
 
 
 # ── Main Application ────────────────────────────────────────────────────────
@@ -1248,32 +1270,36 @@ class App:
                 self._thinking_mode_label.pack_forget()
                 self._thinking_mode_combo.pack_forget()
                 self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
-                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
                 self._thinking_check.config(state="normal")
                 self._update_thinking_strength_options()
                 if self.thinking_enabled:
-                    self._on_thinking_toggled()
-                else:
-                    if self.provider == "OpenAI" and self._is_openai_reasoning_model():
-                        self._temp_label.config(state="disabled")
-                        self._temp_spin.config(state="disabled")
+                    self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+                    self._thinking_strength_combo.config(state="readonly")
+                    if self.provider == "Gemini":
+                        self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                        self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
                     else:
-                        self._temp_label.config(state="normal")
-                        self._temp_spin.config(state="normal")
-                    self._thinking_strength_combo.config(state="disabled")
+                        self._temp_label.pack_forget()
+                        self._temp_spin.pack_forget()
+                else:
+                    self._thinking_strength_combo.pack_forget()
+                    if self.provider == "OpenAI" and self._is_openai_reasoning_model():
+                        self._temp_label.pack_forget()
+                        self._temp_spin.pack_forget()
+                    else:
+                        self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                        self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
             else:
-                # No thinking support: hide mode combo, disable checkbox + strength
+                # No thinking support: hide thinking controls entirely
                 self._thinking_mode_label.pack_forget()
                 self._thinking_mode_combo.pack_forget()
-                self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
-                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+                self._thinking_check.pack_forget()
+                self._thinking_strength_combo.pack_forget()
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
                 self.thinking_mode = "off"
-                self._thinking_check.config(state="disabled")
-                self._thinking_strength_combo.config(state="disabled")
-                self._temp_label.config(state="normal")
-                self._temp_spin.config(state="normal")
+                self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
         else:
             # No widgets — just update state
             if support is None:
@@ -1307,6 +1333,8 @@ class App:
 
     def _is_gemini_thinking_model(self, model_id=None):
         mid = model_id or self.model
+        if "lite" in mid:
+            return False
         return any(mid.startswith(p) for p in GEMINI_THINKING_PREFIXES)
 
     def _restore_model_params(self, entry, state_file=False):
@@ -1385,23 +1413,24 @@ class App:
         self.thinking_enabled = self._thinking_var.get()
         if self._has_model_widgets():
             if self.thinking_enabled:
+                self._update_thinking_strength_options()
+                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+                self._thinking_strength_combo.config(state="readonly")
                 # Gemini allows temperature even with thinking enabled
                 if self.provider == "Gemini":
-                    self._temp_label.config(state="normal")
-                    self._temp_spin.config(state="normal")
+                    self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                    self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
                 else:
-                    self._temp_label.config(state="disabled")
-                    self._temp_spin.config(state="disabled")
-                self._update_thinking_strength_options()
-                self._thinking_strength_combo.config(state="readonly")
+                    self._temp_label.pack_forget()
+                    self._temp_spin.pack_forget()
             else:
+                self._thinking_strength_combo.pack_forget()
                 if self.provider == "OpenAI" and self._is_openai_reasoning_model():
-                    self._temp_label.config(state="disabled")
-                    self._temp_spin.config(state="disabled")
+                    self._temp_label.pack_forget()
+                    self._temp_spin.pack_forget()
                 else:
-                    self._temp_label.config(state="normal")
-                    self._temp_spin.config(state="normal")
-                self._thinking_strength_combo.config(state="disabled")
+                    self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                    self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
         self._save_last_state()
 
     def _update_thinking_strength_options(self):
@@ -1452,14 +1481,14 @@ class App:
                 self.thinking_effort = "high"  # internal default, but not sent to API
             else:
                 self.thinking_effort = mode
-        # Update temp spinner
+        # Update temp visibility
         if self._has_model_widgets():
             if mode == "off":
-                self._temp_label.config(state="normal")
-                self._temp_spin.config(state="normal")
+                self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
             else:
-                self._temp_label.config(state="disabled")
-                self._temp_spin.config(state="disabled")
+                self._temp_label.pack_forget()
+                self._temp_spin.pack_forget()
         self._save_last_state()
 
     def _update_title(self):
@@ -2586,10 +2615,26 @@ class App:
         tool_calls_acc = {}  # output_index -> {call_id, name, arguments}
         in_thinking = False
 
+        # Waiting ticker & timeout are managed by _stream_responses_call via _oai_first_content
+        timed_out = False
+        first_content_timeout = getattr(self, '_oai_first_content_timeout', 0)
         with self.openai_client.responses.stream(**api_kwargs) as stream:
             for event in stream:
+                # Check stop request — break out of stream immediately
+                if self.stop_requested:
+                    if hasattr(self, '_oai_first_content'):
+                        self._oai_first_content.set()
+                    break
+                # Check first-content timeout
+                if first_content_timeout and hasattr(self, '_oai_first_content') and not self._oai_first_content.is_set():
+                    if time.time() - self._oai_stream_start >= first_content_timeout:
+                        self._oai_first_content.set()
+                        timed_out = True
+                        break
                 # Reasoning summary deltas (thinking)
                 if event.type == "response.reasoning_summary_text.delta":
+                    if hasattr(self, '_oai_first_content'):
+                        self._oai_first_content.set()
                     if not in_thinking:
                         in_thinking = True
                         had_thinking = True
@@ -2603,6 +2648,8 @@ class App:
 
                 # Regular text content
                 elif event.type == "response.output_text.delta":
+                    if hasattr(self, '_oai_first_content'):
+                        self._oai_first_content.set()
                     if in_thinking:
                         self.queue.put({"type": "thinking_end"})
                         in_thinking = False
@@ -2611,9 +2658,20 @@ class App:
                         label_emitted = True
                     full_text += event.delta
                     self.queue.put({"type": "text_delta", "content": event.delta})
+                    # Detect repetition and abort stream
+                    if _detect_repetition(full_text):
+                        self.queue.put({
+                            "type": "warning",
+                            "content": "\n⚠ Repetitive output detected — truncating response.\n",
+                        })
+                        if hasattr(self, '_oai_first_content'):
+                            self._oai_first_content.set()
+                        break
 
                 # New output item — capture function call name and call_id
                 elif event.type == "response.output_item.added":
+                    if hasattr(self, '_oai_first_content'):
+                        self._oai_first_content.set()
                     item = getattr(event, "item", None)
                     if item and getattr(item, "type", None) == "function_call":
                         tool_calls_acc[event.output_index] = {
@@ -2633,6 +2691,9 @@ class App:
                     idx = event.output_index
                     if idx in tool_calls_acc:
                         tool_calls_acc[idx]["arguments"] = event.arguments
+
+        if timed_out:
+            raise openai.APITimeoutError(request=None)  # type: ignore[arg-type]
 
         # End any open thinking block
         if in_thinking:
@@ -2700,6 +2761,9 @@ class App:
                 # Skip non-generative models
                 if any(skip in mid for skip in ("embedding", "imagen", "aqa",
                                                 "bisheng", "text-")):
+                    continue
+                # Skip deprecated models
+                if mid.startswith("gemini-2.0-") or mid.startswith("gemini-1."):
                     continue
                 model_ids.append(mid)
             model_ids.sort()
@@ -2943,6 +3007,12 @@ class App:
                                 label_emitted = True
                             full_text += part.text
                             self.queue.put({"type": "text_delta", "content": part.text})
+                            if _detect_repetition(full_text):
+                                self.queue.put({
+                                    "type": "warning",
+                                    "content": "\n⚠ Repetitive output detected — truncating response.\n",
+                                })
+                                break
                         elif part.function_call is not None:
                             # Tool call
                             if in_thinking:
@@ -4681,6 +4751,8 @@ class App:
                 with self.client.messages.stream(**api_kwargs) as stream:
                     in_thinking = False
                     for event in stream:
+                        if self.stop_requested:
+                            break
                         if event.type == "content_block_start":
                             block = event.content_block
                             if hasattr(block, "type") and block.type == "thinking":
@@ -4701,6 +4773,12 @@ class App:
                             elif hasattr(delta, "type") and delta.type == "text_delta":
                                 full_text += delta.text
                                 self.queue.put({"type": "text_delta", "content": delta.text})
+                                if _detect_repetition(full_text):
+                                    self.queue.put({
+                                        "type": "warning",
+                                        "content": "\n⚠ Repetitive output detected — truncating response.\n",
+                                    })
+                                    break
                         elif event.type == "content_block_stop":
                             if in_thinking:
                                 self.queue.put({"type": "thinking_end"})
@@ -4754,16 +4832,51 @@ class App:
         elif not is_reasoning:
             api_kwargs["temperature"] = self.temperature
 
+        FIRST_CONTENT_TIMEOUT = 180
+        WAITING_MSG_INTERVAL = 15
+
+        self._oai_first_content = threading.Event()
+        self._oai_stream_start = time.time()
+        self._oai_first_content_timeout = FIRST_CONTENT_TIMEOUT
+
+        # Background thread posts elapsed-time messages every 15s until content arrives
+        def _waiting_ticker():
+            while not self._oai_first_content.wait(timeout=WAITING_MSG_INTERVAL):
+                elapsed = int(time.time() - self._oai_stream_start)
+                self.queue.put({
+                    "type": "tool_info",
+                    "content": f"Waiting for model response... ({elapsed}s elapsed)\n",
+                })
+        ticker = threading.Thread(target=_waiting_ticker, daemon=True)
+        ticker.start()
+
         for attempt in range(max_retries):
             try:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
                     self._stream_responses(api_kwargs, label_emitted)
+            except openai.BadRequestError as e:
+                # Some models reject temperature — retry without it
+                if "temperature" in str(e) and "temperature" in api_kwargs:
+                    del api_kwargs["temperature"]
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": "Model does not support temperature — retrying without it...\n",
+                    })
+                    full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
+                        self._stream_responses(api_kwargs, label_emitted)
+                else:
+                    raise
                 break  # success
             except openai.APITimeoutError:
+                # Reset timer for next attempt
+                self._oai_first_content = threading.Event()
+                self._oai_stream_start = time.time()
+                ticker = threading.Thread(target=_waiting_ticker, daemon=True)
+                ticker.start()
                 if attempt < max_retries - 1:
                     self.queue.put({
                         "type": "tool_info",
-                        "content": f"Stream timeout (no data for 120s) — retrying (attempt {attempt + 1}/{max_retries})...\n",
+                        "content": f"Stream timeout (no content from model within 180s) — retrying (attempt {attempt + 1}/{max_retries})...\n",
                     })
                 else:
                     raise
@@ -4788,6 +4901,8 @@ class App:
                 else:
                     raise
 
+        # Stop the ticker thread
+        self._oai_first_content.set()
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted
 
     def stream_worker(self, messages):
