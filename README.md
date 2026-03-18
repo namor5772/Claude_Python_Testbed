@@ -546,16 +546,19 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 |---|---|---|---|
 | Anthropic | **Adaptive** (Opus 4.6, Sonnet 4.6) | `thinking: {type: "adaptive"}` | Thinking mode combobox: Off, Adaptive, Low, Medium, High, Max (Max only for Opus 4.6) |
 | Anthropic | **Manual** (Opus 4.5, Sonnet 4.5, Haiku 4.5, Sonnet 3.5) | `thinking: {type: "enabled", budget_tokens: N}` | Token budget: 1K, 4K, 8K (default), 16K, 32K |
-| OpenAI | **Reasoning** (o1, o3, o4, gpt-5 series) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: low, medium, high |
+| OpenAI | **Extended Reasoning** (GPT-5.1+) | `reasoning: {effort: ..., summary: "auto"}` | Reasoning mode combobox: None, Low, Medium, High, Xhigh (Xhigh for GPT-5.2+/codex-max) |
+| OpenAI | **Reasoning** (GPT-5.0, o1, o3, o4) | `reasoning: {effort: ..., summary: "auto"}` | Effort level: minimal (GPT-5.0 only), low, medium, high |
 | OpenAI | **Standard** (GPT-4o, GPT-4.1, etc.) | Not supported | N/A |
 | Gemini | **Thinking** (Gemini 2.5 series) | `thinking_config: {thinking_budget: N}` | Effort level: low (1K), medium (8K), high (24K) |
 | Gemini | **Standard** (Gemini 2.0, etc.) | Not supported | N/A |
 
+**GPT-5.x extended reasoning** — GPT-5.1+ models use a **Reasoning** mode combobox (None/Low/Medium/High/Xhigh) instead of the checkbox+strength pattern. Selecting "None" sends `reasoning: {effort: "none"}`, any other sends the corresponding effort level. Xhigh is available for GPT-5.2+ and codex-max models. All GPT-5 family models also show a **Verbosity** combobox (Low/Medium/High) that controls `text.verbosity` in the API, defaulting to Medium. Temperature is fixed at 1.0 for the entire GPT-5 family and the Temp spinner is hidden.
+
 **Adaptive thinking mode** — For Anthropic adaptive models, the checkbox and strength combobox are replaced by a single **Thinking** mode combobox with values: Off, Adaptive, Low, Medium, High, Max. "Off" disables thinking entirely. "Adaptive" sends `thinking: {type: "adaptive"}` without an explicit effort level (the API decides). Low/Medium/High/Max send `output_config: {effort: ...}` alongside adaptive thinking. "Max" is only available for Opus 4.6. For manual and OpenAI models, the standard checkbox + strength controls are shown instead. The UI dynamically switches between these two control styles when changing models.
 
-**Temperature and thinking controls are model-aware** — OpenAI reasoning models (o1/o3/o4/gpt-5) don't accept a `temperature` parameter, so the Temp spinner stays disabled for these models even when thinking is unchecked. Standard OpenAI models show the Temp spinner normally. Gemini accepts temperature even with thinking enabled, so the Temp spinner stays active for all Gemini models. For Anthropic, when thinking is enabled (any mode except Off), temperature controls are disabled. This is enforced across all code paths: model selection, thinking toggle, and state restore.
+**Temperature and thinking controls are model-aware** — The entire GPT-5 family has temperature fixed at 1.0 (the Temp spinner is hidden). Other OpenAI reasoning models (o1/o3/o4) also hide temperature. Standard OpenAI models show the Temp spinner normally. Gemini accepts temperature even with thinking enabled, so the Temp spinner stays active for all Gemini models. For Anthropic, when thinking is enabled (any mode except Off), temperature controls are hidden. This is enforced across all code paths: model selection, thinking toggle, and state restore.
 
-Provider, model, temperature, and thinking settings are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
+Provider, model, temperature, thinking settings, and text verbosity are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
 
 #### Tool Use
 

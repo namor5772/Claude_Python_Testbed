@@ -991,6 +991,7 @@ class App:
         self.thinking_effort = "high"
         self.thinking_budget = 8192
         self.thinking_mode = "off"  # off/adaptive/low/medium/high/max (for adaptive models)
+        self.text_verbosity = "medium"  # low/medium/high (for gpt-5 family)
         self.instruction_editor_window = None
         self.skills_editor_window = None
         self._skills_refresh_list = None
@@ -1040,6 +1041,7 @@ class App:
         self._thinking_var = tk.BooleanVar(value=False)
         self._thinking_strength_var = tk.StringVar(value="high")
         self._thinking_mode_var = tk.StringVar(value="Off")
+        self._text_verbosity_var = tk.StringVar(value="Medium")
 
         # No model widgets until editor is opened
         self._provider_combo = None
@@ -1049,6 +1051,8 @@ class App:
         self._thinking_check = None
         self._thinking_strength_combo = None
         self._thinking_mode_combo = None
+        self._verbosity_label = None
+        self._verbosity_combo = None
 
         # Row 0: Chat toolbar — Instruction + model info + Save + START/STOP
         chat_toolbar = tk.Frame(self.root)
@@ -1232,6 +1236,7 @@ class App:
                 self._thinking_strength_combo.pack_forget()
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+                self._thinking_mode_label.config(text="Thinking")
                 # Populate values: Max only for Opus 4.6
                 if self.model == "claude-opus-4-6":
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
@@ -1242,8 +1247,31 @@ class App:
                         self._on_thinking_mode_changed()
                 # Sync state from thinking_mode
                 self._on_thinking_mode_changed()
+                # Hide verbosity (Anthropic doesn't use it)
+                self._verbosity_label.pack_forget()
+                self._verbosity_combo.pack_forget()
+            elif support == "extended" and self.provider == "OpenAI":
+                # GPT-5.1+: show mode combobox with None/Low/.../Xhigh
+                self._thinking_check.pack_forget()
+                self._thinking_strength_combo.pack_forget()
+                self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+                self._thinking_mode_label.config(text="Reasoning")
+                # Build values based on model capabilities
+                values = ["None", "Low", "Medium", "High"]
+                if self._has_reasoning_xhigh():
+                    values.append("Xhigh")
+                self._thinking_mode_combo["values"] = values
+                # Validate current selection
+                current = self._thinking_mode_var.get()
+                if current not in values:
+                    self._thinking_mode_var.set("None")
+                self._on_thinking_mode_changed()
+                # Show verbosity
+                self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
             elif support is not None:
-                # Manual thinking model or OpenAI reasoning: show checkbox + strength, hide mode combo
+                # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength, hide mode combo
                 self._thinking_mode_label.pack_forget()
                 self._thinking_mode_combo.pack_forget()
                 self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
@@ -1266,6 +1294,13 @@ class App:
                     else:
                         self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
+                # Show verbosity for gpt-5.0 family, hide for o-series/Gemini
+                if self._has_openai_verbosity():
+                    self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
+                    self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
+                else:
+                    self._verbosity_label.pack_forget()
+                    self._verbosity_combo.pack_forget()
             else:
                 # No thinking support: hide thinking controls entirely
                 self._thinking_mode_label.pack_forget()
@@ -1277,6 +1312,9 @@ class App:
                 self.thinking_mode = "off"
                 self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
+                # Hide verbosity
+                self._verbosity_label.pack_forget()
+                self._verbosity_combo.pack_forget()
         else:
             # No widgets — just update state
             if support is None:
@@ -1298,7 +1336,11 @@ class App:
     def _model_supports_thinking(self, model_id=None):
         mid = model_id or self.model
         if self.provider == "OpenAI":
-            return "adaptive" if self._is_openai_reasoning_model(mid) else None
+            if self._is_openai_reasoning_model(mid):
+                if self._has_reasoning_none(mid):
+                    return "extended"
+                return "adaptive"
+            return None
         if self.provider == "Gemini":
             return "adaptive" if self._is_gemini_thinking_model(mid) else None
         if mid in ADAPTIVE_THINKING_MODELS:
@@ -1360,7 +1402,13 @@ class App:
             else:
                 self.thinking_mode = "off"
             self._thinking_var.set(self.thinking_enabled)
-            self._thinking_mode_var.set(self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
+            # Capitalize thinking_mode for display; handle special values
+            if self.thinking_mode == "off":
+                self._thinking_mode_var.set("Off")
+            elif self.thinking_mode == "none":
+                self._thinking_mode_var.set("None")
+            else:
+                self._thinking_mode_var.set(self.thinking_mode.capitalize())
             support = self._model_supports_thinking()
             if support is None:
                 self._thinking_var.set(False)
@@ -1369,6 +1417,9 @@ class App:
                 self._thinking_mode_var.set("Off")
             elif support == "adaptive" and self.provider == "Anthropic":
                 # Adaptive model: _on_model_selected will show/hide correct widgets
+                pass
+            elif support == "extended":
+                # GPT-5.1+: _on_model_selected will show mode combobox
                 pass
             else:
                 # Manual or OpenAI: restore strength combo
@@ -1384,6 +1435,9 @@ class App:
                 self._on_model_selected()
             else:
                 self._on_thinking_toggled()
+        # Restore text verbosity
+        self.text_verbosity = entry.get("text_verbosity", "medium")
+        self._text_verbosity_var.set(self.text_verbosity.capitalize())
         self._update_title()
 
     def _on_thinking_toggled(self):
@@ -1415,7 +1469,9 @@ class App:
             return
         support = self._model_supports_thinking()
         if support == "adaptive":
-            if self.provider in ("OpenAI", "Gemini"):
+            if self.provider == "OpenAI" and self._is_gpt5_family() and self._parse_gpt5_minor() == 0:
+                values = ["minimal", "low", "medium", "high"]
+            elif self.provider in ("OpenAI", "Gemini"):
                 values = ["low", "medium", "high"]
             else:
                 values = list(EFFORT_LEVELS)
@@ -1446,26 +1502,31 @@ class App:
     def _on_thinking_mode_changed(self):
         """Handle adaptive thinking mode combobox selection."""
         val = self._thinking_mode_var.get()
-        mode = val.lower()  # "off", "adaptive", "low", "medium", "high", "max"
+        mode = val.lower()  # "off", "none", "adaptive", "low", "medium", "high", "max", "xhigh"
         self.thinking_mode = mode
-        if mode == "off":
+        if mode in ("off", "none"):
             self.thinking_enabled = False
             self._thinking_var.set(False)
+            self.thinking_effort = mode  # "off" for Anthropic, "none" for OpenAI
         else:
             self.thinking_enabled = True
             self._thinking_var.set(True)
             if mode == "adaptive":
                 self.thinking_effort = "high"  # internal default, but not sent to API
             else:
-                self.thinking_effort = mode
-        # Update temp visibility
+                self.thinking_effort = mode  # low/medium/high/max/xhigh/minimal
+        # Update temp visibility (gpt-5 family never shows temp — fixed at 1.0)
         if self._has_model_widgets():
-            if mode == "off":
+            if mode in ("off", "none") and not (self.provider == "OpenAI" and self._is_gpt5_family()):
                 self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
             else:
                 self._temp_label.pack_forget()
                 self._temp_spin.pack_forget()
+        self._save_last_state()
+
+    def _on_verbosity_changed(self):
+        self.text_verbosity = self._text_verbosity_var.get().lower()
         self._save_last_state()
 
     def _update_title(self):
@@ -1595,6 +1656,7 @@ class App:
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
             "thinking_mode": self.thinking_mode,
+            "text_verbosity": self.text_verbosity,
             "geometry": self.root.geometry(),
             "screen_width": self.root.winfo_screenwidth(),
             "screen_height": self.root.winfo_screenheight(),
@@ -1800,6 +1862,7 @@ class App:
                 "thinking_effort": entry.get("thinking_effort", "medium"),
                 "thinking_budget": entry.get("thinking_budget", 10000),
                 "thinking_mode": entry.get("thinking_mode", ""),
+                "text_verbosity": entry.get("text_verbosity", "medium"),
                 "image_count": len(entry.get("images", [])),
                 "skill_modes": entry.get("skill_modes", {}),
             }
@@ -1824,6 +1887,7 @@ class App:
                 "thinking_effort": self.thinking_effort,
                 "thinking_budget": self.thinking_budget,
                 "thinking_mode": self.thinking_mode,
+                "text_verbosity": self.text_verbosity,
                 "skill_modes": params.get("skill_modes",
                                {sn: sd["mode"] for sn, sd in self.skills.items()}),
                 "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
@@ -1838,19 +1902,19 @@ class App:
             updatable = ("text", "desktop", "browser", "meta", "skill_modes",
                          "provider", "model", "temperature",
                          "thinking_enabled", "thinking_effort",
-                         "thinking_budget", "thinking_mode")
+                         "thinking_budget", "thinking_mode", "text_verbosity")
             if all(params.get(k) is None for k in updatable):
                 return (
                     "Error: At least one of 'text', 'desktop', 'browser', 'meta', "
                     "'skill_modes', 'provider', 'model', 'temperature', "
                     "'thinking_enabled', 'thinking_effort', 'thinking_budget', "
-                    "or 'thinking_mode' must be provided for update."
+                    "'thinking_mode', or 'text_verbosity' must be provided for update."
                 )
             entry = instructions[name]
             for key in ("text", "desktop", "browser", "meta",
                         "provider", "model", "temperature",
                         "thinking_enabled", "thinking_effort",
-                        "thinking_budget", "thinking_mode"):
+                        "thinking_budget", "thinking_mode", "text_verbosity"):
                 val = params.get(key)
                 if val is not None:
                     entry[key] = val
@@ -1996,8 +2060,23 @@ class App:
         self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
 
+        # Text verbosity combobox (gpt-5 family only)
+        self._verbosity_label = tk.Label(model_frame, text="Verbosity", font=("Arial", 10))
+        self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
+        self._verbosity_combo = ttk.Combobox(
+            model_frame, textvariable=self._text_verbosity_var, state="readonly",
+            font=("Arial", 9), width=7, values=["Low", "Medium", "High"],
+        )
+        self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
+        self._verbosity_combo.bind("<<ComboboxSelected>>", lambda e: self._on_verbosity_changed())
+
         # Sync adaptive thinking mode var from state before applying widget states
-        self._thinking_mode_var.set(self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
+        if self.thinking_mode == "off":
+            self._thinking_mode_var.set("Off")
+        elif self.thinking_mode == "none":
+            self._thinking_mode_var.set("None")
+        else:
+            self._thinking_mode_var.set(self.thinking_mode.capitalize())
 
         # Apply current thinking/temp widget states
         self._on_model_selected()
@@ -2082,6 +2161,8 @@ class App:
         self._thinking_strength_combo = None
         self._thinking_mode_combo = None
         self._thinking_mode_label = None
+        self._verbosity_label = None
+        self._verbosity_combo = None
         self.ps_safety_button = None
 
     def _capture_editor_geometry(self):
@@ -2145,6 +2226,7 @@ class App:
             "thinking_effort": self.thinking_effort,
             "thinking_budget": self.thinking_budget,
             "thinking_mode": self.thinking_mode,
+            "text_verbosity": self.text_verbosity,
             "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
         }
@@ -2203,6 +2285,8 @@ class App:
         self.thinking_mode = "off"
         self._thinking_mode_var.set("Off")
         self._on_thinking_toggled()
+        self.text_verbosity = "medium"
+        self._text_verbosity_var.set("Medium")
         self._refresh_image_listbox()
 
     def _on_instruction_selected(self, event):
@@ -2737,6 +2821,40 @@ class App:
         if "-chat" in mid:
             return False
         return any(mid.startswith(p) for p in OPENAI_REASONING_PREFIXES)
+
+    def _parse_gpt5_minor(self, model_id=None):
+        """Parse minor version from gpt-5.x model IDs. Returns 0 for 'gpt-5' base."""
+        mid = model_id or self.model
+        if mid.startswith("gpt-5."):
+            try:
+                return int(mid[6])
+            except (IndexError, ValueError):
+                return 0
+        return 0
+
+    def _is_gpt5_family(self, model_id=None):
+        """Check if model is in the gpt-5 family (not -chat variants)."""
+        mid = model_id or self.model
+        return mid.startswith("gpt-5") and "-chat" not in mid
+
+    def _has_reasoning_none(self, model_id=None):
+        """Check if model supports reasoning.effort='none' (gpt-5.1+)."""
+        mid = model_id or self.model
+        return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 1
+
+    def _has_reasoning_xhigh(self, model_id=None):
+        """Check if model supports reasoning.effort='xhigh'."""
+        mid = model_id or self.model
+        if not self._is_gpt5_family(mid):
+            return False
+        if "codex-max" in mid:
+            return True
+        return self._parse_gpt5_minor(mid) >= 2
+
+    def _has_openai_verbosity(self, model_id=None):
+        """Check if model supports text.verbosity (all gpt-5 family)."""
+        mid = model_id or self.model
+        return self._is_gpt5_family(mid)
 
     # ── Gemini Translation Helpers ────────────────────────────────────
 
@@ -4757,6 +4875,7 @@ class App:
         responses_tools.append({"type": "web_search_preview"})
         responses_input = self._messages_to_responses(messages)
         is_reasoning = self._is_openai_reasoning_model()
+        has_none = self._has_reasoning_none()
 
         api_kwargs = {
             "model": self.model,
@@ -4765,10 +4884,23 @@ class App:
             "tools": responses_tools,
             "store": False,
         }
-        if is_reasoning and self.thinking_enabled:
+        if has_none:
+            # GPT-5.1+: always send reasoning param, even with effort="none"
+            api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+            if self.thinking_effort == "none":
+                api_kwargs["temperature"] = 1.0  # gpt-5 family: fixed at 1.0
+        elif self._is_gpt5_family():
+            # GPT-5.0: always reasoning, temp fixed at 1.0
+            if self.thinking_enabled:
+                api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+            api_kwargs["temperature"] = 1.0
+        elif is_reasoning and self.thinking_enabled:
             api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
         elif not is_reasoning:
             api_kwargs["temperature"] = self.temperature
+        # Verbosity for gpt-5 family
+        if self._has_openai_verbosity():
+            api_kwargs["text"] = {"verbosity": self.text_verbosity}
 
         FIRST_CONTENT_TIMEOUT = 180
         WAITING_MSG_INTERVAL = 15
