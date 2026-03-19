@@ -1494,7 +1494,13 @@ class App:
         # (temp_label and temp_spin were already forgotten by _forget_all_model_widgets,
         #  so packing here places them directly after the mode combo)
         if self._has_model_widgets():
-            if mode in ("off", "none") and not (self.provider == "OpenAI" and self._is_gpt5_family()):
+            show_temp = False
+            if mode in ("off", "none"):
+                if self.provider != "OpenAI" or not self._is_gpt5_family():
+                    show_temp = True  # non-gpt5 models
+                elif mode == "none" and self._gpt5_supports_temp_at_none():
+                    show_temp = True  # gpt-5.4+ with effort=none
+            if show_temp:
                 self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
             else:
@@ -2900,7 +2906,15 @@ class App:
             return False
         if "codex-max" in mid:
             return True
+        # mini/nano variants cap at 'high' — no xhigh
+        if "-mini" in mid or "-nano" in mid:
+            return False
         return self._parse_gpt5_minor(mid) >= 2
+
+    def _gpt5_supports_temp_at_none(self, model_id=None):
+        """Check if model supports temperature when reasoning.effort='none' (gpt-5.4+)."""
+        mid = model_id or self.model
+        return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 4
 
     def _is_gpt5_chat_model(self, model_id=None):
         """Check if model is a gpt-5.x-chat-* Instant variant."""
@@ -4977,7 +4991,11 @@ class App:
             # GPT-5.1+: always send reasoning param, even with effort="none"
             api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
             if self.thinking_effort == "none":
-                api_kwargs["temperature"] = 1.0  # gpt-5 family: fixed at 1.0
+                # gpt-5.4+ supports user temperature at effort=none; older models fixed at 1.0
+                if self._gpt5_supports_temp_at_none():
+                    api_kwargs["temperature"] = self.temperature
+                else:
+                    api_kwargs["temperature"] = 1.0
         elif self._is_gpt5_family():
             # GPT-5.0: always reasoning, temp fixed at 1.0
             if self.thinking_enabled:
@@ -5015,6 +5033,7 @@ class App:
             try:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
                     self._stream_responses(api_kwargs, label_emitted)
+                break  # success
             except openai.BadRequestError as e:
                 # Some models reject temperature — retry without it
                 if "temperature" in str(e) and "temperature" in api_kwargs:
