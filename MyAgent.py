@@ -838,6 +838,7 @@ OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
 GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
+PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
 PROVIDERS = ["Anthropic", "OpenAI", "Gemini"]
 DEFAULT_GEOMETRY = "1050x930"
 
@@ -1222,6 +1223,16 @@ class App:
         self._update_title()
         self._save_last_state()
 
+    def _forget_all_model_widgets(self):
+        """Hide all model parameter widgets to reset pack order."""
+        if not self._has_model_widgets():
+            return
+        for w in (self._temp_label, self._temp_spin,
+                  self._thinking_check, self._thinking_strength_combo,
+                  self._thinking_mode_label, self._thinking_mode_combo,
+                  self._verbosity_label, self._verbosity_combo):
+            w.pack_forget()
+
     def _on_model_selected(self, event=None):
         selected_display = self._model_var.get()
         for mid in self._model_id_list:
@@ -1230,13 +1241,13 @@ class App:
                 break
         support = self._model_supports_thinking()
         if self._has_model_widgets():
+            # Reset all model param widgets to guarantee correct pack order
+            self._forget_all_model_widgets()
             if support == "adaptive" and self.provider == "Anthropic":
-                # Adaptive model (Anthropic): show mode combo, hide checkbox + strength
-                self._thinking_check.pack_forget()
-                self._thinking_strength_combo.pack_forget()
+                # Adaptive model (Anthropic): show mode combo
+                self._thinking_mode_label.config(text="Thinking")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                self._thinking_mode_label.config(text="Thinking")
                 # Populate values: Max only for Opus 4.6
                 if self.model == "claude-opus-4-6":
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
@@ -1244,19 +1255,13 @@ class App:
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
                     if self._thinking_mode_var.get() == "Max":
                         self._thinking_mode_var.set("High")
-                        self._on_thinking_mode_changed()
-                # Sync state from thinking_mode
+                # Sync state from thinking_mode (may pack temp after combo)
                 self._on_thinking_mode_changed()
-                # Hide verbosity (Anthropic doesn't use it)
-                self._verbosity_label.pack_forget()
-                self._verbosity_combo.pack_forget()
             elif support == "extended" and self.provider == "OpenAI":
                 # GPT-5.1+: show mode combobox with None/Low/.../Xhigh
-                self._thinking_check.pack_forget()
-                self._thinking_strength_combo.pack_forget()
+                self._thinking_mode_label.config(text="Reasoning")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                self._thinking_mode_label.config(text="Reasoning")
                 # Build values based on model capabilities
                 values = ["None", "Low", "Medium", "High"]
                 if self._has_reasoning_xhigh():
@@ -1267,13 +1272,11 @@ class App:
                 if current not in values:
                     self._thinking_mode_var.set("None")
                 self._on_thinking_mode_changed()
-                # Show verbosity
+                # Show verbosity after mode combo
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
             elif support is not None:
-                # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength, hide mode combo
-                self._thinking_mode_label.pack_forget()
-                self._thinking_mode_combo.pack_forget()
+                # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength
                 self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
                 self._thinking_check.config(state="normal")
                 self._update_thinking_strength_options()
@@ -1283,38 +1286,27 @@ class App:
                     if self.provider == "Gemini":
                         self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
-                    else:
-                        self._temp_label.pack_forget()
-                        self._temp_spin.pack_forget()
                 else:
-                    self._thinking_strength_combo.pack_forget()
-                    if self.provider == "OpenAI" and self._is_openai_reasoning_model():
-                        self._temp_label.pack_forget()
-                        self._temp_spin.pack_forget()
-                    else:
+                    if not (self.provider == "OpenAI" and self._is_openai_reasoning_model()):
                         self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
-                # Show verbosity for gpt-5.0 family, hide for o-series/Gemini
+                # Show verbosity for gpt-5.0 family
                 if self._has_openai_verbosity():
                     self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
                     self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
-                else:
-                    self._verbosity_label.pack_forget()
-                    self._verbosity_combo.pack_forget()
             else:
-                # No thinking support: hide thinking controls entirely
-                self._thinking_mode_label.pack_forget()
-                self._thinking_mode_combo.pack_forget()
-                self._thinking_check.pack_forget()
-                self._thinking_strength_combo.pack_forget()
+                # No thinking support
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
                 self.thinking_mode = "off"
-                self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
-                self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
-                # Hide verbosity
-                self._verbosity_label.pack_forget()
-                self._verbosity_combo.pack_forget()
+                # gpt-5.x-chat Instant models don't support temperature
+                if not self._is_gpt5_chat_model():
+                    self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+                    self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
+                # gpt-5.x-chat Instant models support verbosity
+                if self._has_openai_verbosity():
+                    self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
+                    self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
         else:
             # No widgets — just update state
             if support is None:
@@ -1443,25 +1435,8 @@ class App:
     def _on_thinking_toggled(self):
         self.thinking_enabled = self._thinking_var.get()
         if self._has_model_widgets():
-            if self.thinking_enabled:
-                self._update_thinking_strength_options()
-                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
-                self._thinking_strength_combo.config(state="readonly")
-                # Gemini allows temperature even with thinking enabled
-                if self.provider == "Gemini":
-                    self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
-                    self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
-                else:
-                    self._temp_label.pack_forget()
-                    self._temp_spin.pack_forget()
-            else:
-                self._thinking_strength_combo.pack_forget()
-                if self.provider == "OpenAI" and self._is_openai_reasoning_model():
-                    self._temp_label.pack_forget()
-                    self._temp_spin.pack_forget()
-                else:
-                    self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
-                    self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
+            # Reset and re-pack all widgets in correct order via _on_model_selected
+            self._on_model_selected()
         self._save_last_state()
 
     def _update_thinking_strength_options(self):
@@ -1515,7 +1490,9 @@ class App:
                 self.thinking_effort = "high"  # internal default, but not sent to API
             else:
                 self.thinking_effort = mode  # low/medium/high/max/xhigh/minimal
-        # Update temp visibility (gpt-5 family never shows temp — fixed at 1.0)
+        # Update temp visibility — pack right after mode combo to maintain order
+        # (temp_label and temp_spin were already forgotten by _forget_all_model_widgets,
+        #  so packing here places them directly after the mode combo)
         if self._has_model_widgets():
             if mode in ("off", "none") and not (self.provider == "OpenAI" and self._is_gpt5_family()):
                 self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
@@ -1627,10 +1604,66 @@ class App:
     # ── State Persistence ───────────────────────────────────────────────
 
     @staticmethod
-    def _sanitize_geometry(geo, screen_w, screen_h, min_w=200, min_h=150):
-        """Validate a geometry string; return DEFAULT_GEOMETRY if unusable.
+    @staticmethod
+    def _get_virtual_screen_bounds():
+        """Return (vx, vy, vw, vh) covering all monitors via Win32 API."""
+        try:
+            user32 = ctypes.windll.user32
+            vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+            vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+            vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+            vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+            if vw > 0 and vh > 0:
+                return vx, vy, vw, vh
+        except Exception:
+            pass
+        # Fallback: primary monitor only
+        return 0, 0, 1920, 1080
+
+    @staticmethod
+    def _get_monitor_config_key():
+        """Return a string key identifying the current monitor layout.
+
+        Uses EnumDisplayMonitors to capture each monitor's bounding rect,
+        producing a stable key like '0,0,1920,1080|1920,0,3840,1080'.
+        Different setups (docked vs undocked, different monitor arrangements)
+        produce different keys, enabling per-configuration geometry persistence.
+        """
+        try:
+            user32 = ctypes.windll.user32
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            monitors = []
+
+            # EnumDisplayMonitors callback: BOOL CALLBACK(HMONITOR, HDC, LPRECT, LPARAM)
+            MONITORENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.POINTER(RECT), ctypes.c_double)
+
+            def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                r = lprcMonitor[0]
+                monitors.append((r.left, r.top, r.right, r.bottom))
+                return 1  # continue enumeration
+
+            user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
+            if monitors:
+                monitors.sort()
+                return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in monitors)
+        except Exception:
+            pass
+        # Fallback: use virtual screen bounds
+        vx, vy, vw, vh = App._get_virtual_screen_bounds()
+        return f"{vx},{vy},{vx + vw},{vy + vh}"
+
+    @staticmethod
+    def _sanitize_geometry(geo, min_w=200, min_h=150):
+        """Validate a geometry string against the full virtual desktop (all monitors).
 
         Rejects windows that are too small or positioned entirely off-screen.
+        Returns DEFAULT_GEOMETRY if unusable.
         """
         m = re.match(r'(\d+)x(\d+)\+(-?\d+)\+(-?\d+)', geo)
         if not m:
@@ -1638,15 +1671,24 @@ class App:
         w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
         if w < min_w or h < min_h:
             return DEFAULT_GEOMETRY
-        # At least 50px of the window must be visible on-screen
+        # Check against virtual desktop spanning all monitors
+        vx, vy, vw, vh = App._get_virtual_screen_bounds()
         visible_margin = 50
-        if x + w < visible_margin or x > screen_w - visible_margin:
+        if x + w < vx + visible_margin or x > vx + vw - visible_margin:
             return DEFAULT_GEOMETRY
-        if y + h < visible_margin or y > screen_h - visible_margin:
+        if y + h < vy + visible_margin or y > vy + vh - visible_margin:
             return DEFAULT_GEOMETRY
         return geo
 
     def _save_last_state(self):
+        # Read existing state to preserve geometry entries for other monitor configs
+        existing = {}
+        if os.path.exists(self._state_file):
+            try:
+                with open(self._state_file, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
         state = {
             "provider": self.provider,
             "last_instruction_name": self.agent_instruction_name,
@@ -1657,25 +1699,32 @@ class App:
             "thinking_budget": self.thinking_budget,
             "thinking_mode": self.thinking_mode,
             "text_verbosity": self.text_verbosity,
-            "geometry": self.root.geometry(),
-            "screen_width": self.root.winfo_screenwidth(),
-            "screen_height": self.root.winfo_screenheight(),
         }
-        # Capture editor window geometry if it's open
+        # Build geometry dict for current monitor configuration
+        config_key = self._get_monitor_config_key()
+        geo_entry = {"geometry": self.root.geometry()}
         if self.instruction_editor_window and self.instruction_editor_window.winfo_exists():
-            state["editor_geometry"] = self.instruction_editor_window.geometry()
+            geo_entry["editor_geometry"] = self.instruction_editor_window.geometry()
         elif hasattr(self, '_last_editor_geometry') and self._last_editor_geometry:
-            state["editor_geometry"] = self._last_editor_geometry
-        # Persist dialog geometries
+            geo_entry["editor_geometry"] = self._last_editor_geometry
         prompt_geo = getattr(self, '_last_prompt_dialog_geometry', None)
         if prompt_geo:
-            state["prompt_dialog_geometry"] = prompt_geo
+            geo_entry["prompt_dialog_geometry"] = prompt_geo
         confirm_geo = getattr(self, '_last_confirm_dialog_geometry', None)
         if confirm_geo:
-            state["confirm_dialog_geometry"] = confirm_geo
+            geo_entry["confirm_dialog_geometry"] = confirm_geo
         ps_safety_geo = getattr(self, '_last_ps_safety_geometry', None)
         if ps_safety_geo:
-            state["ps_safety_dialog_geometry"] = ps_safety_geo
+            geo_entry["ps_safety_dialog_geometry"] = ps_safety_geo
+        # Capture skills dialog geometry if open, otherwise use last saved
+        if self.skills_editor_window and self.skills_editor_window.winfo_exists():
+            geo_entry["skills_dialog_geometry"] = self.skills_editor_window.geometry()
+        elif getattr(self, '_last_skills_dialog_geometry', None):
+            geo_entry["skills_dialog_geometry"] = self._last_skills_dialog_geometry
+        # Merge into geometries dict (preserves other monitor configs)
+        all_geos = existing.get("geometries", {})
+        all_geos[config_key] = geo_entry
+        state["geometries"] = all_geos
         # Display checkboxes
         state["show_activity"] = self.show_activity.get()
         state["show_thinking"] = self.show_thinking.get()
@@ -1703,30 +1752,36 @@ class App:
         if not model_restored:
             # Fall back to state file's model params (for old instructions or no instruction)
             self._restore_model_params(state, state_file=True)
-        # Restore geometry
-        geo = state.get("geometry")
-        if geo:
-            sw = state.get("screen_width")
-            sh = state.get("screen_height")
-            if sw == self.root.winfo_screenwidth() and sh == self.root.winfo_screenheight():
-                geo = self._sanitize_geometry(geo, sw, sh)
-                self.root.geometry(geo)
-        # Restore editor geometry for next time the editor is opened
-        editor_geo = state.get("editor_geometry")
-        if editor_geo:
-            self._last_editor_geometry = editor_geo
-            self._editor_screen_width = state.get("screen_width")
-            self._editor_screen_height = state.get("screen_height")
-        # Restore dialog geometries
-        prompt_geo = state.get("prompt_dialog_geometry")
-        if prompt_geo:
-            self._last_prompt_dialog_geometry = prompt_geo
-        confirm_geo = state.get("confirm_dialog_geometry")
-        if confirm_geo:
-            self._last_confirm_dialog_geometry = confirm_geo
-        ps_safety_geo = state.get("ps_safety_dialog_geometry")
-        if ps_safety_geo:
-            self._last_ps_safety_geometry = ps_safety_geo
+        # Restore geometries for the current monitor configuration
+        config_key = self._get_monitor_config_key()
+        all_geos = state.get("geometries", {})
+        geo_entry = all_geos.get(config_key)
+        if not geo_entry:
+            # Backward compat: migrate old flat geometry fields
+            if "geometry" in state:
+                geo_entry = {k: state[k] for k in ("geometry", "editor_geometry",
+                             "prompt_dialog_geometry", "confirm_dialog_geometry",
+                             "ps_safety_dialog_geometry",
+                             "skills_dialog_geometry") if k in state}
+        if geo_entry:
+            geo = geo_entry.get("geometry")
+            if geo:
+                self.root.geometry(self._sanitize_geometry(geo))
+            editor_geo = geo_entry.get("editor_geometry")
+            if editor_geo:
+                self._last_editor_geometry = editor_geo
+            prompt_geo = geo_entry.get("prompt_dialog_geometry")
+            if prompt_geo:
+                self._last_prompt_dialog_geometry = prompt_geo
+            confirm_geo = geo_entry.get("confirm_dialog_geometry")
+            if confirm_geo:
+                self._last_confirm_dialog_geometry = confirm_geo
+            ps_safety_geo = geo_entry.get("ps_safety_dialog_geometry")
+            if ps_safety_geo:
+                self._last_ps_safety_geometry = ps_safety_geo
+            skills_geo = geo_entry.get("skills_dialog_geometry")
+            if skills_geo:
+                self._last_skills_dialog_geometry = skills_geo
         # Restore display checkboxes
         if "show_activity" in state:
             self.show_activity.set(state["show_activity"])
@@ -1860,7 +1915,7 @@ class App:
                 "temperature": entry.get("temperature", 1.0),
                 "thinking_enabled": entry.get("thinking_enabled", False),
                 "thinking_effort": entry.get("thinking_effort", "medium"),
-                "thinking_budget": entry.get("thinking_budget", 10000),
+                "thinking_budget": entry.get("thinking_budget", 8192),
                 "thinking_mode": entry.get("thinking_mode", ""),
                 "text_verbosity": entry.get("text_verbosity", "medium"),
                 "image_count": len(entry.get("images", [])),
@@ -1943,20 +1998,9 @@ class App:
             return
 
         win = tk.Toplevel(self.root)
+        win.withdraw()  # Hide until geometry is set
         win.title("Agent Instruction Editor")
         win.transient(self.root)
-        # Restore saved geometry or use default (transient must be set first
-        # so it doesn't override the position we set here)
-        editor_geo = getattr(self, '_last_editor_geometry', None)
-        if editor_geo:
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            if sw == getattr(self, '_editor_screen_width', sw) and sh == getattr(self, '_editor_screen_height', sh):
-                win.geometry(self._sanitize_geometry(editor_geo, sw, sh, min_w=400, min_h=300))
-            else:
-                win.geometry("700x640")
-        else:
-            win.geometry("700x640")
         win.protocol("WM_DELETE_WINDOW", lambda: self._on_editor_close(win))
         self.instruction_editor_window = win
 
@@ -2151,6 +2195,15 @@ class App:
             self._instr_combo_var.set(self.agent_instruction_name)
         self._refresh_image_listbox()
 
+        # Restore geometry AFTER all content is laid out, then show
+        win.update_idletasks()
+        editor_geo = getattr(self, '_last_editor_geometry', None)
+        if editor_geo:
+            win.geometry(self._sanitize_geometry(editor_geo, min_w=400, min_h=300))
+        else:
+            win.geometry("700x640")
+        win.deiconify()
+
     def _nullify_editor_widgets(self):
         """Clear editor widget references so _has_model_widgets() returns False."""
         self._provider_combo = None
@@ -2169,8 +2222,6 @@ class App:
         """Save editor window geometry for restore on next open."""
         try:
             self._last_editor_geometry = self.instruction_editor_window.geometry()
-            self._editor_screen_width = self.root.winfo_screenwidth()
-            self._editor_screen_height = self.root.winfo_screenheight()
         except Exception:
             pass
 
@@ -2827,7 +2878,7 @@ class App:
         mid = model_id or self.model
         if mid.startswith("gpt-5."):
             try:
-                return int(mid[6])
+                return int(mid[6:].split('-')[0].split('.')[0])
             except (IndexError, ValueError):
                 return 0
         return 0
@@ -2851,10 +2902,15 @@ class App:
             return True
         return self._parse_gpt5_minor(mid) >= 2
 
-    def _has_openai_verbosity(self, model_id=None):
-        """Check if model supports text.verbosity (all gpt-5 family)."""
+    def _is_gpt5_chat_model(self, model_id=None):
+        """Check if model is a gpt-5.x-chat-* Instant variant."""
         mid = model_id or self.model
-        return self._is_gpt5_family(mid)
+        return mid.startswith("gpt-5") and "-chat" in mid
+
+    def _has_openai_verbosity(self, model_id=None):
+        """Check if model supports text.verbosity (all gpt-5 family including -chat)."""
+        mid = model_id or self.model
+        return mid.startswith("gpt-5")
 
     # ── Gemini Translation Helpers ────────────────────────────────────
 
@@ -3023,7 +3079,7 @@ class App:
             "temperature": self.temperature,
         }
         if self.thinking_enabled and self._is_gemini_thinking_model():
-            budget_map = {"low": 1024, "medium": 8192, "high": 24576}
+            budget_map = {"minimal": 1024, "low": 1024, "medium": 8192, "high": 24576, "max": 32768}
             budget = budget_map.get(self.thinking_effort, 8192)
             config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
                 thinking_budget=budget,
@@ -3164,13 +3220,20 @@ class App:
             return
 
         win = tk.Toplevel(self.root)
+        win.withdraw()  # Hide until geometry is set
         win.title("Skills Manager")
-        win.geometry("750x500")
         parent = (self.instruction_editor_window
                   if self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
                   else self.root)
         win.transient(parent)
         self.skills_editor_window = win
+
+        def _on_skills_close():
+            self._last_skills_dialog_geometry = win.geometry()
+            self._save_last_state()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_skills_close)
 
         top = tk.Frame(win)
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
@@ -3298,6 +3361,15 @@ class App:
         win.grid_rowconfigure(1, weight=1)
 
         refresh_list()
+
+        # Restore geometry AFTER all content is laid out, then show
+        win.update_idletasks()
+        saved_geo = getattr(self, '_last_skills_dialog_geometry', None)
+        if saved_geo:
+            win.geometry(self._sanitize_geometry(saved_geo, min_w=400, min_h=300))
+        else:
+            win.geometry("750x500")
+        win.deiconify()
 
     # ── Chat Save ───────────────────────────────────────────────────────
 
@@ -3599,6 +3671,7 @@ class App:
             self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
         ) else self.root
         dlg = tk.Toplevel(parent)
+        dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
         dlg.title("PowerShell Safety — Confirm Patterns")
         dlg.transient(parent)
         dlg.resizable(True, True)
@@ -3639,19 +3712,24 @@ class App:
             self._save_last_state()
             dlg.destroy()
 
-        # Restore / persist dialog geometry
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
+
+        # Set geometry AFTER layout but BEFORE showing to prevent WM repositioning
+        dlg.update_idletasks()
         saved_geo = getattr(self, '_last_ps_safety_geometry', None)
         if saved_geo:
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            dlg.geometry(self._sanitize_geometry(saved_geo, sw, sh))
+            geo = self._sanitize_geometry(saved_geo)
         else:
             w, h = 560, 1100
             x = parent.winfo_x() + (parent.winfo_width() - w) // 2
             y = parent.winfo_y() + (parent.winfo_height() - h) // 2
-            dlg.geometry(f"{w}x{h}+{x}+{y}")
-
-        dlg.protocol("WM_DELETE_WINDOW", _on_close)
+            geo = f"{w}x{h}+{x}+{y}"
+        # Apply geometry twice: before and after deiconify, because the embedded
+        # checkbuttons in the Text widget request a large natural size that
+        # overrides the width/height on map. The after_idle re-apply wins.
+        dlg.geometry(geo)
+        dlg.deiconify()
+        dlg.after_idle(lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
 
     def _toggle_confirm_pattern(self, pattern, var):
         if var.get():
@@ -3678,6 +3756,7 @@ class App:
 
         def ask():
             dlg = tk.Toplevel(self.root)
+            dlg.withdraw()  # Hide until geometry is set
             dlg.title("PowerShell — Confirm Command")
             if not self._headless:
                 dlg.transient(self.root)
@@ -3752,19 +3831,18 @@ class App:
 
             dlg.protocol("WM_DELETE_WINDOW", on_no)
 
-            # Restore saved geometry or center over main window
+            # Restore geometry AFTER all content is laid out to prevent layout shifts
+            dlg.update_idletasks()
             saved_geo = getattr(self, '_last_confirm_dialog_geometry', None)
             if saved_geo:
-                sw = self.root.winfo_screenwidth()
-                sh = self.root.winfo_screenheight()
-                dlg.geometry(self._sanitize_geometry(saved_geo, sw, sh))
+                dlg.geometry(self._sanitize_geometry(saved_geo))
             else:
-                dlg.update_idletasks()
                 w = max(dlg.winfo_reqwidth(), 500)
                 h = min(dlg.winfo_reqheight(), 400)
                 x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
                 y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
                 dlg.geometry(f"{w}x{h}+{x}+{y}")
+            dlg.deiconify()  # Show with correct geometry
 
         self.root.after(0, ask)
         event.wait()
@@ -3777,6 +3855,7 @@ class App:
 
         def ask():
             dlg = tk.Toplevel(self.root)
+            dlg.withdraw()  # Hide until geometry is set
             dlg.title("Agent Request")
             if not self._headless:
                 dlg.transient(self.root)
@@ -3858,19 +3937,18 @@ class App:
             resp_text.bind("<Control-KP_Enter>", on_newline)
             dlg.protocol("WM_DELETE_WINDOW", on_close)
 
-            # Restore saved geometry or center over main window
+            # Restore geometry AFTER all content is laid out to prevent layout shifts
+            dlg.update_idletasks()
             saved_geo = getattr(self, '_last_prompt_dialog_geometry', None)
             if saved_geo:
-                sw = self.root.winfo_screenwidth()
-                sh = self.root.winfo_screenheight()
-                dlg.geometry(self._sanitize_geometry(saved_geo, sw, sh))
+                dlg.geometry(self._sanitize_geometry(saved_geo))
             else:
-                dlg.update_idletasks()
                 w = max(dlg.winfo_reqwidth(), 500)
                 h = max(dlg.winfo_reqheight(), 400)
                 x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
                 y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
                 dlg.geometry(f"{w}x{h}+{x}+{y}")
+            dlg.deiconify()  # Show with correct geometry
 
             resp_text.focus_set()
 
@@ -4048,7 +4126,10 @@ class App:
             if all(ord(c) < 128 for c in text):
                 pyautogui.write(text, interval=interval)
             else:
-                import pyperclip
+                try:
+                    import pyperclip
+                except ImportError:
+                    return "Error: pyperclip is not installed (needed for non-ASCII text). Install with: pip install pyperclip"
                 pyperclip.copy(text)
                 pyautogui.hotkey("ctrl", "v")
             return f"Typed {len(text)} characters"
@@ -4091,8 +4172,9 @@ class App:
             else:
                 cmd = name
             if args:
-                cmd = f'{cmd} "{args}"'
-            subprocess.Popen(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen([cmd, args], creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                subprocess.Popen(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
             return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"
         except Exception as e:
             return f"Error opening {name}: {e}"
@@ -4839,7 +4921,14 @@ class App:
                             if in_thinking:
                                 self.queue.put({"type": "thinking_end"})
                                 in_thinking = False
-                    final_message = stream.get_final_message()
+                    if self.stop_requested:
+                        # Stream interrupted by user — synthesize a stop result
+                        return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted
+                    try:
+                        final_message = stream.get_final_message()
+                    except Exception:
+                        # Stream may be incomplete — synthesize a stop result
+                        return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted
                 break  # success
             except anthropic.RateLimitError as e:
                 if attempt < max_retries - 1:
@@ -4897,8 +4986,10 @@ class App:
         elif is_reasoning and self.thinking_enabled:
             api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
         elif not is_reasoning:
-            api_kwargs["temperature"] = self.temperature
-        # Verbosity for gpt-5 family
+            # gpt-5.x-chat Instant models don't support temperature
+            if not self._is_gpt5_chat_model():
+                api_kwargs["temperature"] = self.temperature
+        # Verbosity for all gpt-5 models (including -chat Instant variants)
         if self._has_openai_verbosity():
             api_kwargs["text"] = {"verbosity": self.text_verbosity}
 
@@ -5031,9 +5122,6 @@ class App:
                     else:
                         tool_blocks = [b for b in content_blocks if b.type == "tool_use"]
 
-                    # -- Parallel-safe tools (network I/O, pure lookups) --
-                    PARALLEL_SAFE = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
-
                     # Log all tool calls up front
                     for block in tool_blocks:
                         tool_call_detail = json.dumps(
@@ -5046,7 +5134,7 @@ class App:
                     parallel_items = []   # [(index, block), ...]
                     sequential_items = [] # [(index, block), ...]
                     for idx, block in enumerate(tool_blocks):
-                        if block.name in PARALLEL_SAFE:
+                        if block.name in PARALLEL_SAFE_TOOLS:
                             parallel_items.append((idx, block))
                         else:
                             sequential_items.append((idx, block))
@@ -5108,7 +5196,8 @@ class App:
                         continue
                     break
 
-            messages.append({"role": "assistant", "content": full_text})
+            if full_text:
+                messages.append({"role": "assistant", "content": full_text})
             self.queue.put({"type": "complete"})
             if self._headless:
                 self.root.after(500, self._on_close)
