@@ -34,8 +34,8 @@ taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/n
 There are no tests, linter, or build steps — these are single-file testbed apps.
 
 ## Project Structure
-- `SelfBot.py` — Single-file tkinter GUI chatbot (~3300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~5100 lines); fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
+- `SelfBot.py` — Single-file tkinter GUI chatbot (~3900 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
+- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~5400 lines); fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `CSVEditor.py` — Single-file tkinter GUI CSV editor (~405 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)

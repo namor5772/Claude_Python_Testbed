@@ -360,18 +360,24 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Deskt
 
 #### Python Dependencies
 
+**Core (in `requirements.txt`):**
 ```
 anthropic
 openai
+google-genai
 ddgs
 httpx
-opencv-python
-Pillow
-playwright
 pyautogui
 pygetwindow
-pyperclip
-winocr
+Pillow
+```
+
+**Optional (installed separately when needed):**
+```
+playwright      # Browser tools — connects to Edge via CDP, no `playwright install` needed
+pyperclip       # Desktop tools — Unicode text input via clipboard paste
+winocr          # Desktop tools — OCR via Windows.Media.Ocr (read_screen_text)
+opencv-python   # Desktop tools — image matching (find_image_on_screen)
 ```
 
 > **Note:** `playwright install` is **not** required. The app connects to the system-installed Microsoft Edge via CDP, so no bundled browser binaries are needed.
@@ -701,7 +707,7 @@ Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
 
 ### Architecture
 
-The application is a single-file (~5,100 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+The application is a single-file (~5,400 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
 - **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`. An `_ensure_newline()` helper guarantees each new output block starts on a fresh line, and an `ensure_newline` queue event between loop iterations prevents consecutive response streams from merging when Activity display is off
