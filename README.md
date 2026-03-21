@@ -67,7 +67,7 @@ The chatbot has twenty-eight built-in tools (plus a dynamic `get_skill` tool) th
 **Core Tools (always available):**
 - **web_search** — Searches the web via DuckDuckGo (`ddgs` library) and returns the top 5 results with titles, URLs, and snippets
 - **fetch_webpage** — Fetches the full content of a URL using `httpx`, extracts readable text from HTML (stripping scripts, styles, and tags), and truncates to 20,000 characters
-- **run_powershell** — Executes a PowerShell command on the local Windows PC and returns the output (stdout + stderr). Commands have a 30-second timeout and output is truncated at 20,000 characters. Uses `CREATE_NO_WINDOW` to suppress console window flashes. The tool description instructs Claude to use `Start-Process` when launching GUI applications to avoid blocking the tool loop
+- **run_powershell** / **run_shell** — Executes a shell command on the local machine and returns the output (stdout + stderr). On Windows this runs PowerShell; on macOS it runs bash. Commands have a 30-second timeout and output is truncated at 20,000 characters. On Windows, uses `CREATE_NO_WINDOW` to suppress console window flashes. The tool description instructs Claude to use `Start-Process` (Windows) or `open -a` (macOS) when launching GUI applications to avoid blocking the tool loop
 - **csv_search** — Searches a delimited text file (CSV, TSV, TXT, or any delimited format) for records matching a value. The file must have a header row. Supports searching a specific column or all columns, with three match modes: `contains` (default), `exact`, and `starts_with` — all case-insensitive. The delimiter is auto-detected from file content using `csv.Sniffer` (sampling the first 8KB), or can be explicitly specified (`,`, `\t`, `|`, `;`). Results are returned as labelled key-value rows, capped at 50 matches by default (configurable via `max_results`). Output is truncated at 20,000 characters
 
 **Desktop Tools (enabled via Desktop checkbox):**
@@ -283,12 +283,14 @@ When a second instance is launched, SelfBot automatically enables dual-instance 
 4. **Send a message in instance 1** — After the first response completes, the user's original message is injected into instance 2's output window (in assistant/green colour), and the reply body is written to a shared file for instance 2 to pick up
 5. **Auto-conversation loop** — Each time either instance receives a reply, the response body is written to a shared JSON file (`selfbot_auto_msg.json`). The other instance polls for this file, reads the text into its own input field, and sends it internally — creating a continuous back-and-forth dialogue without any window switching or focus changes
 
-#### Instance Detection (Named Mutex)
+#### Instance Detection
 
-Instance detection uses a Windows named mutex (`CreateMutexW`) instead of relying solely on a lock file. The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created containing instance 1's PID, used by the launcher (`selfbot_position.ps1`) to identify which window is instance 1 for correct positioning.
+**Windows:** Uses a named mutex (`CreateMutexW`). The OS automatically releases the mutex when a process exits — even on crash or `taskkill` — so stale state is impossible. A `selfbot.lock` file is still created containing instance 1's PID, used by the launcher (`selfbot_position.ps1`) to identify which window is instance 1 for correct positioning.
 
 - If the mutex is not held → this is instance 1; the mutex is acquired and the lock file is created
 - If the mutex is already held → this is instance 2
+
+**macOS:** Uses a lock file (`selfbot.lock`) containing the PID. On startup, the lock file is read and the PID is verified via `os.kill(pid, 0)` + `ps -p` to confirm it belongs to a running SelfBot process. Stale locks from crashed processes are automatically reclaimed.
 
 #### Name Swapping & Read-Only Fields
 
@@ -342,7 +344,7 @@ When Auto is toggled OFF mid-conversation, the current API response completes bu
 
 #### Paired Shutdown
 
-Closing either SelfBot window stops the auto-chat conversation, waits for any in-flight API streaming to finish, auto-saves both instances' chats (`.json` + `.txt`), and then shuts down both instances cleanly via `WM_CLOSE` messages. Instance 2's files are suffixed with `_` to avoid collisions. A periodic auto-save every 5 seconds on all instances also protects against force-kill (`taskkill /F`, `Stop-Process`) data loss.
+Closing either SelfBot window stops the auto-chat conversation, waits for any in-flight API streaming to finish, auto-saves both instances' chats (`.json` + `.txt`), and then shuts down both instances cleanly via `WM_CLOSE` messages (Windows only; on macOS each instance closes independently). Instance 2's files are suffixed with `_` to avoid collisions. A periodic auto-save every 5 seconds on all instances also protects against force-kill (`taskkill /F`, `Stop-Process`) data loss.
 
 #### Message Display Formatting
 
@@ -354,8 +356,8 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Deskt
 
 ### Requirements
 
-- Windows 10/11
-- Python 3 with tkinter (included in standard library)
+- **Windows 10/11** or **macOS** (both fully supported from the same codebase)
+- Python 3.10+ with tkinter (on macOS, install via `brew install python-tk@3.13` — the system Python's Tk is too old)
 - At least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY` environment variables (MyAgent supports all three; SelfBot requires Anthropic)
 
 #### Python Dependencies
@@ -374,18 +376,34 @@ Pillow
 
 **Optional (installed separately when needed):**
 ```
-playwright      # Browser tools — connects to Edge via CDP, no `playwright install` needed
+playwright      # Browser tools — connects to Edge/Chrome via CDP, no `playwright install` needed
 pyperclip       # Desktop tools — Unicode text input via clipboard paste
-winocr          # Desktop tools — OCR via Windows.Media.Ocr (read_screen_text)
+winocr          # Desktop tools — OCR via Windows.Media.Ocr (read_screen_text, Windows only)
 opencv-python   # Desktop tools — image matching (find_image_on_screen)
 ```
 
-> **Note:** `playwright install` is **not** required. The app connects to the system-installed Microsoft Edge via CDP, so no bundled browser binaries are needed.
+> **Note:** `playwright install` is **not** required. The app connects to the system-installed Microsoft Edge (or Google Chrome on macOS) via CDP, so no bundled browser binaries are needed.
+
+#### Cross-Platform Notes
+
+Both SelfBot.py and MyAgent.py use a runtime `IS_WINDOWS = sys.platform == "win32"` constant to branch between Windows and macOS code paths. All Windows behaviour is preserved exactly — macOS gets equivalent or gracefully degraded functionality:
+
+| Feature | Windows | macOS |
+|---|---|---|
+| Shell tool | `run_powershell` (PowerShell) | `run_shell` (bash) |
+| Desktop automation | Full (pyautogui + pygetwindow) | pyautogui works; pygetwindow may not — Desktop checkbox auto-disables if unavailable |
+| Browser automation | Edge via CDP | Edge or Chrome via CDP |
+| Instance detection (SelfBot) | Named mutex (`CreateMutexW`) | Lock file + PID verification |
+| Duo peer detection (SelfBot) | `pygetwindow` window enumeration | Not available (each instance runs independently) |
+| Monitor geometry (MyAgent) | Win32 `EnumDisplayMonitors` | Falls back to primary screen bounds |
+| DPI awareness | `SetProcessDpiAwareness(2)` | Not needed (macOS handles scaling natively) |
+| Monospace font | Consolas | Menlo |
 
 ### Setup (New Machine)
 
-The project is fully portable — no hardcoded paths. To set up on a new Windows PC:
+The project is fully portable — no hardcoded paths.
 
+**Windows:**
 ```bash
 # Clone the repository
 git clone https://github.com/namor5772/Claude_Python_Testbed.git
@@ -405,6 +423,29 @@ export OPENAI_API_KEY="your-key-here"      # optional, for MyAgent OpenAI suppor
 export GEMINI_API_KEY="your-key-here"      # optional, for MyAgent Gemini support
 ```
 
+**macOS:**
+```bash
+# Install Python 3.13 with tkinter support
+brew install python-tk@3.13
+
+# Clone the repository
+git clone https://github.com/namor5772/Claude_Python_Testbed.git
+cd Claude_Python_Testbed
+
+# Create and activate the virtual environment
+python3.13 -m venv .venv
+source .venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Set your API key(s) permanently
+echo 'export ANTHROPIC_API_KEY="your-key-here"' >> ~/.zshrc
+echo 'export OPENAI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
+echo 'export GEMINI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
+source ~/.zshrc
+```
+
 The `.venv` directory is gitignored and must be recreated on each machine. All runtime files (`app_state.json`, `skills.json`, `saved_chats/`, etc.) are created automatically on first run.
 
 ### Running
@@ -412,7 +453,8 @@ The `.venv` directory is gitignored and must be recreated on each machine. All r
 **Solo mode:**
 ```bash
 # Activate the virtual environment
-source .venv/Scripts/activate
+source .venv/Scripts/activate   # Windows (Git Bash)
+source .venv/bin/activate       # macOS
 
 # Run the application
 python SelfBot.py
@@ -697,13 +739,14 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 
 ```bash
 # Activate the virtual environment
-source .venv/Scripts/activate
+source .venv/Scripts/activate   # Windows (Git Bash)
+source .venv/bin/activate       # macOS
 
 # Run the application
 python MyAgent.py
 ```
 
-Or double-click `LaunchMyAgent.bat` (or the "MyAgent" desktop shortcut).
+Or double-click `LaunchMyAgent.bat` on Windows (or the "MyAgent" desktop shortcut).
 
 ### Architecture
 
@@ -775,7 +818,8 @@ A compact tkinter window with:
 
 ```bash
 # Activate the virtual environment
-source .venv/Scripts/activate
+source .venv/Scripts/activate   # Windows (Git Bash)
+source .venv/bin/activate       # macOS
 
 # Run the application
 python Account_Activity_WBC.py

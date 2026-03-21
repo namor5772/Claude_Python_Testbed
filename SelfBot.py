@@ -1,16 +1,19 @@
-import ctypes
-import ctypes.wintypes
+import sys
+IS_WINDOWS = sys.platform == "win32"
 
-# Fix DPI scaling for desktop automation tools — must run before any window creation.
-# Without this, Windows display scaling (125%, 150%, etc.) causes screenshot pixel
-# coordinates and mouse click coordinates to use different scales, so clicks miss.
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-except Exception:
+import ctypes
+if IS_WINDOWS:
+    import ctypes.wintypes
+    # Fix DPI scaling for desktop automation tools — must run before any window creation.
+    # Without this, Windows display scaling (125%, 150%, etc.) causes screenshot pixel
+    # coordinates and mouse click coordinates to use different scales, so clicks miss.
     try:
-        ctypes.windll.user32.SetProcessDPIAware()
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
     except Exception:
-        pass
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
@@ -28,12 +31,16 @@ import csv
 import subprocess
 import re
 import io
-import sys
 import time
 import concurrent.futures
 import pyautogui
-import pygetwindow as gw
 from PIL import Image
+
+_HAS_DESKTOP = True
+try:
+    import pygetwindow as gw
+except ImportError:
+    _HAS_DESKTOP = False
 
 # Desktop automation safety settings
 pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
@@ -71,7 +78,7 @@ TOOLS = [
         },
     },
     {
-        "name": "run_powershell",
+        "name": "run_powershell" if IS_WINDOWS else "run_shell",
         "description": (
             "Execute a PowerShell command on the local Windows PC and return its output. "
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
@@ -81,13 +88,20 @@ TOOLS = [
             "IMPORTANT: When launching GUI applications (e.g. notepad++, mspaint, excel), "
             "always use Start-Process so the command returns immediately instead of blocking. "
             "Example: Start-Process notepad++ -ArgumentList 'C:\\path\\to\\file.txt'"
+        ) if IS_WINDOWS else (
+            "Execute a shell command on the local machine and return its output. "
+            "Use this for system tasks like listing files, checking processes, reading/writing files, "
+            "getting system info, running scripts, installing software, or any other local operation. "
+            "Commands run with the current user's permissions via bash. "
+            "IMPORTANT: When launching GUI applications, use 'open -a AppName' so the command "
+            "returns immediately instead of blocking."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The PowerShell command to execute",
+                    "description": "The PowerShell command to execute" if IS_WINDOWS else "The shell command to execute",
                 }
             },
             "required": ["command"],
@@ -643,6 +657,27 @@ POWERSHELL_CONFIRM = [
     r"\b-Force\b",
 ]
 
+if not IS_WINDOWS:
+    POWERSHELL_BLOCKED.extend([
+        r"\bsudo\s+rm\s+-rf\s+/\s*$",
+        r"\bmkfs\b",
+        r"\bdd\b.*\bof=/dev/",
+        r"\bshutdown\b",
+        r"\breboot\b",
+    ])
+    POWERSHELL_CONFIRM.extend([
+        r"\brm\b",
+        r"\bmv\b",
+        r"\bkill\b",
+        r"\bkillall\b",
+        r"\bchmod\b",
+        r"\bchown\b",
+        r"\bsudo\b",
+        r"\bcurl\b.*-o",
+        r"\bwget\b",
+        r"\blaunchctl\b",
+    ])
+
 FALLBACK_MODELS = [
     "claude-sonnet-4-5-20250929",
     "claude-opus-4-6",
@@ -664,6 +699,7 @@ BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
 ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
 DEFAULT_GEOMETRY = "1050x930"
+MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are a capable personal assistant for Roman with access to a rich set of tools. "
@@ -765,9 +801,11 @@ def extract_text_from_html(html):
 
 def _get_window_pid(hwnd):
     """Get the process ID that owns a given window handle."""
-    pid = ctypes.wintypes.DWORD()
-    ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    return pid.value
+    if IS_WINDOWS:
+        pid = ctypes.wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        return pid.value
+    return 0
 
 
 class App:
@@ -816,20 +854,51 @@ class App:
         self.skills = self._load_skills()
         self.available_models = self._fetch_available_models()
 
-        # Detect second instance via named mutex (OS auto-releases on crash/kill)
-        _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        self._mutex = _k32.CreateMutexW(None, True, "SelfBotInstanceMutex")
-        if ctypes.get_last_error() == 183:          # ERROR_ALREADY_EXISTS
-            self._is_second_instance = True
-            self._state_file = APP_STATE_FILE_2
+        # Detect second instance
+        if IS_WINDOWS:
+            # Named mutex (OS auto-releases on crash/kill)
+            _k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            self._mutex = _k32.CreateMutexW(None, True, "SelfBotInstanceMutex")
+            if ctypes.get_last_error() == 183:          # ERROR_ALREADY_EXISTS
+                self._is_second_instance = True
+                self._state_file = APP_STATE_FILE_2
+            else:
+                self._is_second_instance = False
+                self._state_file = APP_STATE_FILE
+                try:
+                    with open(LOCK_FILE, "w") as f:
+                        f.write(str(os.getpid()))
+                except OSError:
+                    pass
         else:
+            # Lock-file-based detection for macOS
             self._is_second_instance = False
-            self._state_file = APP_STATE_FILE
             try:
-                with open(LOCK_FILE, "w") as f:
-                    f.write(str(os.getpid()))
-            except OSError:
+                if os.path.exists(LOCK_FILE):
+                    with open(LOCK_FILE, "r") as f:
+                        old_pid = int(f.read().strip())
+                    try:
+                        os.kill(old_pid, 0)
+                        # PID alive — verify it's a SelfBot process
+                        result = subprocess.run(
+                            ["ps", "-p", str(old_pid), "-o", "command="],
+                            capture_output=True, text=True, timeout=5,
+                        )
+                        if "SelfBot.py" in result.stdout:
+                            self._is_second_instance = True
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass  # stale lock
+            except (ValueError, OSError):
                 pass
+            if self._is_second_instance:
+                self._state_file = APP_STATE_FILE_2
+            else:
+                self._state_file = APP_STATE_FILE
+                try:
+                    with open(LOCK_FILE, "w") as f:
+                        f.write(str(os.getpid()))
+                except OSError:
+                    pass
         self._response_count = 0
         self._first_message_text = ""
         self._current_response_text = ""
@@ -1022,16 +1091,16 @@ class App:
             "image_info", foreground="#6a1b9a", font=("Arial", 10, "italic")
         )
         self.chat_display.tag_config(
-            "debug", foreground="#b06000", font=("Consolas", 9)
+            "debug", foreground="#b06000", font=(MONO_FONT, 9)
         )
         self.chat_display.tag_config(
-            "debug_label", foreground="#b06000", font=("Consolas", 9, "bold")
+            "debug_label", foreground="#b06000", font=(MONO_FONT, 9, "bold")
         )
         self.chat_display.tag_config(
-            "tool_debug", foreground="#00796b", font=("Consolas", 9)
+            "tool_debug", foreground="#00796b", font=(MONO_FONT, 9)
         )
         self.chat_display.tag_config(
-            "tool_debug_label", foreground="#00796b", font=("Consolas", 9, "bold")
+            "tool_debug_label", foreground="#00796b", font=(MONO_FONT, 9, "bold")
         )
         self.chat_display.tag_config(
             "call_counter", foreground="#ffffff", background="#d32f2f",
@@ -1043,11 +1112,11 @@ class App:
         )
         self.chat_display.tag_config(
             "thinking", foreground="#b8860b", background="#fffde7",
-            font=("Consolas", 9, "italic")
+            font=(MONO_FONT, 9, "italic")
         )
         self.chat_display.tag_config(
             "thinking_label", foreground="#b8860b", background="#fffde7",
-            font=("Consolas", 9, "bold italic")
+            font=(MONO_FONT, 9, "bold italic")
         )
 
         # Input field
@@ -1129,6 +1198,9 @@ class App:
             font=("Arial", 9),
         )
         self.desktop_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_DESKTOP:
+            self.desktop_enabled.set(False)
+            self.desktop_toggle.config(state=tk.DISABLED)
 
         self.browser_toggle = tk.Checkbutton(
             checkbox_frame, text="Browser", variable=self.browser_enabled,
@@ -1403,10 +1475,15 @@ class App:
                         self.root.geometry(duo_geo)
                         return
             # No saved duo geometry — calculate side-by-side from work area
-            rect = ctypes.wintypes.RECT()
-            ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
-            wa_x, wa_y = rect.left, rect.top
-            wa_w, wa_h = rect.right - rect.left, rect.bottom - rect.top
+            if IS_WINDOWS:
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+                wa_x, wa_y = rect.left, rect.top
+                wa_w, wa_h = rect.right - rect.left, rect.bottom - rect.top
+            else:
+                wa_x, wa_y = 0, 0
+                wa_w = self.root.winfo_screenwidth()
+                wa_h = self.root.winfo_screenheight()
             half_w = wa_w // 2
             if self._is_second_instance:
                 self.root.geometry(f"{half_w}x{wa_h}+{wa_x + half_w}+{wa_y}")
@@ -1571,7 +1648,7 @@ class App:
         self._refresh_prompt_list()
 
         # Row 2: Text editor
-        self._prompt_text = tk.Text(win, wrap=tk.WORD, font=("Consolas", 10))
+        self._prompt_text = tk.Text(win, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._prompt_text.grid(
             row=2, column=0, columnspan=5, sticky="nsew", padx=10, pady=(5, 5)
         )
@@ -1841,7 +1918,7 @@ class App:
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        text_editor = tk.Text(right, wrap=tk.WORD, font=("Consolas", 10))
+        text_editor = tk.Text(right, wrap=tk.WORD, font=(MONO_FONT, 10))
         text_editor.grid(row=0, column=0, sticky="nsew")
         text_scrollbar = tk.Scrollbar(right, command=text_editor.yview)
         text_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -2341,7 +2418,7 @@ class App:
             text_frame.grid_columnconfigure(0, weight=1)
 
             cmd_text = tk.Text(
-                text_frame, wrap=tk.WORD, font=("Consolas", 10),
+                text_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
                 relief="sunken", bd=1, height=10,
             )
             cmd_text.grid(row=0, column=0, sticky="nsew")
@@ -2401,8 +2478,10 @@ class App:
                 return "Command was rejected by the user."
 
         try:
+            shell_cmd = (["powershell", "-NoProfile", "-Command", command]
+                         if IS_WINDOWS else ["/bin/bash", "-c", command])
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", command],
+                shell_cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -2520,6 +2599,22 @@ class App:
         "discord": "start discord:",
         "slack": "start slack:",
         "teams": "start msteams:",
+    } if IS_WINDOWS else {
+        "chrome": "open -a 'Google Chrome'",
+        "firefox": "open -a Firefox",
+        "edge": "open -a 'Microsoft Edge'",
+        "safari": "open -a Safari",
+        "calculator": "open -a Calculator",
+        "calc": "open -a Calculator",
+        "terminal": "open -a Terminal",
+        "finder": "open .",
+        "explorer": "open .",
+        "vscode": "code",
+        "code": "code",
+        "spotify": "open -a Spotify",
+        "discord": "open -a Discord",
+        "slack": "open -a Slack",
+        "teams": "open -a 'Microsoft Teams'",
     }
 
     def do_screenshot(self, region=None):
@@ -2779,18 +2874,27 @@ class App:
 
         if not _port_open():
             # Try to launch Edge with the debug port
-            edge_paths = [
-                os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
-                os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
-                os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
-            ]
+            if IS_WINDOWS:
+                edge_paths = [
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                    os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+                    os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
+                ]
+            else:
+                edge_paths = [
+                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                ]
             edge_exe = None
             for p in edge_paths:
                 if os.path.isfile(p):
                     edge_exe = p
                     break
             if not edge_exe:
-                raise RuntimeError("Microsoft Edge not found. Install Edge or check its path.")
+                raise RuntimeError(
+                    "Microsoft Edge not found. Install Edge or check its path." if IS_WINDOWS
+                    else "No supported browser found. Install Microsoft Edge or Google Chrome."
+                )
 
             self._edge_process = subprocess.Popen(
                 [edge_exe, "--remote-debugging-port=9222"],
@@ -2906,12 +3010,15 @@ class App:
         """Check for another SelfBot window; enable/disable auto-chat and delay accordingly."""
         if getattr(self, '_closing', False):
             return
-        try:
-            peers = [
-                w for w in gw.getWindowsWithTitle("Claude SelfBot")
-                if _get_window_pid(w._hWnd) != self._my_pid and w.visible
-            ]
-        except Exception:
+        if IS_WINDOWS and _HAS_DESKTOP:
+            try:
+                peers = [
+                    w for w in gw.getWindowsWithTitle("Claude SelfBot")
+                    if _get_window_pid(w._hWnd) != self._my_pid and w.visible
+                ]
+            except Exception:
+                peers = []
+        else:
             peers = []
         has_peer = len(peers) > 0
         was_paired = self._auto_chat.get()
@@ -3073,26 +3180,27 @@ class App:
         # Auto-save the chat on close (all instances)
         self._auto_save_on_close()
         # Find any remaining peer windows to close
-        peer_windows = []
-        try:
-            peer_windows = [
-                w for w in gw.getWindowsWithTitle("Claude SelfBot")
-                if _get_window_pid(w._hWnd) != self._my_pid and w.visible
-            ]
-        except Exception:
-            pass
-        # Close any other SelfBot instance — send WM_CLOSE so it shuts down cleanly
-        WM_CLOSE = 0x0010
-        for w in peer_windows:
+        if IS_WINDOWS and _HAS_DESKTOP:
+            peer_windows = []
             try:
-                ctypes.windll.user32.PostMessageW(w._hWnd, WM_CLOSE, 0, 0)
+                peer_windows = [
+                    w for w in gw.getWindowsWithTitle("Claude SelfBot")
+                    if _get_window_pid(w._hWnd) != self._my_pid and w.visible
+                ]
             except Exception:
-                # Fallback to hard kill if PostMessage fails
+                pass
+            # Close any other SelfBot instance — send WM_CLOSE so it shuts down cleanly
+            WM_CLOSE = 0x0010
+            for w in peer_windows:
                 try:
-                    pid = _get_window_pid(w._hWnd)
-                    os.kill(pid, 9)
+                    ctypes.windll.user32.PostMessageW(w._hWnd, WM_CLOSE, 0, 0)
                 except Exception:
-                    pass
+                    # Fallback to hard kill if PostMessage fails
+                    try:
+                        pid = _get_window_pid(w._hWnd)
+                        os.kill(pid, 9)
+                    except Exception:
+                        pass
         # First instance owns the lock file — remove it on exit
         if not self._is_second_instance:
             try:
@@ -3113,10 +3221,17 @@ class App:
     def do_browser_open(self, url):
         try:
             self._cleanup_browser()
-            subprocess.run(
-                ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+            else:
+                subprocess.run(
+                    ["pkill", "-f", "Microsoft Edge"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.5)
             page = self._ensure_browser()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             return f"Navigated to {url} — page title: {page.title()}"
@@ -3413,7 +3528,7 @@ class App:
             url = inp.get("url", "")
             self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
             return self.fetch_url(url)
-        elif block.name == "run_powershell":
+        elif block.name in ("run_powershell", "run_shell"):
             cmd = inp.get("command", "")
             self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
             return self.run_powershell(cmd)

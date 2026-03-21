@@ -1,14 +1,17 @@
-import ctypes
-import ctypes.wintypes
+import sys
+IS_WINDOWS = sys.platform == "win32"
 
-# Fix DPI scaling for desktop automation tools — must run before any window creation.
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-except Exception:
+import ctypes
+if IS_WINDOWS:
+    import ctypes.wintypes
+    # Fix DPI scaling for desktop automation tools — must run before any window creation.
     try:
-        ctypes.windll.user32.SetProcessDPIAware()
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
     except Exception:
-        pass
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
@@ -30,12 +33,16 @@ import subprocess
 import re
 import io
 import socket
-import sys
 import time
 import concurrent.futures
 import pyautogui
-import pygetwindow as gw
 from PIL import Image
+
+_HAS_DESKTOP = True
+try:
+    import pygetwindow as gw
+except ImportError:
+    _HAS_DESKTOP = False
 
 # Desktop automation safety settings
 pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
@@ -74,7 +81,7 @@ TOOLS = [
         },
     },
     {
-        "name": "run_powershell",
+        "name": "run_powershell" if IS_WINDOWS else "run_shell",
         "description": (
             "Execute a PowerShell command on the local Windows PC and return its output. "
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
@@ -84,13 +91,20 @@ TOOLS = [
             "IMPORTANT: When launching GUI applications (e.g. notepad++, mspaint, excel), "
             "always use Start-Process so the command returns immediately instead of blocking. "
             "Example: Start-Process notepad++ -ArgumentList 'C:\\path\\to\\file.txt'"
+        ) if IS_WINDOWS else (
+            "Execute a shell command on the local machine and return its output. "
+            "Use this for system tasks like listing files, checking processes, reading/writing files, "
+            "getting system info, running scripts, installing software, or any other local operation. "
+            "Commands run with the current user's permissions via bash. "
+            "IMPORTANT: When launching GUI applications, use 'open -a AppName' so the command "
+            "returns immediately instead of blocking."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The PowerShell command to execute",
+                    "description": "The PowerShell command to execute" if IS_WINDOWS else "The shell command to execute",
                 }
             },
             "required": ["command"],
@@ -807,6 +821,27 @@ POWERSHELL_CONFIRM = [
     r"\b-Force\b",
 ]
 
+if not IS_WINDOWS:
+    POWERSHELL_BLOCKED.extend([
+        r"\bsudo\s+rm\s+-rf\s+/\s*$",
+        r"\bmkfs\b",
+        r"\bdd\b.*\bof=/dev/",
+        r"\bshutdown\b",
+        r"\breboot\b",
+    ])
+    POWERSHELL_CONFIRM.extend([
+        r"\brm\b",
+        r"\bmv\b",
+        r"\bkill\b",
+        r"\bkillall\b",
+        r"\bchmod\b",
+        r"\bchown\b",
+        r"\bsudo\b",
+        r"\bcurl\b.*-o",
+        r"\bwget\b",
+        r"\blaunchctl\b",
+    ])
+
 # ── Constants ───────────────────────────────────────────────────────────────
 
 FALLBACK_MODELS = [
@@ -841,6 +876,8 @@ GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
 PROVIDERS = ["Anthropic", "OpenAI", "Gemini"]
 DEFAULT_GEOMETRY = "1050x930"
+MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
+_SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
 
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 INSTRUCTIONS_FILE = os.path.join(_BASE_DIR, "agent_instructions.json")
@@ -1113,16 +1150,16 @@ class App:
             "warning", foreground="#e65100", font=("Arial", 10, "italic")
         )
         self.chat_display.tag_config(
-            "debug", foreground="#b06000", font=("Consolas", 9)
+            "debug", foreground="#b06000", font=(MONO_FONT, 9)
         )
         self.chat_display.tag_config(
-            "debug_label", foreground="#b06000", font=("Consolas", 9, "bold")
+            "debug_label", foreground="#b06000", font=(MONO_FONT, 9, "bold")
         )
         self.chat_display.tag_config(
-            "tool_debug", foreground="#00796b", font=("Consolas", 9)
+            "tool_debug", foreground="#00796b", font=(MONO_FONT, 9)
         )
         self.chat_display.tag_config(
-            "tool_debug_label", foreground="#00796b", font=("Consolas", 9, "bold")
+            "tool_debug_label", foreground="#00796b", font=(MONO_FONT, 9, "bold")
         )
         self.chat_display.tag_config(
             "call_counter", foreground="#ffffff", background="#d32f2f",
@@ -1134,11 +1171,11 @@ class App:
         )
         self.chat_display.tag_config(
             "thinking", foreground="#b8860b", background="#fffde7",
-            font=("Consolas", 9, "italic")
+            font=(MONO_FONT, 9, "italic")
         )
         self.chat_display.tag_config(
             "thinking_label", foreground="#b8860b", background="#fffde7",
-            font=("Consolas", 9, "bold italic")
+            font=(MONO_FONT, 9, "bold italic")
         )
 
         # Row 2: Checkbox row
@@ -1530,46 +1567,56 @@ class App:
         Verifies both that the executable is Python and that its command line
         contains 'MyAgent.py', so other Python processes (VS Code, Claude Code)
         don't falsely hold lock slots."""
-        try:
-            kernel32 = ctypes.windll.kernel32
-            psapi = ctypes.windll.psapi
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            PROCESS_VM_READ = 0x0010
-            handle = kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, pid
-            )
-            if not handle:
-                return False
+        if IS_WINDOWS:
             try:
-                # Get the executable name of the process
-                buf = ctypes.create_unicode_buffer(260)
-                if psapi.GetModuleBaseNameW(handle, None, buf, 260):
-                    exe_name = buf.value.lower()
-                    if exe_name not in ("python.exe", "pythonw.exe"):
-                        return False
-                else:
+                kernel32 = ctypes.windll.kernel32
+                psapi = ctypes.windll.psapi
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                PROCESS_VM_READ = 0x0010
+                handle = kernel32.OpenProcess(
+                    PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, False, pid
+                )
+                if not handle:
                     return False
-            finally:
-                kernel32.CloseHandle(handle)
-            # Verify command line contains MyAgent.py
+                try:
+                    # Get the executable name of the process
+                    buf = ctypes.create_unicode_buffer(260)
+                    if psapi.GetModuleBaseNameW(handle, None, buf, 260):
+                        exe_name = buf.value.lower()
+                        if exe_name not in ("python.exe", "pythonw.exe"):
+                            return False
+                    else:
+                        return False
+                finally:
+                    kernel32.CloseHandle(handle)
+                # Verify command line contains MyAgent.py
+                try:
+                    result = subprocess.run(
+                        ["wmic", "process", "where", f"ProcessId={pid}",
+                         "get", "CommandLine", "/value"],
+                        capture_output=True, text=True, timeout=5,
+                        creationflags=0x08000000,  # CREATE_NO_WINDOW
+                    )
+                    return "MyAgent.py" in result.stdout
+                except Exception:
+                    # If we can't check command line, accept the exe name match
+                    return True
+            except Exception:
+                return False
+        else:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return False
+            # PID exists — verify it belongs to a MyAgent.py process
             try:
                 result = subprocess.run(
-                    ["wmic", "process", "where", f"ProcessId={pid}",
-                     "get", "CommandLine", "/value"],
+                    ["ps", "-p", str(pid), "-o", "command="],
                     capture_output=True, text=True, timeout=5,
-                    creationflags=0x08000000,  # CREATE_NO_WINDOW
                 )
                 return "MyAgent.py" in result.stdout
             except Exception:
-                # If we can't check command line, accept the exe name match
                 return True
-        except Exception:
-            # Fallback for non-Windows
-            try:
-                os.kill(pid, 0)
-                return True
-            except OSError:
-                return False
 
     def _claim_instance_number(self):
         """Claim the lowest available instance number via lock files.
@@ -1610,19 +1657,19 @@ class App:
     # ── State Persistence ───────────────────────────────────────────────
 
     @staticmethod
-    @staticmethod
     def _get_virtual_screen_bounds():
         """Return (vx, vy, vw, vh) covering all monitors via Win32 API."""
-        try:
-            user32 = ctypes.windll.user32
-            vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
-            vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
-            vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
-            vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
-            if vw > 0 and vh > 0:
-                return vx, vy, vw, vh
-        except Exception:
-            pass
+        if IS_WINDOWS:
+            try:
+                user32 = ctypes.windll.user32
+                vx = user32.GetSystemMetrics(76)   # SM_XVIRTUALSCREEN
+                vy = user32.GetSystemMetrics(77)   # SM_YVIRTUALSCREEN
+                vw = user32.GetSystemMetrics(78)   # SM_CXVIRTUALSCREEN
+                vh = user32.GetSystemMetrics(79)   # SM_CYVIRTUALSCREEN
+                if vw > 0 and vh > 0:
+                    return vx, vy, vw, vh
+            except Exception:
+                pass
         # Fallback: primary monitor only
         return 0, 0, 1920, 1080
 
@@ -1635,31 +1682,32 @@ class App:
         Different setups (docked vs undocked, different monitor arrangements)
         produce different keys, enabling per-configuration geometry persistence.
         """
-        try:
-            user32 = ctypes.windll.user32
+        if IS_WINDOWS:
+            try:
+                user32 = ctypes.windll.user32
 
-            class RECT(ctypes.Structure):
-                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+                class RECT(ctypes.Structure):
+                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
-            monitors = []
+                monitors = []
 
-            # EnumDisplayMonitors callback: BOOL CALLBACK(HMONITOR, HDC, LPRECT, LPARAM)
-            MONITORENUMPROC = ctypes.WINFUNCTYPE(
-                ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
-                ctypes.POINTER(RECT), ctypes.c_double)
+                # EnumDisplayMonitors callback: BOOL CALLBACK(HMONITOR, HDC, LPRECT, LPARAM)
+                MONITORENUMPROC = ctypes.WINFUNCTYPE(
+                    ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                    ctypes.POINTER(RECT), ctypes.c_double)
 
-            def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
-                r = lprcMonitor[0]
-                monitors.append((r.left, r.top, r.right, r.bottom))
-                return 1  # continue enumeration
+                def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                    r = lprcMonitor[0]
+                    monitors.append((r.left, r.top, r.right, r.bottom))
+                    return 1  # continue enumeration
 
-            user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
-            if monitors:
-                monitors.sort()
-                return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in monitors)
-        except Exception:
-            pass
+                user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
+                if monitors:
+                    monitors.sort()
+                    return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in monitors)
+            except Exception:
+                pass
         # Fallback: use virtual screen bounds
         vx, vy, vw, vh = App._get_virtual_screen_bounds()
         return f"{vx},{vy},{vx + vw},{vy + vh}"
@@ -2041,7 +2089,7 @@ class App:
         self._refresh_instruction_list()
 
         # Row 2: Text editor
-        self._instr_text = tk.Text(win, wrap=tk.WORD, font=("Consolas", 10))
+        self._instr_text = tk.Text(win, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._instr_text.grid(
             row=2, column=0, columnspan=5, sticky="nsew", padx=10, pady=(5, 5)
         )
@@ -2142,13 +2190,16 @@ class App:
             img_frame, text="Remove Selected", command=self._remove_selected_images, width=16
         ).pack(side=tk.LEFT, padx=(0, 5))
 
-        self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get())
+        self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get() if _HAS_DESKTOP else False)
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
         self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
-        tk.Checkbutton(
+        _desktop_cb = tk.Checkbutton(
             img_frame, text="Desktop", variable=self._editor_desktop,
             font=("Arial", 9),
-        ).pack(side=tk.LEFT, padx=(15, 0))
+        )
+        _desktop_cb.pack(side=tk.LEFT, padx=(15, 0))
+        if not _HAS_DESKTOP:
+            _desktop_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
             img_frame, text="Browser", variable=self._editor_browser,
             font=("Arial", 9),
@@ -2164,8 +2215,9 @@ class App:
         self.skills_button.pack(side=tk.LEFT, padx=(15, 0))
         self._update_skills_button()
 
+        _safety_label = "PS Safety" if IS_WINDOWS else "Shell Safety"
         self.ps_safety_button = tk.Button(
-            img_frame, text="PS Safety", command=self._open_ps_safety_dialog, padx=10
+            img_frame, text=_safety_label, command=self._open_ps_safety_dialog, padx=10
         )
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
         self._update_ps_safety_button()
@@ -2553,7 +2605,8 @@ class App:
 
     def _update_ps_safety_button(self):
         n = len(self._disabled_confirm_patterns)
-        label = f"PS Safety ({n} bypassed)" if n else "PS Safety"
+        base = "PS Safety" if IS_WINDOWS else "Shell Safety"
+        label = f"{base} ({n} bypassed)" if n else base
         try:
             self.ps_safety_button.config(text=label)
         except (AttributeError, tk.TclError):
@@ -3364,7 +3417,7 @@ class App:
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
-        text_editor = tk.Text(right, wrap=tk.WORD, font=("Consolas", 10))
+        text_editor = tk.Text(right, wrap=tk.WORD, font=(MONO_FONT, 10))
         text_editor.grid(row=0, column=0, sticky="nsew")
         text_scrollbar = tk.Scrollbar(right, command=text_editor.yview)
         text_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -3686,7 +3739,7 @@ class App:
         ) else self.root
         dlg = tk.Toplevel(parent)
         dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
-        dlg.title("PowerShell Safety — Confirm Patterns")
+        dlg.title("PowerShell Safety — Confirm Patterns" if IS_WINDOWS else "Shell Safety — Confirm Patterns")
         dlg.transient(parent)
         dlg.resizable(True, True)
 
@@ -3712,7 +3765,7 @@ class App:
         for pattern in POWERSHELL_CONFIRM:
             var = tk.BooleanVar(value=pattern not in self._disabled_confirm_patterns)
             cb = tk.Checkbutton(
-                text_widget, text=pattern, variable=var, font=("Consolas", 9),
+                text_widget, text=pattern, variable=var, font=(MONO_FONT, 9),
                 anchor="w", bg="white", activebackground="white",
                 command=lambda p=pattern, v=var: self._toggle_confirm_pattern(p, v),
             )
@@ -3792,7 +3845,7 @@ class App:
             if matched_pattern:
                 tk.Label(
                     dlg, text=f"Triggered by:  {matched_pattern}",
-                    font=("Consolas", 9), fg="#cc3300", wraplength=450, justify="left",
+                    font=(MONO_FONT, 9), fg="#cc3300", wraplength=450, justify="left",
                 ).grid(row=row, column=0, sticky="w", padx=15, pady=(0, 5))
                 row += 1
 
@@ -3804,7 +3857,7 @@ class App:
             row += 1
 
             cmd_text = tk.Text(
-                text_frame, wrap=tk.WORD, font=("Consolas", 10),
+                text_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
                 relief="sunken", bd=1, height=10,
             )
             cmd_text.grid(row=0, column=0, sticky="nsew")
@@ -3894,7 +3947,7 @@ class App:
             msg_frame.grid_columnconfigure(0, weight=1)
 
             msg_text = tk.Text(
-                msg_frame, wrap=tk.WORD, font=("Consolas", 10),
+                msg_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
                 relief="sunken", bd=1, height=6,
             )
             msg_text.grid(row=0, column=0, sticky="nsew")
@@ -3914,7 +3967,7 @@ class App:
             resp_frame.grid_columnconfigure(0, weight=1)
 
             resp_text = tk.Text(
-                resp_frame, wrap=tk.WORD, font=("Consolas", 10),
+                resp_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
                 relief="sunken", bd=1, height=6,
             )
             resp_text.grid(row=0, column=0, sticky="nsew")
@@ -3984,12 +4037,14 @@ class App:
             if not self._request_confirmation(command, info):
                 return "Command was rejected by the user."
         try:
+            shell_cmd = (["powershell", "-NoProfile", "-Command", command]
+                         if IS_WINDOWS else ["/bin/bash", "-c", command])
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", command],
+                shell_cmd,
                 capture_output=True,
                 text=True,
                 timeout=30,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                **_SUBPROCESS_NOWND,
             )
             output = ""
             if result.stdout:
@@ -4089,6 +4144,22 @@ class App:
         "discord": "start discord:",
         "slack": "start slack:",
         "teams": "start msteams:",
+    } if IS_WINDOWS else {
+        "chrome": "open -a 'Google Chrome'",
+        "firefox": "open -a Firefox",
+        "edge": "open -a 'Microsoft Edge'",
+        "safari": "open -a Safari",
+        "calculator": "open -a Calculator",
+        "calc": "open -a Calculator",
+        "terminal": "open -a Terminal",
+        "finder": "open .",
+        "explorer": "open .",
+        "vscode": "code",
+        "code": "code",
+        "spotify": "open -a Spotify",
+        "discord": "open -a Discord",
+        "slack": "open -a Slack",
+        "teams": "open -a 'Microsoft Teams'",
     }
 
     def do_screenshot(self, region=None):
@@ -4186,9 +4257,9 @@ class App:
             else:
                 cmd = name
             if args:
-                subprocess.Popen([cmd, args], creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen([cmd, args], **_SUBPROCESS_NOWND)
             else:
-                subprocess.Popen(cmd, shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.Popen(cmd, shell=True, **_SUBPROCESS_NOWND)
             return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"
         except Exception as e:
             return f"Error opening {name}: {e}"
@@ -4322,18 +4393,27 @@ class App:
                 return s.connect_ex(("127.0.0.1", 9222)) == 0
 
         if not _port_open():
-            edge_paths = [
-                os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
-                os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
-                os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
-            ]
+            if IS_WINDOWS:
+                edge_paths = [
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                    os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+                    os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
+                ]
+            else:
+                edge_paths = [
+                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                ]
             edge_exe = None
             for p in edge_paths:
                 if os.path.isfile(p):
                     edge_exe = p
                     break
             if not edge_exe:
-                raise RuntimeError("Microsoft Edge not found. Install Edge or check its path.")
+                raise RuntimeError(
+                    "Microsoft Edge not found. Install Edge or check its path." if IS_WINDOWS
+                    else "No supported browser found. Install Microsoft Edge or Google Chrome."
+                )
             self._edge_process = subprocess.Popen(
                 [edge_exe, "--remote-debugging-port=9222"],
                 stdout=subprocess.DEVNULL,
@@ -4379,11 +4459,18 @@ class App:
     def do_browser_open(self, url):
         try:
             self._cleanup_browser()
-            subprocess.run(
-                ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    **_SUBPROCESS_NOWND,
+                )
+            else:
+                subprocess.run(
+                    ["pkill", "-f", "Microsoft Edge"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.5)
             page = self._ensure_browser()
             page.goto(url, wait_until="domcontentloaded", timeout=30000)
             return f"Navigated to {url} — page title: {page.title()}"
@@ -4693,7 +4780,7 @@ class App:
             url = block.input.get("url", "")
             self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
             return self.fetch_url(url)
-        elif block.name == "run_powershell":
+        elif block.name in ("run_powershell", "run_shell"):
             cmd = block.input.get("command", "")
             self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
             return self.run_powershell(cmd)
