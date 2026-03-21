@@ -35,18 +35,16 @@ import io
 import socket
 import time
 import concurrent.futures
-import pyautogui
-from PIL import Image
-
 _HAS_DESKTOP = True
 try:
+    import pyautogui
+    from PIL import Image
     import pygetwindow as gw
-except ImportError:
+    # Desktop automation safety settings
+    pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
+    pyautogui.PAUSE = 0.3       # small delay between actions
+except Exception:
     _HAS_DESKTOP = False
-
-# Desktop automation safety settings
-pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
-pyautogui.PAUSE = 0.3       # small delay between actions
 
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
@@ -959,7 +957,7 @@ class App:
     def __init__(self, root, launch_instruction=None, headless=False):
         self.root = root
         self._headless = headless
-        self.root.title("Claude Agent")
+        self.root.title("My Agent")
         self.root.geometry(DEFAULT_GEOMETRY)
 
         # Check for at least one API key
@@ -981,7 +979,7 @@ class App:
         else:
             self._state_file = os.path.join(_BASE_DIR, f"agent_state_{self._instance_num}.json")
         if self._instance_num > 1:
-            self.root.title(f"Claude Agent ({self._instance_num})")
+            self.root.title(f"My Agent ({self._instance_num})")
 
         # Initialize API clients for available providers
         self.client = anthropic.Anthropic() if self._has_anthropic else None
@@ -1554,9 +1552,9 @@ class App:
         inst_num = getattr(self, '_instance_num', 1)
         suffix = f" ({inst_num})" if inst_num > 1 else ""
         if self.agent_instruction_name:
-            self.root.title(f"Claude Agent{suffix} — {self.agent_instruction_name}  [{model_info}]")
+            self.root.title(f"My Agent{suffix} — {self.agent_instruction_name}  [{model_info}]")
         else:
-            self.root.title(f"Claude Agent{suffix}  [{model_info}]")
+            self.root.title(f"My Agent{suffix}  [{model_info}]")
 
     # ── Instance Management ────────────────────────────────────────────
 
@@ -5463,7 +5461,7 @@ if __name__ == "__main__":
     import argparse
     import signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    parser = argparse.ArgumentParser(description="Claude Agent — autonomous task runner")
+    parser = argparse.ArgumentParser(description="My Agent — autonomous task runner")
     parser.add_argument("-l", "--load", metavar="NAME",
                         help="Load an instruction by name and auto-start the agent")
     parser.add_argument("--headless", action="store_true",

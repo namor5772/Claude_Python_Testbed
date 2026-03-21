@@ -495,7 +495,7 @@ The application is a single-file tkinter app structured around the `App` class:
 
 ## MyAgent.py — Autonomous AI Task Agent
 
-A fire-and-forget autonomous task runner built with tkinter that supports both **Anthropic** (Claude) and **OpenAI** (GPT-4.1, o4-mini, etc.) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Agent Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"Claude Agent"** (with **"[OpenAI]"** appended when using the OpenAI provider).
+A fire-and-forget autonomous task runner built with tkinter that supports both **Anthropic** (Claude) and **OpenAI** (GPT-4.1, o4-mini, etc.) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Agent Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
 ### How the Agentic Loop Works
 
@@ -575,7 +575,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **PS Safety patterns persist with instructions** — Each saved instruction stores its set of disabled PowerShell confirmation patterns. Loading an instruction restores these bypass settings, and the PS Safety button label updates to show how many patterns are bypassed. This effectively makes each instruction a self-contained task profile — text, images, tool categories, provider, model configuration, skills environment, and PS Safety overrides — so different tasks can target different providers, models, settings, and skill sets.
 
-When a named instruction is applied, the window title updates to show it (e.g., `Claude Agent — Daily News Brief`).
+When a named instruction is applied, the window title updates to show it (e.g., `My Agent — Daily News Brief`).
 
 A "Default" instruction is automatically created on first run if missing. Old-format instruction files (plain string values) are auto-migrated to the new dict format that includes image data.
 
@@ -689,7 +689,7 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 
 #### App State Persistence
 
-- **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (confirms the PID belongs to `python.exe` or `pythonw.exe`, not a recycled PID from an unrelated process). The title bar shows `Claude Agent (N)` for instance 2+
+- **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (confirms the PID belongs to `python.exe` or `pythonw.exe`, not a recycled PID from an unrelated process). The title bar shows `My Agent (N)` for instance 2+
 - Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking, Save Thinking), main window geometry, and dialog geometries are saved per instance
 - On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser/Meta toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
 - **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), **PowerShell Confirm**, **PS Safety**, and **Skills Manager** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened. All dialogs use a withdraw/deiconify pattern to prevent the window manager from overriding saved positions
@@ -733,7 +733,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 | **Instruction file** | `system_prompts.json` | `agent_instructions.json` |
 | **Chat loading** | Save and load chats | Save only (no load-back into UI) |
 | **API providers** | Anthropic only | Anthropic + OpenAI + Gemini (switchable via Provider combobox) |
-| **Window title** | "Claude SelfBot" | "Claude Agent" with provider/model info in title bar |
+| **Window title** | "Claude SelfBot" | "My Agent" with provider/model info in title bar |
 
 ### Running
 
