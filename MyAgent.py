@@ -1109,14 +1109,13 @@ class App:
 
         self._stop_button = tk.Button(
             chat_toolbar, text="STOP", command=self._stop_agent, width=8,
-            bg="#c62828", fg="white", font=("Arial", 10, "bold"),
-            state="disabled",
+            font=("Arial", 10, "bold"), state="disabled",
         )
         self._stop_button.pack(side=tk.RIGHT, padx=(5, 0))
 
         self._start_button = tk.Button(
             chat_toolbar, text="START", command=self._start_agent, width=8,
-            bg="#2e7d32", fg="white", font=("Arial", 10, "bold"),
+            font=("Arial", 10, "bold"),
         )
         self._start_button.pack(side=tk.RIGHT, padx=(5, 0))
 
