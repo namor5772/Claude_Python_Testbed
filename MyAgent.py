@@ -93,21 +93,12 @@ TOOLS = [
     {
         "name": "run_command",
         "description": (
-            "Execute a PowerShell command on the local machine and return its output. "
+            "Execute a command on the local machine and return its output. "
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
             "getting system info, running scripts, installing software, or any other local operation. "
-            "Commands run with the current user's permissions. Prefer single-line commands or "
-            "semicolon-separated statements. "
-            "IMPORTANT: When launching GUI applications (e.g. notepad++, mspaint, excel), "
-            "always use Start-Process so the command returns immediately instead of blocking. "
-            "Example: Start-Process notepad++ -ArgumentList 'C:\\path\\to\\file.txt'"
-        ) if IS_WINDOWS else (
-            "Execute a shell command on the local machine and return its output. "
-            "Use this for system tasks like listing files, checking processes, reading/writing files, "
-            "getting system info, running scripts, installing software, or any other local operation. "
-            "Commands run with the current user's permissions via bash. "
-            "IMPORTANT: When launching GUI applications, use 'open -a AppName' so the command "
-            "returns immediately instead of blocking."
+            "Commands run with the current user's permissions. On Windows this runs PowerShell; on macOS this runs bash. "
+            "IMPORTANT: When launching GUI applications, use Start-Process (Windows) or 'open -a' (macOS) "
+            "so the command returns immediately instead of blocking."
         ),
         "input_schema": {
             "type": "object",
@@ -387,11 +378,8 @@ DESKTOP_TOOLS = [
         "description": (
             "Press a key or key combination. Use '+' to combine keys. "
             "Examples: 'enter', 'tab', 'escape', 'ctrl+c', 'ctrl+shift+s', 'alt+tab', "
-            "'alt+f4', 'win+r', 'ctrl+a'. Key names follow pyautogui naming."
-        ) if IS_WINDOWS else (
-            "Press a key or key combination. Use '+' to combine keys. "
-            "Examples: 'enter', 'tab', 'escape', 'command+c', 'command+shift+s', 'command+tab', "
-            "'command+q', 'command+space', 'command+a'. Key names follow pyautogui naming."
+            "'command+c', 'command+q'. Key names follow pyautogui naming. "
+            "Use ctrl/alt/win on Windows, command/option on macOS."
         ),
         "input_schema": {
             "type": "object",
@@ -427,13 +415,8 @@ DESKTOP_TOOLS = [
         "name": "open_application",
         "description": (
             "Open an application by common name or full path. Known names: chrome, firefox, edge, "
-            "notepad, notepad++, calculator, excel, word, powerpoint, explorer, cmd, powershell, vscode, "
+            "safari, notepad, notepad++, calculator, terminal, finder, excel, word, vscode, "
             "spotify, discord, slack, teams. Or provide a full executable path. "
-            "Use the optional 'args' parameter to pass arguments (e.g. a file path to open)."
-        ) if IS_WINDOWS else (
-            "Open an application by common name or full path. Known names: chrome, firefox, edge, "
-            "safari, calculator, terminal, finder, vscode, spotify, discord, slack, teams. "
-            "Or provide a full executable path or app name for 'open -a'. "
             "Use the optional 'args' parameter to pass arguments (e.g. a file path to open)."
         ),
         "input_schema": {
@@ -586,12 +569,7 @@ BROWSER_TOOLS = [
     {
         "name": "browser_open",
         "description": (
-            "Open or connect to Microsoft Edge and navigate to a URL. "
-            "Uses the user's real Edge profile with all cookies, logins, and extensions. "
-            "If Edge isn't running, it will be launched automatically. "
-            "Call this first before using any other browser tools."
-        ) if IS_WINDOWS else (
-            "Open or connect to Edge or Chrome and navigate to a URL. "
+            "Open or connect to the system browser (Edge on Windows, Edge or Chrome on macOS) and navigate to a URL. "
             "Uses the user's real browser profile with all cookies, logins, and extensions. "
             "If the browser isn't running, it will be launched automatically. "
             "Call this first before using any other browser tools."
