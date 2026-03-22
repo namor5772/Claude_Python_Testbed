@@ -3,41 +3,46 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Environment
-- OS: Windows 11
-- Python: Activate the `.venv` before running Python commands: `source .venv/Scripts/activate`
+- OS: Windows 11 or macOS (cross-platform)
+- Python: Activate the `.venv` before running Python commands
+  - Windows: `source .venv/Scripts/activate`
+  - macOS: `source .venv/bin/activate`
 - After activation, use `python` to run scripts (the venv maps it correctly)
-- Shell: bash (Git Bash)
+- Shell: bash (Git Bash on Windows, zsh/bash on macOS)
 
 ## Commands
 ```bash
-# Activate venv and run SelfBot
-source .venv/Scripts/activate && python SelfBot.py
+# Activate venv (use Scripts on Windows, bin on macOS)
+source .venv/bin/activate   # macOS
+source .venv/Scripts/activate  # Windows
 
-# Activate venv and run MyAgent
-source .venv/Scripts/activate && python MyAgent.py
+# Run SelfBot / MyAgent / CSVEditor
+python SelfBot.py
+python MyAgent.py
+python CSVEditor.py
 
-# Activate venv and run MyAgent with auto-launch instruction
-source .venv/Scripts/activate && python MyAgent.py -l "Instruction Name"
+# Run MyAgent with auto-launch instruction
+python MyAgent.py -l "Instruction Name"
 
-# Activate venv and run MyAgent headless (no main window, auto-closes on completion)
-source .venv/Scripts/activate && python MyAgent.py -l "Instruction Name" --headless
+# Run MyAgent headless (no main window, auto-closes on completion)
+python MyAgent.py -l "Instruction Name" --headless
 
-# Activate venv and run Account Activity extractor
-source .venv/Scripts/activate && python Account_Activity_WBC.py
+# Run Account Activity extractor
+python Account_Activity_WBC.py
 
-# Activate venv and run CSV Editor
-source .venv/Scripts/activate && python CSVEditor.py
-
-# Kill any running instances before relaunching (Windows)
+# Kill any running instances before relaunching
+# Windows:
 taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/null
+# macOS:
+pkill -f "python.*MyAgent.py" 2>/dev/null; pkill -f "python.*SelfBot.py" 2>/dev/null
 ```
 There are no tests, linter, or build steps — these are single-file testbed apps.
 
 ## Project Structure
-- `SelfBot.py` — Single-file tkinter GUI chatbot (~3900 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~5400 lines); fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
+- `SelfBot.py` — Single-file tkinter GUI chatbot (~4100 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
+- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~5600 lines); fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
-- `CSVEditor.py` — Single-file tkinter GUI CSV editor (~405 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
+- `CSVEditor.py` — Single-file tkinter GUI CSV editor (~520 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
 - `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)
@@ -59,7 +64,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 **Single class design** — The `App` class contains all UI, API, tool execution, and persistence logic. No separate modules.
 
 **Tool system** — Three global tool lists define API tool schemas:
-- `TOOLS` — Core tools always sent to the API (web_search, fetch_webpage, run_powershell, csv_search)
+- `TOOLS` — Core tools always sent to the API (web_search, fetch_webpage, run_command, csv_search)
 - `DESKTOP_TOOLS` — 13 pyautogui-based tools, conditionally included when Desktop checkbox is enabled
 - `BROWSER_TOOLS` — 11 Playwright/CDP tools, conditionally included when Browser checkbox is enabled
 - `_get_tools()` assembles the final tool list dynamically based on UI toggle state
@@ -113,11 +118,11 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Threading model** — Same as SelfBot: background daemon thread for API calls, `queue.Queue` for events, main thread polls every 50ms via `root.after()`.
 
-**PowerShell Safety dialog** — The "PS Safety" button (inside the instruction editor, next to the Skills button) opens a dialog listing all `POWERSHELL_CONFIRM` patterns as checkboxes. Checked = confirmation required (default), unchecked = bypass confirmation and show a `⚠ Confirm bypassed` warning in the output window instead. Disabled patterns are persisted per-instruction in `agent_instructions.json` as `disabled_confirm_patterns`. The bypass warning uses the `"warning"` queue message type which always displays regardless of the Activity checkbox. The PS Safety button label shows a count when patterns are bypassed (e.g., `PS Safety (3 bypassed)`).
+**PowerShell Safety dialog** — The "PS Safety" button (inside the instruction editor, next to the Skills button) opens a dialog listing all `COMMAND_CONFIRM` patterns as checkboxes. Checked = confirmation required (default), unchecked = bypass confirmation and show a `⚠ Confirm bypassed` warning in the output window instead. Disabled patterns are persisted per-instruction in `agent_instructions.json` as `disabled_confirm_patterns`. The bypass warning uses the `"warning"` queue message type which always displays regardless of the Activity checkbox. The PS Safety button label shows a count when patterns are bypassed (e.g., `PS Safety (3 bypassed)`).
 
 **Command-line launch** — `python MyAgent.py -l "Name"` auto-loads a saved instruction and starts the agent. Uses `argparse` for `-l`/`--load`. The instruction is loaded via `_auto_launch()`, scheduled as `root.after(100)` to ensure UI is initialized, which then schedules `_start_agent` via `root.after(200)` to allow a full event loop cycle between state setup and agent start. Shows an error dialog listing available names if the instruction is not found. The `-l` flag also auto-populates the "Save Chat as" entry with `"{InstructionName}_{timestamp}"` so output is always captured.
 
-**Headless mode** — `python MyAgent.py -l "Name" --headless` runs without a main window (`root.withdraw()`). Dialogs (`user_prompt`, PS confirmation) skip `transient()` and `grab_set()` so they float as standalone windows. The process auto-closes after the agent loop completes. Designed for orchestrator patterns where a parent MyAgent spawns child instances via `run_powershell`.
+**Headless mode** — `python MyAgent.py -l "Name" --headless` runs without a main window (`root.withdraw()`). Dialogs (`user_prompt`, PS confirmation) skip `transient()` and `grab_set()` so they float as standalone windows. The process auto-closes after the agent loop completes. Designed for orchestrator patterns where a parent MyAgent spawns child instances via `run_command`.
 
 **Meta-agent tools** — Three tools in the `META_TOOLS` list, conditionally included when the Meta checkbox is enabled (same gating pattern as Desktop/Browser). Two CRUD tools (`manage_instructions`, `manage_skills`) use a single `action` parameter (`list`/`read`/`create`/`update`/`delete`) to minimize tool count. `manage_instructions` creates entries inheriting the current provider/model/thinking settings; the `read` action returns all model params (provider, model, temperature, thinking_enabled, thinking_effort, thinking_budget, thinking_mode); the `update` action accepts these same params as optional fields alongside text, desktop, browser, meta, and skill_modes. `manage_skills` updates the in-memory skills dict and triggers thread-safe UI refresh via `_post_skill_ui_refresh()`. `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget) using `subprocess.Popen` with `sys.executable`; defaults to headless mode, with an optional `headless=false` parameter to show the GUI. None of these tools are in `PARALLEL_SAFE` since they modify shared state or spawn processes. The Meta toggle is saved per-instruction.
 

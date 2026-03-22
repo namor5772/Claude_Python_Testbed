@@ -33,18 +33,28 @@ import re
 import io
 import time
 import concurrent.futures
-import pyautogui
-from PIL import Image
-
 _HAS_DESKTOP = True
 try:
-    import pygetwindow as gw
-except ImportError:
+    # On macOS ARM64, rubicon-objc (used by mouseinfo) may fail to find
+    # objc_msgSendSuper_stret. Pre-import mouseinfo with the error suppressed
+    # so pyautogui falls back gracefully.
+    if not IS_WINDOWS:
+        try:
+            import mouseinfo  # noqa: F401
+        except Exception:
+            sys.modules["mouseinfo"] = type(sys)("mouseinfo")
+    import pyautogui
+    from PIL import Image
+    # Desktop automation safety settings
+    pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
+    pyautogui.PAUSE = 0.3       # small delay between actions
+except Exception:
     _HAS_DESKTOP = False
-
-# Desktop automation safety settings
-pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
-pyautogui.PAUSE = 0.3       # small delay between actions
+if IS_WINDOWS:
+    try:
+        import pygetwindow as gw
+    except Exception:
+        pass
 
 
 # Tool definitions for the Anthropic API
@@ -78,9 +88,9 @@ TOOLS = [
         },
     },
     {
-        "name": "run_powershell" if IS_WINDOWS else "run_shell",
+        "name": "run_command",
         "description": (
-            "Execute a PowerShell command on the local Windows PC and return its output. "
+            "Execute a PowerShell command on the local machine and return its output. "
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
             "getting system info, running scripts, installing software, or any other local operation. "
             "Commands run with the current user's permissions. Prefer single-line commands or "
@@ -101,7 +111,7 @@ TOOLS = [
             "properties": {
                 "command": {
                     "type": "string",
-                    "description": "The PowerShell command to execute" if IS_WINDOWS else "The shell command to execute",
+                    "description": "The command to execute",
                 }
             },
             "required": ["command"],
@@ -215,6 +225,10 @@ DESKTOP_TOOLS = [
             "Press a key or key combination. Use '+' to combine keys. "
             "Examples: 'enter', 'tab', 'escape', 'ctrl+c', 'ctrl+shift+s', 'alt+tab', "
             "'alt+f4', 'win+r', 'ctrl+a'. Key names follow pyautogui naming."
+        ) if IS_WINDOWS else (
+            "Press a key or key combination. Use '+' to combine keys. "
+            "Examples: 'enter', 'tab', 'escape', 'command+c', 'command+shift+s', 'command+tab', "
+            "'command+q', 'command+space', 'command+a'. Key names follow pyautogui naming."
         ),
         "input_schema": {
             "type": "object",
@@ -252,6 +266,11 @@ DESKTOP_TOOLS = [
             "Open an application by common name or full path. Known names: chrome, firefox, edge, "
             "notepad, notepad++, calculator, excel, word, powerpoint, explorer, cmd, powershell, vscode, "
             "spotify, discord, slack, teams. Or provide a full executable path. "
+            "Use the optional 'args' parameter to pass arguments (e.g. a file path to open)."
+        ) if IS_WINDOWS else (
+            "Open an application by common name or full path. Known names: chrome, firefox, edge, "
+            "safari, calculator, terminal, finder, vscode, spotify, discord, slack, teams. "
+            "Or provide a full executable path or app name for 'open -a'. "
             "Use the optional 'args' parameter to pass arguments (e.g. a file path to open)."
         ),
         "input_schema": {
@@ -292,7 +311,7 @@ DESKTOP_TOOLS = [
     },
     {
         "name": "clipboard_read",
-        "description": "Read the current text contents of the Windows clipboard.",
+        "description": "Read the current text contents of the clipboard.",
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -301,7 +320,7 @@ DESKTOP_TOOLS = [
     },
     {
         "name": "clipboard_write",
-        "description": "Write text to the Windows clipboard, replacing any current content.",
+        "description": "Write text to the clipboard, replacing any current content.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -407,6 +426,11 @@ BROWSER_TOOLS = [
             "Open or connect to Microsoft Edge and navigate to a URL. "
             "Uses the user's real Edge profile with all cookies, logins, and extensions. "
             "If Edge isn't running, it will be launched automatically. "
+            "Call this first before using any other browser tools."
+        ) if IS_WINDOWS else (
+            "Open or connect to Edge or Chrome and navigate to a URL. "
+            "Uses the user's real browser profile with all cookies, logins, and extensions. "
+            "If the browser isn't running, it will be launched automatically. "
             "Call this first before using any other browser tools."
         ),
         "input_schema": {
@@ -605,67 +629,73 @@ BROWSER_TOOLS = [
     },
 ]
 
-# PowerShell safety guardrails — two-tier system
+# Command safety guardrails — two-tier system, platform-specific
 # Tier 1: Hard-blocked patterns (rejected outright, never run)
-POWERSHELL_BLOCKED = [
-    r"\bFormat-Volume\b",
-    r"\bFormat-Disk\b",
-    r"\bClear-Disk\b",
-    r"\bInitialize-Disk\b",
-    r"\bStop-Computer\b",
-    r"\bRestart-Computer\b",
-    r"\bSet-ExecutionPolicy\b",
-    r"\breg\s+delete\b",
-    r"\bRemove-ItemProperty\b.*\\\\HKLM",
-    r"\bRemove-ItemProperty\b.*\\\\HKCU",
-    r"\bRemove-Item\b.*\\\\HKLM",
-    r"\bRemove-Item\b.*\\\\HKCU",
-    r"\bbcdedit\b",
-    r"\bdiskpart\b",
-    r"\bnet\s+user\b.*(/add|/delete)",
-    r"\bDisable-LocalUser\b",
-    r"\bRemove-LocalUser\b",
-    r"\bClear-EventLog\b",
-    r"\bwmic\b.*delete",
-]
-
 # Tier 2: Confirmation-required patterns (user must approve via dialog)
-POWERSHELL_CONFIRM = [
-    r"\bRemove-Item\b",
-    r"\bdel\b",
-    r"\brmdir\b",
-    r"\brm\b\s",
-    r"\brd\b\s",
-    r"\bClear-Content\b",
-    r"\bClear-RecycleBin\b",
-    r"\bStop-Process\b",
-    r"\bkill\b\s",
-    r"\btaskkill\b",
-    r"\bStop-Service\b",
-    r"\bRemove-Service\b",
-    r"\bUninstall-Package\b",
-    r"\bMove-Item\b",
-    r"\bRename-Item\b",
-    r"\bSet-Content\b",
-    r"\bOut-File\b",
-    r"\bInvoke-Expression\b",
-    r"\biex\b\s",
-    r"\bInvoke-WebRequest\b.*-OutFile",
-    r"\bStart-Process\b",
-    r"\bNew-Service\b",
-    r"\b-Recurse\b",
-    r"\b-Force\b",
-]
 
-if not IS_WINDOWS:
-    POWERSHELL_BLOCKED.extend([
+if IS_WINDOWS:
+    COMMAND_BLOCKED = [
+        r"\bFormat-Volume\b",
+        r"\bFormat-Disk\b",
+        r"\bClear-Disk\b",
+        r"\bInitialize-Disk\b",
+        r"\bStop-Computer\b",
+        r"\bRestart-Computer\b",
+        r"\bSet-ExecutionPolicy\b",
+        r"\breg\s+delete\b",
+        r"\bRemove-ItemProperty\b.*\\\\HKLM",
+        r"\bRemove-ItemProperty\b.*\\\\HKCU",
+        r"\bRemove-Item\b.*\\\\HKLM",
+        r"\bRemove-Item\b.*\\\\HKCU",
+        r"\bbcdedit\b",
+        r"\bdiskpart\b",
+        r"\bnet\s+user\b.*(/add|/delete)",
+        r"\bDisable-LocalUser\b",
+        r"\bRemove-LocalUser\b",
+        r"\bClear-EventLog\b",
+        r"\bwmic\b.*delete",
+    ]
+    COMMAND_CONFIRM = [
+        r"\bRemove-Item\b",
+        r"\bdel\b",
+        r"\brmdir\b",
+        r"\brm\b\s",
+        r"\brd\b\s",
+        r"\bClear-Content\b",
+        r"\bClear-RecycleBin\b",
+        r"\bStop-Process\b",
+        r"\bkill\b\s",
+        r"\btaskkill\b",
+        r"\bStop-Service\b",
+        r"\bRemove-Service\b",
+        r"\bUninstall-Package\b",
+        r"\bMove-Item\b",
+        r"\bRename-Item\b",
+        r"\bSet-Content\b",
+        r"\bOut-File\b",
+        r"\bInvoke-Expression\b",
+        r"\biex\b\s",
+        r"\bInvoke-WebRequest\b.*-OutFile",
+        r"\bStart-Process\b",
+        r"\bNew-Service\b",
+        r"\b-Recurse\b",
+        r"\b-Force\b",
+    ]
+else:
+    COMMAND_BLOCKED = [
         r"\bsudo\s+rm\s+-rf\s+/\s*$",
         r"\bmkfs\b",
         r"\bdd\b.*\bof=/dev/",
         r"\bshutdown\b",
         r"\breboot\b",
-    ])
-    POWERSHELL_CONFIRM.extend([
+        r"\bdiskutil\s+eraseDisk\b",
+        r"\bdiskutil\s+partitionDisk\b",
+        r"\bnewfs\b",
+        r"\bcsrutil\s+disable\b",
+        r"\bdscl\b.*-delete",
+        r"\bsysadminctl\b.*-deleteUser",
+    ]
+    COMMAND_CONFIRM = [
         r"\brm\b",
         r"\bmv\b",
         r"\bkill\b",
@@ -676,7 +706,17 @@ if not IS_WINDOWS:
         r"\bcurl\b.*-o",
         r"\bwget\b",
         r"\blaunchctl\b",
-    ])
+        r"\bdefaults\s+write\b",
+        r"\bdefaults\s+delete\b",
+        r"\bbrew\s+(install|uninstall|remove)\b",
+        r"\bpip\s+install\b",
+        r"\bpip\s+uninstall\b",
+        r"\bnpm\s+(install|uninstall)\b",
+        r"\bopen\s+-a\b",
+        r"\bdiskutil\b",
+        r"\bnetworksetup\b",
+        r"\bpmset\b",
+    ]
 
 FALLBACK_MODELS = [
     "claude-sonnet-4-5-20250929",
@@ -711,7 +751,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "that benefits from up-to-date data.\n"
     "• fetch_webpage — fetch and read a specific URL. Use after web_search to get full "
     "details from a result, or when Roman provides a link.\n"
-    "• run_powershell — execute PowerShell commands on Roman's Windows PC. Use for file "
+    "• run_command — execute " + ("PowerShell" if IS_WINDOWS else "shell") + " commands on Roman's machine. Use for file "
     "operations, system info, installing software, running scripts, or any local task.\n"
     "• csv_search — search a delimited text file (CSV, TSV, TXT, etc.) for records by column "
     "heading and value. Auto-detects the delimiter or accepts an explicit one. Use whenever "
@@ -723,19 +763,19 @@ DEFAULT_SYSTEM_PROMPT = (
     "screen before clicking or typing.\n"
     "• mouse_click — click at specific coordinates from the screenshot.\n"
     "• type_text — type text at the current cursor position.\n"
-    "• press_key — press keys or combos (e.g. 'ctrl+c', 'enter', 'alt+tab').\n"
+    "• press_key — press keys or combos (e.g. " + ("'ctrl+c', 'enter', 'alt+tab'" if IS_WINDOWS else "'command+c', 'enter', 'command+tab'") + ").\n"
     "• mouse_scroll — scroll up or down.\n"
     "• open_application — launch apps by name (chrome, notepad, vscode, etc.) or path.\n"
     "• find_window — find and optionally activate windows by title.\n"
-    "• clipboard_read — read the current text from the Windows clipboard.\n"
-    "• clipboard_write — write text to the Windows clipboard.\n"
+    "• clipboard_read — read the current text from the clipboard.\n"
+    "• clipboard_write — write text to the clipboard.\n"
     "• wait_for_window — wait until a window with a given title appears (with timeout).\n"
     "• read_screen_text — OCR a screen region to extract text.\n"
     "• find_image_on_screen — find a reference image on screen and return its coordinates.\n"
     "• mouse_drag — drag the mouse from one point to another (drag-and-drop, sliders, etc.).\n\n"
 
     "BROWSER TOOLS (available when Browser is enabled):\n"
-    "• browser_open — connect to Edge with Roman's real profile (cookies, logins, extensions) "
+    "• browser_open — connect to " + ("Edge" if IS_WINDOWS else "Edge or Chrome") + " with Roman's real profile (cookies, logins, extensions) "
     "and navigate to a URL. Call this first before other browser tools.\n"
     "• browser_navigate — go to a new URL in the connected browser.\n"
     "• browser_click — click an element by CSS selector or visible text.\n"
@@ -2379,13 +2419,13 @@ class App:
         except Exception as e:
             return f"Error fetching URL: {e}"
 
-    def _check_powershell_safety(self, command):
+    def _check_command_safety(self, command):
         """Check command against safety tiers. Returns (allowed, message)."""
-        for pattern in POWERSHELL_BLOCKED:
+        for pattern in COMMAND_BLOCKED:
             if re.search(pattern, command, re.IGNORECASE):
                 return "blocked", f"BLOCKED: Command matches dangerous pattern ({pattern})"
 
-        for pattern in POWERSHELL_CONFIRM:
+        for pattern in COMMAND_CONFIRM:
             if re.search(pattern, command, re.IGNORECASE):
                 return "confirm", pattern
         return "safe", ""
@@ -2466,9 +2506,9 @@ class App:
         return result_holder[0]
 
     def run_powershell(self, command):
-        """Execute a PowerShell command with safety checks."""
+        """Execute a command with safety checks (PowerShell on Windows, bash on macOS)."""
         # Tier 1 & 2 safety checks
-        safety, info = self._check_powershell_safety(command)
+        safety, info = self._check_command_safety(command)
 
         if safety == "blocked":
             return info
@@ -2675,7 +2715,8 @@ class App:
                 # Clipboard paste for Unicode
                 import pyperclip
                 pyperclip.copy(text)
-                pyautogui.hotkey("ctrl", "v")
+                paste_mod = "ctrl" if IS_WINDOWS else "command"
+                pyautogui.hotkey(paste_mod, "v")
             return f"Typed {len(text)} characters"
         except Exception as e:
             return f"Type error: {e}"
@@ -2684,8 +2725,12 @@ class App:
         """Press a key or combination like 'ctrl+c', 'enter', 'alt+tab'."""
         try:
             parts = [k.strip().lower() for k in keys.split("+")]
-            # Normalize common aliases
-            aliases = {"windows": "win", "control": "ctrl", "return": "enter", "esc": "escape"}
+            # Normalize common aliases (platform-adaptive)
+            if IS_WINDOWS:
+                aliases = {"windows": "win", "control": "ctrl", "return": "enter", "esc": "escape"}
+            else:
+                aliases = {"windows": "command", "win": "command", "cmd": "command",
+                           "control": "ctrl", "return": "enter", "esc": "escape", "option": "alt"}
             parts = [aliases.get(p, p) for p in parts]
 
             if len(parts) == 1:
@@ -2727,24 +2772,55 @@ class App:
         except Exception as e:
             return f"Error opening {name}: {e}"
 
+    def _find_windows_by_title(self, title):
+        """Find windows matching title (case-insensitive substring). Cross-platform."""
+        pattern = title.lower()
+        if IS_WINDOWS:
+            matches = gw.getWindowsWithTitle(title)
+            return [{"title": w.title, "left": w.left, "top": w.top,
+                      "width": w.width, "height": w.height, "_win": w} for w in matches]
+        else:
+            import Quartz
+            wins = Quartz.CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                Quartz.kCGNullWindowID)
+            results = []
+            for w in wins:
+                app = w.get("kCGWindowOwnerName", "")
+                name = w.get("kCGWindowName", "")
+                full_title = f"{app} — {name}" if name else app
+                if pattern in full_title.lower() or pattern in app.lower() or pattern in (name or "").lower():
+                    b = w.get("kCGWindowBounds", {})
+                    results.append({"title": full_title,
+                                    "left": int(b.get("X", 0)), "top": int(b.get("Y", 0)),
+                                    "width": int(b.get("Width", 0)), "height": int(b.get("Height", 0)),
+                                    "_app": app, "_pid": w.get("kCGWindowOwnerPID")})
+            return results
+
     def do_find_window(self, title, activate=False):
         """Find windows matching title pattern, optionally activate the first match."""
         try:
-            windows = gw.getWindowsWithTitle(title)
+            windows = self._find_windows_by_title(title)
             if not windows:
                 return f"No windows found matching '{title}'"
 
             results = []
             for w in windows:
-                results.append(f"  Title: {w.title}\n  Position: ({w.left}, {w.top})\n  Size: {w.width}x{w.height}")
+                results.append(f"  Title: {w['title']}\n  Position: ({w['left']}, {w['top']})\n  Size: {w['width']}x{w['height']}")
 
             if activate and windows:
                 try:
                     win = windows[0]
-                    if win.isMinimized:
-                        win.restore()
-                    win.activate()
-                    results.insert(0, f"Activated: {win.title}")
+                    if IS_WINDOWS:
+                        obj = win["_win"]
+                        if obj.isMinimized:
+                            obj.restore()
+                        obj.activate()
+                    else:
+                        subprocess.run(["osascript", "-e",
+                                        f'tell application "{win["_app"]}" to activate'],
+                                       capture_output=True, timeout=5)
+                    results.insert(0, f"Activated: {win['title']}")
                 except Exception as e:
                     results.insert(0, f"Found but could not activate: {e}")
 
@@ -2777,13 +2853,13 @@ class App:
         try:
             deadline = time.time() + timeout
             while time.time() < deadline:
-                windows = gw.getWindowsWithTitle(title)
+                windows = self._find_windows_by_title(title)
                 if windows:
                     w = windows[0]
                     return (
-                        f"Window found: {w.title}\n"
-                        f"Position: ({w.left}, {w.top})\n"
-                        f"Size: {w.width}x{w.height}"
+                        f"Window found: {w['title']}\n"
+                        f"Position: ({w['left']}, {w['top']})\n"
+                        f"Size: {w['width']}x{w['height']}"
                     )
                 time.sleep(0.5)
             return f"Timed out after {timeout}s waiting for window '{title}'"
@@ -2791,19 +2867,41 @@ class App:
             return f"Wait for window error: {e}"
 
     def do_read_screen_text(self, x, y, width, height):
-        """OCR a region of the screen using winocr."""
+        """OCR a region of the screen. Uses winocr on Windows, Vision framework on macOS."""
         try:
-            import winocr
-            import asyncio
-
             scale = self._screenshot_scale
             sx = int(x * scale)
             sy = int(y * scale)
             sw = int(width * scale)
             sh = int(height * scale)
             img = pyautogui.screenshot(region=(sx, sy, sw, sh))
-            result = asyncio.run(winocr.recognize_pil(img, lang="en"))
-            text = result.text.strip()
+
+            if IS_WINDOWS:
+                import winocr
+                import asyncio
+                result = asyncio.run(winocr.recognize_pil(img, lang="en"))
+                text = result.text.strip()
+            else:
+                import objc, Quartz
+                Vision = objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
+                                         module_globals={})
+                from Quartz import CGImageDestinationCreateWithData, CGImageDestinationAddImage
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                ns_data = Quartz.NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))
+                ci_image = Quartz.CIImage.imageWithData_(ns_data)
+                handler = Quartz.VNImageRequestHandler.alloc().initWithCIImage_options_(ci_image, None)
+                request = Quartz.VNRecognizeTextRequest.alloc().init()
+                request.setRecognitionLevel_(0)  # 0 = accurate
+                handler.performRequests_error_([request], None)
+                observations = request.results()
+                lines = []
+                for obs in (observations or []):
+                    candidates = obs.topCandidates_(1)
+                    if candidates:
+                        lines.append(candidates[0].string())
+                text = "\n".join(lines).strip()
+
             if not text:
                 return "OCR returned no text for the specified region."
             return f"OCR text from ({x},{y} {width}x{height}):\n{text}"
@@ -3476,7 +3574,7 @@ class App:
     def _get_tools(self):
         """Return tool list based on which toggles are enabled."""
         tools = copy.deepcopy(TOOLS)
-        if self.desktop_enabled.get():
+        if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
             screen_w, screen_h = pyautogui.size()
             for tool in desktop:
@@ -3528,7 +3626,7 @@ class App:
             url = inp.get("url", "")
             self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
             return self.fetch_url(url)
-        elif block.name in ("run_powershell", "run_shell"):
+        elif block.name == "run_command":
             cmd = inp.get("command", "")
             self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
             return self.run_powershell(cmd)

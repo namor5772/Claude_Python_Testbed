@@ -22,9 +22,11 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **skills.json** — Saved skills with content and mode, shared by both apps (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
-- **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (see below)
-- **LaunchMyAgent.bat** — One-click launcher for MyAgent
-- **selfbot_position.ps1** — PowerShell helper used by the launcher to position and focus windows
+- **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (Windows)
+- **LaunchMyAgent.bat** — One-click launcher for MyAgent (Windows)
+- **My Agent.command** — Double-click launcher for MyAgent (macOS)
+- **LaunchMyAgent.sh** — Shell launcher for MyAgent (macOS)
+- **selfbot_position.ps1** — PowerShell helper used by the SelfBot launcher to position and focus windows (Windows)
 
 ## SelfBot.py — Claude Chatbot & Dual-Instance Self-Chatting Bot
 
@@ -746,11 +748,11 @@ source .venv/bin/activate       # macOS
 python MyAgent.py
 ```
 
-Or double-click `LaunchMyAgent.bat` on Windows (or the "MyAgent" desktop shortcut).
+Or double-click `LaunchMyAgent.bat` on Windows (or `My Agent.command` on macOS).
 
 ### Architecture
 
-The application is a single-file (~5,400 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+The application is a single-file (~5,600 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
 - **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`. An `_ensure_newline()` helper guarantees each new output block starts on a fresh line, and an `ensure_newline` queue event between loop iterations prevents consecutive response streams from merging when Activity display is off
@@ -861,7 +863,7 @@ A compact tkinter window (default 1000x600) with:
 
 ### Architecture
 
-**Single class design** — Same as the other apps: the `App` class contains all UI, file I/O, editing, filtering, and persistence logic in a single file (~470 lines).
+**Single class design** — Same as the other apps: the `App` class contains all UI, file I/O, editing, filtering, and persistence logic in a single file (~520 lines).
 
 - **Treeview-based spreadsheet** — Uses `ttk.Treeview` with `show="headings"` to display the CSV as a sortable, scrollable table with horizontal and vertical scrollbars
 - **Visible index mapping** — `_visible_indices` maps tree positions to real row indices in `self.rows`, so row operations work correctly even when a filter is active
@@ -871,7 +873,8 @@ A compact tkinter window (default 1000x600) with:
 
 ```bash
 # Activate the virtual environment
-source .venv/Scripts/activate
+source .venv/Scripts/activate   # Windows (Git Bash)
+source .venv/bin/activate       # macOS
 
 # Run the application
 python CSVEditor.py

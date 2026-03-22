@@ -1,0 +1,13 @@
+Roman:
+What will be the Weather in Sydney NSW tommorow in detail!
+
+Jason:
+Based on the information gathered from the web searches and webpage fetch, here are the key details about the weather in Sydney, NSW tomorrow:
+
+- The maximum temperature is expected to be around 24°C, which is typical for this time of year.
+- There is an 88% chance of rain, with expected precipitation of around 2.6mm.
+- The wind speed is forecast to be around 18km/h.
+- The UV index is expected to be low.
+- Sunrise is at 7:00am and sunset is at 7:04pm, giving 12 hours and 4 minutes of daylight.
+
+The weather conditions suggest it will be a partly cloudy day with some patchy rain. It's recommended to dress in layers, with a light jacket or umbrella, as the weather may be changeable. Overall, the forecast indicates typical autumn weather for Sydney.
