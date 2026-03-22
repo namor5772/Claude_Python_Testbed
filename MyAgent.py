@@ -1675,8 +1675,44 @@ class App:
     # ── State Persistence ───────────────────────────────────────────────
 
     @staticmethod
+    def _get_macos_display_rects():
+        """Return list of (left, top, right, bottom) for each display via CoreGraphics."""
+        try:
+            cg = ctypes.cdll.LoadLibrary(
+                '/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+
+            class CGPoint(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+            class CGSize(ctypes.Structure):
+                _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+            class CGRect(ctypes.Structure):
+                _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+            max_displays = 16
+            display_ids = (ctypes.c_uint32 * max_displays)()
+            display_count = ctypes.c_uint32()
+            cg.CGGetActiveDisplayList(max_displays, display_ids,
+                                      ctypes.byref(display_count))
+
+            cg.CGDisplayBounds.restype = CGRect
+
+            rects = []
+            for i in range(display_count.value):
+                bounds = cg.CGDisplayBounds(display_ids[i])
+                l = int(bounds.origin.x)
+                t = int(bounds.origin.y)
+                r = int(bounds.origin.x + bounds.size.width)
+                b = int(bounds.origin.y + bounds.size.height)
+                rects.append((l, t, r, b))
+            return rects
+        except Exception:
+            return []
+
+    @staticmethod
     def _get_virtual_screen_bounds():
-        """Return (vx, vy, vw, vh) covering all monitors via Win32 API."""
+        """Return (vx, vy, vw, vh) covering all monitors."""
         if IS_WINDOWS:
             try:
                 user32 = ctypes.windll.user32
@@ -1688,6 +1724,18 @@ class App:
                     return vx, vy, vw, vh
             except Exception:
                 pass
+        else:
+            # macOS: use CoreGraphics
+            rects = App._get_macos_display_rects()
+            if rects:
+                min_x = min(r[0] for r in rects)
+                min_y = min(r[1] for r in rects)
+                max_x = max(r[2] for r in rects)
+                max_y = max(r[3] for r in rects)
+                vw = max_x - min_x
+                vh = max_y - min_y
+                if vw > 0 and vh > 0:
+                    return min_x, min_y, vw, vh
         # Fallback: primary monitor only
         return 0, 0, 1920, 1080
 
@@ -1695,10 +1743,11 @@ class App:
     def _get_monitor_config_key():
         """Return a string key identifying the current monitor layout.
 
-        Uses EnumDisplayMonitors to capture each monitor's bounding rect,
-        producing a stable key like '0,0,1920,1080|1920,0,3840,1080'.
-        Different setups (docked vs undocked, different monitor arrangements)
-        produce different keys, enabling per-configuration geometry persistence.
+        Uses EnumDisplayMonitors (Windows) or CoreGraphics (macOS) to capture
+        each monitor's bounding rect, producing a stable key like
+        '0,0,1920,1080|1920,0,3840,1080'. Different setups (docked vs
+        undocked, different monitor arrangements) produce different keys,
+        enabling per-configuration geometry persistence.
         """
         if IS_WINDOWS:
             try:
@@ -1726,6 +1775,12 @@ class App:
                     return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in monitors)
             except Exception:
                 pass
+        else:
+            # macOS: use CoreGraphics to enumerate displays
+            rects = App._get_macos_display_rects()
+            if rects:
+                rects.sort()
+                return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in rects)
         # Fallback: use virtual screen bounds
         vx, vy, vw, vh = App._get_virtual_screen_bounds()
         return f"{vx},{vy},{vx + vw},{vy + vh}"
@@ -1779,15 +1834,22 @@ class App:
             geo_entry["editor_geometry"] = self.instruction_editor_window.geometry()
         elif hasattr(self, '_last_editor_geometry') and self._last_editor_geometry:
             geo_entry["editor_geometry"] = self._last_editor_geometry
-        prompt_geo = getattr(self, '_last_prompt_dialog_geometry', None)
-        if prompt_geo:
-            geo_entry["prompt_dialog_geometry"] = prompt_geo
-        confirm_geo = getattr(self, '_last_confirm_dialog_geometry', None)
-        if confirm_geo:
-            geo_entry["confirm_dialog_geometry"] = confirm_geo
-        ps_safety_geo = getattr(self, '_last_ps_safety_geometry', None)
-        if ps_safety_geo:
-            geo_entry["ps_safety_dialog_geometry"] = ps_safety_geo
+        # Capture live geometry from open dialogs, fall back to cached values
+        ps_dlg = getattr(self, '_ps_safety_dialog', None)
+        if ps_dlg and ps_dlg.winfo_exists():
+            geo_entry["ps_safety_dialog_geometry"] = ps_dlg.geometry()
+        elif getattr(self, '_last_ps_safety_geometry', None):
+            geo_entry["ps_safety_dialog_geometry"] = self._last_ps_safety_geometry
+        prompt_dlg = getattr(self, '_prompt_dialog', None)
+        if prompt_dlg and prompt_dlg.winfo_exists():
+            geo_entry["prompt_dialog_geometry"] = prompt_dlg.geometry()
+        elif getattr(self, '_last_prompt_dialog_geometry', None):
+            geo_entry["prompt_dialog_geometry"] = self._last_prompt_dialog_geometry
+        confirm_dlg = getattr(self, '_confirm_dialog', None)
+        if confirm_dlg and confirm_dlg.winfo_exists():
+            geo_entry["confirm_dialog_geometry"] = confirm_dlg.geometry()
+        elif getattr(self, '_last_confirm_dialog_geometry', None):
+            geo_entry["confirm_dialog_geometry"] = self._last_confirm_dialog_geometry
         # Capture skills dialog geometry if open, otherwise use last saved
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
             geo_entry["skills_dialog_geometry"] = self.skills_editor_window.geometry()
@@ -2304,7 +2366,15 @@ class App:
     def _close_editor(self):
         """Capture geometry, destroy the editor, and nullify widget refs."""
         self._capture_editor_geometry()
+        # Capture PS Safety dialog geometry before editor destroy cascades to it
+        ps_dlg = getattr(self, '_ps_safety_dialog', None)
+        if ps_dlg and ps_dlg.winfo_exists():
+            try:
+                self._last_ps_safety_geometry = ps_dlg.geometry()
+            except Exception:
+                pass
         self.instruction_editor_window.destroy()
+        self._ps_safety_dialog = None
         self._nullify_editor_widgets()
 
     def _on_editor_close(self, win):
@@ -3777,6 +3847,7 @@ class App:
             self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
         ) else self.root
         dlg = tk.Toplevel(parent)
+        self._ps_safety_dialog = dlg
         dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
         dlg.title("PS Safety — Confirm Patterns" if IS_WINDOWS else "Shell Safety — Confirm Patterns")
         dlg.transient(parent)
@@ -3815,6 +3886,7 @@ class App:
 
         def _on_close():
             self._last_ps_safety_geometry = dlg.geometry()
+            self._ps_safety_dialog = None
             self._save_last_state()
             dlg.destroy()
 
@@ -3832,10 +3904,13 @@ class App:
             geo = f"{w}x{h}+{x}+{y}"
         # Apply geometry twice: before and after deiconify, because the embedded
         # checkbuttons in the Text widget request a large natural size that
-        # overrides the width/height on map. The after_idle re-apply wins.
+        # overrides the width/height on map. The delayed re-apply wins.
+        # Use after(100ms) instead of after_idle — on macOS the WM repositions
+        # transient windows asynchronously after deiconify, so after_idle fires
+        # too early and gets overridden.
         dlg.geometry(geo)
         dlg.deiconify()
-        dlg.after_idle(lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
+        dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
 
     def _toggle_confirm_pattern(self, pattern, var):
         if var.get():
@@ -3862,6 +3937,7 @@ class App:
 
         def ask():
             dlg = tk.Toplevel(self.root)
+            self._confirm_dialog = dlg
             dlg.withdraw()  # Hide until geometry is set
             dlg.title("PowerShell — Confirm Command")
             if not self._headless:
@@ -3919,6 +3995,7 @@ class App:
                     self._last_confirm_dialog_geometry = dlg.geometry()
                 except Exception:
                     pass
+                self._confirm_dialog = None
 
             def on_yes():
                 result_holder[0] = True
@@ -3961,6 +4038,7 @@ class App:
 
         def ask():
             dlg = tk.Toplevel(self.root)
+            self._prompt_dialog = dlg
             dlg.withdraw()  # Hide until geometry is set
             dlg.title("Agent Request")
             if not self._headless:
@@ -4020,6 +4098,7 @@ class App:
                     self._last_prompt_dialog_geometry = dlg.geometry()
                 except Exception:
                     pass
+                self._prompt_dialog = None
 
             def on_inject(ev=None):
                 result_holder[0] = resp_text.get("1.0", tk.END).strip()

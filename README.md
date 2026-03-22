@@ -24,7 +24,8 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (Windows)
 - **LaunchMyAgent.bat** — One-click launcher for MyAgent (Windows)
-- **My Agent.command** — Double-click launcher for MyAgent (macOS)
+- **My Agent.app** — macOS desktop shortcut for MyAgent (each click launches a new instance; blue/yellow icon)
+- **My Agent.command** — Double-click launcher for MyAgent (macOS, opens Terminal)
 - **LaunchMyAgent.sh** — Shell launcher for MyAgent (macOS)
 - **selfbot_position.ps1** — PowerShell helper used by the SelfBot launcher to position and focus windows (Windows)
 
@@ -397,7 +398,7 @@ Both SelfBot.py and MyAgent.py use a runtime `IS_WINDOWS = sys.platform == "win3
 | Browser automation | Edge via CDP | Edge or Chrome via CDP |
 | Instance detection (SelfBot) | Named mutex (`CreateMutexW`) | Lock file + PID verification |
 | Duo peer detection (SelfBot) | `pygetwindow` window enumeration | Not available (each instance runs independently) |
-| Monitor geometry (MyAgent) | Win32 `EnumDisplayMonitors` | Falls back to primary screen bounds |
+| Monitor geometry (MyAgent) | Win32 `EnumDisplayMonitors` | CoreGraphics `CGGetActiveDisplayList` |
 | DPI awareness | `SetProcessDpiAwareness(2)` | Not needed (macOS handles scaling natively) |
 | Monospace font | Consolas | Menlo |
 
@@ -691,12 +692,12 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 
 #### App State Persistence
 
-- **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (confirms the PID belongs to `python.exe` or `pythonw.exe`, not a recycled PID from an unrelated process). The title bar shows `My Agent (N)` for instance 2+
+- **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (or `os.kill` + `ps` on macOS) — confirms the PID belongs to a running MyAgent.py process, not a recycled PID from an unrelated process. The title bar shows `My Agent (N)` for instance 2+
 - Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking, Save Thinking), main window geometry, and dialog geometries are saved per instance
 - On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser/Meta toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
-- **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), **PowerShell Confirm**, **PS Safety**, and **Skills Manager** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened. All dialogs use a withdraw/deiconify pattern to prevent the window manager from overriding saved positions
-- **Multi-monitor geometry persistence** — Window and dialog geometries are stored **per monitor configuration** in `agent_state.json` under a `geometries` dict keyed by the current monitor layout (detected via Win32 `EnumDisplayMonitors`). Switching between different setups (e.g., docked with dual monitors vs undocked laptop) automatically restores the correct positions for each configuration. Works with any number of monitors in any arrangement
-- **Geometry sanitization** — All persisted window and dialog geometries (main window, editor, prompt dialog, confirm dialog, PS Safety dialog, Skills Manager dialog) are validated on restore via `_sanitize_geometry()` against the full virtual desktop bounds (all monitors via Win32 `GetSystemMetrics`). Windows that are too small (below 200x150), positioned entirely off-screen, or have fewer than 50 visible pixels on any monitor are reset to defaults. This prevents windows from becoming invisible after monitor changes or corrupted state files. Old state files with flat geometry fields are automatically migrated to the per-config format on first load
+- **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), **PowerShell Confirm**, **PS Safety**, and **Skills Manager** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened. All dialogs use a withdraw/deiconify pattern to prevent the window manager from overriding saved positions. The periodic auto-save (every 5 seconds) captures **live geometry** from all currently open dialogs, so positions are saved even if the app is closed without closing dialogs first
+- **Multi-monitor geometry persistence** — Window and dialog geometries are stored **per monitor configuration** in `agent_state.json` under a `geometries` dict keyed by the current monitor layout (detected via Win32 `EnumDisplayMonitors` on Windows, CoreGraphics `CGGetActiveDisplayList` on macOS). Switching between different setups (e.g., docked with dual monitors vs undocked laptop) automatically restores the correct positions for each configuration. Works with any number of monitors in any arrangement on both platforms
+- **Geometry sanitization** — All persisted window and dialog geometries (main window, editor, prompt dialog, confirm dialog, PS Safety dialog, Skills Manager dialog) are validated on restore via `_sanitize_geometry()` against the full virtual desktop bounds spanning all monitors (Win32 `GetSystemMetrics` on Windows, CoreGraphics `CGDisplayBounds` on macOS). Windows that are too small (below 200x150), positioned entirely off-screen, or have fewer than 50 visible pixels on any monitor are reset to defaults. This prevents windows from becoming invisible after monitor changes or corrupted state files. Old state files with flat geometry fields are automatically migrated to the per-config format on first load
 
 #### Rate-Limit Retry
 
@@ -748,7 +749,7 @@ source .venv/bin/activate       # macOS
 python MyAgent.py
 ```
 
-Or double-click `LaunchMyAgent.bat` on Windows (or `My Agent.command` on macOS).
+Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop shortcut on macOS (each click launches a new instance). The `.command` and `.sh` launchers are also available.
 
 ### Architecture
 
