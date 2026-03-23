@@ -5430,6 +5430,10 @@ class App:
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
 
+                # Post-process LaTeX in the just-completed text segment
+                if full_text:
+                    self.queue.put({"type": "post_process_latex"})
+
                 if self.stop_requested:
                     self.queue.put({"type": "tool_info", "content": "Agent stopped by user.\n"})
                     break
@@ -5529,6 +5533,26 @@ class App:
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
 
+    def _post_process_latex(self):
+        """Replace LaTeX notation with Unicode in the most recent assistant response."""
+        try:
+            # Find the last "Agent:\n" in the widget to locate the response start
+            pos = self.chat_display.search("Agent:\n", "end-1c", backwards=True, exact=True)
+            if not pos:
+                return
+            # Text starts after "Agent:\n" (7 chars)
+            start = f"{pos}+7c"
+            end = self.chat_display.index("end-1c")
+            raw = self.chat_display.get(start, end)
+            if not raw:
+                return
+            converted = self._latex_to_unicode(raw)
+            if converted != raw:
+                self.chat_display.delete(start, end)
+                self.chat_display.insert(start, converted, "assistant")
+        except Exception:
+            pass  # Don't break the UI if conversion fails
+
     def _ensure_newline(self):
         """Ensure the chat display ends with a newline so the next insert starts on a fresh line."""
         end_pos = self.chat_display.index("end-1c")
@@ -5536,6 +5560,100 @@ class App:
             last_char = self.chat_display.get("end-2c", "end-1c")
             if last_char != "\n":
                 self.chat_display.insert(tk.END, "\n")
+
+    @staticmethod
+    def _latex_to_unicode(text):
+        """Convert LaTeX math notation to Unicode equivalents and strip delimiters."""
+        # Strip display math delimiters first (longer patterns before shorter)
+        text = text.replace("$$", "")
+        text = text.replace("\\[", "")
+        text = text.replace("\\]", "")
+        # Strip inline math delimiters
+        text = text.replace("\\(", "")
+        text = text.replace("\\)", "")
+        # Strip single $ delimiters (but not $$ which is already removed)
+        # Use regex to avoid stripping $ in non-math contexts like currency
+        text = re.sub(r'(?<!\$)\$(?!\$)', '', text)
+
+        # Fractions: \frac{a}{b} → a/b
+        text = re.sub(r'\\frac\{([^}]*)\}\{([^}]*)\}', r'\1/\2', text)
+
+        # Square root: \sqrt{x} → √x, \sqrt → √
+        text = re.sub(r'\\sqrt\{([^}]*)\}', r'√\1', text)
+        text = text.replace("\\sqrt", "√")
+
+        # Superscripts: ^{...} and ^x
+        _sup_map = str.maketrans("0123456789+-=()nixy", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱˣʸ")
+        def _sup_repl(m):
+            content = m.group(1) if m.group(1) is not None else m.group(2)
+            return content.translate(_sup_map)
+        text = re.sub(r'\^\{([^}]*)\}|\^([0-9nixy])', _sup_repl, text)
+
+        # Subscripts: _{...} and _x
+        _sub_map = str.maketrans("0123456789+-=()aeiourxhklmnpst", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢₒᵤᵣₓₕₖₗₘₙₚₛₜ")
+        def _sub_repl(m):
+            content = m.group(1) if m.group(1) is not None else m.group(2)
+            return content.translate(_sub_map)
+        text = re.sub(r'_\{([^}]*)\}|_([0-9aeiourxhklmnpst])', _sub_repl, text)
+
+        # Greek letters (common ones)
+        _greek = {
+            "\\alpha": "α", "\\beta": "β", "\\gamma": "γ", "\\delta": "δ",
+            "\\epsilon": "ε", "\\zeta": "ζ", "\\eta": "η", "\\theta": "θ",
+            "\\iota": "ι", "\\kappa": "κ", "\\lambda": "λ", "\\mu": "μ",
+            "\\nu": "ν", "\\xi": "ξ", "\\pi": "π", "\\rho": "ρ",
+            "\\sigma": "σ", "\\tau": "τ", "\\upsilon": "υ", "\\phi": "φ",
+            "\\chi": "χ", "\\psi": "ψ", "\\omega": "ω",
+            "\\Alpha": "Α", "\\Beta": "Β", "\\Gamma": "Γ", "\\Delta": "Δ",
+            "\\Theta": "Θ", "\\Lambda": "Λ", "\\Pi": "Π", "\\Sigma": "Σ",
+            "\\Phi": "Φ", "\\Psi": "Ψ", "\\Omega": "Ω",
+        }
+        # Operators, relations, arrows, sets, misc
+        _symbols = {
+            "\\times": "×", "\\div": "÷", "\\pm": "±", "\\mp": "∓",
+            "\\cdot": "·", "\\cdots": "⋯", "\\ldots": "…",
+            "\\le": "≤", "\\leq": "≤", "\\ge": "≥", "\\geq": "≥",
+            "\\ne": "≠", "\\neq": "≠", "\\approx": "≈", "\\equiv": "≡",
+            "\\infty": "∞", "\\propto": "∝",
+            "\\sum": "Σ", "\\prod": "Π", "\\int": "∫",
+            "\\to": "→", "\\rightarrow": "→", "\\leftarrow": "←",
+            "\\Rightarrow": "⇒", "\\Leftarrow": "⇐",
+            "\\leftrightarrow": "↔", "\\Leftrightarrow": "⇔",
+            "\\in": "∈", "\\notin": "∉", "\\subset": "⊂", "\\subseteq": "⊆",
+            "\\supset": "⊃", "\\supseteq": "⊇",
+            "\\cup": "∪", "\\cap": "∩", "\\emptyset": "∅",
+            "\\forall": "∀", "\\exists": "∃", "\\neg": "¬",
+            "\\partial": "∂", "\\nabla": "∇", "\\degree": "°",
+            "\\circ": "°", "\\prime": "′",
+            # Functions (just strip the backslash)
+            "\\sin": "sin", "\\cos": "cos", "\\tan": "tan",
+            "\\sec": "sec", "\\csc": "csc", "\\cot": "cot",
+            "\\arcsin": "arcsin", "\\arccos": "arccos", "\\arctan": "arctan",
+            "\\sinh": "sinh", "\\cosh": "cosh", "\\tanh": "tanh",
+            "\\log": "log", "\\ln": "ln", "\\exp": "exp",
+            "\\lim": "lim", "\\max": "max", "\\min": "min",
+            "\\det": "det", "\\dim": "dim",
+        }
+        # Apply all replacements (longer keys first to avoid partial matches)
+        all_replacements = {**_greek, **_symbols}
+        for latex, uni in sorted(all_replacements.items(), key=lambda x: -len(x[0])):
+            text = text.replace(latex, uni)
+
+        # Clean up remaining LaTeX formatting commands
+        text = re.sub(r'\\(?:text|mathrm|mathbf|mathit|mathbb|mathcal|operatorname)\{([^}]*)\}', r'\1', text)
+        text = re.sub(r'\\(?:left|right|big|Big|bigg|Bigg)', '', text)
+        text = text.replace("\\,", " ")
+        text = text.replace("\\;", " ")
+        text = text.replace("\\!", "")
+        text = text.replace("\\quad", "  ")
+        text = text.replace("\\qquad", "    ")
+        text = text.replace("\\\\", "\n")
+        # Strip remaining \command patterns that we don't recognize (just remove backslash)
+        text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
+        # Clean up braces used for grouping
+        text = re.sub(r'\{([^}]*)\}', r'\1', text)
+
+        return text
 
     def check_queue(self):
         try:
@@ -5692,8 +5810,14 @@ class App:
                     self.chat_display.config(state="normal")
                     self._ensure_newline()
                     self.chat_display.config(state="disabled")
-                elif msg["type"] == "complete":
+                elif msg["type"] == "post_process_latex":
                     self.chat_display.config(state="normal")
+                    self._post_process_latex()
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "complete":
+                    # Post-process: convert LaTeX to Unicode in the last response
+                    self.chat_display.config(state="normal")
+                    self._post_process_latex()
                     self.chat_display.insert(tk.END, "\n\n")
                     self.chat_display.config(state="disabled")
                     self.streaming = False
