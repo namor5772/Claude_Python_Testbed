@@ -400,6 +400,7 @@ Both SelfBot.py and MyAgent.py use a runtime `IS_WINDOWS = sys.platform == "win3
 | Duo peer detection (SelfBot) | `pygetwindow` window enumeration | Not available (each instance runs independently) |
 | Monitor geometry (MyAgent) | Win32 `EnumDisplayMonitors` | CoreGraphics `CGGetActiveDisplayList` |
 | DPI awareness | `SetProcessDpiAwareness(2)` | Not needed (macOS handles scaling natively) |
+| Dialog multi-monitor | `transient(parent)` (works across screens) | `transient()` skipped (macOS restricts transient dialogs to parent's screen) |
 | Monospace font | Consolas | Menlo |
 
 ### Setup (New Machine)
@@ -680,6 +681,19 @@ Four checkboxes on the main window control what is shown in the output display (
 Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction inside the Agent Instruction Editor.
 
 The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
+
+#### LaTeX to Unicode Conversion
+
+Assistant responses containing LaTeX math notation are automatically converted to Unicode after each streaming segment completes. The raw LaTeX streams in real-time for visual feedback, then a post-processing pass converts it in-place. All common delimiter styles are handled:
+
+| Delimiter | Style | Example |
+|---|---|---|
+| `\( ... \)` | Inline (OpenAI) | `\(x^2\)` → `x²` |
+| `$ ... $` | Inline (Gemini) | `$\alpha + \beta$` → `α + β` |
+| `\[ ... \]` | Display (OpenAI) | Delimiters stripped |
+| `$$ ... $$` | Display (Gemini) | Delimiters stripped |
+
+Conversions include: superscripts (`x^2` → `x²`), subscripts (`x_0` → `x₀`), Greek letters (`\alpha` → `α`), operators (`\times` → `×`, `\le` → `≤`, `\infty` → `∞`), functions (`\sin` → `sin`), fractions (`\frac{a}{b}` → `a/b`), set notation (`\in` → `∈`), arrows (`\to` → `→`), and more. Unrecognised `\command` patterns have their backslash stripped as a fallback.
 
 #### PS Safety — Deselectable Confirm Patterns
 
