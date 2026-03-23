@@ -4922,11 +4922,15 @@ class App:
             elif not is_reasoning:
                 payload["temperature"] = self.temperature
         else:
+            tools = self._get_tools()
+            if self.provider == "Anthropic":
+                tools.append({"type": "web_search_20250305", "name": "web_search"})
+                tools.append({"type": "code_execution_20250522", "name": "code_execution"})
             payload = {
                 "model": self.model,
                 "stream": True,
                 "system": self._build_system_prompt(),
-                "tools": self._get_tools(),
+                "tools": tools,
                 "messages": display_msgs,
             }
             model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
@@ -4946,8 +4950,8 @@ class App:
 
     def _get_tools(self):
         tools = copy.deepcopy(TOOLS)
-        # OpenAI uses native web_search_preview; exclude custom web tools
-        if self.provider == "OpenAI":
+        # OpenAI/Anthropic use native server-side web search; exclude custom web tools
+        if self.provider in ("OpenAI", "Anthropic"):
             tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
@@ -5192,11 +5196,15 @@ class App:
         full_text = ""
         had_thinking = False
 
+        tools = self._get_tools()
+        # Add Anthropic server-side tools
+        tools.append({"type": "web_search_20250305", "name": "web_search"})
+        tools.append({"type": "code_execution_20250522", "name": "code_execution"})
         api_kwargs = {
             "model": self.model,
             "system": self._build_system_prompt(),
             "messages": messages,
-            "tools": self._get_tools(),
+            "tools": tools,
         }
         model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
         if self.thinking_enabled:
@@ -5214,7 +5222,9 @@ class App:
 
         for attempt in range(max_retries):
             try:
-                with self.client.messages.stream(**api_kwargs) as stream:
+                with self.client.beta.messages.stream(
+                        betas=["web-search-2025-03-05", "code-execution-2025-05-22"],
+                        **api_kwargs) as stream:
                     in_thinking = False
                     for event in stream:
                         if self.stop_requested:
@@ -5232,6 +5242,15 @@ class App:
                                 if not label_emitted:
                                     self.queue.put({"type": "label"})
                                     label_emitted = True
+                            elif hasattr(block, "type") and block.type == "server_tool_use":
+                                tool_name = getattr(block, "name", "")
+                                if tool_name == "web_search":
+                                    self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
+                                elif tool_name == "code_execution":
+                                    self.queue.put({"type": "tool_info", "content": "Running code execution...\n"})
+                            elif hasattr(block, "type") and block.type in (
+                                    "code_execution_tool_result", "web_search_tool_result"):
+                                pass  # Results extracted from final_message post-stream
                         elif event.type == "content_block_delta":
                             delta = event.delta
                             if hasattr(delta, "type") and delta.type == "thinking_delta":
@@ -5251,6 +5270,27 @@ class App:
                     except Exception:
                         # Stream may be incomplete — synthesize a stop result
                         return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted
+                # Extract code execution images from final message
+                # (file IDs are only available after streaming completes)
+                for block in final_message.content:
+                    if getattr(block, "type", None) == "code_execution_tool_result":
+                        content = getattr(block, "content", None)
+                        items = content if isinstance(content, list) else [content] if content else []
+                        for item in items:
+                            itype = getattr(item, "type", None)
+                            if itype == "code_execution_result":
+                                stdout = getattr(item, "stdout", "")
+                                if stdout:
+                                    self.queue.put({"type": "tool_info", "content": stdout + "\n"})
+                                for sub in getattr(item, "content", []) or []:
+                                    if getattr(sub, "type", None) == "code_execution_output":
+                                        fid = getattr(sub, "file_id", "")
+                                        if fid:
+                                            self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
+                            elif itype == "code_execution_output":
+                                fid = getattr(item, "file_id", "")
+                                if fid:
+                                    self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
                 break  # success
             except anthropic.RateLimitError as e:
                 if attempt < max_retries - 1:
@@ -5759,6 +5799,9 @@ class App:
                             import urllib.request
                             with urllib.request.urlopen(url, timeout=30) as resp:
                                 img_data = resp.read()
+                        elif file_id and self.provider == "Anthropic" and hasattr(self, 'client') and self.client:
+                            resp = self.client.beta.files.download(file_id)
+                            img_data = resp.read()
                         elif file_id and hasattr(self, 'openai_client') and self.openai_client:
                             content = self.openai_client.files.content(file_id)
                             img_data = content.read()
