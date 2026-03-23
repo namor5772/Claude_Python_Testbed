@@ -2851,6 +2851,7 @@ class App:
         full_text = ""
         had_thinking = False
         tool_calls_acc = {}  # output_index -> {call_id, name, arguments}
+        ci_code_acc = ""     # accumulate code interpreter code deltas
         in_thinking = False
 
         # Waiting ticker & timeout are managed by _stream_responses_call via _oai_first_content
@@ -2925,15 +2926,17 @@ class App:
                     if idx in tool_calls_acc:
                         tool_calls_acc[idx]["arguments"] = event.arguments
 
-                # Code interpreter — show code being generated
+                # Code interpreter — accumulate code deltas
                 elif event.type == "response.code_interpreter_call_code.delta":
                     if hasattr(self, '_oai_first_content'):
                         self._oai_first_content.set()
-                    self.queue.put({"type": "tool_info", "content": event.delta})
+                    ci_code_acc += event.delta
 
-                # Code interpreter — code complete, show separator
+                # Code interpreter — code complete, display full code block
                 elif event.type == "response.code_interpreter_call_code.done":
-                    self.queue.put({"type": "tool_info", "content": "\n"})
+                    if ci_code_acc.strip():
+                        self.queue.put({"type": "ci_code", "content": ci_code_acc})
+                    ci_code_acc = ""
 
                 # Code interpreter — completed, extract logs and images from outputs
                 elif event.type == "response.output_item.done":
@@ -5606,6 +5609,15 @@ class App:
                     self._ensure_newline()
                     self.chat_display.insert(tk.END, "\nYou:\n", "user_label")
                     self.chat_display.insert(tk.END, msg["content"] + "\n\n", "user")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
+                elif msg["type"] == "ci_code" and not self.show_activity.get():
+                    pass
+                elif msg["type"] == "ci_code":
+                    # Code interpreter code — display as a single readable block
+                    self.chat_display.config(state="normal")
+                    self._ensure_newline()
+                    self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_info")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
                 elif msg["type"] == "ci_image":
