@@ -2910,6 +2910,8 @@ class App:
                         }
                     elif item and getattr(item, "type", None) == "web_search_call":
                         self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
+                    elif item and getattr(item, "type", None) == "code_interpreter_call":
+                        self.queue.put({"type": "tool_info", "content": "Running code interpreter...\n"})
 
                 # Function call argument chunks
                 elif event.type == "response.function_call_arguments.delta":
@@ -2922,6 +2924,37 @@ class App:
                     idx = event.output_index
                     if idx in tool_calls_acc:
                         tool_calls_acc[idx]["arguments"] = event.arguments
+
+                # Code interpreter — show code being generated
+                elif event.type == "response.code_interpreter_call_code.delta":
+                    if hasattr(self, '_oai_first_content'):
+                        self._oai_first_content.set()
+                    self.queue.put({"type": "tool_info", "content": event.delta})
+
+                # Code interpreter — code complete, show separator
+                elif event.type == "response.code_interpreter_call_code.done":
+                    self.queue.put({"type": "tool_info", "content": "\n"})
+
+                # Code interpreter — completed, extract logs and images from outputs
+                elif event.type == "response.output_item.done":
+                    item = getattr(event, "item", None)
+                    if item and getattr(item, "type", None) == "code_interpreter_call":
+                        outputs = getattr(item, "outputs", []) or []
+                        for r in outputs:
+                            rtype = getattr(r, "type", None) or (r.get("type") if isinstance(r, dict) else None)
+                            if rtype == "logs":
+                                logs = getattr(r, "logs", "") or (r.get("logs", "") if isinstance(r, dict) else "")
+                                if logs:
+                                    self.queue.put({"type": "tool_info", "content": logs + "\n"})
+                            elif rtype == "image":
+                                # Image URL can be directly on the result or nested under .image
+                                url = getattr(r, "url", "") or (r.get("url", "") if isinstance(r, dict) else "")
+                                if not url:
+                                    img_obj = getattr(r, "image", None) or (r.get("image") if isinstance(r, dict) else None)
+                                    if img_obj:
+                                        url = getattr(img_obj, "url", "") or (img_obj.get("url", "") if isinstance(img_obj, dict) else "")
+                                if url:
+                                    self.queue.put({"type": "ci_image", "url": url, "file_id": ""})
 
         if timed_out:
             raise openai.APITimeoutError(request=None)  # type: ignore[arg-type]
@@ -4849,6 +4882,7 @@ class App:
             tools = self._get_tools()
             responses_tools = self._tools_to_responses(tools) if tools else []
             responses_tools.append({"type": "web_search_preview"})
+            responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
             responses_input = self._messages_to_responses(display_msgs)
             # Truncate input_image data in Responses API input
             for item in responses_input:
@@ -4872,6 +4906,7 @@ class App:
                 "instructions": system_prompt,
                 "tools": responses_tools,
                 "store": False,
+                "include": ["code_interpreter_call.outputs"],
             }
             is_reasoning = self._is_openai_reasoning_model()
             if is_reasoning and self.thinking_enabled:
@@ -5241,6 +5276,7 @@ class App:
         tools = self._get_tools()
         responses_tools = self._tools_to_responses(tools) if tools else []
         responses_tools.append({"type": "web_search_preview"})
+        responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
         responses_input = self._messages_to_responses(messages)
         is_reasoning = self._is_openai_reasoning_model()
         has_none = self._has_reasoning_none()
@@ -5251,6 +5287,7 @@ class App:
             "instructions": system_prompt,
             "tools": responses_tools,
             "store": False,
+            "include": ["code_interpreter_call.outputs"],
         }
         if has_none:
             # GPT-5.1+: always send reasoning param, even with effort="none"
@@ -5571,6 +5608,60 @@ class App:
                     self.chat_display.insert(tk.END, msg["content"] + "\n\n", "user")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
+                elif msg["type"] == "ci_image":
+                    # Code interpreter image — decode/download, display inline, and save
+                    try:
+                        url = msg.get("url", "")
+                        file_id = msg.get("file_id", "")
+                        img_data = None
+                        if url and url.startswith("data:"):
+                            # data URL: data:image/png;base64,<data>
+                            import base64
+                            parts = url.split(",", 1)
+                            if len(parts) == 2:
+                                img_data = base64.b64decode(parts[1])
+                        elif url:
+                            import urllib.request
+                            with urllib.request.urlopen(url, timeout=30) as resp:
+                                img_data = resp.read()
+                        elif file_id and hasattr(self, 'openai_client') and self.openai_client:
+                            content = self.openai_client.files.content(file_id)
+                            img_data = content.read()
+                        if img_data:
+                            # Save to saved_chats dir
+                            os.makedirs("saved_chats", exist_ok=True)
+                            ts = time.strftime("%Y%m%d_%H%M%S")
+                            img_path = os.path.join("saved_chats", f"ci_output_{ts}.png")
+                            with open(img_path, "wb") as f:
+                                f.write(img_data)
+                            # Display inline in chat
+                            pil_img = Image.open(io.BytesIO(img_data))
+                            # Scale to fit chat display width (max ~600px)
+                            max_w = 600
+                            if pil_img.width > max_w:
+                                ratio = max_w / pil_img.width
+                                pil_img = pil_img.resize(
+                                    (max_w, int(pil_img.height * ratio)),
+                                    Image.LANCZOS,
+                                )
+                            from PIL import ImageTk
+                            tk_img = ImageTk.PhotoImage(pil_img)
+                            # Keep reference to prevent garbage collection
+                            if not hasattr(self, '_ci_images'):
+                                self._ci_images = []
+                            self._ci_images.append(tk_img)
+                            self.chat_display.config(state="normal")
+                            self._ensure_newline()
+                            self.chat_display.image_create(tk.END, image=tk_img)
+                            self.chat_display.insert(tk.END, f"\n[Saved: {img_path}]\n", "tool_info")
+                            self.chat_display.see(tk.END)
+                            self.chat_display.config(state="disabled")
+                    except Exception as e:
+                        self.chat_display.config(state="normal")
+                        self._ensure_newline()
+                        self.chat_display.insert(tk.END, f"[Code interpreter image error: {e}]\n", "error")
+                        self.chat_display.see(tk.END)
+                        self.chat_display.config(state="disabled")
                 elif msg["type"] == "tool_info" and not self.show_activity.get():
                     pass
                 elif msg["type"] == "tool_info":
