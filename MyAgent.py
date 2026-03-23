@@ -2134,7 +2134,8 @@ class App:
         win = tk.Toplevel(self.root)
         win.withdraw()  # Hide until geometry is set
         win.title("Agent Instruction Editor")
-        win.transient(self.root)
+        if IS_WINDOWS:
+            win.transient(self.root)
         win.protocol("WM_DELETE_WINDOW", lambda: self._on_editor_close(win))
         self.instruction_editor_window = win
 
@@ -3437,7 +3438,8 @@ class App:
         parent = (self.instruction_editor_window
                   if self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
                   else self.root)
-        win.transient(parent)
+        if IS_WINDOWS:
+            win.transient(parent)
         self.skills_editor_window = win
 
         def _on_skills_close():
@@ -3886,7 +3888,8 @@ class App:
         self._ps_safety_dialog = dlg
         dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
         dlg.title("PS Safety — Confirm Patterns" if IS_WINDOWS else "Shell Safety — Confirm Patterns")
-        dlg.transient(parent)
+        if IS_WINDOWS:
+            dlg.transient(parent)
         dlg.resizable(True, True)
 
         tk.Label(
@@ -3977,7 +3980,8 @@ class App:
             dlg.withdraw()  # Hide until geometry is set
             dlg.title("PowerShell — Confirm Command")
             if not self._headless:
-                dlg.transient(self.root)
+                if IS_WINDOWS:
+                    dlg.transient(self.root)
                 dlg.grab_set()
             else:
                 dlg.lift()
@@ -4078,7 +4082,8 @@ class App:
             dlg.withdraw()  # Hide until geometry is set
             dlg.title("Agent Request")
             if not self._headless:
-                dlg.transient(self.root)
+                if IS_WINDOWS:
+                    dlg.transient(self.root)
                 dlg.grab_set()
             else:
                 dlg.lift()
