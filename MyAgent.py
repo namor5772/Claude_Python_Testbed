@@ -322,8 +322,12 @@ DESKTOP_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "x": {"type": "integer", "description": "Left edge of region to capture"},
-                "y": {"type": "integer", "description": "Top edge of region to capture"},
+                "display": {
+                    "type": "integer",
+                    "description": "Which display to capture (0 = primary, 1 = secondary, etc.). Default: 0 (primary). Use this to see and interact with windows on different monitors.",
+                },
+                "x": {"type": "integer", "description": "Left edge of region to capture (in screen coordinates)"},
+                "y": {"type": "integer", "description": "Top edge of region to capture (in screen coordinates)"},
                 "width": {"type": "integer", "description": "Width of region to capture"},
                 "height": {"type": "integer", "description": "Height of region to capture"},
             },
@@ -1028,7 +1032,7 @@ class App:
         self.pending_images = []   # list of (base64_data, media_type, filename)
         self._editor_images = []   # working copy while editor is open
         self._screenshot_scale = 1.0
-        self._screenshot_offset = (0, 0)  # virtual desktop origin for multi-display
+        self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
@@ -4322,71 +4326,131 @@ class App:
         "teams": "open -a 'Microsoft Teams'",
     }
 
-    def _macos_full_screenshot(self):
-        """Capture all displays on macOS using Quartz CoreGraphics.
-        Returns a PIL Image covering the full virtual desktop, or None on failure."""
+    def _macos_display_screenshot(self, display_index=0):
+        """Capture a single display on macOS using Quartz CoreGraphics.
+        Returns (PIL Image, display_origin_x, display_origin_y) or (None, 0, 0)."""
         try:
             import Quartz
+            rects = self._get_macos_display_rects()
+            if not rects or display_index >= len(rects):
+                return None, 0, 0
+            # Use API order: display 0 = primary (origin 0,0)
+            l, t, r, b = rects[display_index]
+            w, h = r - l, b - t
+            # Capture just this display's region
+            cg_rect = Quartz.CGRectMake(l, t, w, h)
             cg_img = Quartz.CGWindowListCreateImage(
-                Quartz.CGRectInfinite,
+                cg_rect,
                 Quartz.kCGWindowListOptionOnScreenOnly,
                 Quartz.kCGNullWindowID,
                 Quartz.kCGWindowImageDefault,
             )
             if not cg_img:
-                return None
-            w = Quartz.CGImageGetWidth(cg_img)
-            h = Quartz.CGImageGetHeight(cg_img)
-            # Convert CGImage to PIL via raw bitmap data
+                return None, 0, 0
+            iw = Quartz.CGImageGetWidth(cg_img)
+            ih = Quartz.CGImageGetHeight(cg_img)
             cf_data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_img))
-            img = Image.frombytes("RGBA", (w, h), cf_data, "raw", "BGRA")
-            return img.convert("RGB")
+            img = Image.frombytes("RGBA", (iw, ih), cf_data, "raw", "BGRA")
+            return img.convert("RGB"), l, t
         except Exception:
-            return None
+            return None, 0, 0
 
-    def do_screenshot(self, region=None):
-        try:
-            if region:
-                img = pyautogui.screenshot(region=region)
-            elif not IS_WINDOWS:
-                # macOS: use Quartz to capture all displays (pyautogui only captures primary)
-                img = self._macos_full_screenshot()
-                if img is None:
-                    img = pyautogui.screenshot()  # fallback
+    def _capture_single_display(self, display_idx, region=None):
+        """Capture a single display (or region), resize to API limit, update scale/offset.
+        Returns list of content blocks [text, image] or error string."""
+        if region:
+            img = pyautogui.screenshot(region=region)
+            # Region uses current display's offset (already set from last full screenshot)
+        elif not IS_WINDOWS:
+            img, disp_x, disp_y = self._macos_display_screenshot(display_idx)
+            if img is not None:
+                self._screenshot_offset = (disp_x, disp_y)
             else:
                 img = pyautogui.screenshot()
-            phys_w, phys_h = img.size
-            # Align screenshot to pyautogui's logical coordinate space so all
-            # desktop tool coordinates map directly to mouse positions.
-            if not region:
-                if not IS_WINDOWS:
-                    # macOS multi-display: get virtual desktop size from CoreGraphics
-                    vx, vy, vw, vh = self._get_virtual_screen_bounds()
-                    log_w, log_h = vw, vh
-                    self._screenshot_offset = (vx, vy)
+                self._screenshot_offset = (0, 0)
+        else:
+            img = pyautogui.screenshot()
+            self._screenshot_offset = (0, 0)
+        phys_w, phys_h = img.size
+        # Align to logical coordinate space (handles DPI scaling)
+        if not region:
+            if not IS_WINDOWS:
+                rects = self._get_macos_display_rects()
+                if rects:
+                    idx = min(display_idx, len(rects) - 1)
+                    l, t, r, b = rects[idx]
+                    log_w, log_h = r - l, b - t
                 else:
                     log_w, log_h = pyautogui.size()
-                    self._screenshot_offset = (0, 0)
-                if phys_w != log_w and log_w:
-                    img = img.resize((log_w, log_h))
-            logical_w, logical_h = img.size
-            max_w = 1280
-            if logical_w > max_w:
-                ratio = logical_w / max_w
-                new_h = int(logical_h / ratio)
-                img = img.resize((max_w, new_h))
-                self._screenshot_scale = ratio
-                img_w, img_h = max_w, new_h
             else:
-                self._screenshot_scale = 1.0
-                img_w, img_h = logical_w, logical_h
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-            return [
-                {"type": "text", "text": f"Screenshot captured ({img_w}x{img_h}). Click coordinates are automatically mapped to the screen — just use the pixel positions you see in this image."},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
-            ]
+                log_w, log_h = pyautogui.size()
+            if phys_w != log_w and log_w:
+                img = img.resize((log_w, log_h))
+        logical_w, logical_h = img.size
+        # Resize to API image limit (provider-specific)
+        if self.provider == "Gemini":
+            max_long_edge, max_megapixels = 3072, 4_000_000
+        elif self.provider == "OpenAI":
+            max_long_edge, max_megapixels = 2048, 2_000_000
+        else:
+            max_long_edge, max_megapixels = 1568, 1_150_000
+        longest = max(logical_w, logical_h)
+        if longest > max_long_edge:
+            r = max_long_edge / longest
+            max_w = int(logical_w * r)
+        else:
+            max_w = logical_w
+        max_h = int(logical_h * (max_w / logical_w)) if logical_w else logical_h
+        if max_w * max_h > max_megapixels:
+            r = (max_megapixels / (max_w * max_h)) ** 0.5
+            max_w = int(max_w * r)
+        if logical_w > max_w:
+            ratio = logical_w / max_w
+            new_h = int(logical_h / ratio)
+            img = img.resize((max_w, new_h))
+            self._screenshot_scale = ratio
+            img_w, img_h = max_w, new_h
+        else:
+            self._screenshot_scale = 1.0
+            img_w, img_h = logical_w, logical_h
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        return img_w, img_h, b64_data
+
+    def do_screenshot(self, region=None, display=None):
+        try:
+            if region:
+                # Region screenshot on the last-captured display
+                img_w, img_h, b64_data = self._capture_single_display(0, region=region)
+                return [
+                    {"type": "text", "text": f"Region screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click."},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
+                ]
+            # Determine how many displays to capture
+            if not IS_WINDOWS:
+                rects = self._get_macos_display_rects()
+                num_displays = len(rects) if rects else 1
+            else:
+                num_displays = 1
+            if display is not None:
+                # Specific display requested
+                img_w, img_h, b64_data = self._capture_single_display(display)
+                return [
+                    {"type": "text", "text": f"Display {display} screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click — coordinates are automatically mapped to the correct screen."},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
+                ]
+            # No display specified — capture ALL displays
+            result = []
+            for i in range(num_displays):
+                img_w, img_h, b64_data = self._capture_single_display(i)
+                result.append({"type": "text", "text": f"Display {i} ({img_w}x{img_h}):"})
+                result.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}})
+            result.append({"type": "text", "text": "To click on a target, first call screenshot with that display number, THEN use mouse_click with coordinates from that specific display's screenshot."})
+            # Set offset to primary display (display 0) as default for subsequent clicks
+            if not IS_WINDOWS and num_displays > 1:
+                self._capture_single_display(0)  # reset scale/offset to display 0
+            return result
         except Exception as e:
             return f"Screenshot error: {e}"
 
@@ -4802,7 +4866,7 @@ class App:
             raw = self._page.screenshot(type="png")
             img = Image.open(io.BytesIO(raw))
             orig_w, orig_h = img.size
-            max_w = 1280
+            max_w = 2048
             if orig_w > max_w:
                 ratio = orig_w / max_w
                 new_h = int(orig_h / ratio)
@@ -4996,17 +5060,44 @@ class App:
             tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
-            vx, vy, vw, vh = self._get_virtual_screen_bounds()
-            screen_w, screen_h = vw, vh
+            # Build display info for tool description (API order: 0=primary)
+            if not IS_WINDOWS:
+                rects = self._get_macos_display_rects()
+                num_displays = len(rects) if rects else 1
+                if rects:
+                    disp_info = ", ".join(
+                        f"display {i}: {r[2]-r[0]}x{r[3]-r[1]}" for i, r in enumerate(rects)
+                    )
+                else:
+                    sw, sh = pyautogui.size()
+                    disp_info = f"display 0: {sw}x{sh}"
+            else:
+                sw, sh = pyautogui.size()
+                num_displays = 1
+                disp_info = f"display 0: {sw}x{sh}"
             for tool in desktop:
                 if tool["name"] == "screenshot":
-                    tool["description"] = (
-                        f"Take a screenshot of the screen (resolution {screen_w}x{screen_h}). "
-                        "Always use this FIRST to see what is on the screen before clicking or typing. "
-                        "The image may be resized. For mouse_click, use the pixel coordinates as you see "
-                        "them in the image — they are automatically scaled to screen coordinates. "
-                        "Optionally capture only a region by specifying x, y, width, height."
-                    )
+                    if num_displays > 1:
+                        tool["description"] = (
+                            f"Take a screenshot. {num_displays} displays available: {disp_info}. "
+                            "By default (no 'display' parameter), captures ALL displays as separate images "
+                            "so you can see everything. To click on something, call screenshot again with "
+                            "the specific 'display' number where the target is, then use coordinates from "
+                            "THAT screenshot for mouse_click. Always take a screenshot BEFORE clicking. "
+                            "TIP: For precise clicking on small targets (close buttons, icons), take a REGION "
+                            "screenshot (x, y, width, height) zoomed into just that area."
+                        )
+                    else:
+                        tool["description"] = (
+                            f"Take a screenshot of the screen (resolution {disp_info.split(': ')[1]}). "
+                            "Always use this FIRST to see what is on the screen before clicking or typing. "
+                            "The image may be resized. For mouse_click, use the pixel coordinates as you see "
+                            "them in the image — they are automatically scaled to screen coordinates. "
+                            "Optionally capture only a region by specifying x, y, width, height. "
+                            "TIP: For precise clicking on small targets (close buttons, icons), first take a "
+                            "full screenshot to locate the target, then take a REGION screenshot zoomed into "
+                            "just that area for pixel-accurate coordinates."
+                        )
                     break
             tools.extend(desktop)
         if self.browser_enabled.get():
@@ -5076,11 +5167,13 @@ class App:
                 return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
             inp = block.input
             if block.name == "screenshot":
-                self.queue.put({"type": "tool_info", "content": "Taking screenshot...\n"})
+                display = inp.get("display")  # None = all displays
+                disp_label = f"display {display}" if display is not None else "all displays"
+                self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
                     region = (inp["x"], inp["y"], inp["width"], inp["height"])
-                return self.do_screenshot(region)
+                return self.do_screenshot(region, display=display)
             elif block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
                 if cx is None or cy is None:

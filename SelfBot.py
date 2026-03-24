@@ -2651,7 +2651,7 @@ class App:
                 if phys_w != log_w and log_w:
                     img = img.resize((log_w, log_h))
             logical_w, logical_h = img.size
-            max_w = 1280
+            max_w = 2048
             if logical_w > max_w:
                 ratio = logical_w / max_w
                 new_h = int(logical_h / ratio)
@@ -3384,7 +3384,7 @@ class App:
             raw_bytes = self._page.screenshot(type="png")
             img = Image.open(io.BytesIO(raw_bytes))
             orig_w, orig_h = img.size
-            max_w = 1280
+            max_w = 2048
             if orig_w > max_w:
                 ratio = max_w / orig_w
                 new_h = int(orig_h * ratio)
