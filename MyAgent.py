@@ -3155,6 +3155,40 @@ class App:
 
     # ── Gemini Translation Helpers ────────────────────────────────────
 
+    # Gemini needs much more explicit coordinate guidance than Anthropic/OpenAI.
+    # These suffixes are appended to desktop tool descriptions in _tools_to_gemini.
+    _GEMINI_COORD_HINTS = {
+        "screenshot": (
+            "\n\nCRITICAL COORDINATE RULES: The returned image has a specific pixel "
+            "resolution (stated in the response text, e.g. 1920x1080). All coordinate-"
+            "based tools (mouse_click, mouse_scroll, mouse_drag, read_screen_text) "
+            "use pixel positions within THIS image. Origin (0,0) is the TOP-LEFT "
+            "corner. X increases rightward, Y increases downward. The bottom-right "
+            "pixel is (width-1, height-1). Always take a fresh screenshot before "
+            "interacting with the screen."
+        ),
+        "mouse_click": (
+            "\n\nCRITICAL: x and y MUST be pixel coordinates taken directly from the "
+            "most recent screenshot image. (0,0) is the top-left corner of the image. "
+            "X is the horizontal pixel offset from the left edge, Y is the vertical "
+            "pixel offset from the top edge. Do NOT use screen resolution coordinates "
+            "— use the coordinates as they appear in the screenshot image."
+        ),
+        "mouse_scroll": (
+            "\n\nIf specifying x/y position, use pixel coordinates from the most "
+            "recent screenshot image (origin top-left)."
+        ),
+        "mouse_drag": (
+            "\n\nAll coordinates (start_x, start_y, end_x, end_y) MUST be pixel "
+            "positions from the most recent screenshot image. Origin (0,0) is the "
+            "top-left corner."
+        ),
+        "read_screen_text": (
+            "\n\nAll coordinates (x, y, width, height) use pixel positions from the "
+            "most recent screenshot image. Origin (0,0) is the top-left corner."
+        ),
+    }
+
     def _tools_to_gemini(self, tools):
         """Convert Anthropic tool schemas to Gemini FunctionDeclaration objects."""
         declarations = []
@@ -3162,26 +3196,56 @@ class App:
             schema = copy.deepcopy(tool.get("input_schema", {"type": "object", "properties": {}}))
             # Strip additionalProperties which some Gemini models reject
             self._strip_additional_properties(schema)
+            desc = tool.get("description", "")
+            # Append Gemini-specific coordinate guidance for desktop tools
+            desc += self._GEMINI_COORD_HINTS.get(tool["name"], "")
             declarations.append(genai_types.FunctionDeclaration(
                 name=tool["name"],
-                description=tool.get("description", ""),
+                description=desc,
                 parameters=schema,
             ))
         return declarations
 
     def _strip_additional_properties(self, schema):
-        """Recursively strip additionalProperties and stringify enum values."""
+        """Recursively strip additionalProperties and handle enum values for Gemini."""
         if isinstance(schema, dict):
             schema.pop("additionalProperties", None)
-            # Gemini only allows enum on STRING type properties
+            # Gemini only allows enum on STRING type properties.
+            # For non-string enums (e.g. integer), remove the enum constraint
+            # to keep the original type — converting integer params to string
+            # type confuses Gemini's coordinate reasoning in desktop tools.
             if "enum" in schema and isinstance(schema["enum"], list):
-                schema["enum"] = [str(v) for v in schema["enum"]]
-                schema["type"] = "string"
+                if schema.get("type") == "string":
+                    schema["enum"] = [str(v) for v in schema["enum"]]
+                else:
+                    schema.pop("enum")
             for v in schema.values():
                 self._strip_additional_properties(v)
         elif isinstance(schema, list):
             for item in schema:
                 self._strip_additional_properties(item)
+
+    @staticmethod
+    def _normalize_gemini_args(args_dict):
+        """Normalize Gemini protobuf args to plain Python types.
+
+        Protobuf Struct returns all numbers as float64.  Edge cases
+        (especially when schema enum types are mismatched) can produce
+        string-encoded numbers like "500.0" that break downstream
+        int(x) calls in shared tool methods.  Convert string numbers
+        back to int/float; leave real strings (e.g. "left") untouched.
+        """
+        result = {}
+        for k, v in args_dict.items():
+            if isinstance(v, str):
+                try:
+                    fv = float(v)
+                    result[k] = int(fv) if fv == int(fv) else fv
+                except (ValueError, OverflowError):
+                    result[k] = v
+            else:
+                result[k] = v
+        return result
 
     def _messages_to_gemini(self, messages):
         """Convert Anthropic-format messages to Gemini Content objects."""
@@ -3216,6 +3280,7 @@ class App:
                     if has_tool_result:
                         parts = []
                         image_parts = []  # Collect images separately
+                        all_text_parts = []  # Accumulate for dimension extraction
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
                                 tool_id = block.get("tool_use_id", "")
@@ -3241,6 +3306,7 @@ class App:
                                         else:
                                             text_parts.append(str(part))
                                     response_text = "\n".join(text_parts) if text_parts else ""
+                                    all_text_parts.extend(text_parts)
                                 else:
                                     response_text = str(tc_content) if tc_content else ""
                                 parts.append(genai_types.Part.from_function_response(
@@ -3256,11 +3322,25 @@ class App:
                             # Prefix with a text hint so Gemini associates the
                             # image with the preceding screenshot tool call and
                             # knows to use its pixel coordinates for mouse_click.
+                            # Include image dimensions so the model has the
+                            # coordinate space right next to the image.
+                            dims_hint = ""
+                            dims_w, dims_h = "", ""
+                            for tp in all_text_parts:
+                                m = re.search(r"\((\d+)x(\d+)\)", tp)
+                                if m:
+                                    dims_w, dims_h = m.group(1), m.group(2)
+                                    dims_hint = f" ({dims_w}x{dims_h} pixels)"
+                                    break
                             hint = genai_types.Part.from_text(
                                 text=(
-                                    "Below is the screenshot image returned by the screenshot tool above. "
-                                    "Use the pixel coordinates you see in this image when calling mouse_click "
-                                    "— they are automatically scaled to screen coordinates."
+                                    f"Below is the screenshot image{dims_hint} returned by the "
+                                    "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
+                                    "is (0, 0), X increases rightward, Y increases downward"
+                                    + (f", bottom-right is ({int(dims_w)-1}, {int(dims_h)-1})" if dims_w else "")
+                                    + ". When calling mouse_click, use pixel coordinates "
+                                    "as they appear in THIS image — they are automatically "
+                                    "scaled to actual screen coordinates."
                                 )
                             )
                             contents.append(genai_types.Content(
@@ -3403,7 +3483,7 @@ class App:
                             tc_entry = {
                                 "name": fc.name,
                                 "id": tool_id,
-                                "input": dict(fc.args) if fc.args else {},
+                                "input": self._normalize_gemini_args(dict(fc.args)) if fc.args else {},
                             }
                             # Preserve thought_signature for thinking models (required by Gemini API)
                             ts = getattr(part, "thought_signature", None)
@@ -4456,7 +4536,7 @@ class App:
         logical_w, logical_h = img.size
         # Resize to API image limit (provider-specific)
         if self.provider == "Gemini":
-            max_long_edge, max_megapixels = 2048, 2_000_000
+            max_long_edge, max_megapixels = 1568, 1_150_000  # match Anthropic; prevents silent API resizing
         elif self.provider == "OpenAI":
             max_long_edge, max_megapixels = 2048, 2_000_000
         else:
