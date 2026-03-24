@@ -4951,6 +4951,7 @@ class App:
     def _get_tools(self):
         tools = copy.deepcopy(TOOLS)
         # OpenAI/Anthropic use native server-side web search; exclude custom web tools
+        # (Gemini can't combine built-in tools with function calling, so it keeps local tools)
         if self.provider in ("OpenAI", "Anthropic"):
             tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
         if self.desktop_enabled.get() and _HAS_DESKTOP:
