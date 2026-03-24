@@ -1028,6 +1028,7 @@ class App:
         self.pending_images = []   # list of (base64_data, media_type, filename)
         self._editor_images = []   # working copy while editor is open
         self._screenshot_scale = 1.0
+        self._screenshot_offset = (0, 0)  # virtual desktop origin for multi-display
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
@@ -4321,17 +4322,51 @@ class App:
         "teams": "open -a 'Microsoft Teams'",
     }
 
+    def _macos_full_screenshot(self):
+        """Capture all displays on macOS using Quartz CoreGraphics.
+        Returns a PIL Image covering the full virtual desktop, or None on failure."""
+        try:
+            import Quartz
+            cg_img = Quartz.CGWindowListCreateImage(
+                Quartz.CGRectInfinite,
+                Quartz.kCGWindowListOptionOnScreenOnly,
+                Quartz.kCGNullWindowID,
+                Quartz.kCGWindowImageDefault,
+            )
+            if not cg_img:
+                return None
+            w = Quartz.CGImageGetWidth(cg_img)
+            h = Quartz.CGImageGetHeight(cg_img)
+            # Convert CGImage to PIL via raw bitmap data
+            cf_data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_img))
+            img = Image.frombytes("RGBA", (w, h), cf_data, "raw", "BGRA")
+            return img.convert("RGB")
+        except Exception:
+            return None
+
     def do_screenshot(self, region=None):
         try:
             if region:
                 img = pyautogui.screenshot(region=region)
+            elif not IS_WINDOWS:
+                # macOS: use Quartz to capture all displays (pyautogui only captures primary)
+                img = self._macos_full_screenshot()
+                if img is None:
+                    img = pyautogui.screenshot()  # fallback
             else:
                 img = pyautogui.screenshot()
             phys_w, phys_h = img.size
             # Align screenshot to pyautogui's logical coordinate space so all
             # desktop tool coordinates map directly to mouse positions.
             if not region:
-                log_w, log_h = pyautogui.size()
+                if not IS_WINDOWS:
+                    # macOS multi-display: get virtual desktop size from CoreGraphics
+                    vx, vy, vw, vh = self._get_virtual_screen_bounds()
+                    log_w, log_h = vw, vh
+                    self._screenshot_offset = (vx, vy)
+                else:
+                    log_w, log_h = pyautogui.size()
+                    self._screenshot_offset = (0, 0)
                 if phys_w != log_w and log_w:
                     img = img.resize((log_w, log_h))
             logical_w, logical_h = img.size
@@ -4358,8 +4393,9 @@ class App:
     def do_mouse_click(self, x, y, button="left", clicks=1):
         try:
             scale = self._screenshot_scale
-            screen_x = int(x * scale)
-            screen_y = int(y * scale)
+            ox, oy = self._screenshot_offset
+            screen_x = int(x * scale) + ox
+            screen_y = int(y * scale) + oy
             pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
             return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image coords ({x}, {y}), scale {scale:.2f}x]"
         except Exception as e:
@@ -4402,11 +4438,12 @@ class App:
     def do_mouse_scroll(self, clicks, x=None, y=None):
         try:
             scale = self._screenshot_scale
+            ox, oy = self._screenshot_offset
             kwargs = {}
             if x is not None:
-                kwargs["x"] = int(x * scale)
+                kwargs["x"] = int(x * scale) + ox
             if y is not None:
-                kwargs["y"] = int(y * scale)
+                kwargs["y"] = int(y * scale) + oy
             pyautogui.scroll(clicks, **kwargs)
             direction = "up" if clicks > 0 else "down"
             pos = f" at ({x}, {y})" if x is not None else ""
@@ -4519,8 +4556,9 @@ class App:
     def do_read_screen_text(self, x, y, width, height):
         try:
             scale = self._screenshot_scale
-            sx = int(x * scale)
-            sy = int(y * scale)
+            ox, oy = self._screenshot_offset
+            sx = int(x * scale) + ox
+            sy = int(y * scale) + oy
             sw = int(width * scale)
             sh = int(height * scale)
             img = pyautogui.screenshot(region=(sx, sy, sw, sh))
@@ -4567,8 +4605,9 @@ class App:
             cx = location.left + location.width // 2
             cy = location.top + location.height // 2
             scale = self._screenshot_scale
-            img_cx = int(cx / scale) if scale else cx
-            img_cy = int(cy / scale) if scale else cy
+            ox, oy = self._screenshot_offset
+            img_cx = int((cx - ox) / scale) if scale else cx
+            img_cy = int((cy - oy) / scale) if scale else cy
             return (
                 f"Image found at region ({location.left}, {location.top}, "
                 f"{location.width}x{location.height})\n"
@@ -4581,10 +4620,11 @@ class App:
     def do_mouse_drag(self, start_x, start_y, end_x, end_y, duration=0.5, button="left"):
         try:
             scale = self._screenshot_scale
-            sx = int(start_x * scale)
-            sy = int(start_y * scale)
-            ex = int(end_x * scale)
-            ey = int(end_y * scale)
+            ox, oy = self._screenshot_offset
+            sx = int(start_x * scale) + ox
+            sy = int(start_y * scale) + oy
+            ex = int(end_x * scale) + ox
+            ey = int(end_y * scale) + oy
             pyautogui.moveTo(sx, sy, duration=0.1)
             pyautogui.mouseDown(button=button)
             pyautogui.moveTo(ex, ey, duration=duration)
@@ -4956,7 +4996,8 @@ class App:
             tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
-            screen_w, screen_h = pyautogui.size()
+            vx, vy, vw, vh = self._get_virtual_screen_bounds()
+            screen_w, screen_h = vw, vh
             for tool in desktop:
                 if tool["name"] == "screenshot":
                     tool["description"] = (
