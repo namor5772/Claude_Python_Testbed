@@ -501,7 +501,7 @@ The application is a single-file tkinter app structured around the `App` class:
 
 ## MyAgent.py — Autonomous AI Task Agent
 
-A fire-and-forget autonomous task runner built with tkinter that supports both **Anthropic** (Claude) and **OpenAI** (GPT-4.1, o4-mini, etc.) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Agent Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
+A fire-and-forget autonomous task runner built with tkinter that supports both **Anthropic** (Claude) and **OpenAI** (GPT-4.1, o4-mini, etc.) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
 ### How the Agentic Loop Works
 
@@ -542,7 +542,7 @@ When launched with `-l`, the app restores window geometry and display settings n
 
 #### Agent Instructions
 
-Agent Instructions are pre-configured task descriptions that serve as the first (and only) user message. They are managed through a dedicated **Agent Instruction** editor window and stored in `agent_instructions.json`.
+Agent Instructions are pre-configured task descriptions that serve as the first (and only) user message. They are managed through a dedicated **Instruction Editor** window and stored in `agent_instructions.json`.
 
 | Control | Description |
 |---|---|
@@ -551,6 +551,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **DELETE** button | Remove the named instruction from disk |
 | **CLEAR** button | Reset the editor — clears text, images, and tool toggles |
 | **Load Instruction** dropdown | Select a previously saved instruction — populates the editor fields for preview |
+| **Apply** button | Next to the Load dropdown — make the instruction active for this session (no disk write) and close the editor |
 | **Text editor** | Multi-line area for writing the task description |
 | **Attach Images** button | Select image files to attach to the instruction |
 | **Remove Selected** button | Delete selected images from the image list |
@@ -560,7 +561,6 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
 | **PS Safety** button | Open the PowerShell Safety dialog to selectively bypass individual confirmation patterns; the button label shows a count when patterns are bypassed (e.g., `PS Safety (3 bypassed)`) |
 | **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
-| **Apply** button | Make the instruction active for this session (no disk write) and close the editor |
 
 **Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser/Meta toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
 
@@ -658,11 +658,11 @@ Results are slotted back into their original API-requested order regardless of e
 
 Shared with SelfBot — both apps read from the same `skills.json` file. The three-mode system (disabled, enabled, on-demand) works identically. See the SelfBot.py Skills System section above for full details.
 
-The **Skills** button is located in the **Agent Instruction Editor** (not on the main window), since skill modes are saved and restored per-instruction. Opening the Skills Manager from the editor makes it clear that the skills configuration is part of the instruction's environment.
+The **Skills** button is located in the **Instruction Editor** (not on the main window), since skill modes are saved and restored per-instruction. Opening the Skills Manager from the editor makes it clear that the skills configuration is part of the instruction's environment.
 
 #### Image Attachments
 
-- Image management is integrated into the **Agent Instruction Editor** — click **Attach Images** to select files (PNG, JPG, JPEG, GIF, WEBP)
+- Image management is integrated into the **Instruction Editor** — click **Attach Images** to select files (PNG, JPG, JPEG, GIF, WEBP)
 - Attached images appear in a scrollable listbox showing filenames in purple text
 - Select one or more images and click **Remove Selected** to delete them (supports Ctrl+click and Shift+click for multi-select)
 - Images are sent to Claude as base64-encoded content blocks alongside the Agent Instruction text when START is pressed
@@ -690,7 +690,7 @@ Four checkboxes on the main window control what is shown in the output display (
 | **Show Thinking** | Extended thinking blocks in amber/gold italic text |
 | **Save Thinking** | Preserve thinking blocks in saved chat JSON for reasoning continuity on reload |
 
-Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction inside the Agent Instruction Editor.
+Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction inside the Instruction Editor.
 
 The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
 
@@ -709,7 +709,7 @@ Conversions include: superscripts (`x^2` → `x²`), subscripts (`x_0` → `x₀
 
 #### PS Safety — Deselectable Confirm Patterns
 
-The **PS Safety** button (inside the Agent Instruction Editor, next to the Skills button) opens a dialog listing all 24 `POWERSHELL_CONFIRM` patterns as checkboxes:
+The **PS Safety** button (inside the Instruction Editor, next to the Skills button) opens a dialog listing all 24 `POWERSHELL_CONFIRM` patterns as checkboxes:
 
 - **Checked** (default) — the pattern requires a confirmation dialog before execution, as normal
 - **Unchecked** — the confirmation dialog is bypassed; the command runs immediately and a `⚠ Confirm bypassed (pattern: ...)` warning is displayed in the output window
@@ -721,7 +721,7 @@ The bypass warning always appears regardless of the Activity checkbox state. Dis
 - **Multi-instance state** — Each instance claims the lowest available instance number via lock files (`agent_lock_N.lock`). Instance 1 saves to `agent_state.json`, instance 2+ to `agent_state_N.json`. All settings (provider, model, geometry, dialog positions, display checkboxes) are independent per instance. Stale locks from crashed processes are detected via Windows `OpenProcess` with executable name verification (or `os.kill` + `ps` on macOS) — confirms the PID belongs to a running MyAgent.py process, not a recycled PID from an unrelated process. The title bar shows `My Agent (N)` for instance 2+
 - Provider, last-used instruction name, model, temperature, thinking settings, display checkbox states (Debug, Tool Calls, Activity, Show Thinking, Save Thinking), main window geometry, and dialog geometries are saved per instance
 - On startup, the app restores all settings and the last instruction (including its images, Desktop/Browser/Meta toggles, provider, and model parameters) automatically. If the saved model doesn't exist in the saved provider's model list (e.g., provider/model mismatch from a corrupted state file), it falls back to the first available model for that provider
-- **Persistent dialog geometry** — The **Agent Instruction Editor**, **Agent Request** (user_prompt), **PowerShell Confirm**, **PS Safety**, and **Skills Manager** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened. All dialogs use a withdraw/deiconify pattern to prevent the window manager from overriding saved positions. The periodic auto-save (every 5 seconds) captures **live geometry** from all currently open dialogs, so positions are saved even if the app is closed without closing dialogs first
+- **Persistent dialog geometry** — The **Instruction Editor**, **Agent Request** (user_prompt), **PowerShell Confirm**, **PS Safety**, and **Skills Manager** dialog windows all remember their size and position across sessions. Resizing or moving any dialog persists to the instance's state file and is restored the next time that dialog is opened. All dialogs use a withdraw/deiconify pattern to prevent the window manager from overriding saved positions. The periodic auto-save (every 5 seconds) captures **live geometry** from all currently open dialogs, so positions are saved even if the app is closed without closing dialogs first
 - **Multi-monitor geometry persistence** — Window and dialog geometries are stored **per monitor configuration** in `agent_state.json` under a `geometries` dict keyed by the current monitor layout (detected via Win32 `EnumDisplayMonitors` on Windows, CoreGraphics `CGGetActiveDisplayList` on macOS). Switching between different setups (e.g., docked with dual monitors vs undocked laptop) automatically restores the correct positions for each configuration. Works with any number of monitors in any arrangement on both platforms
 - **Geometry sanitization** — All persisted window and dialog geometries (main window, editor, prompt dialog, confirm dialog, PS Safety dialog, Skills Manager dialog) are validated on restore via `_sanitize_geometry()` against the full virtual desktop bounds spanning all monitors (Win32 `GetSystemMetrics` on Windows, CoreGraphics `CGDisplayBounds` on macOS). Windows that are too small (below 200x150), positioned entirely off-screen, or have fewer than 50 visible pixels on any monitor are reset to defaults. This prevents windows from becoming invisible after monitor changes or corrupted state files. Old state files with flat geometry fields are automatically migrated to the per-config format on first load
 
@@ -741,7 +741,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 
 | Row | Contents |
 |---|---|
-| **Row 0** | Chat toolbar: Agent Instruction button, model info label, Save Chat as entry, START button (green), STOP button (red) |
+| **Row 0** | Chat toolbar: START button, STOP button, Instruction button, model info label, Save Chat as entry (fills remaining space) |
 | **Row 1** | Chat display: read-only text area with scrollbar, colour-coded output |
 | **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Save Thinking |
 
@@ -752,7 +752,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 | Aspect | SelfBot.py | MyAgent.py |
 |---|---|---|
 | **Paradigm** | Interactive chatbot — user sends messages, gets replies | Autonomous agent — configure a task, press START, observe |
-| **User input** | Multi-line text input field for typing messages | No input field — task is defined via Agent Instruction editor; mid-task input via `user_prompt` tool dialog |
+| **User input** | Multi-line text input field for typing messages | No input field — task is defined via Instruction Editor; mid-task input via `user_prompt` tool dialog |
 | **Controls** | Send button (Enter key) | START / STOP buttons |
 | **Conversation** | Multi-turn back-and-forth with user | Single task instruction, then autonomous tool-use loop |
 | **Multi-instance** | Yes — two instances can self-chat autonomously | Yes — unlimited instances with independent state via lock files |
@@ -781,7 +781,7 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 The application is a single-file (~5,600 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
 
-- **UI Layout** — Grid-based layout with 3 rows: chat toolbar with Agent Instruction button, model info label, save-chat entry, and START/STOP buttons (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Agent Instruction editor window
+- **UI Layout** — Grid-based layout with 3 rows: chat toolbar with START/STOP buttons, Instruction button, model info label, and save-chat entry that fills remaining space (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Instruction Editor window
 - **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`. An `_ensure_newline()` helper guarantees each new output block starts on a fresh line, and an `ensure_newline` queue event between loop iterations prevents consecutive response streams from merging when Activity display is off
 - **Multi-Provider Support** — A Provider combobox switches between Anthropic, OpenAI, and Gemini. The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary via `_messages_to_responses()`, `_tools_to_responses()`, `_messages_to_gemini()`, `_tools_to_gemini()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, top-level `function_call`/`function_call_output` items, native `web_search_preview` and `code_interpreter` (server-side tools). Anthropic uses `client.beta.messages.stream()` with `betas` flags to enable server-side `web_search_20250305` and `code_execution_20250825`; streaming events for `server_tool_use` display status messages, and code execution file outputs are extracted from `final_message.content` post-stream and downloaded via `beta.files.download()`. Gemini uses the Google GenAI SDK with streaming and thinking support; Gemini cannot use server-side built-in tools (`google_search`, `code_execution`) alongside custom function declarations due to an API restriction, so it keeps local DuckDuckGo web search. The `_ToolBlock` wrapper class gives OpenAI/Gemini dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for all providers
 - **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button. An **auto-prompt safety net** keeps interactive instructions alive: if the instruction text mentions `user_prompt` but the model ends its turn without calling it, the agent automatically injects a `user_prompt` dialog asking the user what to do next (submitting an empty response exits the loop)

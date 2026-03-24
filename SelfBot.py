@@ -1015,7 +1015,7 @@ class App:
         self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
         # Not packed yet — _on_model_selected() will show/hide as needed
 
-        tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=8).pack(side=tk.RIGHT, padx=(5, 0))
+        tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=10).pack(side=tk.RIGHT, padx=(5, 0))
         tk.Button(model_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.RIGHT, padx=(10, 5))
 
         # Names toolbar (row 0)

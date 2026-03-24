@@ -1117,32 +1117,32 @@ class App:
         self._verbosity_label = None
         self._verbosity_combo = None
 
-        # Row 0: Chat toolbar — Instruction + model info + Save + START/STOP
+        # Row 0: Chat toolbar — START/STOP + Instruction + model info + Save
         chat_toolbar = tk.Frame(self.root)
         chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
 
+        self._start_button = tk.Button(
+            chat_toolbar, text="START", command=self._start_agent, width=8,
+            font=("Arial", 10, "bold"),
+        )
+        self._start_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self._stop_button = tk.Button(
+            chat_toolbar, text="STOP", command=self._stop_agent, width=8,
+            font=("Arial", 10, "bold"), state="disabled",
+        )
+        self._stop_button.pack(side=tk.LEFT, padx=(0, 8))
+
         self.instruction_button = tk.Button(
-            chat_toolbar, text="Agent Instruction", command=self.open_instruction_editor,
+            chat_toolbar, text="Instruction", command=self.open_instruction_editor,
         )
         self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self._update_title()
 
         tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
-        self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10), width=20)
-        self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 15))
-
-        self._stop_button = tk.Button(
-            chat_toolbar, text="STOP", command=self._stop_agent, width=8,
-            font=("Arial", 10, "bold"), state="disabled",
-        )
-        self._stop_button.pack(side=tk.RIGHT, padx=(5, 0))
-
-        self._start_button = tk.Button(
-            chat_toolbar, text="START", command=self._start_agent, width=8,
-            font=("Arial", 10, "bold"),
-        )
-        self._start_button.pack(side=tk.RIGHT, padx=(5, 0))
+        self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10))
+        self.chat_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
         # Row 1: Chat display
         self.chat_display = tk.Text(
@@ -2176,7 +2176,7 @@ class App:
 
         win = tk.Toplevel(self.root)
         win.withdraw()  # Hide until geometry is set
-        win.title("Agent Instruction Editor")
+        win.title("Instruction Editor")
         if IS_WINDOWS:
             win.transient(self.root)
         win.protocol("WM_DELETE_WINDOW", lambda: self._on_editor_close(win))
@@ -2211,6 +2211,16 @@ class App:
         self._instr_combo.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self._instr_combo.bind("<<ComboboxSelected>>", self._on_instruction_selected)
         self._refresh_instruction_list()
+
+        _apply_btn = tk.Button(
+            win, text="Apply", command=self._apply_instruction
+        )
+        # Bold label, sized to match SAVE button column via sticky="ew"
+        import tkinter.font as _tkfont
+        _f = _tkfont.nametofont(_apply_btn.cget("font")).copy()
+        _f.configure(weight="bold")
+        _apply_btn.configure(font=_f)
+        _apply_btn.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
 
         # Row 2: Text editor
         self._instr_text = tk.Text(win, wrap=tk.WORD, font=(MONO_FONT, 10))
@@ -2357,11 +2367,7 @@ class App:
         img_list_scrollbar.grid(row=5, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
         self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
 
-        # Row 6: Apply button
-        tk.Button(
-            win, text="Apply", command=self._apply_instruction,
-            font=("Arial", 10, "bold"), width=16
-        ).grid(row=6, column=0, columnspan=5, pady=(5, 10))
+        # (Apply button is in row 1, to the right of the Load combo)
 
         # Grid weights
         win.grid_columnconfigure(1, weight=1)
