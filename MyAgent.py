@@ -5631,16 +5631,15 @@ class App:
         # Superscripts: ^{...} and ^x
         _sup_map = str.maketrans("0123456789+-=()nixy", "⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱˣʸ")
         def _sup_repl(m):
-            content = m.group(1) if m.group(1) is not None else m.group(2)
-            return content.translate(_sup_map)
-        text = re.sub(r'\^\{([^}]*)\}|\^([0-9nixy])', _sup_repl, text)
+            return m.group(1).translate(_sup_map)
+        # Only convert braced superscripts ^{...} to avoid false positives in code/filenames
+        text = re.sub(r'\^\{([^}]*)\}', _sup_repl, text)
 
-        # Subscripts: _{...} and _x
+        # Subscripts: only braced _{...} to avoid false positives (e.g. sinc_plot.png)
         _sub_map = str.maketrans("0123456789+-=()aeiourxhklmnpst", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢₒᵤᵣₓₕₖₗₘₙₚₛₜ")
         def _sub_repl(m):
-            content = m.group(1) if m.group(1) is not None else m.group(2)
-            return content.translate(_sub_map)
-        text = re.sub(r'_\{([^}]*)\}|_([0-9aeiourxhklmnpst])', _sub_repl, text)
+            return m.group(1).translate(_sub_map)
+        text = re.sub(r'_\{([^}]*)\}', _sub_repl, text)
 
         # Greek letters (common ones)
         _greek = {
