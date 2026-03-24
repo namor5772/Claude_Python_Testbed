@@ -46,10 +46,10 @@ try:
         except Exception:
             sys.modules["mouseinfo"] = type(sys)("mouseinfo")
     import pyautogui
-    from PIL import Image
+    from PIL import Image, ImageGrab
     # Desktop automation safety settings
     pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
-    pyautogui.PAUSE = 0.3       # small delay between actions
+    pyautogui.PAUSE = 0.1       # small delay between actions
 except Exception:
     _HAS_DESKTOP = False
 if IS_WINDOWS:
@@ -326,8 +326,8 @@ DESKTOP_TOOLS = [
                     "type": "integer",
                     "description": "Which display to capture (0 = primary, 1 = secondary, etc.). Default: 0 (primary). Use this to see and interact with windows on different monitors.",
                 },
-                "x": {"type": "integer", "description": "Left edge of region to capture (in screen coordinates)"},
-                "y": {"type": "integer", "description": "Top edge of region to capture (in screen coordinates)"},
+                "x": {"type": "integer", "description": "Left edge of region to capture (use coordinates from the screenshot image)"},
+                "y": {"type": "integer", "description": "Top edge of region to capture (use coordinates from the screenshot image)"},
                 "width": {"type": "integer", "description": "Width of region to capture"},
                 "height": {"type": "integer", "description": "Height of region to capture"},
             },
@@ -507,7 +507,7 @@ DESKTOP_TOOLS = [
         "name": "read_screen_text",
         "description": (
             "Read text from a region of the screen using OCR. "
-            "Specify the region as x, y, width, height in screen coordinates."
+            "Specify the region as x, y, width, height using coordinates from the screenshot image."
         ),
         "input_schema": {
             "type": "object",
@@ -1033,6 +1033,7 @@ class App:
         self._editor_images = []   # working copy while editor is open
         self._screenshot_scale = 1.0
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
+        self._screenshot_dims = (0, 0)    # (width, height) of last screenshot sent to model
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
@@ -1714,6 +1715,43 @@ class App:
             return rects
         except Exception:
             return []
+
+    @staticmethod
+    def _get_windows_display_rects():
+        """Return list of (left, top, right, bottom) for each display via EnumDisplayMonitors.
+        Primary monitor (origin 0,0) is always first."""
+        try:
+            user32 = ctypes.windll.user32
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            monitors = []
+            MONITORENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.POINTER(RECT), ctypes.c_double)
+
+            def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                r = lprcMonitor[0]
+                monitors.append((r.left, r.top, r.right, r.bottom))
+                return 1
+
+            user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
+            if monitors:
+                # Primary monitor has origin (0,0); sort it first, then by position
+                monitors.sort(key=lambda r: (r[0] != 0 or r[1] != 0, r[0], r[1]))
+                return monitors
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def _get_display_rects():
+        """Return list of (left, top, right, bottom) for each display. Cross-platform."""
+        if IS_WINDOWS:
+            return App._get_windows_display_rects()
+        return App._get_macos_display_rects()
 
     @staticmethod
     def _get_virtual_screen_bounds():
@@ -4359,8 +4397,27 @@ class App:
         """Capture a single display (or region), resize to API limit, update scale/offset.
         Returns list of content blocks [text, image] or error string."""
         if region:
-            img = pyautogui.screenshot(region=region)
-            # Region uses current display's offset (already set from last full screenshot)
+            # Convert image coordinates to screen coordinates using current scale/offset
+            scale = self._screenshot_scale
+            ox, oy = self._screenshot_offset
+            rx, ry, rw, rh = int(region[0]), int(region[1]), int(region[2]), int(region[3])
+            screen_x = round(rx * scale) + ox
+            screen_y = round(ry * scale) + oy
+            screen_w = max(round(rw * scale), 1)
+            screen_h = max(round(rh * scale), 1)
+            if IS_WINDOWS:
+                # ImageGrab supports all_screens for multi-monitor; bbox is (l, t, r, b)
+                img = ImageGrab.grab(bbox=(screen_x, screen_y,
+                                          screen_x + screen_w, screen_y + screen_h),
+                                    all_screens=True)
+            else:
+                img = pyautogui.screenshot(region=(screen_x, screen_y, screen_w, screen_h))
+            # Update offset to region origin so subsequent clicks use region-relative coords
+            self._screenshot_offset = (screen_x, screen_y)
+            # DPI alignment: on macOS Retina, pyautogui returns physical resolution
+            phys_w_r, phys_h_r = img.size
+            if not IS_WINDOWS and phys_w_r != screen_w and screen_w:
+                img = img.resize((screen_w, screen_h))
         elif not IS_WINDOWS:
             img, disp_x, disp_y = self._macos_display_screenshot(display_idx)
             if img is not None:
@@ -4369,19 +4426,23 @@ class App:
                 img = pyautogui.screenshot()
                 self._screenshot_offset = (0, 0)
         else:
-            img = pyautogui.screenshot()
-            self._screenshot_offset = (0, 0)
+            # Windows: per-display capture via ImageGrab with all_screens
+            rects = self._get_windows_display_rects()
+            if rects and display_idx < len(rects):
+                l, t, r, b = rects[display_idx]
+                img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
+                self._screenshot_offset = (l, t)
+            else:
+                img = pyautogui.screenshot()
+                self._screenshot_offset = (0, 0)
         phys_w, phys_h = img.size
         # Align to logical coordinate space (handles DPI scaling)
         if not region:
-            if not IS_WINDOWS:
-                rects = self._get_macos_display_rects()
-                if rects:
-                    idx = min(display_idx, len(rects) - 1)
-                    l, t, r, b = rects[idx]
-                    log_w, log_h = r - l, b - t
-                else:
-                    log_w, log_h = pyautogui.size()
+            rects = self._get_display_rects()
+            if rects:
+                idx = min(display_idx, len(rects) - 1)
+                l, t, r, b = rects[idx]
+                log_w, log_h = r - l, b - t
             else:
                 log_w, log_h = pyautogui.size()
             if phys_w != log_w and log_w:
@@ -4389,7 +4450,7 @@ class App:
         logical_w, logical_h = img.size
         # Resize to API image limit (provider-specific)
         if self.provider == "Gemini":
-            max_long_edge, max_megapixels = 3072, 4_000_000
+            max_long_edge, max_megapixels = 2048, 2_000_000
         elif self.provider == "OpenAI":
             max_long_edge, max_megapixels = 2048, 2_000_000
         else:
@@ -4397,22 +4458,23 @@ class App:
         longest = max(logical_w, logical_h)
         if longest > max_long_edge:
             r = max_long_edge / longest
-            max_w = int(logical_w * r)
+            max_w = round(logical_w * r)
         else:
             max_w = logical_w
-        max_h = int(logical_h * (max_w / logical_w)) if logical_w else logical_h
+        max_h = round(logical_h * (max_w / logical_w)) if logical_w else logical_h
         if max_w * max_h > max_megapixels:
             r = (max_megapixels / (max_w * max_h)) ** 0.5
-            max_w = int(max_w * r)
+            max_w = round(max_w * r)
         if logical_w > max_w:
             ratio = logical_w / max_w
-            new_h = int(logical_h / ratio)
+            new_h = round(logical_h / ratio)
             img = img.resize((max_w, new_h))
             self._screenshot_scale = ratio
             img_w, img_h = max_w, new_h
         else:
             self._screenshot_scale = 1.0
             img_w, img_h = logical_w, logical_h
+        self._screenshot_dims = (img_w, img_h)
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
@@ -4428,11 +4490,8 @@ class App:
                     {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
                 ]
             # Determine how many displays to capture
-            if not IS_WINDOWS:
-                rects = self._get_macos_display_rects()
-                num_displays = len(rects) if rects else 1
-            else:
-                num_displays = 1
+            rects = self._get_display_rects()
+            num_displays = len(rects) if rects else 1
             if display is not None:
                 # Specific display requested
                 img_w, img_h, b64_data = self._capture_single_display(display)
@@ -4448,7 +4507,7 @@ class App:
                 result.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}})
             result.append({"type": "text", "text": "To click on a target, first call screenshot with that display number, THEN use mouse_click with coordinates from that specific display's screenshot."})
             # Set offset to primary display (display 0) as default for subsequent clicks
-            if not IS_WINDOWS and num_displays > 1:
+            if num_displays > 1:
                 self._capture_single_display(0)  # reset scale/offset to display 0
             return result
         except Exception as e:
@@ -4456,12 +4515,20 @@ class App:
 
     def do_mouse_click(self, x, y, button="left", clicks=1):
         try:
+            x, y = int(x), int(y)
             scale = self._screenshot_scale
             ox, oy = self._screenshot_offset
-            screen_x = int(x * scale) + ox
-            screen_y = int(y * scale) + oy
+            iw, ih = self._screenshot_dims
+            # Clamp to screenshot image bounds to prevent gross misclicks
+            warning = ""
+            if iw and ih and (x < 0 or y < 0 or x >= iw or y >= ih):
+                warning = f" ⚠ coords ({x},{y}) outside screenshot {iw}x{ih} — clamped"
+                x = max(0, min(x, iw - 1))
+                y = max(0, min(y, ih - 1))
+            screen_x = round(x * scale) + ox
+            screen_y = round(y * scale) + oy
             pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
-            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image coords ({x}, {y}), scale {scale:.2f}x]"
+            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image ({x},{y}) of {iw}x{ih}, scale {scale:.2f}x, offset ({ox},{oy})]{warning}"
         except Exception as e:
             return f"Click error: {e}"
 
@@ -4505,9 +4572,9 @@ class App:
             ox, oy = self._screenshot_offset
             kwargs = {}
             if x is not None:
-                kwargs["x"] = int(x * scale) + ox
+                kwargs["x"] = round(int(x) * scale) + ox
             if y is not None:
-                kwargs["y"] = int(y * scale) + oy
+                kwargs["y"] = round(int(y) * scale) + oy
             pyautogui.scroll(clicks, **kwargs)
             direction = "up" if clicks > 0 else "down"
             pos = f" at ({x}, {y})" if x is not None else ""
@@ -4621,11 +4688,14 @@ class App:
         try:
             scale = self._screenshot_scale
             ox, oy = self._screenshot_offset
-            sx = int(x * scale) + ox
-            sy = int(y * scale) + oy
-            sw = int(width * scale)
-            sh = int(height * scale)
-            img = pyautogui.screenshot(region=(sx, sy, sw, sh))
+            sx = round(int(x) * scale) + ox
+            sy = round(int(y) * scale) + oy
+            sw = max(round(int(width) * scale), 1)
+            sh = max(round(int(height) * scale), 1)
+            if IS_WINDOWS:
+                img = ImageGrab.grab(bbox=(sx, sy, sx + sw, sy + sh), all_screens=True)
+            else:
+                img = pyautogui.screenshot(region=(sx, sy, sw, sh))
 
             if IS_WINDOWS:
                 import winocr
@@ -4670,8 +4740,8 @@ class App:
             cy = location.top + location.height // 2
             scale = self._screenshot_scale
             ox, oy = self._screenshot_offset
-            img_cx = int((cx - ox) / scale) if scale else cx
-            img_cy = int((cy - oy) / scale) if scale else cy
+            img_cx = round((cx - ox) / scale) if scale else cx
+            img_cy = round((cy - oy) / scale) if scale else cy
             return (
                 f"Image found at region ({location.left}, {location.top}, "
                 f"{location.width}x{location.height})\n"
@@ -4685,10 +4755,10 @@ class App:
         try:
             scale = self._screenshot_scale
             ox, oy = self._screenshot_offset
-            sx = int(start_x * scale) + ox
-            sy = int(start_y * scale) + oy
-            ex = int(end_x * scale) + ox
-            ey = int(end_y * scale) + oy
+            sx = round(int(start_x) * scale) + ox
+            sy = round(int(start_y) * scale) + oy
+            ex = round(int(end_x) * scale) + ox
+            ey = round(int(end_y) * scale) + oy
             pyautogui.moveTo(sx, sy, duration=0.1)
             pyautogui.mouseDown(button=button)
             pyautogui.moveTo(ex, ey, duration=duration)
@@ -5061,19 +5131,14 @@ class App:
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
             # Build display info for tool description (API order: 0=primary)
-            if not IS_WINDOWS:
-                rects = self._get_macos_display_rects()
-                num_displays = len(rects) if rects else 1
-                if rects:
-                    disp_info = ", ".join(
-                        f"display {i}: {r[2]-r[0]}x{r[3]-r[1]}" for i, r in enumerate(rects)
-                    )
-                else:
-                    sw, sh = pyautogui.size()
-                    disp_info = f"display 0: {sw}x{sh}"
+            rects = self._get_display_rects()
+            num_displays = len(rects) if rects else 1
+            if rects:
+                disp_info = ", ".join(
+                    f"display {i}: {r[2]-r[0]}x{r[3]-r[1]}" for i, r in enumerate(rects)
+                )
             else:
                 sw, sh = pyautogui.size()
-                num_displays = 1
                 disp_info = f"display 0: {sw}x{sh}"
             for tool in desktop:
                 if tool["name"] == "screenshot":
@@ -5168,6 +5233,8 @@ class App:
             inp = block.input
             if block.name == "screenshot":
                 display = inp.get("display")  # None = all displays
+                if display is not None:
+                    display = int(display)  # Gemini proto returns floats
                 disp_label = f"display {display}" if display is not None else "all displays"
                 self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
                 region = None
