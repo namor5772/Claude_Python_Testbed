@@ -1,0 +1,361 @@
+================================================================================
+                    SelfBot.py — Complete Tool Reference
+                         29 Tools across 4 Categories
+================================================================================
+
+Generated: 2026-03-27
+Source: SelfBot.py (Claude_Python_Testbed)
+
+================================================================================
+CATEGORY 1: CORE TOOLS (2 tools)
+Always included in every API call
+================================================================================
+
+[1] run_command
+    Description:  Execute a command on the local machine and return its output.
+                  Use this for system tasks like listing files, checking
+                  processes, reading/writing files, getting system info, running
+                  scripts, installing software, or any other local operation.
+                  Commands run with the current user's permissions. On Windows
+                  this runs PowerShell; on macOS this runs bash. IMPORTANT: When
+                  launching GUI applications, use Start-Process (Windows) or
+                  'open -a' (macOS) so the command returns immediately instead
+                  of blocking.
+    Parameters:
+      - command    (string, REQUIRED)  The command to execute
+
+[2] csv_search
+    Description:  Search a delimited text file (CSV, TSV, TXT, etc.) for records
+                  matching a value. The file must have a header row. You can
+                  search a specific column or all columns. Returns matching rows
+                  as formatted text. Use this whenever the user asks to find,
+                  look up, or filter data in a CSV, TSV, or delimited text file.
+    Parameters:
+      - file_path    (string, REQUIRED)   Absolute path to the file
+      - search_value (string, REQUIRED)   The value to search for
+      - delimiter    (string, optional)   Column delimiter: ',' (default), '\t',
+                                          '|', ';'. Auto-detects if omitted.
+      - column       (string, optional)   Column heading to search in. If
+                                          omitted, searches all columns.
+      - match_mode   (string, optional)   "contains" (default), "exact", or
+                                          "starts_with". Case-insensitive.
+                                          Enum: [contains, exact, starts_with]
+      - max_results  (integer, optional)  Max matching rows to return (default 50)
+
+
+================================================================================
+CATEGORY 2: DESKTOP TOOLS (13 tools)
+Enabled when: Desktop checkbox is checked AND pyautogui is available
+================================================================================
+
+[3] screenshot
+    Description:  (Dynamically patched at runtime with display info)
+                  Single display: "Take a screenshot of the screen (resolution
+                  {W}x{H}). Always use this FIRST to see what is on the screen
+                  before clicking or typing. The image may be resized. For
+                  mouse_click, use the pixel coordinates as you see them in the
+                  image — they are automatically scaled to screen coordinates.
+                  Optionally capture only a region by specifying x, y, width,
+                  height. TIP: For precise clicking on small targets, first take
+                  a full screenshot to locate the target, then take a REGION
+                  screenshot zoomed into just that area for pixel-accurate
+                  coordinates."
+                  Multi-display: Lists all displays with resolutions, explains
+                  capture-all-then-target workflow with region tip.
+    Parameters:
+      - display  (integer, optional)  Which display to capture (0 = primary,
+                                      1 = secondary, etc.). Omit to capture ALL
+                                      displays as separate images.
+      - x        (integer, optional)  Left edge of region to capture
+      - y        (integer, optional)  Top edge of region to capture
+      - width    (integer, optional)  Width of region to capture
+      - height   (integer, optional)  Height of region to capture
+    Returns: List of content blocks (text + base64 PNG image)
+    Coordinate system: Images resized to Anthropic API limits (1568px/1.15MP).
+                       _screenshot_scale, _screenshot_offset, _screenshot_dims
+                       are updated for all subsequent coordinate tools.
+
+[4] mouse_click
+    Description:  Click the mouse at the given (x, y) position. Take a
+                  screenshot first to identify the correct coordinates — use
+                  pixel positions as seen in the screenshot image. Coordinates
+                  are automatically mapped to the actual screen. Supports
+                  left/right/middle button and single/double click.
+    Parameters:
+      - x        (integer, REQUIRED)  X coordinate to click
+      - y        (integer, REQUIRED)  Y coordinate to click
+      - button   (string, optional)   Enum: [left, right, middle] (default: left)
+      - clicks   (integer, optional)  Enum: [1, 2] — single or double (default: 1)
+    Coordinate mapping: round(x * scale) + offset_x, with bounds clamping
+                        against _screenshot_dims
+
+[5] type_text
+    Description:  Type text at the current cursor position. Click on an input
+                  field first to focus it, then use this tool to type. Uses
+                  clipboard paste for non-ASCII characters.
+    Parameters:
+      - text      (string, REQUIRED)  The text to type
+      - interval  (number, optional)  Seconds between keystrokes (default: 0.02)
+
+[6] press_key
+    Description:  Press a key or key combination. Use '+' to combine keys.
+                  Examples: 'enter', 'tab', 'escape', 'ctrl+c', 'ctrl+shift+s',
+                  'alt+tab', 'command+c', 'command+q'. Key names follow pyautogui
+                  naming. Use ctrl/alt/win on Windows, command/option on macOS.
+    Parameters:
+      - keys  (string, REQUIRED)  Key or combo, e.g. 'enter', 'ctrl+c', 'alt+tab'
+
+[7] mouse_scroll
+    Description:  Scroll the mouse wheel. Positive clicks = scroll up, negative
+                  = scroll down. Optionally specify (x, y) to scroll at a
+                  specific position.
+    Parameters:
+      - clicks  (integer, REQUIRED)  Scroll amount: positive=up, negative=down
+      - x       (integer, optional)  X coordinate to scroll at
+      - y       (integer, optional)  Y coordinate to scroll at
+    Coordinate mapping: round(int(x) * scale) + offset_x
+
+[8] open_application
+    Description:  Open an application by common name or full path. Known names:
+                  chrome, firefox, edge, safari, notepad, notepad++, calculator,
+                  terminal, finder, excel, word, vscode, spotify, discord, slack,
+                  teams. Or provide a full executable path. Use the optional
+                  'args' parameter to pass arguments (e.g. a file path to open).
+    Parameters:
+      - name  (string, REQUIRED)  App name or full path to executable
+      - args  (string, optional)  Arguments to pass to the application
+
+[9] find_window
+    Description:  Find windows matching a title pattern. Returns window titles,
+                  positions, and sizes. Optionally activate (bring to foreground)
+                  the first matching window.
+    Parameters:
+      - title     (string, REQUIRED)   Window title or partial text to search
+      - activate  (boolean, optional)  Bring first match to foreground (default: false)
+
+[10] clipboard_read
+    Description:  Read the current text contents of the clipboard.
+    Parameters:   (none)
+
+[11] clipboard_write
+    Description:  Write text to the clipboard, replacing any current content.
+    Parameters:
+      - text  (string, REQUIRED)  The text to place on the clipboard
+
+[12] wait_for_window
+    Description:  Wait until a window with the given title appears, polling every
+                  0.5 seconds. Returns the window info once found, or times out.
+    Parameters:
+      - title    (string, REQUIRED)  Window title or partial text to wait for
+      - timeout  (number, optional)  Maximum seconds to wait (default: 10)
+
+[13] read_screen_text
+    Description:  Read text from a region of the screen using OCR. Specify the
+                  region as x, y, width, height using coordinates from the
+                  screenshot image.
+    Parameters:
+      - x       (integer, REQUIRED)  Left edge of region
+      - y       (integer, REQUIRED)  Top edge of region
+      - width   (integer, REQUIRED)  Width of region
+      - height  (integer, REQUIRED)  Height of region
+    OCR engine: winocr on Windows, Apple Vision framework on macOS
+    Coordinate mapping: round(int(x) * scale) + offset_x
+
+[14] find_image_on_screen
+    Description:  Find an image on the screen by matching a reference image file.
+                  Returns the center coordinates if found. Useful for finding
+                  buttons or icons.
+    Parameters:
+      - image_path   (string, REQUIRED)  Absolute path to reference image (PNG, JPG)
+      - confidence   (number, optional)  Match threshold 0.0-1.0 (default: 0.8)
+    Returns: Center coordinates in both screen and image coordinate spaces
+    Coordinate mapping: round((screen_cx - offset_x) / scale)
+
+[15] mouse_drag
+    Description:  Drag the mouse from one point to another. Useful for
+                  drag-and-drop, resizing windows, moving sliders, drawing, etc.
+    Parameters:
+      - start_x   (integer, REQUIRED)  Starting X coordinate
+      - start_y   (integer, REQUIRED)  Starting Y coordinate
+      - end_x     (integer, REQUIRED)  Ending X coordinate
+      - end_y     (integer, REQUIRED)  Ending Y coordinate
+      - duration   (number, optional)  Duration of drag in seconds (default: 0.5)
+      - button     (string, optional)  'left', 'right', or 'middle' (default: 'left')
+    Coordinate mapping: round(int(x) * scale) + offset_x
+
+
+================================================================================
+CATEGORY 3: BROWSER TOOLS (11 tools)
+Enabled when: Browser checkbox is checked
+Uses Playwright via Chrome DevTools Protocol (CDP)
+================================================================================
+
+[16] browser_open
+    Description:  Open or connect to the system browser (Edge on Windows, Edge
+                  or Chrome on macOS) and navigate to a URL. Uses the user's
+                  real browser profile with all cookies, logins, and extensions.
+                  If the browser isn't running, it will be launched automatically.
+                  Call this first before using any other browser tools.
+    Parameters:
+      - url  (string, REQUIRED)  The URL to navigate to (e.g. 'https://google.com')
+
+[17] browser_navigate
+    Description:  Navigate the current browser page to a new URL.
+    Parameters:
+      - url  (string, REQUIRED)  The URL to navigate to
+
+[18] browser_click
+    Description:  Click an element on the page. Use a CSS selector (e.g.
+                  '#submit-btn', 'a.nav-link') or provide visible text to find
+                  and click the element. Prefer selectors when possible.
+    Parameters:
+      - selector  (string, optional)  CSS selector of the element to click
+      - text      (string, optional)  Visible text of the element to click
+
+[19] browser_fill
+    Description:  Fill a form field with text. This clears any existing value and
+                  types instantly. Use a CSS selector to identify the input field.
+    Parameters:
+      - selector  (string, REQUIRED)  CSS selector of the input field
+      - value     (string, REQUIRED)  The text to fill into the field
+
+[20] browser_get_text
+    Description:  Get the text content of the page or a specific element. Use
+                  this to read page content without taking a screenshot. If no
+                  selector is given, returns the full page text.
+    Parameters:
+      - selector  (string, optional)  CSS selector of the element to read
+
+[21] browser_run_js
+    Description:  Execute JavaScript code on the current page and return the
+                  result. Use for advanced interactions, extracting data, or
+                  manipulating the DOM. The code runs in the page context. Use
+                  'return' to get a value back.
+    Parameters:
+      - code  (string, REQUIRED)  JavaScript code to execute
+
+[22] browser_screenshot
+    Description:  Take a screenshot of the current browser page. Returns an
+                  image. Use this to see what the page looks like visually.
+    Parameters:   (none)
+
+[23] browser_close
+    Description:  Disconnect from the browser. The browser stays open — only the
+                  automation connection is closed. Use this when you're done with
+                  browser tasks.
+    Parameters:   (none)
+
+[24] browser_wait_for
+    Description:  Wait for an element matching a CSS selector to appear on the
+                  page. Returns the element's text content once found, or
+                  times out.
+    Parameters:
+      - selector  (string, REQUIRED)   CSS selector to wait for
+      - timeout   (integer, optional)  Max milliseconds to wait (default: 10000)
+
+[25] browser_select
+    Description:  Select an option from a <select> dropdown element. Specify the
+                  option by value attribute or visible label text.
+    Parameters:
+      - selector  (string, REQUIRED)  CSS selector for the <select> element
+      - value     (string, optional)  Option value attribute to select
+      - label     (string, optional)  Visible text of the option to select
+
+[26] browser_get_elements
+    Description:  Get information about elements matching a CSS selector. Returns
+                  tag name, text content, key attributes, and visibility for each
+                  match.
+    Parameters:
+      - selector  (string, REQUIRED)   CSS selector to query
+      - limit     (integer, optional)  Max elements to return (default: 10)
+
+
+================================================================================
+CATEGORY 4: ANTHROPIC SERVER-SIDE TOOLS (2 tools) + DYNAMIC (1 tool)
+================================================================================
+
+--- Server-Side (always appended at API call time) ---
+
+[27] web_search  (type: web_search_20250305)
+    Description:  Anthropic's native web search tool. The API handles query
+                  execution, result extraction, and citation generation
+                  entirely server-side.
+    Parameters:   Managed by Anthropic backend (no local schema sent)
+    Beta flag:    "web-search-2025-03-05"
+    Streaming:    Shows "Searching the web..." activity message
+    Token cost:   Minimal — only type + name sent, no description or schema
+
+[28] code_execution  (type: code_execution_20250825)
+    Description:  Anthropic's native code execution sandbox. Allows Claude to
+                  write and run Python code server-side, producing text output
+                  and images (charts, plots, etc.).
+    Parameters:   Managed by Anthropic backend (no local schema sent)
+    Beta flag:    "code-execution-2025-08-25"
+    Streaming:    Shows "Running code execution..." activity message
+    Token cost:   Minimal — only type + name sent, no description or schema
+    Output handling:
+      - stdout is displayed as tool_info in the chat
+      - File outputs (images) are downloaded via client.beta.files.download()
+      - Images are saved to saved_chats/ci_output_{timestamp}.png
+      - Images are displayed inline in the chat widget (scaled to max 600px)
+
+--- Dynamic (conditionally generated) ---
+
+[29] get_skill
+    Description:  Retrieve the full content of an on-demand skill by name.
+    Included when: At least one skill has mode="on_demand"
+    Parameters:
+      - skill_name  (string, REQUIRED)  Name of the skill to retrieve.
+                    Enum values dynamically populated from skills with
+                    mode="on_demand" in the skills dict.
+
+
+================================================================================
+PARALLEL EXECUTION
+================================================================================
+
+Tools classified as parallel-safe (run concurrently via ThreadPoolExecutor):
+  - csv_search, get_skill
+
+All other tools run sequentially to avoid state conflicts. Results are
+reordered to match the original API-expected order regardless of completion
+sequence.
+
+
+================================================================================
+COORDINATE SYSTEM (Desktop Tools)
+================================================================================
+
+All coordinate-using desktop tools share a unified pipeline:
+
+  1. screenshot captures a display -> resized to API limit (1568px / 1.15MP)
+  2. _screenshot_scale  = logical_pixels / image_pixels
+  3. _screenshot_offset = (display_origin_x, display_origin_y)
+  4. _screenshot_dims   = (image_width, image_height)
+
+  Image coord -> Screen coord:  round(img_coord * scale) + offset
+  Screen coord -> Image coord:  round((screen_coord - offset) / scale)
+
+  mouse_click additionally clamps coordinates to _screenshot_dims bounds,
+  emitting a warning if the model sends out-of-range values.
+
+
+================================================================================
+TOOL COUNTS BY CATEGORY
+================================================================================
+
+  Core:                2  (run_command, csv_search)
+  Desktop:            13  (screenshot through mouse_drag)
+  Browser:            11  (browser_open through browser_get_elements)
+  Server-side:         2  (web_search, code_execution)
+  Dynamic:             1  (get_skill — conditional)
+  -------------------------
+  Total:              29
+
+  Maximum tools per API call (all enabled): 29
+    = 2 core + 13 desktop + 11 browser + 1 get_skill + 2 server-side
+
+  Minimum tools per API call (nothing enabled, no skills): 4
+    = 2 core + 2 server-side
+
+================================================================================

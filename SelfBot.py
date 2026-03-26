@@ -17,10 +17,7 @@ if IS_WINDOWS:
 
 import tkinter as tk
 from tkinter import messagebox, filedialog, ttk
-from html.parser import HTMLParser
 import anthropic
-from ddgs import DDGS
-import httpx
 import threading
 import queue
 import os
@@ -55,38 +52,15 @@ if IS_WINDOWS:
         import pygetwindow as gw
     except Exception:
         pass
+    try:
+        from PIL import ImageGrab
+    except Exception:
+        pass
 
+_SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
 
 # Tool definitions for the Anthropic API
 TOOLS = [
-    {
-        "name": "web_search",
-        "description": "Search the web for information. Use this to find current information, answer questions about recent events, look up facts, or find relevant websites. Always prefer searching before guessing.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query",
-                }
-            },
-            "required": ["query"],
-        },
-    },
-    {
-        "name": "fetch_webpage",
-        "description": "Fetch the full content of a specific webpage URL. Use this after web_search to read a page in detail, or when the user provides a specific URL.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL to fetch",
-                }
-            },
-            "required": ["url"],
-        },
-    },
     {
         "name": "run_command",
         "description": (
@@ -159,8 +133,12 @@ DESKTOP_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "x": {"type": "integer", "description": "Left edge of region to capture"},
-                "y": {"type": "integer", "description": "Top edge of region to capture"},
+                "display": {
+                    "type": "integer",
+                    "description": "Which display to capture (0 = primary, 1 = secondary, etc.). Default: 0 (primary). Use this to see and interact with windows on different monitors.",
+                },
+                "x": {"type": "integer", "description": "Left edge of region to capture (use coordinates from the screenshot image)"},
+                "y": {"type": "integer", "description": "Top edge of region to capture (use coordinates from the screenshot image)"},
                 "width": {"type": "integer", "description": "Width of region to capture"},
                 "height": {"type": "integer", "description": "Height of region to capture"},
             },
@@ -340,7 +318,7 @@ DESKTOP_TOOLS = [
         "name": "read_screen_text",
         "description": (
             "Read text from a region of the screen using OCR. "
-            "Specify the region as x, y, width, height in screen coordinates."
+            "Specify the region as x, y, width, height using coordinates from the screenshot image."
         ),
         "input_schema": {
             "type": "object",
@@ -785,37 +763,6 @@ INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_
 AUTO_MSG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_auto_msg.json")
 
 
-class HTMLTextExtractor(HTMLParser):
-    """Strip HTML tags and return plain text."""
-
-    def __init__(self):
-        super().__init__()
-        self._text = []
-        self._skip = False
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ("script", "style", "noscript"):
-            self._skip = True
-
-    def handle_endtag(self, tag):
-        if tag in ("script", "style", "noscript"):
-            self._skip = False
-        if tag in ("p", "br", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr"):
-            self._text.append("\n")
-
-    def handle_data(self, data):
-        if not self._skip:
-            self._text.append(data)
-
-    def get_text(self):
-        return "".join(self._text).strip()
-
-
-def extract_text_from_html(html):
-    extractor = HTMLTextExtractor()
-    extractor.feed(html)
-    return extractor.get_text()
-
 
 def _get_window_pid(hwnd):
     """Get the process ID that owns a given window handle."""
@@ -848,6 +795,8 @@ class App:
         self.streaming = False
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
+        self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
+        self._screenshot_dims = (0, 0)    # (width, height) of last screenshot sent to model
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
@@ -2367,36 +2316,6 @@ class App:
         )
         thread.start()
 
-    def search_web(self, query):
-        """Search the web using DuckDuckGo and return results."""
-        try:
-            results = DDGS().text(query, max_results=5)
-            if not results:
-                return "No results found."
-            formatted = []
-            for r in results:
-                formatted.append(f"Title: {r['title']}\nURL: {r['href']}\nSnippet: {r['body']}\n")
-            return "\n".join(formatted)
-        except Exception as e:
-            return f"Search error: {e}"
-
-    def fetch_url(self, url):
-        """Fetch a URL and return extracted text content."""
-        try:
-            response = httpx.get(url, follow_redirects=True, timeout=15)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            if "html" in content_type:
-                text = extract_text_from_html(response.text)
-            else:
-                text = response.text
-            # Truncate to avoid blowing up context
-            if len(text) > 20000:
-                text = text[:20000] + "\n\n[Content truncated...]"
-            return text
-        except Exception as e:
-            return f"Error fetching URL: {e}"
-
     def _check_command_safety(self, command):
         """Check command against safety tiers. Returns (allowed, message)."""
         for pattern in COMMAND_BLOCKED:
@@ -2635,52 +2554,156 @@ class App:
         "teams": "open -a 'Microsoft Teams'",
     }
 
-    def do_screenshot(self, region=None):
+    def _macos_display_screenshot(self, display_index=0):
+        """Capture a single display on macOS using Quartz CoreGraphics.
+        Returns (PIL Image, display_origin_x, display_origin_y) or (None, 0, 0)."""
+        try:
+            import Quartz
+            rects = self._get_macos_display_rects()
+            if not rects or display_index >= len(rects):
+                return None, 0, 0
+            l, t, r, b = rects[display_index]
+            w, h = r - l, b - t
+            cg_rect = Quartz.CGRectMake(l, t, w, h)
+            cg_img = Quartz.CGWindowListCreateImage(
+                cg_rect,
+                Quartz.kCGWindowListOptionOnScreenOnly,
+                Quartz.kCGNullWindowID,
+                Quartz.kCGWindowImageDefault,
+            )
+            if not cg_img:
+                return None, 0, 0
+            iw = Quartz.CGImageGetWidth(cg_img)
+            ih = Quartz.CGImageGetHeight(cg_img)
+            cf_data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_img))
+            img = Image.frombytes("RGBA", (iw, ih), cf_data, "raw", "BGRA")
+            return img.convert("RGB"), l, t
+        except Exception:
+            return None, 0, 0
+
+    def _capture_single_display(self, display_idx, region=None):
+        """Capture a single display (or region), resize to API limit, update scale/offset.
+        Returns (img_w, img_h, b64_data)."""
+        if region:
+            scale = self._screenshot_scale
+            ox, oy = self._screenshot_offset
+            rx, ry, rw, rh = int(region[0]), int(region[1]), int(region[2]), int(region[3])
+            screen_x = round(rx * scale) + ox
+            screen_y = round(ry * scale) + oy
+            screen_w = max(round(rw * scale), 1)
+            screen_h = max(round(rh * scale), 1)
+            if IS_WINDOWS:
+                img = ImageGrab.grab(bbox=(screen_x, screen_y,
+                                          screen_x + screen_w, screen_y + screen_h),
+                                    all_screens=True)
+            else:
+                img = pyautogui.screenshot(region=(screen_x, screen_y, screen_w, screen_h))
+            self._screenshot_offset = (screen_x, screen_y)
+            phys_w_r, phys_h_r = img.size
+            if not IS_WINDOWS and phys_w_r != screen_w and screen_w:
+                img = img.resize((screen_w, screen_h))
+        elif not IS_WINDOWS:
+            img, disp_x, disp_y = self._macos_display_screenshot(display_idx)
+            if img is not None:
+                self._screenshot_offset = (disp_x, disp_y)
+            else:
+                img = pyautogui.screenshot()
+                self._screenshot_offset = (0, 0)
+        else:
+            rects = self._get_windows_display_rects()
+            if rects and display_idx < len(rects):
+                l, t, r, b = rects[display_idx]
+                img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
+                self._screenshot_offset = (l, t)
+            else:
+                img = pyautogui.screenshot()
+                self._screenshot_offset = (0, 0)
+        phys_w, phys_h = img.size
+        if not region:
+            rects = self._get_display_rects()
+            if rects:
+                idx = min(display_idx, len(rects) - 1)
+                l, t, r, b = rects[idx]
+                log_w, log_h = r - l, b - t
+            else:
+                log_w, log_h = pyautogui.size()
+            if phys_w != log_w and log_w:
+                img = img.resize((log_w, log_h))
+        logical_w, logical_h = img.size
+        # Resize to Anthropic API image limit (1568px long edge, 1.15MP)
+        max_long_edge, max_megapixels = 1568, 1_150_000
+        longest = max(logical_w, logical_h)
+        if longest > max_long_edge:
+            r = max_long_edge / longest
+            max_w = round(logical_w * r)
+        else:
+            max_w = logical_w
+        max_h = round(logical_h * (max_w / logical_w)) if logical_w else logical_h
+        if max_w * max_h > max_megapixels:
+            r = (max_megapixels / (max_w * max_h)) ** 0.5
+            max_w = round(max_w * r)
+        if logical_w > max_w:
+            ratio = logical_w / max_w
+            new_h = round(logical_h / ratio)
+            img = img.resize((max_w, new_h))
+            self._screenshot_scale = ratio
+            img_w, img_h = max_w, new_h
+        else:
+            self._screenshot_scale = 1.0
+            img_w, img_h = logical_w, logical_h
+        self._screenshot_dims = (img_w, img_h)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        return img_w, img_h, b64_data
+
+    def do_screenshot(self, region=None, display=None):
         """Capture screen (or region), resize, return as content list with image block."""
         try:
             if region:
-                img = pyautogui.screenshot(region=region)
-            else:
-                img = pyautogui.screenshot()
-
-            phys_w, phys_h = img.size
-            # Align screenshot to pyautogui's logical coordinate space so all
-            # desktop tool coordinates map directly to mouse positions.
-            if not region:
-                log_w, log_h = pyautogui.size()
-                if phys_w != log_w and log_w:
-                    img = img.resize((log_w, log_h))
-            logical_w, logical_h = img.size
-            max_w = 2048
-            if logical_w > max_w:
-                ratio = logical_w / max_w
-                new_h = int(logical_h / ratio)
-                img = img.resize((max_w, new_h))
-                self._screenshot_scale = ratio
-                img_w, img_h = max_w, new_h
-            else:
-                self._screenshot_scale = 1.0
-                img_w, img_h = logical_w, logical_h
-
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-
-            return [
-                {"type": "text", "text": f"Screenshot captured ({img_w}x{img_h}). Click coordinates are automatically mapped to the screen — just use the pixel positions you see in this image."},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
-            ]
+                img_w, img_h, b64_data = self._capture_single_display(0, region=region)
+                return [
+                    {"type": "text", "text": f"Region screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click."},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
+                ]
+            rects = self._get_display_rects()
+            num_displays = len(rects) if rects else 1
+            if display is not None:
+                img_w, img_h, b64_data = self._capture_single_display(display)
+                return [
+                    {"type": "text", "text": f"Display {display} screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click — coordinates are automatically mapped to the correct screen."},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
+                ]
+            # No display specified — capture ALL displays
+            result = []
+            for i in range(num_displays):
+                img_w, img_h, b64_data = self._capture_single_display(i)
+                result.append({"type": "text", "text": f"Display {i} ({img_w}x{img_h}):"})
+                result.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}})
+            result.append({"type": "text", "text": "To click on a target, first call screenshot with that display number, THEN use mouse_click with coordinates from that specific display's screenshot."})
+            if num_displays > 1:
+                self._capture_single_display(0)  # reset scale/offset to display 0
+            return result
         except Exception as e:
             return f"Screenshot error: {e}"
 
     def do_mouse_click(self, x, y, button="left", clicks=1):
         """Click at (x, y) with specified button and click count."""
         try:
+            x, y = int(x), int(y)
             scale = self._screenshot_scale
-            screen_x = int(x * scale)
-            screen_y = int(y * scale)
+            ox, oy = self._screenshot_offset
+            iw, ih = self._screenshot_dims
+            # Clamp to screenshot image bounds to prevent gross misclicks
+            warning = ""
+            if iw and ih and (x < 0 or y < 0 or x >= iw or y >= ih):
+                warning = f" ⚠ coords ({x},{y}) outside screenshot {iw}x{ih} — clamped"
+                x = max(0, min(x, iw - 1))
+                y = max(0, min(y, ih - 1))
+            screen_x = round(x * scale) + ox
+            screen_y = round(y * scale) + oy
             pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
-            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image coords ({x}, {y}), scale {scale:.2f}x]"
+            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image ({x},{y}) of {iw}x{ih}, scale {scale:.2f}x, offset ({ox},{oy})]{warning}"
         except Exception as e:
             return f"Click error: {e}"
 
@@ -2723,11 +2746,12 @@ class App:
         """Scroll the mouse wheel at current position or specified (x, y)."""
         try:
             scale = self._screenshot_scale
+            ox, oy = self._screenshot_offset
             kwargs = {}
             if x is not None:
-                kwargs["x"] = int(x * scale)
+                kwargs["x"] = round(int(x) * scale) + ox
             if y is not None:
-                kwargs["y"] = int(y * scale)
+                kwargs["y"] = round(int(y) * scale) + oy
             pyautogui.scroll(clicks, **kwargs)
             direction = "up" if clicks > 0 else "down"
             pos = f" at ({x}, {y})" if x is not None else ""
@@ -2744,8 +2768,9 @@ class App:
             else:
                 cmd = name
             if args:
-                cmd = f'{cmd} "{args}"'
-            subprocess.Popen(cmd, shell=True)
+                subprocess.Popen([cmd, args], **_SUBPROCESS_NOWND)
+            else:
+                subprocess.Popen(cmd, shell=True, **_SUBPROCESS_NOWND)
             return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"
         except Exception as e:
             return f"Error opening {name}: {e}"
@@ -2848,11 +2873,15 @@ class App:
         """OCR a region of the screen. Uses winocr on Windows, Vision framework on macOS."""
         try:
             scale = self._screenshot_scale
-            sx = int(x * scale)
-            sy = int(y * scale)
-            sw = int(width * scale)
-            sh = int(height * scale)
-            img = pyautogui.screenshot(region=(sx, sy, sw, sh))
+            ox, oy = self._screenshot_offset
+            sx = round(int(x) * scale) + ox
+            sy = round(int(y) * scale) + oy
+            sw = max(round(int(width) * scale), 1)
+            sh = max(round(int(height) * scale), 1)
+            if IS_WINDOWS:
+                img = ImageGrab.grab(bbox=(sx, sy, sx + sw, sy + sh), all_screens=True)
+            else:
+                img = pyautogui.screenshot(region=(sx, sy, sw, sh))
 
             if IS_WINDOWS:
                 import winocr
@@ -2897,8 +2926,9 @@ class App:
             cx = location.left + location.width // 2
             cy = location.top + location.height // 2
             scale = self._screenshot_scale
-            img_cx = int(cx / scale) if scale else cx
-            img_cy = int(cy / scale) if scale else cy
+            ox, oy = self._screenshot_offset
+            img_cx = round((cx - ox) / scale) if scale else cx
+            img_cy = round((cy - oy) / scale) if scale else cy
             return (
                 f"Image found at region ({location.left}, {location.top}, "
                 f"{location.width}x{location.height})\n"
@@ -2912,10 +2942,11 @@ class App:
         """Drag the mouse from one point to another."""
         try:
             scale = self._screenshot_scale
-            sx = int(start_x * scale)
-            sy = int(start_y * scale)
-            ex = int(end_x * scale)
-            ey = int(end_y * scale)
+            ox, oy = self._screenshot_offset
+            sx = round(int(start_x) * scale) + ox
+            sy = round(int(start_y) * scale) + oy
+            ex = round(int(end_x) * scale) + ox
+            ey = round(int(end_y) * scale) + oy
             pyautogui.moveTo(sx, sy, duration=0.1)
             pyautogui.mouseDown(button=button)
             pyautogui.moveTo(ex, ey, duration=duration)
@@ -3549,21 +3580,117 @@ class App:
             payload["temperature"] = self.temperature
         return json.dumps(payload, indent=2)
 
+    @staticmethod
+    def _get_macos_display_rects():
+        """Return list of (left, top, right, bottom) for each display via CoreGraphics."""
+        try:
+            cg = ctypes.cdll.LoadLibrary(
+                '/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics')
+
+            class CGPoint(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+            class CGSize(ctypes.Structure):
+                _fields_ = [("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+            class CGRect(ctypes.Structure):
+                _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+            max_displays = 16
+            display_ids = (ctypes.c_uint32 * max_displays)()
+            display_count = ctypes.c_uint32()
+            cg.CGGetActiveDisplayList(max_displays, display_ids,
+                                      ctypes.byref(display_count))
+
+            cg.CGDisplayBounds.restype = CGRect
+
+            rects = []
+            for i in range(display_count.value):
+                bounds = cg.CGDisplayBounds(display_ids[i])
+                l = int(bounds.origin.x)
+                t = int(bounds.origin.y)
+                r = int(bounds.origin.x + bounds.size.width)
+                b = int(bounds.origin.y + bounds.size.height)
+                rects.append((l, t, r, b))
+            return rects
+        except Exception:
+            return []
+
+    @staticmethod
+    def _get_windows_display_rects():
+        """Return list of (left, top, right, bottom) for each display via EnumDisplayMonitors.
+        Primary monitor (origin 0,0) is always first."""
+        try:
+            user32 = ctypes.windll.user32
+
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+            monitors = []
+            MONITORENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
+                ctypes.POINTER(RECT), ctypes.c_double)
+
+            def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+                r = lprcMonitor[0]
+                monitors.append((r.left, r.top, r.right, r.bottom))
+                return 1
+
+            user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
+            if monitors:
+                # Primary monitor has origin (0,0); sort it first, then by position
+                monitors.sort(key=lambda r: (r[0] != 0 or r[1] != 0, r[0], r[1]))
+                return monitors
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def _get_display_rects():
+        """Return list of (left, top, right, bottom) for each display. Cross-platform."""
+        if IS_WINDOWS:
+            return App._get_windows_display_rects()
+        return App._get_macos_display_rects()
+
     def _get_tools(self):
         """Return tool list based on which toggles are enabled."""
         tools = copy.deepcopy(TOOLS)
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
-            screen_w, screen_h = pyautogui.size()
+            # Build display info for tool description (API order: 0=primary)
+            rects = self._get_display_rects()
+            num_displays = len(rects) if rects else 1
+            if rects:
+                disp_info = ", ".join(
+                    f"display {i}: {r[2]-r[0]}x{r[3]-r[1]}" for i, r in enumerate(rects)
+                )
+            else:
+                sw, sh = pyautogui.size()
+                disp_info = f"display 0: {sw}x{sh}"
             for tool in desktop:
                 if tool["name"] == "screenshot":
-                    tool["description"] = (
-                        f"Take a screenshot of the screen (resolution {screen_w}x{screen_h}). "
-                        "Always use this FIRST to see what is on the screen before clicking or typing. "
-                        "The image may be resized. For mouse_click, use the pixel coordinates as you see "
-                        "them in the image — they are automatically scaled to screen coordinates. "
-                        "Optionally capture only a region by specifying x, y, width, height."
-                    )
+                    if num_displays > 1:
+                        tool["description"] = (
+                            f"Take a screenshot. {num_displays} displays available: {disp_info}. "
+                            "By default (no 'display' parameter), captures ALL displays as separate images "
+                            "so you can see everything. To click on something, call screenshot again with "
+                            "the specific 'display' number where the target is, then use coordinates from "
+                            "THAT screenshot for mouse_click. Always take a screenshot BEFORE clicking. "
+                            "TIP: For precise clicking on small targets (close buttons, icons), take a REGION "
+                            "screenshot (x, y, width, height) zoomed into just that area."
+                        )
+                    else:
+                        tool["description"] = (
+                            f"Take a screenshot of the screen (resolution {disp_info.split(': ')[1]}). "
+                            "Always use this FIRST to see what is on the screen before clicking or typing. "
+                            "The image may be resized. For mouse_click, use the pixel coordinates as you see "
+                            "them in the image — they are automatically scaled to screen coordinates. "
+                            "Optionally capture only a region by specifying x, y, width, height. "
+                            "TIP: For precise clicking on small targets (close buttons, icons), first take a "
+                            "full screenshot to locate the target, then take a REGION screenshot zoomed into "
+                            "just that area for pixel-accurate coordinates."
+                        )
                     break
             tools.extend(desktop)
         if self.browser_enabled.get():
@@ -3591,20 +3718,12 @@ class App:
     def _execute_tool(self, block):
         """Execute a single tool_use block and return the result.
 
-        Thread-safe for parallel-safe tools (web_search, fetch_webpage,
-        csv_search, get_skill). Sequential tools (desktop, browser,
-        run_powershell) must only be called from one thread.
+        Thread-safe for parallel-safe tools (csv_search, get_skill).
+        Sequential tools (desktop, browser, run_command) must only be
+        called from one thread.
         """
         inp = block.input
-        if block.name == "web_search":
-            query = inp.get("query", "")
-            self.queue.put({"type": "tool_info", "content": f"Searching: {query}\n"})
-            return self.search_web(query)
-        elif block.name == "fetch_webpage":
-            url = inp.get("url", "")
-            self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
-            return self.fetch_url(url)
-        elif block.name == "run_command":
+        if block.name == "run_command":
             cmd = inp.get("command", "")
             self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
             return self.run_powershell(cmd)
@@ -3627,11 +3746,15 @@ class App:
             if not self.desktop_enabled.get():
                 return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
             if block.name == "screenshot":
-                self.queue.put({"type": "tool_info", "content": "Taking screenshot...\n"})
+                display = inp.get("display")
+                if display is not None:
+                    display = int(display)  # Gemini proto returns floats
+                disp_label = f"display {display}" if display is not None else "all displays"
+                self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
                     region = (inp["x"], inp["y"], inp["width"], inp["height"])
-                return self.do_screenshot(region)
+                return self.do_screenshot(region, display=display)
             elif block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
                 if cx is None or cy is None:
@@ -3644,7 +3767,7 @@ class App:
                 return self.do_mouse_click(
                     cx, cy,
                     button=inp.get("button", "left"),
-                    clicks=inp.get("clicks", 1),
+                    clicks=int(inp.get("clicks", 1)),
                 )
             elif block.name == "type_text":
                 text = inp.get("text", "")
@@ -3656,7 +3779,7 @@ class App:
                 self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
                 return self.do_press_key(keys)
             elif block.name == "mouse_scroll":
-                clicks_val = inp.get("clicks", 0)
+                clicks_val = int(inp.get("clicks", 0))
                 self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
                 return self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
             elif block.name == "open_application":
@@ -3796,11 +3919,15 @@ class App:
                 max_retries = 10
 
                 # Build API kwargs dynamically
+                tools = self._get_tools()
+                # Add Anthropic server-side tools
+                tools.append({"type": "web_search_20250305", "name": "web_search"})
+                tools.append({"type": "code_execution_20250825", "name": "code_execution"})
                 api_kwargs = {
                     "model": self.model,
                     "system": self._build_system_prompt(),
                     "messages": messages,
-                    "tools": self._get_tools(),
+                    "tools": tools,
                 }
                 model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
                 if self.thinking_enabled:
@@ -3818,7 +3945,9 @@ class App:
 
                 for attempt in range(max_retries):
                     try:
-                        with self.client.messages.stream(**api_kwargs) as stream:
+                        with self.client.beta.messages.stream(
+                                betas=["web-search-2025-03-05", "code-execution-2025-08-25", "files-api-2025-04-14"],
+                                **api_kwargs) as stream:
                             in_thinking = False
                             for event in stream:
                                 if event.type == "content_block_start":
@@ -3834,6 +3963,16 @@ class App:
                                         if not label_emitted:
                                             self.queue.put({"type": "label"})
                                             label_emitted = True
+                                    elif hasattr(block, "type") and block.type == "server_tool_use":
+                                        tool_name = getattr(block, "name", "")
+                                        if tool_name == "web_search":
+                                            self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
+                                        elif tool_name == "code_execution":
+                                            self.queue.put({"type": "tool_info", "content": "Running code execution...\n"})
+                                    elif hasattr(block, "type") and block.type in (
+                                            "code_execution_tool_result", "bash_code_execution_tool_result",
+                                            "web_search_tool_result"):
+                                        pass  # Results extracted from final_message post-stream
                                 elif event.type == "content_block_delta":
                                     delta = event.delta
                                     if hasattr(delta, "type") and delta.type == "thinking_delta":
@@ -3847,6 +3986,27 @@ class App:
                                         in_thinking = False
 
                             final_message = stream.get_final_message()
+                        # Extract code execution outputs (images, stdout) from final message
+                        for blk in final_message.content:
+                            if getattr(blk, "type", None) in ("code_execution_tool_result",
+                                                                  "bash_code_execution_tool_result"):
+                                content = getattr(blk, "content", None)
+                                items = content if isinstance(content, list) else [content] if content else []
+                                for item in items:
+                                    itype = getattr(item, "type", None)
+                                    if itype in ("code_execution_result", "bash_code_execution_result"):
+                                        stdout = getattr(item, "stdout", "")
+                                        if stdout:
+                                            self.queue.put({"type": "tool_info", "content": stdout + "\n"})
+                                        for sub in getattr(item, "content", []) or []:
+                                            sub_type = getattr(sub, "type", None) or ""
+                                            fid = getattr(sub, "file_id", "")
+                                            if fid and ("output" in sub_type or sub_type == "file"):
+                                                self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
+                                    elif itype and ("output" in itype or itype == "file"):
+                                        fid = getattr(item, "file_id", "")
+                                        if fid:
+                                            self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
                         break  # success — exit retry loop
                     except anthropic.RateLimitError as e:
                         if attempt < max_retries - 1:
@@ -3878,7 +4038,7 @@ class App:
                     tool_blocks = [b for b in final_message.content if b.type == "tool_use"]
 
                     # -- Parallel-safe tools (network I/O, pure lookups) --
-                    PARALLEL_SAFE = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
+                    PARALLEL_SAFE = {"csv_search", "get_skill"}
 
                     # Log all tool calls up front
                     for block in tool_blocks:
@@ -4017,6 +4177,54 @@ class App:
                     self.chat_display.insert(tk.END, msg["content"], "assistant")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
+                elif msg["type"] == "ci_image":
+                    # Code execution image — decode/download, display inline, and save
+                    try:
+                        url = msg.get("url", "")
+                        file_id = msg.get("file_id", "")
+                        img_data = None
+                        if url and url.startswith("data:"):
+                            parts = url.split(",", 1)
+                            if len(parts) == 2:
+                                img_data = base64.b64decode(parts[1])
+                        elif url:
+                            import urllib.request
+                            with urllib.request.urlopen(url, timeout=30) as resp:
+                                img_data = resp.read()
+                        elif file_id and hasattr(self, 'client') and self.client:
+                            resp = self.client.beta.files.download(file_id)
+                            img_data = resp.read()
+                        if img_data:
+                            os.makedirs("saved_chats", exist_ok=True)
+                            ts = time.strftime("%Y%m%d_%H%M%S")
+                            img_path = os.path.join("saved_chats", f"ci_output_{ts}.png")
+                            with open(img_path, "wb") as f:
+                                f.write(img_data)
+                            pil_img = Image.open(io.BytesIO(img_data))
+                            max_w = 600
+                            if pil_img.width > max_w:
+                                ratio = max_w / pil_img.width
+                                pil_img = pil_img.resize(
+                                    (max_w, int(pil_img.height * ratio)),
+                                    Image.LANCZOS,
+                                )
+                            from PIL import ImageTk
+                            tk_img = ImageTk.PhotoImage(pil_img)
+                            if not hasattr(self, '_ci_images'):
+                                self._ci_images = []
+                            self._ci_images.append(tk_img)
+                            self.chat_display.config(state="normal")
+                            self._ensure_newline()
+                            self.chat_display.image_create(tk.END, image=tk_img)
+                            self.chat_display.insert(tk.END, f"\n[Saved: {img_path}]\n", "tool_info")
+                            self.chat_display.see(tk.END)
+                            self.chat_display.config(state="disabled")
+                    except Exception as e:
+                        self.chat_display.config(state="normal")
+                        self._ensure_newline()
+                        self.chat_display.insert(tk.END, f"[Code execution image error: {e}]\n", "error")
+                        self.chat_display.see(tk.END)
+                        self.chat_display.config(state="disabled")
                 elif msg["type"] == "tool_info" and not self.show_activity.get():
                     pass  # skip tool activity when activity display disabled
                 elif msg["type"] == "tool_info":
