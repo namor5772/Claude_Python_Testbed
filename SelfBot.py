@@ -384,7 +384,7 @@ BROWSER_TOOLS = [
     {
         "name": "browser_open",
         "description": (
-            "Open or connect to the system browser (Edge on Windows, Edge or Chrome on macOS) and navigate to a URL. "
+            "Open or connect to Google Chrome or Microsoft Edge and navigate to a URL. "
             "Uses the user's real browser profile with all cookies, logins, and extensions. "
             "If the browser isn't running, it will be launched automatically. "
             "Call this first before using any other browser tools."
@@ -2980,17 +2980,20 @@ class App:
                 return s.connect_ex(("127.0.0.1", 9222)) == 0
 
         if not _port_open():
-            # Try to launch Edge with the debug port
+            # Try to launch Chrome or Edge with the debug port (Chrome preferred)
             if IS_WINDOWS:
                 edge_paths = [
+                    os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                    os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
                     os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
                     os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
                     os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
                 ]
             else:
                 edge_paths = [
-                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
                     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
                 ]
             edge_exe = None
             for p in edge_paths:
@@ -2999,8 +3002,7 @@ class App:
                     break
             if not edge_exe:
                 raise RuntimeError(
-                    "Microsoft Edge not found. Install Edge or check its path." if IS_WINDOWS
-                    else "No supported browser found. Install Microsoft Edge or Google Chrome."
+                    "No supported browser found. Install Microsoft Edge or Google Chrome."
                 )
 
             self._edge_process = subprocess.Popen(

@@ -191,11 +191,12 @@ Uses Playwright via Chrome DevTools Protocol (CDP)
 ================================================================================
 
 [16] browser_open
-    Description:  Open or connect to the system browser (Edge on Windows, Edge
-                  or Chrome on macOS) and navigate to a URL. Uses the user's
-                  real browser profile with all cookies, logins, and extensions.
-                  If the browser isn't running, it will be launched automatically.
-                  Call this first before using any other browser tools.
+    Description:  Open or connect to Google Chrome or Microsoft Edge and navigate
+                  to a URL. Chrome is preferred; Edge is used as fallback. Uses
+                  the user's real browser profile with all cookies, logins, and
+                  extensions. If the browser isn't running, it will be launched
+                  automatically. Call this first before using any other browser
+                  tools.
     Parameters:
       - url  (string, REQUIRED)  The URL to navigate to (e.g. 'https://google.com')
 
