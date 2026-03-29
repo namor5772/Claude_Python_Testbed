@@ -179,8 +179,9 @@ META_TOOLS = [
     {
         "name": "manage_instructions",
         "description": (
-            "Manage the saved agent instruction library on disk for use by future agent "
-            "instances. Does NOT change the currently-running instruction. Actions: list "
+            "Manage the saved agent instruction library on disk. You CAN read and update "
+            "the currently-running instruction — changes are saved to disk and take effect "
+            "the next time it is loaded (the live session is not affected). Actions: list "
             "(show all), read (full detail), create (new), update (modify), delete (remove)."
         ),
         "input_schema": {
@@ -2156,6 +2157,8 @@ class App:
                 existing.update(skill_modes)
                 entry["skill_modes"] = existing
             self._save_instructions_to_disk(instructions)
+            if name == self.agent_instruction_name:
+                return f"Instruction '{name}' updated on disk. Changes will take effect next time it is loaded."
             return f"Instruction '{name}' updated successfully."
 
         elif action == "delete":
@@ -4895,8 +4898,11 @@ class App:
                 raise RuntimeError(
                     "No supported browser found. Install Microsoft Edge or Google Chrome."
                 )
+            import tempfile
+            debug_profile = os.path.join(tempfile.gettempdir(), "myagent_browser_debug")
             self._edge_process = subprocess.Popen(
-                [edge_exe, "--remote-debugging-port=9222"],
+                [edge_exe, "--remote-debugging-port=9222", "--no-first-run",
+                 f"--user-data-dir={debug_profile}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )

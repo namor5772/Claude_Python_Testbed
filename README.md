@@ -92,7 +92,7 @@ The chatbot has twenty-nine tools (including 2 server-side and a dynamic `get_sk
 - **mouse_drag** — Drags the mouse from one point to another using `pyautogui.moveTo()`, `mouseDown()`, `moveTo()`, `mouseUp()`. Coordinates are scaled by `_screenshot_scale`. Useful for drag-and-drop, resizing, sliders, and drawing
 
 **Browser Tools (enabled via Browser checkbox):**
-- **browser_open** — Connects to Microsoft Edge via Chrome DevTools Protocol (CDP) and navigates to a URL. Uses the user's real Edge profile with all cookies, logins, and extensions. Launches Edge automatically if it isn't running
+- **browser_open** — Connects to Google Chrome or Microsoft Edge via Chrome DevTools Protocol (CDP) and navigates to a URL. Launches the browser automatically with a separate debug profile if it isn't running
 - **browser_navigate** — Navigates the current browser page to a new URL
 - **browser_click** — Clicks an element by CSS selector (e.g., `#submit-btn`, `button.login`) or by visible text
 - **browser_fill** — Fills a form field instantly by CSS selector (clears existing value, no character-by-character typing)
@@ -152,24 +152,24 @@ The thirteen desktop tools (screenshot, mouse_click, type_text, press_key, mouse
 
 The eleven browser tools are gated behind a **Browser** checkbox, independent of the Desktop toggle. When disabled (the default), any attempt by Claude to use browser tools returns an error message. Browser tool schemas are only sent to the API when the checkbox is enabled, saving tokens and preventing Claude from attempting to use unavailable tools.
 
-**How it works** — Playwright connects to Microsoft Edge via the Chrome DevTools Protocol (CDP) on port 9222. Instead of launching a sterile automation browser, this approach uses the user's real Edge installation with their full profile (cookies, saved logins, extensions, and sessions).
+**How it works** — Playwright connects to Google Chrome or Microsoft Edge via the Chrome DevTools Protocol (CDP) on port 9222. When no browser with a debug port is running, the app launches one automatically using a separate `--user-data-dir` temp profile so it doesn't conflict with the user's existing browser sessions.
 
-**Edge connection scenarios:**
+**Browser connection scenarios:**
 
 | Scenario | What happens |
 |---|---|
-| Edge not running | App launches Edge with `--remote-debugging-port=9222` |
-| Edge running WITH debug port | App connects directly |
-| Edge running WITHOUT debug port | Error message: close Edge and retry |
+| No browser with debug port | App launches Chrome/Edge with `--remote-debugging-port=9222` and a separate temp profile |
+| Browser running WITH debug port | App connects directly |
+| Browser running WITHOUT debug port | Error message: close the browser and retry |
 | Connection drops mid-session | Auto-detected and reconnected on next tool call |
 
 **Lifecycle details:**
-- `_ensure_browser()` handles the full connection lifecycle: probes port 9222, launches Edge if needed (checking three common install paths), waits up to 15 seconds for the debug port, connects Playwright via CDP, and reuses the first open tab as the active page
-- If the connection dies between tool calls (e.g., Edge was closed), the next tool call auto-reconnects
-- `browser_close` only disconnects Playwright — Edge stays open with all tabs intact
+- `_ensure_browser()` handles the full connection lifecycle: probes port 9222, launches Chrome or Edge if needed (checking common install paths on both Windows and macOS), uses `--user-data-dir` with a temp directory to avoid conflicts with existing browser sessions, waits up to 15 seconds for the debug port, connects Playwright via CDP, and reuses the first open tab as the active page
+- If the connection dies between tool calls (e.g., browser was closed), the next tool call auto-reconnects
+- `browser_close` only disconnects Playwright — the browser stays open with all tabs intact
 - Closing the app window automatically cleans up the Playwright connection via `WM_DELETE_WINDOW`
 
-**No `playwright install` needed** — Since the app connects to the system-installed Edge via CDP, it does not use Playwright's bundled browser binaries. Only the `playwright` Python package is required.
+**No `playwright install` needed** — Since the app connects to the system-installed Chrome or Edge via CDP, it does not use Playwright's bundled browser binaries. Only the `playwright` Python package is required.
 
 #### PowerShell Safety Guardrails
 
@@ -638,14 +638,14 @@ Server-side code execution outputs (plots, charts) are displayed inline in the c
 
 **Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
 
-**Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — tools for the agent to manage its own instruction library, shared skills, and launch other agents. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions (changes apply to future runs, not the current one); read/create/update actions include `skill_modes` (a map of skill names to disabled/enabled/on_demand modes), and update uses merge semantics so omitted skills keep their current mode. `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget via `subprocess.Popen`); defaults to headless mode, with an optional `headless=false` parameter to show the GUI window — the launched process runs independently and the PID is returned. None of these tools are parallel-safe since they modify shared state or spawn processes.
+**Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — tools for the agent to manage its own instruction library, shared skills, and launch other agents. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions — including the currently-running instruction (changes are saved to disk and take effect the next time the instruction is loaded, without affecting the live session). Read/create/update actions include `skill_modes` (a map of skill names to disabled/enabled/on_demand modes), and update uses merge semantics so omitted skills keep their current mode. `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget via `subprocess.Popen`); defaults to headless mode, with an optional `headless=false` parameter to show the GUI window — the launched process runs independently and the PID is returned. None of these tools are parallel-safe since they modify shared state or spawn processes.
 
 **User Interaction Tool:**
 - **user_prompt** — Pauses the agentic loop and displays a modal dialog to the user with the agent's message, then waits for the user to type a response. This is the **only** way the agent can get user input mid-task (e.g., asking the user to log in, approve an action, or make a choice). The system prompt strongly instructs Claude to always use this tool rather than outputting a question as plain text (which would end the turn and exit the loop). The user types their response and presses **Enter** to submit (or **Ctrl+Enter** to insert a newline for multi-line responses), or dismisses the dialog (via [X]) to return a default "no response" message. The user's injected response is echoed in the chat display as "You: [text]" so the conversation flow is visible, and the agent's follow-up response gets a fresh "Agent:" heading
 
 **Dynamic Tool:** `get_skill` — automatically added when on-demand skills exist
 
-All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Edge, PowerShell safety guardrails, image compression) is identical to SelfBot. See the SelfBot.py tool sections above for full details.
+All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Chrome/Edge, PowerShell safety guardrails, image compression) is identical to SelfBot. See the SelfBot.py tool sections above for full details.
 
 #### Parallel Tool Execution
 

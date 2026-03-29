@@ -3005,8 +3005,11 @@ class App:
                     "No supported browser found. Install Microsoft Edge or Google Chrome."
                 )
 
+            import tempfile
+            debug_profile = os.path.join(tempfile.gettempdir(), "selfbot_browser_debug")
             self._edge_process = subprocess.Popen(
-                [edge_exe, "--remote-debugging-port=9222"],
+                [edge_exe, "--remote-debugging-port=9222", "--no-first-run",
+                 f"--user-data-dir={debug_profile}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
