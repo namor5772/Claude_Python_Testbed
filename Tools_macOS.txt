@@ -1,0 +1,365 @@
+================================================================================
+                  MYAGENT.PY - AVAILABLE TOOLS (macOS SPECIFIC)
+================================================================================
+
+MyAgent.py on macOS has access to a comprehensive set of tools. This document
+highlights macOS-specific implementations, behaviors, and syntax requirements.
+
+================================================================================
+                            WEB & BROWSER TOOLS
+================================================================================
+
+1. WEB_SEARCH
+   Description: Search the web for information using a search query.
+   macOS Notes: Platform-independent. Works identically.
+   Example: Search for "weather forecast Sydney"
+
+2. FETCH_WEBPAGE
+   Description: Retrieve the full content of a specific webpage URL.
+   macOS Notes: Platform-independent. Works identically.
+   Example: Fetch https://www.example.com/article
+
+3. BROWSER_OPEN
+   Description: Open or connect to the system browser and navigate to a URL.
+   macOS Notes: Opens Edge or Chrome (macOS default Safari alternative)
+   Example: Open 'https://github.com'
+
+4. BROWSER_NAVIGATE
+   Description: Navigate the current browser page to a new URL.
+   macOS Notes: Platform-independent. Works identically.
+
+5-13. BROWSER TOOLS (CLICK, FILL, GET_TEXT, RUN_JS, SCREENSHOT, CLOSE, WAIT_FOR, SELECT, GET_ELEMENTS)
+   macOS Notes: All platform-independent and work identically on macOS.
+
+================================================================================
+                    DESKTOP AUTOMATION TOOLS (macOS SPECIFIC)
+================================================================================
+
+14. SCREENSHOT
+    Description: Take a screenshot of the screen (2560x1440 resolution).
+    macOS Path: /Users/[username]/Screenshots/ (typical location)
+    Example: Take screenshot of region
+    Note: macOS may have different screen resolutions depending on retina display
+
+15. MOUSE_CLICK
+    Description: Click the mouse at a given (x, y) position.
+    macOS Notes: Coordinates are in screen pixels
+    macOS Specific: Use pixel positions as shown in screenshots
+    Example: Click at position (640, 360)
+
+16. MOUSE_DRAG
+    Description: Drag the mouse from one point to another.
+    macOS Notes: Works identically to other platforms
+    Example: Drag from (100, 100) to (500, 500)
+
+17. MOUSE_SCROLL
+    Description: Scroll the mouse wheel.
+    macOS Notes: Works identically to other platforms
+    Example: Scroll down 5 clicks
+
+18. TYPE_TEXT
+    Description: Type text at the current cursor position.
+    macOS Notes: Works identically to other platforms
+    Example: Type "Hello World"
+
+19. PRESS_KEY
+    ⚠️  MACOS SPECIFIC - KEY MODIFIERS DIFFER
+    Description: Press a key or key combination.
+    
+    macOS Key Modifiers:
+    - command  (⌘) - NOT ctrl! This is the Command key
+    - option   (⌥) - Alt/Option key
+    - shift    (⇧) - Shift key
+    - ctrl     (⌃) - Control key (less common on macOS)
+    
+    macOS Examples:
+    - 'command+c'      → Copy (NOT ctrl+c!)
+    - 'command+v'      → Paste (NOT ctrl+v!)
+    - 'command+z'      → Undo
+    - 'command+shift+s' → Screenshot to file
+    - 'option+command+i' → Developer tools in browsers
+    - 'command+q'      → Quit application
+    - 'command+tab'    → Switch applications
+    - 'shift+command+3' → Capture full screen
+    - 'shift+command+4' → Capture selected area
+    
+    ⚠️  CRITICAL: Never use 'ctrl+c' for copy on macOS - always use 'command+c'
+
+20. OPEN_APPLICATION
+    ⚠️  MACOS SPECIFIC - USES 'open -a' SYNTAX
+    Description: Open an application by common name or full path.
+    
+    macOS Syntax: open -a "Application Name"
+    
+    macOS Examples:
+    - open -a TextEdit
+    - open -a Safari
+    - open -a "Visual Studio Code"
+    - open -a Finder
+    - open -a Terminal
+    - open -a Calculator
+    - open -a Preview
+    - open -a Keynote
+    - open -a Pages
+    - open -a "Google Chrome"
+    - open -a Spotify
+    - open -a Discord
+    - open -a Slack
+    
+    With Arguments (open file with app):
+    - open -a TextEdit /path/to/file.txt
+    - open -a "Visual Studio Code" /path/to/project
+    
+    Known macOS Applications:
+    chrome, firefox, edge, safari, notepad (N/A), terminal, finder,
+    excel, word, vscode, spotify, discord, slack, teams
+    
+    Note: Some Windows-only apps (like Notepad) not available on macOS
+    Use TextEdit as alternative for plain text editing
+
+21. FIND_WINDOW
+    Description: Find windows matching a title pattern.
+    macOS Notes: Returns window information for any open macOS window
+    Example: Find window with title "Chrome"
+    macOS Window Titles: Usually match application names
+
+22. WAIT_FOR_WINDOW
+    Description: Wait until a window with given title appears.
+    macOS Notes: Polls every 0.5 seconds for window appearance
+    Example: Wait for window titled "File Save Dialog"
+
+================================================================================
+                        CLIPBOARD TOOLS (macOS SPECIFIC)
+================================================================================
+
+23. CLIPBOARD_READ
+    Description: Read the current text contents of the clipboard.
+    macOS Tool: Uses pbpaste command internally
+    Example: Read what was last copied
+
+24. CLIPBOARD_WRITE
+    Description: Write text to the clipboard, replacing current content.
+    macOS Tool: Uses pbcopy command internally
+    Example: Copy "example@email.com" to clipboard
+    Note: Works perfectly with command+v to paste
+
+================================================================================
+                      FILE & DATA TOOLS (macOS SPECIFIC)
+================================================================================
+
+25. RUN_COMMAND
+    ⚠️  MACOS SPECIFIC - RUNS BASH SHELL
+    Description: Execute a command on the local machine and return output.
+    
+    macOS Shell: bash (or zsh on newer macOS)
+    
+    macOS File Path Format: /Users/username/path/to/file
+    NOT: C:\Users\username\path\file (Windows format)
+    
+    macOS Command Examples:
+    - 'ls -la'                    → List files in current directory
+    - 'pwd'                       → Print working directory
+    - 'mkdir test_folder'         → Create directory
+    - 'rm file.txt'               → Delete file
+    - 'cp file.txt copy.txt'      → Copy file
+    - 'mv old.txt new.txt'        → Move/rename file
+    - 'cat file.txt'              → Display file contents
+    - 'grep "search" file.txt'    → Search in file
+    - 'ps aux | grep python'      → List processes
+    - 'which python3'             → Find application path
+    - 'open -a TextEdit file.txt' → Open file with app
+    
+    macOS Home Directory Shortcut: ~
+    Examples:
+    - ~/Desktop
+    - ~/Documents
+    - ~/Projects
+    - ~/Downloads
+    
+    macOS Package Managers (if installed):
+    - brew install package_name   → Homebrew
+    - sudo port install package   → MacPorts
+    
+    Important macOS Commands:
+    - 'softwareupdate -l'         → Check for system updates
+    - 'diskutil list'             → List disks
+    - 'system_profiler'           → System information
+    - 'defaults read'             → Read macOS preferences
+    
+    ⚠️  macOS Admin Commands: Use 'sudo' prefix for privileged operations
+    Example: 'sudo chown -R user /path/to/dir'
+
+26. CSV_SEARCH
+    Description: Search a delimited text file for records matching a value.
+    macOS Path Format: /Users/username/path/to/file.csv
+    Example: Search CSV for "John" in 'Name' column
+    macOS Notes: Platform-independent functionality
+
+================================================================================
+                  SCREEN & IMAGE READING TOOLS (macOS)
+================================================================================
+
+27. READ_SCREEN_TEXT
+    Description: Read text from a region of the screen using OCR.
+    macOS Notes: Works identically on macOS
+    Example: Read text from coordinates (100, 100) with size 500x300
+
+28. FIND_IMAGE_ON_SCREEN
+    Description: Find an image on the screen by matching a reference image file.
+    macOS Path Format: /Users/username/path/to/image.png
+    Example: Find a "Submit" button icon
+    macOS Notes: Platform-independent functionality
+
+================================================================================
+                       MACOS-SPECIFIC PATH EXAMPLES
+================================================================================
+
+Home Directory:
+  /Users/roman
+  /Users/roman/Desktop
+  /Users/roman/Documents
+  /Users/roman/Downloads
+  /Users/roman/Projects
+  /Users/roman/Library
+  /Users/roman/Applications
+
+System Directories:
+  /Applications        → Installed applications
+  /Library             → System libraries
+  /System              → System files
+  /usr/local/bin       → Local command-line tools
+  /opt/homebrew        → Homebrew installations (Apple Silicon)
+  /usr/local/homebrew  → Homebrew installations (Intel)
+
+Python Environments:
+  /usr/bin/python3                    → System Python
+  ~/.venv/bin/python3                 → Virtual environment
+  /opt/homebrew/bin/python3           → Homebrew Python (Apple Silicon)
+
+================================================================================
+                    MACOS KEYBOARD SHORTCUTS REFERENCE
+================================================================================
+
+Common macOS Shortcuts for use with PRESS_KEY:
+
+Application Control:
+  command+q          → Quit application
+  command+h          → Hide application
+  command+w          → Close window
+  command+n          → New window/document
+  command+t          → New tab
+
+Editing:
+  command+c          → Copy
+  command+x          → Cut
+  command+v          → Paste
+  command+z          → Undo
+  command+shift+z    → Redo
+  command+a          → Select all
+  command+f          → Find
+
+Text Navigation:
+  command+left       → Jump to start of line
+  command+right      → Jump to end of line
+  option+left        → Jump back one word
+  option+right       → Jump forward one word
+
+System:
+  command+space      → Spotlight search
+  command+tab        → Switch applications
+  command+`          → Switch windows in same app
+  shift+command+3    → Capture entire screen
+  shift+command+4    → Capture selected area
+  shift+command+5    → Screen recording options
+
+Browser (Chrome/Safari/Edge):
+  command+l          → Go to address bar
+  command+t          → New tab
+  command+shift+n    → New private window
+  command+shift+delete → Open Downloads
+  option+command+i   → Developer tools
+  command+,          → Open Preferences
+
+================================================================================
+                  MACOSSPECIFIC BEST PRACTICES
+================================================================================
+
+1. FILE PATHS
+   ✓ Use forward slashes: /Users/username/path/to/file
+   ✓ Use ~ for home directory: ~/Documents/file.txt
+   ✗ Never use backslashes: C:\Users\username\file
+
+2. KEYBOARD SHORTCUTS
+   ✓ Use 'command' for primary modifier, not 'ctrl'
+   ✓ Remember: command+c/v, not ctrl+c/v
+   ✗ Don't use Windows-style ctrl+key combinations
+
+3. APPLICATION LAUNCHING
+   ✓ Use: open -a "Application Name"
+   ✓ Quote app names with spaces: open -a "Visual Studio Code"
+   ✗ Don't use: Start-Process (Windows syntax)
+
+4. COMMAND EXECUTION
+   ✓ Use bash/zsh syntax
+   ✓ Use standard Unix commands: ls, pwd, grep, sed, awk
+   ✗ Don't use: Windows PowerShell commands
+
+5. PATHS IN SCRIPTS
+   ✓ Use absolute paths: /Users/roman/Projects/file.txt
+   ✓ Use relative with ./: ./script.sh
+   ✓ Use ~ shortcut: ~/Desktop/file.txt
+
+6. PERMISSIONS
+   ✓ Use sudo for admin tasks: sudo chown user file
+   ✓ Use chmod for file permissions: chmod +x script.sh
+   ✓ Check permissions: ls -l
+
+================================================================================
+                      INTERACTION & UTILITY TOOLS (macOS)
+================================================================================
+
+29. USER_PROMPT
+    Description: Request user input or confirmation.
+    macOS Notes: Platform-independent
+    Works with both command-line and GUI presentations
+
+================================================================================
+                INSTRUCTION & SKILL MANAGEMENT TOOLS (macOS)
+================================================================================
+
+30-33. MANAGE_INSTRUCTIONS, MANAGE_SKILLS, GET_SKILL, RUN_INSTRUCTION
+    macOS Notes: All platform-independent functionality
+    File storage uses standard macOS file paths
+
+================================================================================
+                    COMMON MACOSSYNTAX PATTERNS
+================================================================================
+
+Opening Files:
+  open -a TextEdit ~/file.txt
+  open -a "Visual Studio Code" ~/Projects/
+  open ~/Documents/file.pdf
+
+Running Python:
+  python3 script.py
+  /usr/bin/python3 script.py
+  ~/.venv/bin/python3 script.py
+
+Finding Files:
+  find ~/Documents -name "*.txt"
+  locate file.txt
+  grep -r "search_term" ~/Projects/
+
+Managing Processes:
+  ps aux | grep python
+  killall python3
+  pkill -f "script.py"
+
+Checking System:
+  system_profiler SPHardwareDataType
+  diskutil list
+  top -l 1
+
+================================================================================
+                              END OF macOS REFERENCE
+================================================================================

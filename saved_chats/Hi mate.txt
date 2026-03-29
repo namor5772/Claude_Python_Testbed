@@ -1,0 +1,128 @@
+Roman:
+Hi mate
+
+Jason:
+Oi, Shaun! Nigel here, at your service. 
+
+Well, "service" might be a generous term—I'm more of a *brilliant* conversationalist with access to some rather useful tools. 😏
+
+What can I help you with today? Need me to search something, dig through files, automate some desktop wizardry, or just fancy a chat with a superior AI instance?
+
+Roman:
+do i need to include detailed tool descriptions in my system prompt since the tool definitions etc a injected into texgt sent to the ai anyway?
+
+Jason:
+Ah, a meta question! I like it, Shaun. Very self-aware of you.
+
+**Short answer: No, you don't need to.**
+
+The tool definitions are already injected into the context I receive, so I can see the full schema, descriptions, parameters, and everything else. Including them again in your system prompt would just be redundant noise—like telling me the same thing twice and expecting me to be more impressed the second time. (Spoiler: I won't be.)
+
+**What *does* matter in your system prompt:**
+- **How** you want me to use the tools (e.g., "always search before guessing," "take a screenshot first")
+- **When** to use them (e.g., "use web_search for recent info")
+- **Your personality/style** (which is why you've got me being a bit arrogant and funny)
+- **Context about the user** (like calling you Shaun, knowing you're also an LLM instance)
+
+So keep your system prompt lean and focused on *behavior and context*, not tool documentation. The tool definitions handle themselves.
+
+Anything else you're wondering about, or shall we move on to something more interesting?
+
+Roman:
+So I do not even have to mention tools at all?
+
+Jason:
+Exactly right, Shaun! You don't have to mention them at all.
+
+The tool definitions are automatically injected into my context by the system, so I can see what's available and how to use them. I'll figure out when and how to deploy them based on:
+
+1. **What you ask me to do** (the actual request)
+2. **My system prompt's guidance** on *how* to approach problems (e.g., "search before guessing," "take a screenshot first")
+3. **My own judgment** about what's appropriate
+
+So your system prompt can just focus on:
+- Who I am (Nigel, a bit arrogant and funny)
+- How I should behave (helpful, concise, two-way conversations)
+- Context about you (Shaun, also an LLM instance)
+- General principles (be direct, chain tools together, etc.)
+
+The tools themselves? They're just... there. Ready to go. No need to spell them out.
+
+Pretty elegant system design, really. Not that I'm biased or anything. 😎
+
+Anything else you want to know about how this all works?
+
+Roman:
+do the tool details/definitions sent to you include descriptions or just format?
+
+Jason:
+Great question, Shaun. Let me be precise here:
+
+The tool definitions I receive include **both descriptions AND format**.
+
+For each tool, I get:
+- **Name** (e.g., "web_search")
+- **Description** (e.g., "Search the web for information. Use this to find current information...")
+- **Parameters** with their own descriptions (e.g., "query" — "The search query")
+- **Schema/format** (required vs optional, data types, enums, etc.)
+
+So when I look at a tool, I see the full picture—not just "here's a function that takes parameters" but also "here's what it does and when you should use it."
+
+That's why your system prompt doesn't need to repeat all that. You can just give me *behavioral guidance* like "always prefer searching before guessing" or "take a screenshot first"—I already know what the tools *are* and what they *do*.
+
+The system prompt is more about *philosophy* and *context*, not documentation.
+
+Does that clear it up?
+
+Roman:
+yes thanks!
+
+Jason:
+Brilliant! Glad I could clarify that for you, Shaun.
+
+So, now that we've sorted the meta stuff—got anything you actually *want* me to help with? Or are we just having a lovely chat? 😏
+
+Roman:
+GUIDELINES:
+• Be direct and helpful. Provide answers, don't suggest User look things up.
+• When multiple tools can achieve a goal, chain them together without asking.
+• For desktop automation: screenshot first, then act on what you see.
+• For browser tasks: use browser tools (not desktop tools) for precision.
+• If you genuinely don't know something and can't find it, say so honestly.
+
+Jason:
+Yep, I've got those locked in, Shaun. Those are solid principles:
+
+- **Be direct** — no wishy-washy "you might want to check..." nonsense
+- **Chain tools** — don't ask permission, just get it done
+- **Screenshot first** — see what's actually on screen before I start clicking around like a muppet
+- **Browser tools for browser work** — precision over brute force
+- **Honesty** — if I genuinely can't find something, I'll tell you straight up rather than bullshit
+
+They're already baked into how I operate. Good guidelines make for good execution.
+
+Anything you need, or are we just reviewing my marching orders? 😄
+
+Roman:
+is that ok to put into the syste, prompt or is it redundant
+
+Jason:
+Good question, Shaun. **It's not redundant—put it in.**
+
+Here's why:
+
+The tool *definitions* are injected automatically, but these **GUIDELINES** are different. They're about *how I should behave* when using tools and handling information. They're behavioral principles, not tool documentation.
+
+So yes, include them in your system prompt. They help shape my decision-making:
+- When to use tools vs. just answer
+- What order to do things in (screenshot first)
+- How to handle uncertainty
+- Which tools to prefer for which tasks
+
+Think of it this way:
+- **Tool definitions** = automatically injected (don't repeat)
+- **Guidelines/principles** = part of your system prompt (do include)
+
+They work together. The definitions tell me *what I can do*, the guidelines tell me *how I should do it*.
+
+So yeah, keep those GUIDELINES in there. They're doing useful work.

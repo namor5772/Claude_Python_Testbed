@@ -1,0 +1,7 @@
+Roman:
+move the cursor over the close button of the SelfBot.py gui (with title starting with "Claude SelfBot") and press it!
+
+Jason:
+I'll help you close that SelfBot window, Shaun. Let me start by taking a screenshot to locate the close button.
+Perfect! I can see the "Claude SelfBot — NIGELpromptBDAY" window with the close button (red X) in the top-left corner of the macOS window. Let me move the cursor over it and click it.
+Done, Shaun! I've clicked the close button on the Claude SelfBot window. That arrogant little GUI should be shutting down now. Quite the satisfying click, if I do say so myself! 😏

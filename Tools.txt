@@ -1,0 +1,365 @@
+================================================================================
+                    MYAGENT.PY - AVAILABLE TOOLS REFERENCE
+================================================================================
+
+MyAgent.py is an autonomous AI agent with access to a comprehensive set of tools
+for desktop automation, web browsing, file operations, and system tasks. Below
+is a complete reference of all available tools and their detailed descriptions.
+
+================================================================================
+                            WEB & BROWSER TOOLS
+================================================================================
+
+1. WEB_SEARCH
+   Description: Search the web for information using a search query.
+   Purpose: Find current information, answer questions about recent events, 
+            look up facts, or find relevant websites.
+   Parameters:
+      - query (required): The search query string
+   Example: Search for "weather forecast Sydney"
+   Returns: Search results with titles, URLs, and snippets
+
+2. FETCH_WEBPAGE
+   Description: Retrieve the full content of a specific webpage URL.
+   Purpose: Read complete page content after web_search, or fetch specific URLs
+            for detailed information.
+   Parameters:
+      - url (required): The URL to fetch (e.g., 'https://example.com')
+   Example: Fetch https://www.example.com/article
+   Returns: Full text content of the webpage
+
+3. BROWSER_OPEN
+   Description: Open or connect to the system browser and navigate to a URL.
+   Purpose: Access websites using the user's real browser profile with all
+            cookies, logins, and extensions. Launches browser if not running.
+   Parameters:
+      - url (required): The URL to navigate to (e.g., 'https://google.com')
+   Example: Open 'https://github.com'
+   Returns: Browser connection established
+
+4. BROWSER_NAVIGATE
+   Description: Navigate the current browser page to a new URL.
+   Purpose: Change pages within an already-open browser session.
+   Parameters:
+      - url (required): The URL to navigate to
+   Example: Navigate to 'https://example.com/new-page'
+   Returns: Page loaded
+
+5. BROWSER_CLICK
+   Description: Click an element on the current webpage.
+   Purpose: Interact with buttons, links, and other clickable elements.
+   Parameters:
+      - selector (optional): CSS selector of the element (e.g., '#submit-btn')
+      - text (optional): Visible text of the element to click
+   Example: Click button with text "Submit"
+   Returns: Element clicked
+
+6. BROWSER_FILL
+   Description: Fill a form field with text instantly.
+   Purpose: Input data into text fields, replacing any existing value.
+   Parameters:
+      - selector (required): CSS selector of the input field
+      - value (required): The text to fill into the field
+   Example: Fill email field with 'user@example.com'
+   Returns: Field populated
+
+7. BROWSER_GET_TEXT
+   Description: Get the text content of the page or a specific element.
+   Purpose: Read page content without taking a screenshot.
+   Parameters:
+      - selector (optional): CSS selector of the element (omit for full page)
+   Example: Get text from element with ID 'result'
+   Returns: Text content as string
+
+8. BROWSER_RUN_JS
+   Description: Execute JavaScript code on the current page.
+   Purpose: Advanced interactions, extracting data, or manipulating the DOM.
+   Parameters:
+      - code (required): JavaScript code to execute (use 'return' to get values)
+   Example: Execute "return document.title"
+   Returns: Result of JavaScript execution
+
+9. BROWSER_SCREENSHOT
+   Description: Take a screenshot of the current browser page.
+   Purpose: Capture visual representation of the page.
+   Returns: Image of the current browser view
+
+10. BROWSER_CLOSE
+    Description: Disconnect from the browser automation connection.
+    Purpose: End browser automation session (Edge stays open, only connection closes).
+    Returns: Connection closed
+
+11. BROWSER_WAIT_FOR
+    Description: Wait for an element matching a CSS selector to appear.
+    Purpose: Pause execution until a specific element loads.
+    Parameters:
+       - selector (required): CSS selector to wait for
+       - timeout (optional): Maximum milliseconds to wait (default: 10000)
+    Example: Wait for element with class 'loaded'
+    Returns: Element's text content once found
+
+12. BROWSER_SELECT
+    Description: Select an option from a <select> dropdown element.
+    Purpose: Choose options from dropdown menus.
+    Parameters:
+       - selector (required): CSS selector for the <select> element
+       - value (optional): Option value attribute to select
+       - label (optional): Visible text of the option to select
+    Example: Select option "USA" from country dropdown
+    Returns: Option selected
+
+13. BROWSER_GET_ELEMENTS
+    Description: Get information about elements matching a CSS selector.
+    Purpose: Retrieve details about multiple elements.
+    Parameters:
+       - selector (required): CSS selector to query
+       - limit (optional): Maximum number of elements to return (default: 10)
+    Example: Get all links on the page
+    Returns: Array of elements with tag names, text content, attributes
+
+================================================================================
+                         DESKTOP AUTOMATION TOOLS
+================================================================================
+
+14. SCREENSHOT
+    Description: Take a screenshot of the screen (2560x1440 resolution).
+    Purpose: See what is displayed on screen before clicking or typing.
+    Parameters:
+       - x, y, width, height (optional): Capture only a specific region
+    Example: Take screenshot of top-left 500x400 region
+    Returns: Screenshot image
+
+15. MOUSE_CLICK
+    Description: Click the mouse at a given (x, y) position.
+    Purpose: Interact with GUI elements, buttons, and clickable items.
+    Parameters:
+       - x, y (required): Pixel coordinates to click
+       - button (optional): 'left', 'right', or 'middle' (default: left)
+       - clicks (optional): Number of clicks - 1=single, 2=double (default: 1)
+    Example: Double-click at position (640, 360)
+    Returns: Mouse click performed
+
+16. MOUSE_DRAG
+    Description: Drag the mouse from one point to another.
+    Purpose: Perform drag-and-drop, resize windows, move sliders, draw.
+    Parameters:
+       - start_x, start_y (required): Starting coordinates
+       - end_x, end_y (required): Ending coordinates
+       - button (optional): Mouse button to drag with (default: 'left')
+       - duration (optional): Duration of drag in seconds (default: 0.5)
+    Example: Drag from (100, 100) to (500, 500)
+    Returns: Drag operation completed
+
+17. MOUSE_SCROLL
+    Description: Scroll the mouse wheel.
+    Purpose: Navigate through content on the screen.
+    Parameters:
+       - clicks (required): Scroll amount (positive=up, negative=down)
+       - x, y (optional): Coordinates to scroll at
+    Example: Scroll down 5 clicks at position (640, 360)
+    Returns: Scroll performed
+
+18. TYPE_TEXT
+    Description: Type text at the current cursor position.
+    Purpose: Input text into focused fields.
+    Parameters:
+       - text (required): The text to type
+       - interval (optional): Seconds between keystrokes (default: 0.02)
+    Example: Type "Hello World"
+    Returns: Text typed
+
+19. PRESS_KEY
+    Description: Press a key or key combination.
+    Purpose: Simulate keyboard input for special keys and shortcuts.
+    Parameters:
+       - keys (required): Key name or combo (e.g., 'enter', 'ctrl+c', 'alt+tab')
+    Example: Press 'ctrl+shift+s' for screenshot
+    Returns: Key(s) pressed
+
+20. OPEN_APPLICATION
+    Description: Open an application by common name or full path.
+    Purpose: Launch applications on the system.
+    Parameters:
+       - name (required): App name (e.g., 'chrome', 'notepad', 'vscode')
+                          or full executable path
+       - args (optional): Arguments to pass (e.g., file path to open)
+    Known apps: chrome, firefox, edge, safari, notepad, notepad++, calculator,
+                terminal, finder, excel, word, vscode, spotify, discord, slack, teams
+    Example: Open 'chrome' or 'chrome' with args '/path/to/file.html'
+    Returns: Application launched
+
+21. FIND_WINDOW
+    Description: Find windows matching a title pattern.
+    Purpose: Locate and optionally activate windows.
+    Parameters:
+       - title (required): Window title or partial text to search for
+       - activate (optional): If true, bring first matching window to foreground
+    Example: Find window with title "Chrome"
+    Returns: Window titles, positions, and sizes
+
+22. WAIT_FOR_WINDOW
+    Description: Wait until a window with given title appears.
+    Purpose: Pause execution until a specific window is found.
+    Parameters:
+       - title (required): Window title or partial text to wait for
+       - timeout (optional): Maximum seconds to wait (default: 10)
+    Example: Wait for window titled "File Save Dialog"
+    Returns: Window info once found
+
+================================================================================
+                            CLIPBOARD TOOLS
+================================================================================
+
+23. CLIPBOARD_READ
+    Description: Read the current text contents of the clipboard.
+    Purpose: Retrieve text that was copied to clipboard.
+    Returns: Clipboard text content
+
+24. CLIPBOARD_WRITE
+    Description: Write text to the clipboard, replacing current content.
+    Purpose: Copy text to clipboard for pasting elsewhere.
+    Parameters:
+       - text (required): The text to place on the clipboard
+    Example: Copy "example@email.com" to clipboard
+    Returns: Text written to clipboard
+
+================================================================================
+                            FILE & DATA TOOLS
+================================================================================
+
+25. RUN_COMMAND
+    Description: Execute a command on the local machine and return output.
+    Purpose: Run system tasks, shell scripts, install software, etc.
+    Parameters:
+       - command (required): The command to execute (e.g., 'ls -la', 'mkdir test')
+    Behavior: On Windows runs PowerShell; on macOS runs bash
+              Use Start-Process (Windows) or 'open -a' (macOS) for GUI apps
+    Example: Execute 'echo "Hello World"'
+    Returns: Command output and error messages
+
+26. CSV_SEARCH
+    Description: Search a delimited text file for records matching a value.
+    Purpose: Find, look up, or filter data in CSV, TSV, or delimited files.
+    Parameters:
+       - file_path (required): Absolute path to the file
+       - search_value (required): The value to search for
+       - column (optional): Column heading to search in (searches all if omitted)
+       - delimiter (optional): Column delimiter (',', '\t', '|', ';')
+                               Auto-detects if omitted
+       - match_mode (optional): 'contains' (default), 'exact', or 'starts_with'
+       - max_results (optional): Maximum matching rows to return (default: 50)
+    Example: Search CSV for "John" in 'Name' column
+    Returns: Matching rows formatted as text
+
+================================================================================
+                        SCREEN & IMAGE READING TOOLS
+================================================================================
+
+27. READ_SCREEN_TEXT
+    Description: Read text from a region of the screen using OCR.
+    Purpose: Extract text from screen without taking full screenshot.
+    Parameters:
+       - x, y (required): Left and top edge coordinates
+       - width, height (required): Dimensions of region to read
+    Example: Read text from coordinates (100, 100) with size 500x300
+    Returns: Extracted text from that region
+
+28. FIND_IMAGE_ON_SCREEN
+    Description: Find an image on the screen by matching a reference image file.
+    Purpose: Locate buttons, icons, or specific UI elements.
+    Parameters:
+       - image_path (required): Absolute path to reference image file
+       - confidence (optional): Match confidence threshold 0.0-1.0 (default: 0.8)
+    Example: Find a "Submit" button icon
+    Returns: Center coordinates if found
+
+================================================================================
+                         INTERACTION & UTILITY TOOLS
+================================================================================
+
+29. USER_PROMPT
+    Description: Pause execution and display a message to user, wait for response.
+    Purpose: Request user input, confirmation, or action.
+            CRITICAL: Use this when you need user input. Never just ask
+            questions in output - it ends your turn.
+    Parameters:
+       - message (required): The message or question to display
+    Example: Ask user "Which option would you like? (1/2/3)"
+    Returns: User's response text
+
+================================================================================
+                      INSTRUCTION & SKILL MANAGEMENT TOOLS
+================================================================================
+
+30. MANAGE_INSTRUCTIONS
+    Description: Manage the saved agent instruction library on disk.
+    Purpose: List, read, create, update, or delete saved instructions.
+    Parameters:
+       - action (required): 'list', 'read', 'create', 'update', or 'delete'
+       - name (required for all except 'list'): Instruction name
+       - text (required for create): Instruction content
+       - browser, desktop, meta (optional): Enable specific tool groups
+       - model, provider, temperature (optional): Model configuration
+       - thinking_enabled, thinking_mode, thinking_effort (optional): Reasoning settings
+    Example: List all saved instructions
+    Returns: Instruction information
+
+31. MANAGE_SKILLS
+    Description: Manage the shared skills library on disk.
+    Purpose: List, read, create, update, or delete skills.
+    Parameters:
+       - action (required): 'list', 'read', 'create', 'update', or 'delete'
+       - name (required for all except 'list'): Skill name
+       - content (required for create): Skill content text
+       - mode (optional): 'disabled', 'enabled', or 'on_demand' (default: disabled)
+    Example: Create a new skill for data processing
+    Returns: Skill information
+
+32. GET_SKILL
+    Description: Retrieve the full content of an on-demand skill by name.
+    Purpose: Access specific skill content when needed.
+    Parameters:
+       - skill_name (required): Name of the skill to retrieve
+    Available skills: NIP Generation
+    Returns: Full skill content
+
+33. RUN_INSTRUCTION
+    Description: Launch a saved agent instruction as a separate process.
+    Purpose: Run pre-configured agent instances independently.
+    Parameters:
+       - name (required): Name of saved instruction to launch
+       - headless (optional): Run without GUI window (default: true)
+                              Set false to show agent window
+    Example: Launch instruction named "DataProcessor"
+    Returns: Process started immediately
+
+================================================================================
+                            TOOL USAGE GUIDELINES
+================================================================================
+
+GENERAL PRINCIPLES:
+  • Execute tasks autonomously - chain tools together without hesitation
+  • When multiple tools can achieve a goal, combine them effectively
+  • For desktop tasks: screenshot first, then act on what you see
+  • For browser tasks: use browser tools for precision (not desktop tools)
+  • Always use user_prompt when you need user input or confirmation
+
+DEPENDENCIES:
+  • If tools have dependencies, wait for previous calls to finish first
+  • Use returned values from one tool as inputs for subsequent tools
+  • Never guess or use placeholders for required parameters
+
+ERROR HANDLING:
+  • If a tool fails, explain what went wrong and try alternatives
+  • Some websites may block automated access (403 errors)
+  • Always check for tool availability before execution
+
+BEST PRACTICES:
+  • Take screenshots to verify results before proceeding
+  • Chain independent tools together in single function_calls block
+  • Use specific CSS selectors in browser tools for reliability
+  • Provide user_prompt for any action requiring human confirmation
+
+================================================================================
+                               END OF REFERENCE
+================================================================================

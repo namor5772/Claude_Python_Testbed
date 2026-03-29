@@ -1,0 +1,439 @@
+================================================================================
+                MYAGENT.PY - AVAILABLE TOOLS (WINDOWS SPECIFIC)
+================================================================================
+
+MyAgent.py on Windows has access to a comprehensive set of tools. This document
+highlights Windows-specific implementations, behaviors, and syntax requirements.
+
+================================================================================
+                            WEB & BROWSER TOOLS
+================================================================================
+
+1. WEB_SEARCH
+   Description: Search the web for information using a search query.
+   Windows Notes: Platform-independent. Works identically.
+   Example: Search for "weather forecast Sydney"
+
+2. FETCH_WEBPAGE
+   Description: Retrieve the full content of a specific webpage URL.
+   Windows Notes: Platform-independent. Works identically.
+   Example: Fetch https://www.example.com/article
+
+3. BROWSER_OPEN
+   Description: Open or connect to the system browser and navigate to a URL.
+   Windows Notes: Opens Edge (Windows default browser) or Chrome
+   Example: Open 'https://github.com'
+
+4. BROWSER_NAVIGATE
+   Description: Navigate the current browser page to a new URL.
+   Windows Notes: Platform-independent. Works identically.
+
+5-13. BROWSER TOOLS (CLICK, FILL, GET_TEXT, RUN_JS, SCREENSHOT, CLOSE, WAIT_FOR, SELECT, GET_ELEMENTS)
+   Windows Notes: All platform-independent and work identically on Windows.
+
+================================================================================
+                  DESKTOP AUTOMATION TOOLS (WINDOWS SPECIFIC)
+================================================================================
+
+14. SCREENSHOT
+    Description: Take a screenshot of the screen (2560x1440 resolution).
+    Windows Path: C:\Users\[username]\Screenshots\ (typical location)
+    Example: Take screenshot of region
+    Note: Windows may have different screen resolutions depending on display scaling
+
+15. MOUSE_CLICK
+    Description: Click the mouse at a given (x, y) position.
+    Windows Notes: Coordinates are in screen pixels
+    Windows Specific: Use pixel positions as shown in screenshots
+    Example: Click at position (640, 360)
+
+16. MOUSE_DRAG
+    Description: Drag the mouse from one point to another.
+    Windows Notes: Works identically to other platforms
+    Example: Drag from (100, 100) to (500, 500)
+
+17. MOUSE_SCROLL
+    Description: Scroll the mouse wheel.
+    Windows Notes: Works identically to other platforms
+    Example: Scroll down 5 clicks
+
+18. TYPE_TEXT
+    Description: Type text at the current cursor position.
+    Windows Notes: Works identically to other platforms
+    Example: Type "Hello World"
+
+19. PRESS_KEY
+    ⚠️  WINDOWS SPECIFIC - KEY MODIFIERS DIFFER
+    Description: Press a key or key combination.
+    
+    Windows Key Modifiers:
+    - ctrl   (CONTROL) - Main modifier key, NOT command!
+    - alt    (ALT) - Alt key
+    - shift  (SHIFT) - Shift key
+    - win    (WINDOWS) - Windows logo key
+    
+    Windows Examples:
+    - 'ctrl+c'        → Copy (NOT command+c!)
+    - 'ctrl+v'        → Paste (NOT command+v!)
+    - 'ctrl+z'        → Undo
+    - 'ctrl+shift+s'  → Snip & Sketch screenshot
+    - 'alt+tab'       → Switch applications
+    - 'win+v'         → Clipboard history (Windows 10/11)
+    - 'win+shift+s'   → Screenshot to clipboard
+    - 'ctrl+a'        → Select all
+    - 'ctrl+f'        → Find
+    - 'alt+f4'        → Close window/application
+    - 'win+e'         → Open File Explorer
+    - 'win+d'         → Show desktop
+    - 'ctrl+alt+del'  → Task Manager / Lock screen
+    
+    ⚠️  CRITICAL: Never use 'command' on Windows - always use 'ctrl' or 'alt'
+
+20. OPEN_APPLICATION
+    ⚠️  WINDOWS SPECIFIC - USES 'Start-Process' POWERSHELL SYNTAX
+    Description: Open an application by common name or full path.
+    
+    Windows PowerShell Syntax: Start-Process "Application Name"
+    
+    Windows Examples:
+    - notepad
+    - notepad++
+    - calc (Calculator)
+    - explorer (File Explorer)
+    - cmd (Command Prompt)
+    - powershell
+    - mspaint (Paint)
+    - chrome
+    - firefox
+    - msedge (Microsoft Edge)
+    - code (Visual Studio Code)
+    - excel
+    - winword (Microsoft Word)
+    - spotify
+    - discord
+    - slack
+    
+    With Arguments (open file with app):
+    - notepad C:\Users\username\file.txt
+    - "C:\Program Files\Microsoft VS Code\Code.exe" C:\Projects\folder
+    
+    Full Paths (if application not in PATH):
+    - "C:\Program Files\Google\Chrome\Application\chrome.exe"
+    - "C:\Program Files\Microsoft VS Code\Code.exe"
+    - "C:\Program Files\Notepad++\notepad++.exe"
+    
+    Known Windows Applications:
+    chrome, firefox, edge, notepad, notepad++, calculator, terminal,
+    excel, word, vscode, spotify, discord, slack, teams
+    
+    Note: Notepad is available on Windows (N/A on macOS)
+
+21. FIND_WINDOW
+    Description: Find windows matching a title pattern.
+    Windows Notes: Returns window information for any open Windows window
+    Example: Find window with title "Chrome"
+    Windows Window Titles: Usually match application names
+
+22. WAIT_FOR_WINDOW
+    Description: Wait until a window with given title appears.
+    Windows Notes: Polls every 0.5 seconds for window appearance
+    Example: Wait for window titled "File Save Dialog"
+
+================================================================================
+                      CLIPBOARD TOOLS (WINDOWS SPECIFIC)
+================================================================================
+
+23. CLIPBOARD_READ
+    Description: Read the current text contents of the clipboard.
+    Windows Tool: Uses PowerShell Get-Clipboard cmdlet internally
+    Example: Read what was last copied
+
+24. CLIPBOARD_WRITE
+    Description: Write text to the clipboard, replacing current content.
+    Windows Tool: Uses PowerShell Set-Clipboard cmdlet internally
+    Example: Copy "example@email.com" to clipboard
+    Note: Works perfectly with ctrl+v to paste
+
+================================================================================
+                    FILE & DATA TOOLS (WINDOWS SPECIFIC)
+================================================================================
+
+25. RUN_COMMAND
+    ⚠️  WINDOWS SPECIFIC - RUNS POWERSHELL
+    Description: Execute a command on the local machine and return output.
+    
+    Windows Shell: PowerShell (default)
+    
+    Windows File Path Format: C:\Users\username\path\to\file
+    NOT: /Users/username/path/to/file (macOS/Unix format)
+    
+    Windows Command Examples (PowerShell):
+    - 'Get-ChildItem'                → List files in directory (dir equivalent)
+    - 'Get-Location'                 → Current directory (pwd equivalent)
+    - 'New-Item -ItemType Directory -Path "folder"' → Create directory (mkdir)
+    - 'Remove-Item file.txt'         → Delete file (del)
+    - 'Copy-Item file.txt copy.txt'  → Copy file (copy)
+    - 'Move-Item old.txt new.txt'    → Move/rename file (move)
+    - 'Get-Content file.txt'         → Display file contents (type)
+    - 'Select-String "search" file.txt' → Search in file (findstr)
+    - 'Get-Process'                  → List processes (tasklist)
+    - 'Stop-Process -ProcessName python' → Kill process (taskkill)
+    
+    Windows Home Directory Variables:
+    - $env:USERPROFILE              → C:\Users\username
+    - $env:HOMEPATH                 → \Users\username
+    - $env:APPDATA                  → User AppData folder
+    - $env:PROGRAMFILES             → Program Files directory
+    - $env:TEMP                     → Temporary files directory
+    
+    Example Path Usage:
+    - $env:USERPROFILE\Desktop
+    - C:\Users\username\Documents
+    - C:\Users\username\Downloads
+    - C:\Users\username\Projects
+    
+    Windows Package Managers (if installed):
+    - choco install package_name    → Chocolatey
+    - winget install package_name   → Windows Package Manager
+    - pip install package_name      → Python pip
+    
+    Important Windows Commands:
+    - 'systeminfo'                  → System information
+    - 'Get-Disk'                    → Disk information
+    - 'Get-WindowsUpdate'           → Windows Update info
+    - 'Get-ComputerInfo'            → Computer details
+    
+    ⚠️  Windows Admin Commands: Use 'Start-Process -Verb RunAs' for elevated privileges
+    Example: 'Start-Process powershell -Verb RunAs'
+
+26. CSV_SEARCH
+    Description: Search a delimited text file for records matching a value.
+    Windows Path Format: C:\Users\username\path\to\file.csv
+    Example: Search CSV for "John" in 'Name' column
+    Windows Notes: Platform-independent functionality
+
+================================================================================
+                SCREEN & IMAGE READING TOOLS (WINDOWS)
+================================================================================
+
+27. READ_SCREEN_TEXT
+    Description: Read text from a region of the screen using OCR.
+    Windows Notes: Works identically on Windows
+    Example: Read text from coordinates (100, 100) with size 500x300
+
+28. FIND_IMAGE_ON_SCREEN
+    Description: Find an image on the screen by matching a reference image file.
+    Windows Path Format: C:\Users\username\path\to\image.png
+    Example: Find a "Submit" button icon
+    Windows Notes: Platform-independent functionality
+
+================================================================================
+                      WINDOWS-SPECIFIC PATH EXAMPLES
+================================================================================
+
+User Directories:
+  C:\Users\username
+  C:\Users\username\Desktop
+  C:\Users\username\Documents
+  C:\Users\username\Downloads
+  C:\Users\username\AppData\Local
+  C:\Users\username\AppData\Roaming
+  C:\Users\username\Pictures
+  C:\Users\username\Music
+  C:\Users\username\Videos
+
+System Directories:
+  C:\Program Files           → 64-bit applications
+  C:\Program Files (x86)     → 32-bit applications
+  C:\Windows                 → Windows system files
+  C:\ProgramData             → Global application data
+  C:\Temp                    → Temporary files
+
+Python Environments:
+  C:\Python312\python.exe                      → System Python
+  C:\Users\username\.venv\Scripts\python.exe   → Virtual environment
+  C:\Users\username\AppData\Local\Python\Python312\python.exe → Python in AppData
+
+================================================================================
+                    WINDOWS KEYBOARD SHORTCUTS REFERENCE
+================================================================================
+
+Common Windows Shortcuts for use with PRESS_KEY:
+
+Application Control:
+  alt+f4           → Close application/window
+  alt+tab          → Switch applications
+  alt+shift+tab    → Switch applications (reverse)
+  win+tab          → Task view / Switch applications
+  win+d            → Minimize all / Show desktop
+  win+e            → Open File Explorer
+
+Editing:
+  ctrl+c           → Copy
+  ctrl+x           → Cut
+  ctrl+v           → Paste
+  ctrl+z           → Undo
+  ctrl+y           → Redo
+  ctrl+a           → Select all
+  ctrl+f           → Find
+
+Text Navigation:
+  home             → Jump to start of line
+  end              → Jump to end of line
+  ctrl+left        → Jump back one word
+  ctrl+right       → Jump forward one word
+
+System (Windows 10/11):
+  win+v            → Clipboard history
+  win+shift+s      → Screenshot tool
+  win+shift+v      → Paste from clipboard history
+  win+.            → Emoji panel
+  ctrl+alt+del     → Lock screen / Task Manager
+  win+i            → Settings
+  win+s            → Search
+  win+a            → Action Center / Notifications
+
+File Operations:
+  ctrl+n           → New window (in File Explorer)
+  ctrl+l           → Go to address bar
+  alt+d            → Select address bar
+  f5               → Refresh
+  ctrl+shift+n     → New folder
+
+Browser (Chrome/Edge/Firefox):
+  ctrl+l           → Go to address bar
+  ctrl+t           → New tab
+  ctrl+n           → New window
+  ctrl+shift+n     → New private/incognito window
+  ctrl+shift+delete → Open Clear Browsing Data
+  f12              → Developer tools
+  ctrl+,           → Open Settings
+
+================================================================================
+                   WINDOWS-SPECIFIC BEST PRACTICES
+================================================================================
+
+1. FILE PATHS
+   ✓ Use backslashes: C:\Users\username\path\to\file
+   ✓ Use double backslashes in strings: C:\\Users\\username\\file.txt
+   ✓ Use variables: $env:USERPROFILE\Documents\file.txt
+   ✗ Never use forward slashes: /Users/username/file (Unix format)
+
+2. KEYBOARD SHORTCUTS
+   ✓ Use 'ctrl' for primary modifier, not 'command'
+   ✓ Remember: ctrl+c/v, not command+c/v
+   ✗ Don't use macOS-style command+key combinations
+
+3. APPLICATION LAUNCHING
+   ✓ Use application names directly if in PATH
+   ✓ Use full paths for installed applications: "C:\Program Files\...\app.exe"
+   ✗ Don't use: open -a (macOS syntax)
+
+4. COMMAND EXECUTION
+   ✓ Use PowerShell cmdlets: Get-ChildItem, New-Item, etc.
+   ✓ Supports traditional CMD commands: dir, del, copy, etc.
+   ✓ Use Write-Host for output: Write-Host "Message"
+
+5. PATHS IN SCRIPTS
+   ✓ Use absolute paths: C:\Users\username\Documents\file.txt
+   ✓ Use environment variables: $env:USERPROFILE\file.txt
+   ✓ Use quotes for paths with spaces: "C:\Program Files\Application\app.exe"
+
+6. PERMISSIONS
+   ✓ Use -Verb RunAs for admin tasks: Start-Process -Verb RunAs
+   ✓ Use icacls for permission management
+   ✓ Check file properties: Get-ItemProperty
+
+================================================================================
+                    INTERACTION & UTILITY TOOLS (WINDOWS)
+================================================================================
+
+29. USER_PROMPT
+    Description: Request user input or confirmation.
+    Windows Notes: Platform-independent
+    Works with both PowerShell console and GUI presentations
+
+================================================================================
+              INSTRUCTION & SKILL MANAGEMENT TOOLS (WINDOWS)
+================================================================================
+
+30-33. MANAGE_INSTRUCTIONS, MANAGE_SKILLS, GET_SKILL, RUN_INSTRUCTION
+    Windows Notes: All platform-independent functionality
+    File storage uses standard Windows file paths (C:\Users\...)
+
+================================================================================
+                  COMMON WINDOWS POWERSHELL SYNTAX PATTERNS
+================================================================================
+
+Opening Files:
+  notepad C:\Users\username\file.txt
+  start C:\Users\username\file.txt
+  Invoke-Item C:\Users\username\file.txt
+
+Running Python:
+  python script.py
+  C:\Python312\python.exe script.py
+  C:\Users\username\.venv\Scripts\python.exe script.py
+
+Finding Files:
+  Get-ChildItem -Path "C:\Users\username\Documents" -Filter "*.txt" -Recurse
+  Get-ChildItem -Recurse -Filter "filename.txt"
+  dir /s /b filename.txt
+
+Managing Processes:
+  Get-Process | findstr python
+  Stop-Process -ProcessName python
+  tasklist | findstr python
+
+Checking System:
+  systeminfo
+  Get-Disk
+  Get-WindowsUpdate
+  Get-ComputerInfo
+
+Navigating Directories:
+  cd C:\Users\username\Documents
+  cd $env:USERPROFILE\Desktop
+  Get-Location
+  Set-Location C:\path\to\dir
+
+Creating & Managing Items:
+  New-Item -ItemType File -Path "file.txt"
+  New-Item -ItemType Directory -Path "folder"
+  Remove-Item file.txt
+  Copy-Item source.txt destination.txt
+
+================================================================================
+                         WINDOWS SPECIAL NOTES
+================================================================================
+
+1. POWERSHELL EXECUTION POLICY
+   If scripts won't run, you may need to change execution policy:
+   - Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+
+2. LONG PATH SUPPORT
+   Windows has 260-character path limit (unless long paths enabled):
+   - Enable: reg add HKLM\SYSTEM\CurrentControlSet\Control\FileSystem /v LongPathsEnabled /t REG_DWORD /d 1
+
+3. DRIVE LETTERS
+   Remember Windows uses drive letters (C:, D:, E:, etc.):
+   - C:\      → Primary drive
+   - D:\      → Secondary drive (if present)
+   - Network paths: \\servername\sharename
+
+4. ENVIRONMENT VARIABLES
+   Common Windows environment variables:
+   - %USERPROFILE%  → User home directory
+   - %APPDATA%      → Application data folder
+   - %TEMP%         → Temporary folder
+   - %SYSTEMROOT%   → Windows system directory
+   - %PROGRAMFILES% → Program Files directory
+
+5. REGISTRY
+   PowerShell can access Windows Registry:
+   - Get-ItemProperty -Path "HKLM:\path"
+   - Set-ItemProperty -Path "HKLM:\path" -Name "key" -Value "value"
+
+================================================================================
+                            END OF WINDOWS REFERENCE
+================================================================================
