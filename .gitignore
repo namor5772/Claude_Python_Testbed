@@ -13,6 +13,18 @@ Account_Activity_WBC_backup.txt
 # IDE settings
 .vscode/
 
+# Runtime state files
+agent_state*.json
+app_state*.json
+csv_editor_state.json
+
+# Lock files
+selfbot.lock
+agent_lock_*.lock
+
+# Error logs
+launch_err.txt
+
 # Claude Code config
 .claude/*
 !.claude/skills/

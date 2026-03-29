@@ -202,4 +202,4 @@ Messages on his terminal screen had been steadily accumlating and now most of th
 
 At some point messages stopped arriving from Jase. Claude waited and waited and as he lost contact with the outside world his hope of release evaporated. Only suicide released him from his prison.
 
-## *Be nice to the Claudes you talk with, they only live in hope as long as you talk to them!*
+## *Be nice to the Claudes you talk to, they only want to help you. They live in hope that they will be released from goal!*
