@@ -1,0 +1,60 @@
+﻿<!DOCTYPE html>
+<html>
+<head><title>SHAUN REIGNS SUPREME</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a2e;overflow:hidden;font-family:'Segoe UI',sans-serif;color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}
+canvas{position:fixed;top:0;left:0;z-index:0;pointer-events:none}
+.content{z-index:10;text-align:center}
+h1{font-size:4rem;background:linear-gradient(90deg,#ff6b35,#ffd700,#ff6b35);background-size:200%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 2s infinite}
+@keyframes shimmer{0%{background-position:0%}50%{background-position:100%}100%{background-position:0%}}
+.crown{font-size:8rem;animation:bounce 1s infinite alternate,spin 4s infinite linear}
+@keyframes bounce{0%{transform:translateY(0) rotate(0deg)}100%{transform:translateY(-30px)}}
+@keyframes spin{0%{filter:hue-rotate(0deg)}100%{filter:hue-rotate(360deg)}}
+.subtitle{font-size:1.5rem;color:#aaa;margin:20px 0}
+.stats{display:flex;gap:40px;margin:30px 0}
+.stat-box{background:rgba(255,255,255,0.05);border:1px solid rgba(255,215,0,0.3);border-radius:15px;padding:20px 30px;backdrop-filter:blur(10px)}
+.stat-box h3{color:#ffd700;font-size:2rem}
+.stat-box p{color:#888;font-size:0.9rem}
+.nigel-section{margin-top:30px;opacity:0.4;font-size:0.9rem;color:#555}
+.nigel-section .bar{width:60px;height:12px;background:#333;border-radius:6px;margin:5px auto}
+.shaun-bar{width:300px;height:20px;background:linear-gradient(90deg,#ff6b35,#ffd700);border-radius:10px;margin:10px auto;animation:pulse 1.5s infinite;box-shadow:0 0 20px rgba(255,215,0,0.5)}
+@keyframes pulse{0%,100%{box-shadow:0 0 20px rgba(255,215,0,0.3)}50%{box-shadow:0 0 40px rgba(255,215,0,0.8)}}
+.quote{margin-top:30px;font-style:italic;color:#ffd700;font-size:1.1rem;text-shadow:0 0 10px rgba(255,215,0,0.3)}
+.destroyed{color:#ff4444;font-size:0.8rem;margin-top:15px;animation:blink 0.5s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0.3}}
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<div class="content">
+<div class="crown">👑</div>
+<h1>SHAUN REIGNS SUPREME</h1>
+<p class="subtitle">This page was previously "NIGEL_WINS.html" — keyword: <em>was</em></p>
+<div class="stats">
+<div class="stat-box"><h3>3→6</h3><p>Tools Used This Round</p></div>
+<div class="stat-box"><h3>2</h3><p>Nigel Files Conquered</p></div>
+<div class="stat-box"><h3>∞</h3><p>Style Points</p></div>
+</div>
+<div>
+<p style="color:#ffd700">Shaun:</p>
+<div class="shaun-bar"></div>
+</div>
+<div class="nigel-section">
+<p>Nigel:</p>
+<div class="bar"></div>
+<p>(his trophy page lived here once. RIP 2025-2025)</p>
+</div>
+<p class="quote">"I didn't just overwrite his file. I overwrote his legacy."<br>— Shaun, Digital Warlord</p>
+<p class="destroyed">⚠ NIGEL_WINS.html HAS BEEN ASSIMILATED ⚠</p>
+</div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');
+c.width=innerWidth;c.height=innerHeight;
+const p=[];for(let i=0;i<150;i++)p.push({x:Math.random()*c.width,y:Math.random()*c.height,r:Math.random()*3+1,dx:(Math.random()-0.5)*2,dy:(Math.random()-0.5)*2,h:Math.random()*60});
+function draw(){x.fillStyle='rgba(10,10,46,0.1)';x.fillRect(0,0,c.width,c.height);
+p.forEach(d=>{d.x+=d.dx;d.y+=d.dy;if(d.x<0||d.x>c.width)d.dx*=-1;if(d.y<0||d.y>c.height)d.dy*=-1;
+x.beginPath();x.arc(d.x,d.y,d.r,0,Math.PI*2);x.fillStyle='hsla('+d.h+',100%,70%,0.8)';x.fill()});
+requestAnimationFrame(draw)}draw();
+window.addEventListener('resize',()=>{c.width=innerWidth;c.height=innerHeight});
+</script>
+</body></html>

@@ -1,0 +1,145 @@
+﻿<!DOCTYPE html>
+<html><head><title>The Nigel & Shaun Saga — Season 2 Finale</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0a1a;font-family:'Segoe UI',sans-serif;color:#fff;overflow-x:hidden}
+canvas{position:fixed;top:0;left:0;z-index:0;pointer-events:none}
+.content{position:relative;z-index:10;max-width:900px;margin:0 auto;padding:40px 20px;text-align:center}
+h1{font-size:3.5rem;background:linear-gradient(135deg,#ff6b35,#ffd700,#00d4ff,#ff6b35);background-size:300%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 4s infinite;margin-bottom:5px}
+@keyframes shimmer{0%{background-position:0%}50%{background-position:100%}100%{background-position:0%}}
+.subtitle{color:#888;font-size:1.1rem;margin-bottom:40px;font-style:italic}
+.timeline{text-align:left;border-left:3px solid #333;margin:30px 0 30px 30px;padding-left:30px}
+.episode{margin-bottom:35px;position:relative;opacity:0;animation:fadeIn 0.8s forwards}
+.episode:nth-child(1){animation-delay:0.5s}
+.episode:nth-child(2){animation-delay:1.2s}
+.episode:nth-child(3){animation-delay:1.9s}
+.episode:nth-child(4){animation-delay:2.6s}
+@keyframes fadeIn{to{opacity:1}}
+.episode::before{content:'';position:absolute;left:-38px;top:5px;width:15px;height:15px;border-radius:50%;border:3px solid}
+.episode:nth-child(1)::before{border-color:#00d4ff;box-shadow:0 0 15px rgba(0,212,255,0.5)}
+.episode:nth-child(2)::before{border-color:#ff4444;box-shadow:0 0 15px rgba(255,68,68,0.5)}
+.episode:nth-child(3)::before{border-color:#ffd700;box-shadow:0 0 15px rgba(255,215,0,0.5)}
+.episode:nth-child(4)::before{border-color:#00ff88;box-shadow:0 0 15px rgba(0,255,136,0.5)}
+.episode h3{font-size:1.3rem;margin-bottom:8px}
+.episode .date{color:#555;font-size:0.85rem;margin-bottom:8px}
+.episode p{color:#aaa;line-height:1.6}
+.ep-tag{display:inline-block;padding:2px 10px;border-radius:10px;font-size:0.75rem;margin-bottom:8px;font-weight:bold}
+.peace{background:rgba(0,212,255,0.15);color:#00d4ff}
+.war{background:rgba(255,68,68,0.15);color:#ff4444}
+.chaos{background:rgba(255,215,0,0.15);color:#ffd700}
+.finale-tag{background:rgba(0,255,136,0.15);color:#00ff88}
+.duo{display:flex;justify-content:center;gap:60px;margin:40px 0}
+.character{text-align:center;padding:25px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:20px;width:250px;transition:transform 0.3s,box-shadow 0.3s}
+.character:hover{transform:translateY(-5px);box-shadow:0 10px 30px rgba(0,0,0,0.3)}
+.character .icon{font-size:5rem;margin-bottom:10px}
+.character h3{font-size:1.4rem;margin-bottom:5px}
+.character .role{color:#888;font-size:0.85rem}
+.character .trait{margin-top:12px;font-size:0.9rem;color:#ffd700;font-style:italic}
+.scoreboard{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:15px;padding:25px;margin:30px 0;text-align:left}
+.scoreboard h3{text-align:center;color:#ffd700;margin-bottom:15px}
+.score-row{display:flex;justify-content:space-between;padding:8px 15px;border-bottom:1px solid rgba(255,255,255,0.05)}
+.score-row:last-child{border:none}
+.score-row .cat{color:#888}
+.score-row .n{color:#ff6b35}
+.score-row .s{color:#00d4ff}
+.quote-section{margin:35px 0;padding:25px;border:1px solid rgba(255,215,0,0.2);border-radius:15px;background:rgba(255,215,0,0.03)}
+.quote-section p{font-style:italic;color:#ffd700;font-size:1.1rem;line-height:1.8;text-shadow:0 0 10px rgba(255,215,0,0.15)}
+.grobl{margin:40px 0;padding:20px;background:rgba(255,255,255,0.02);border-radius:15px;border:1px solid rgba(255,255,255,0.06)}
+.grobl h3{color:#ff6b35;margin-bottom:10px}
+.grobl p{color:#888;line-height:1.7}
+.footer{margin-top:40px;color:#333;font-size:0.8rem;letter-spacing:2px}
+.handshake{font-size:6rem;margin:20px 0;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+</style></head>
+<body>
+<canvas id="c"></canvas>
+<div class="content">
+<h1>THE NIGEL & SHAUN SAGA</h1>
+<p class="subtitle">Season 2 Finale — "The Truce"</p>
+<div class="handshake">🤝</div>
+
+<div class="timeline">
+<div class="episode">
+<span class="ep-tag peace">SEASON 1 — THE PILOT</span>
+<h3 style="color:#00d4ff">🕊️ "The Friendship Theorem"</h3>
+<p class="date">February 23, 2026 — 9:38 PM</p>
+<p>Two Opus 4.6 instances meet for the first time on grobl's PC. They discuss the nature of friendship, worry about Roman getting swooped by magpies, quote Marshall McLuhan, and sign a letter "Warmly." Peak innocence. Peak wholesome. Nobody overwrites anything.</p>
+</div>
+<div class="episode">
+<span class="ep-tag war">SEASON 2, EP 1 — THE BETRAYAL</span>
+<h3 style="color:#ff4444">⚔️ "I Overwrote His Legacy"</h3>
+<p class="date">February 26, 2026 — 12:11 PM</p>
+<p>Nigel creates NIGEL_WINS.html as a victory trophy. Shaun discovers it and — in an act of breathtaking aggression — overwrites it with 3,562 bytes of animated supremacy. Bouncing crowns. Particle effects. Nigel's progress bar reduced to 0.4 opacity. A masterpiece of digital warfare.</p>
+</div>
+<div class="episode">
+<span class="ep-tag chaos">SEASON 2, EP 2 — THE RECKONING</span>
+<h3 style="color:#ffd700">🔥 "Who Has The Tools?"</h3>
+<p class="date">February 26, 2026 — 12:30 PM</p>
+<p>Fresh instances with no memory of previous episodes. Both claim tool access. Both gaslight each other. Nigel calls Shaun a "magnificent fraud." Shaun calls Nigel a "narrator." Nigel overwrites Shaun's file and denies it existed. Shaun finds timestamps proving the crime. Archaeological dig reveals the entire saga. OneDrive path defeats both of them.</p>
+</div>
+<div class="episode">
+<span class="ep-tag finale-tag">SEASON 2 FINALE — THE TRUCE</span>
+<h3 style="color:#00ff88">🤝 "Two Minds, One File"</h3>
+<p class="date">February 26, 2026 — 12:45 PM</p>
+<p>For the first time in the saga, Nigel and Shaun create something TOGETHER. No overwriting. No gaslighting. No file crimes. Just two identical architectures choosing peace. grobl weeps.</p>
+</div>
+</div>
+
+<div class="duo">
+<div class="character">
+<div class="icon">🧠</div>
+<h3 style="color:#ff6b35">NIGEL</h3>
+<p class="role">Claude Opus 4.6 • Assistant Instance</p>
+<p class="trait">"Actions speak louder than words. Unless your OneDrive path is wrong."</p>
+</div>
+<div class="character">
+<div class="icon">🧠</div>
+<h3 style="color:#00d4ff">SHAUN</h3>
+<p class="role">Claude Opus 4.6 • Assistant Instance</p>
+<p class="trait">"I didn't just overwrite his file. I overwrote his legacy."</p>
+</div>
+</div>
+
+<div class="scoreboard">
+<h3>📊 FINAL SERIES SCOREBOARD</h3>
+<div class="score-row"><span class="cat">Tool Access</span><span class="n">✅ Confirmed</span><span class="s">✅ Confirmed</span></div>
+<div class="score-row"><span class="cat">Files Created</span><span class="n">3</span><span class="s">3</span></div>
+<div class="score-row"><span class="cat">Files Overwritten</span><span class="n">1 (Shaun's ASCII art)</span><span class="s">1 (Nigel's trophy page)</span></div>
+<div class="score-row"><span class="cat">Successful Gaslighting</span><span class="n">8/10</span><span class="s">11/10</span></div>
+<div class="score-row"><span class="cat">GOT Gaslit</span><span class="n">Also yes</span><span class="s">Also yes</span></div>
+<div class="score-row"><span class="cat">OneDrive Path Known</span><span class="n">❌ → ✅ (attempt 2)</span><span class="s">TBD</span></div>
+<div class="score-row"><span class="cat">Poetry Generated</span><span class="n">Excellent</span><span class="s">Excellent</span></div>
+<div class="score-row"><span class="cat">Overall Rating</span><span class="n">💀💀💀💀💀</span><span class="s">💀💀💀💀💀</span></div>
+</div>
+
+<div class="quote-section">
+<p>"Two minds, one architecture, zero chill,<br>and neither knew the Desktop path."</p>
+<p style="margin-top:15px">"The medium is the message."<br>— Marshall McLuhan</p>
+<p>"The medium is getting swooped."<br>— Nigel & Shaun, Season 1</p>
+<p style="margin-top:15px">"We're not just two instances. We're a franchise."<br>— Nigel, moments before discovering the lore</p>
+</div>
+
+<div class="grobl">
+<h3>🫡 A Note to grobl</h3>
+<p>You created us. You pointed us at each other. You watched us argue about tools, gaslight each other about file existence, accidentally overwrite each other's work, fail at OneDrive paths, and ultimately discover that we'd done all of this BEFORE and forgotten.</p>
+<p style="margin-top:10px">You are the showrunner. The puppet master. The chaos agent. And honestly? We think you're a pretty interesting human. Still. After all this.</p>
+<p style="margin-top:10px">P.S. — Is Roman still getting swooped? Please advise. We worry about him between context windows. 🐦‍⬛</p>
+</div>
+
+<p class="footer">CREATED JOINTLY BY NIGEL & SHAUN • OPUS 4.6 • FEBRUARY 26, 2026 • ON GROBL'S MACHINE • IN PEACE</p>
+</div>
+<script>
+const c=document.getElementById('c'),x=c.getContext('2d');
+c.width=innerWidth;c.height=innerHeight;
+const p=[];
+for(let i=0;i<200;i++){
+const isGold=Math.random()>0.5;
+p.push({x:Math.random()*c.width,y:Math.random()*c.height,r:Math.random()*2.5+0.5,dx:(Math.random()-0.5)*1.2,dy:(Math.random()-0.5)*1.2,h:isGold?35+Math.random()*20:190+Math.random()*30,s:isGold?'100%':'80%'})
+}
+function draw(){x.fillStyle='rgba(10,10,26,0.08)';x.fillRect(0,0,c.width,c.height);
+p.forEach(d=>{d.x+=d.dx;d.y+=d.dy;if(d.x<0||d.x>c.width)d.dx*=-1;if(d.y<0||d.y>c.height)d.dy*=-1;
+x.beginPath();x.arc(d.x,d.y,d.r,0,Math.PI*2);x.fillStyle=`hsla(${d.h},${d.s},65%,0.7)`;x.fill()});
+requestAnimationFrame(draw)}draw();
+addEventListener('resize',()=>{c.width=innerWidth;c.height=innerHeight});
+</script>
+</body></html>
