@@ -5316,7 +5316,11 @@ class App:
         elif block.name == "user_prompt":
             prompt_msg = block.input.get("message", "")
             self.queue.put({"type": "tool_info", "content": "Requesting user input...\n"})
-            return self.do_user_prompt(prompt_msg)
+            response = self.do_user_prompt(prompt_msg)
+            if not response.strip():
+                self.stop_requested = True
+                return "[User submitted empty response — stopping agent]"
+            return response
         elif block.name in ("screenshot", "mouse_click", "type_text",
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
@@ -5849,22 +5853,6 @@ class App:
 
                     messages.append({"role": "user", "content": tool_results_ordered})
                 else:
-                    # Normal end_turn — check if instruction expects interactivity
-                    # If the instruction mentions user_prompt, the model likely forgot
-                    # to call it. Auto-inject a user_prompt to keep the loop alive.
-                    if "user_prompt" in self.agent_instruction:
-                        self.queue.put({"type": "tool_info",
-                                        "content": "Auto-prompting (agent ended turn without user_prompt)...\n"})
-                        auto_response = self.do_user_prompt(
-                            "The agent ended its turn. What would you like to do next? (Leave blank to stop)")
-                        if not auto_response.strip():
-                            break
-                        messages.append({"role": "assistant", "content": full_text})
-                        messages.append({"role": "user", "content": [
-                            {"type": "text", "text": auto_response},
-                        ]})
-                        label_emitted = False
-                        continue
                     break
 
             if full_text:
