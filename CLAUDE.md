@@ -36,11 +36,27 @@ taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/n
 # macOS:
 pkill -f "python.*MyAgent.py" 2>/dev/null; pkill -f "python.*SelfBot.py" 2>/dev/null
 ```
-There are no tests, linter, or build steps — these are single-file testbed apps.
+There are no tests, linter, or build steps — these are testbed apps.
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~4100 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Single-file tkinter GUI autonomous agent (~5600 lines); fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
+- `MyAgent.py` — Entry point (~170 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
+- `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
+  - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, file paths
+  - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock
+  - `ui_mixin.py` — setup_ui(), model/provider/thinking widget handlers
+  - `state_mixin.py` — Instance management, display geometry, state persistence
+  - `instructions_mixin.py` — Instruction CRUD, editor Toplevel dialog
+  - `skills_mixin.py` — Skills CRUD, editor dialog, system prompt building
+  - `streaming_mixin.py` — stream_worker (agentic loop), _execute_tool, _get_tools, message translation
+  - `anthropic_mixin.py` — _stream_anthropic_call
+  - `openai_mixin.py` — OpenAI helpers, _stream_responses, _stream_responses_call
+  - `gemini_mixin.py` — Gemini helpers, _tools_to_gemini, _messages_to_gemini, _stream_gemini_call
+  - `desktop_mixin.py` — Desktop automation tools (pyautogui): screenshot, mouse, keyboard, clipboard, OCR
+  - `browser_mixin.py` — Browser automation tools (Playwright): open, navigate, click, fill, screenshot
+  - `safety_mixin.py` — Command safety, confirmation dialog, user_prompt, run_powershell, agent control
+  - `chat_mixin.py` — Chat save/serialize, image attachment, LaTeX processing
+  - `event_loop_mixin.py` — check_queue, _on_close, _finish_close
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `CSVEditor.py` — Single-file tkinter GUI CSV editor (~520 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
@@ -96,7 +112,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 ## Architecture (MyAgent.py)
 
-**Single class design** — Same as SelfBot: the `App` class contains all UI, API, tool execution, and persistence logic.
+**Mixin-based modular design** — The `App` class in `MyAgent.py` inherits from 14 mixin classes in the `myagent/` package. Each mixin groups related methods by concern (UI, streaming, tools, persistence, etc.). Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports needed.
 
 **Multi-provider support** — A Provider combobox in the instruction editor switches between Anthropic, OpenAI, and Gemini. The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary only. OpenAI uses `_messages_to_responses()`, `_tools_to_responses()`, `_stream_responses()`; Gemini uses `_messages_to_gemini()`, `_tools_to_gemini()`, `_stream_gemini_call()`. The `_ToolBlock` wrapper class gives OpenAI/Gemini dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for all providers. Gemini tool call IDs are synthesized as `gemini_{name}_{index}` since the API doesn't use IDs. Provider selection is saved per-instruction and in `agent_state.json`. The Instruction button is disabled while the agent is running. Gemini requires `GEMINI_API_KEY` or `GOOGLE_API_KEY` env var.
 
@@ -108,7 +124,7 @@ There are no tests, linter, or build steps — these are single-file testbed app
 
 **Agentic loop** — `stream_worker()` runs a `while True:` loop: dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` based on the provider, streams the response, executes any tool calls, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button. No fixed iteration limit.
 
-**Tool system** — Four-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, `META_TOOLS`) and `_get_tools()` assembler. `TOOLS` is always included; the others are conditionally added based on Desktop/Browser/Meta checkboxes. Tool dispatch is handled by the `_execute_tool()` helper method. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless.
+**Tool system** — Four-list structure (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, `META_TOOLS`) in `myagent/constants.py` and `_get_tools()` assembler in `myagent/streaming_mixin.py`. `TOOLS` is always included; the others are conditionally added based on Desktop/Browser/Meta checkboxes. Tool dispatch is handled by `_execute_tool()` in `streaming_mixin.py`. Adding a new tool requires: (1) schema dict in the appropriate tool list in `constants.py`, (2) `elif` branch in `_execute_tool()` in `streaming_mixin.py`, (3) `do_<name>()` implementation method in the appropriate mixin (desktop_mixin, browser_mixin, safety_mixin, etc.), and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless.
 
 **Parallel tool execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering.
 
@@ -173,4 +189,6 @@ There are no tests, linter, or build steps — these are single-file testbed app
 ## Conventions
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
-- Single-file architecture: SelfBot changes go in `SelfBot.py`, agent changes go in `MyAgent.py`, bank extractor changes go in `Account_Activity_WBC.py`
+- SelfBot uses single-file architecture: all changes go in `SelfBot.py`
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 14 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- Bank extractor changes go in `Account_Activity_WBC.py`
