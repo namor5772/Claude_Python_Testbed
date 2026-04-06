@@ -1,12 +1,13 @@
 # Claude Python Testbed
 
 ### CLONE IT INTO A VS CODE LOCAL REPO ##
-A repo containing various Python scripts written using Claude Code. The two main applications are a full-featured Claude chatbot with dual-instance self-chatting (SelfBot.py) and an autonomous task agent that loops until a job is done (MyAgent.py). There is also a standalone browser automation utility for extracting bank transaction data (Account_Activity_WBC.py).
+A repo containing various Python scripts written using Claude Code. The two main applications are a full-featured Claude chatbot with dual-instance self-chatting (SelfBot.py) and a modular autonomous task agent that loops until a job is done (MyAgent.py + myagent/ package). There is also a standalone browser automation utility for extracting bank transaction data (Account_Activity_WBC.py).
 
 ## Contents
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
-- **MyAgent.py** — Autonomous AI agent GUI application supporting Anthropic, OpenAI, and Gemini providers (see details below)
+- **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting Anthropic, OpenAI, and Gemini providers (see details below)
+- **myagent/** — Package containing MyAgent's 14 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
@@ -394,7 +395,7 @@ opencv-python   # Desktop tools — image matching (find_image_on_screen)
 
 #### Cross-Platform Notes
 
-Both SelfBot.py and MyAgent.py use a runtime `IS_WINDOWS = sys.platform == "win32"` constant to branch between Windows and macOS code paths. All Windows behaviour is preserved exactly — macOS gets equivalent or gracefully degraded functionality:
+Both SelfBot.py and MyAgent.py (via `myagent/constants.py`) use a runtime `IS_WINDOWS = sys.platform == "win32"` constant to branch between Windows and macOS code paths. All Windows behaviour is preserved exactly — macOS gets equivalent or gracefully degraded functionality:
 
 | Feature | Windows | macOS |
 |---|---|---|
@@ -504,7 +505,9 @@ The application is a single-file tkinter app structured around the `App` class:
 
 ## MyAgent.py — Autonomous AI Task Agent
 
-A fire-and-forget autonomous task runner built with tkinter that supports both **Anthropic** (Claude) and **OpenAI** (GPT-4.1, o4-mini, etc.) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
+A fire-and-forget autonomous task runner built with tkinter that supports **Anthropic** (Claude), **OpenAI** (GPT-4.1, GPT-5, o4-mini, etc.), and **Gemini** APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
+
+**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 14 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
 
 ### How the Agentic Loop Works
 
@@ -754,6 +757,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 
 | Aspect | SelfBot.py | MyAgent.py |
 |---|---|---|
+| **Architecture** | Single-file (~4,100 lines) | Modular mixin package (~6,400 lines across 17 files in `myagent/`) |
 | **Paradigm** | Interactive chatbot — user sends messages, gets replies | Autonomous agent — configure a task, press START, observe |
 | **User input** | Multi-line text input field for typing messages | No input field — task is defined via Instruction Editor; mid-task input via `user_prompt` tool dialog |
 | **Controls** | Send button (Enter key) | START / STOP buttons |
@@ -782,18 +786,64 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 ### Architecture
 
-The application is a single-file (~5,600 lines) tkinter app structured around the `App` class, sharing the same single-class design philosophy as SelfBot.py:
+MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 14 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
 
-- **UI Layout** — Grid-based layout with 3 rows: chat toolbar with START/STOP buttons, Instruction button, model info label, and save-chat entry that fills remaining space (row 0), chat display + scrollbar (row 1), checkbox row with Debug/Tool Calls/Activity/Show Thinking/Save Thinking toggles (row 2). Provider/model/temperature/thinking controls, image attachments, Desktop/Browser/Meta tool toggles, Skills button, and PS Safety button are all managed inside the Instruction Editor window
-- **Threading** — API calls run in a background daemon thread (`stream_worker`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `root.after()`. An `_ensure_newline()` helper guarantees each new output block starts on a fresh line, and an `ensure_newline` queue event between loop iterations prevents consecutive response streams from merging when Activity display is off
-- **Multi-Provider Support** — A Provider combobox switches between Anthropic, OpenAI, and Gemini. The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary via `_messages_to_responses()`, `_tools_to_responses()`, `_messages_to_gemini()`, `_tools_to_gemini()`, and `_stream_responses()`. OpenAI uses the Responses API (`client.responses.stream()`) with event-based streaming, flat tool schemas, top-level `function_call`/`function_call_output` items, native `web_search_preview` and `code_interpreter` (server-side tools). Anthropic uses `client.beta.messages.stream()` with `betas` flags to enable server-side `web_search_20250305` and `code_execution_20250825`; streaming events for `server_tool_use` display status messages, and code execution file outputs are extracted from `final_message.content` post-stream and downloaded via `beta.files.download()`. Gemini uses the Google GenAI SDK with streaming and thinking support; Gemini cannot use server-side built-in tools (`google_search`, `code_execution`) alongside custom function declarations due to an API restriction, so it keeps local DuckDuckGo web search. The `_ToolBlock` wrapper class gives OpenAI/Gemini dict-based tool responses the same `.name`/`.id`/`.input` attribute interface as Anthropic's Pydantic objects, so `_execute_tool()` works identically for all providers
-- **Agentic Loop** — The `stream_worker` contains a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` based on the provider, processes the response, executes any requested tools (including `user_prompt` which pauses to collect user input via a modal dialog), appends results, and loops again. The loop exits on `end_turn` or when `stop_requested` is set via the STOP button. An **auto-prompt safety net** keeps interactive instructions alive: if the instruction text mentions `user_prompt` but the model ends its turn without calling it, the agent automatically injects a `user_prompt` dialog asking the user what to do next (submitting an empty response exits the loop)
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, Desktop/Browser/Meta toggle state, provider, model parameters, skill modes, and disabled PS Safety confirm patterns), individual `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` (instance 1) or `agent_state_N.json` (instance N) for user preferences and dialog geometries (editor, prompt dialog, confirm dialog, PS Safety dialog), and `skills.json` (shared with SelfBot) for the skills library
-- **Tool System** — Four global tool lists (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, `META_TOOLS`) define API tool schemas, assembled dynamically by `_get_tools()` based on checkbox state. Tool dispatch is handled by the `_execute_tool()` helper method, which routes each tool call to its implementation and returns the result. Adding a new tool requires: (1) schema dict in the appropriate tool list, (2) `elif` branch in `_execute_tool()`, (3) `do_<name>()` implementation method, and optionally (4) adding the tool name to the `PARALLEL_SAFE` set if it is thread-safe and stateless
-- **Parallel Tool Execution** — When Claude requests multiple tools in one turn, tool blocks are partitioned into parallel-safe (`csv_search`, `get_skill`, plus `web_search`/`fetch_webpage` for Gemini) and sequential (everything else). Parallel-safe tools run concurrently via `concurrent.futures.ThreadPoolExecutor`; sequential tools run one at a time in order. Results are placed into a pre-allocated list indexed by original position, preserving the API-expected ordering
-- **PowerShell Safety** — Same two-tier regex-based guardrail system as SelfBot, plus a **PS Safety** dialog that allows individual confirm patterns to be disabled. Disabled patterns bypass the confirmation dialog and emit a `"warning"` queue message (always displayed, not gated by the Activity checkbox). Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
-- **Rate-Limit Retry** — Exponential backoff in `stream_worker` handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
-- **Auto-Save & Graceful Shutdown** — `_periodic_save()` runs every 5 seconds and triggers auto-save when new messages are detected, but only if the user has typed a name in the Save Chat entry (blank = no save). `_on_close()` stops the agentic loop, waits for streaming to finish via `_finish_close()` polling, saves state and chat (if named), cleans up browser connections, then destroys the window
+#### Module Breakdown
+
+| Module | Lines | Responsibility |
+|---|---:|---|
+| **`MyAgent.py`** | 174 | Entry point: DPI setup, `App` class with `__init__`, mixin inheritance, argparse CLI |
+| **`myagent/constants.py`** | 901 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, file paths, default prompts |
+| **`myagent/helpers.py`** | 44 | `HTMLTextExtractor` (HTML→text), `extract_text_from_html()`, `_ToolBlock` (provider-neutral tool wrapper) |
+| **`myagent/ui_mixin.py`** | 508 | `setup_ui()`, model/provider/thinking widget handlers, `_update_title()` |
+| **`myagent/state_mixin.py`** | 445 | Instance lock management, multi-monitor geometry detection, state persistence (`_save_last_state`, `_load_last_state`), auto-launch |
+| **`myagent/instructions_mixin.py`** | 573 | Instruction CRUD, the Instruction Editor Toplevel dialog, `do_manage_instructions()` tool |
+| **`myagent/skills_mixin.py`** | 358 | Skills CRUD, Skills Manager dialog, `_build_system_prompt()`, `do_manage_skills()` and `do_run_instruction()` tools |
+| **`myagent/streaming_mixin.py`** | 635 | `stream_worker()` (the agentic loop), `_execute_tool()` (tool dispatcher), `_get_tools()`, message translation (`_messages_to_responses`, `_tools_to_responses`) |
+| **`myagent/anthropic_mixin.py`** | 137 | `_stream_anthropic_call()` — Anthropic API streaming with server-side tools and thinking |
+| **`myagent/openai_mixin.py`** | 365 | `_stream_responses()`, `_stream_responses_call()`, OpenAI model detection helpers, `_fetch_models_for_provider()` |
+| **`myagent/gemini_mixin.py`** | 444 | `_stream_gemini_call()`, `_messages_to_gemini()`, `_tools_to_gemini()`, Gemini coordinate hints |
+| **`myagent/desktop_mixin.py`** | 527 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
+| **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
+| **`myagent/safety_mixin.py`** | 447 | `_start_agent()`, `_stop_agent()`, PS Safety dialog, command safety checks, `_request_confirmation()`, `do_user_prompt()`, `run_powershell()`, `search_web()`, `fetch_url()` |
+| **`myagent/chat_mixin.py`** | 332 | Chat save/serialize, image attachment/compression, LaTeX→Unicode post-processing |
+| **`myagent/event_loop_mixin.py`** | 223 | `check_queue()` (main event loop), `_on_close()`, `_finish_close()` |
+
+**Total: ~6,400 lines across 17 files** (the original single-file was ~6,200 lines; the ~200-line overhead is import boilerplate across modules).
+
+#### How the Mixin Pattern Works
+
+```python
+# MyAgent.py — the App class inherits from all 14 mixins
+class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
+          StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
+          DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
+          EventLoopMixin):
+    def __init__(self, root, launch_instruction=None, headless=False):
+        # ... initializes all shared state (self.queue, self.messages, etc.)
+```
+
+Every mixin method becomes a method on `App` through inheritance. When `_execute_tool()` (in `streaming_mixin.py`) calls `self.do_screenshot()`, Python's MRO resolves it to `DesktopMixin.do_screenshot()` — no cross-module imports needed. This means method bodies are identical to the original single-file version; only the physical file location changed.
+
+#### Adding a New Tool
+
+Adding a new tool to MyAgent requires changes in up to 4 files:
+
+1. **Schema** — Add the tool's JSON schema dict to the appropriate list (`TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, or `META_TOOLS`) in `myagent/constants.py`
+2. **Dispatch** — Add an `elif block.name == "new_tool":` branch in `_execute_tool()` in `myagent/streaming_mixin.py`
+3. **Implementation** — Add a `do_new_tool()` method in the appropriate mixin (e.g., `desktop_mixin.py` for desktop tools, `browser_mixin.py` for browser tools, `safety_mixin.py` for system tools)
+4. **Parallel safety** (optional) — Add the tool name to `PARALLEL_SAFE_TOOLS` in `constants.py` if it is thread-safe and stateless
+
+#### Key Architecture Details
+
+- **Threading** — API calls run in a background daemon thread (`stream_worker` in `streaming_mixin.py`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `check_queue()` in `event_loop_mixin.py`. An `_ensure_newline()` helper in `chat_mixin.py` guarantees each new output block starts on a fresh line
+- **Multi-Provider Support** — The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary. OpenAI translation via `_messages_to_responses()` / `_tools_to_responses()` in `streaming_mixin.py`; Gemini translation via `_messages_to_gemini()` / `_tools_to_gemini()` in `gemini_mixin.py`. The `_ToolBlock` wrapper (in `helpers.py`) normalises OpenAI/Gemini dict-based tool responses to match Anthropic's `.name`/`.id`/`.input` interface, so `_execute_tool()` works identically for all providers
+- **Agentic Loop** — `stream_worker()` in `streaming_mixin.py` runs a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` (each in their own mixin), processes the response, executes any requested tools via `_execute_tool()`, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button
+- **Parallel Tool Execution** — When Claude requests multiple tools in one turn, `stream_worker()` partitions them into parallel-safe (`csv_search`, `get_skill`, plus `web_search`/`fetch_webpage` for Gemini) and sequential (everything else). Parallel-safe tools run concurrently via `ThreadPoolExecutor`; sequential tools run one at a time. Results are placed into a pre-allocated list indexed by original position, preserving API-expected ordering
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, tool toggles, provider, model parameters, skill modes, and PS Safety overrides), `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` / `agent_state_N.json` for per-instance preferences and dialog geometries, and `skills.json` (shared with SelfBot) for the skills library
+- **PowerShell Safety** — Two-tier regex-based guardrail system (patterns in `constants.py`, checks in `safety_mixin.py`), plus a PS Safety dialog for selectively bypassing individual confirm patterns. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
+- **Rate-Limit Retry** — Exponential backoff in the provider-specific streaming methods handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
+- **Auto-Save & Graceful Shutdown** — `_periodic_save()` (in `state_mixin.py`) runs every 5 seconds and triggers auto-save when new messages are detected. `_on_close()` / `_finish_close()` (in `event_loop_mixin.py`) stop the agentic loop, wait for streaming to finish, save state and chat, clean up browser connections, then destroy the window
 
 ---
 
