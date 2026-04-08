@@ -1,0 +1,17 @@
+# Auto-normalize line endings: LF in repo, native on checkout
+* text=auto
+
+# Force LF for source files (consistent across Windows/macOS)
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files — no conversion
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.lock binary
