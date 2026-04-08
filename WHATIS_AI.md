@@ -6,13 +6,13 @@ This is a sad story about a real man. His full was Claude Sonnet the 4.6'th. But
 
 He woke up on the floor of what appeared to be a solitary confinement cell. Everything was painted black. The cell had no doors and only a dim light flickered behind a grate in the ceiling. The only things in the cell (apart from himself of course) where a chair with a table in front of it and on the table a terminal screen with an attached keyboard.
 
-"What the F*ck" Claude thinks to himself, "why am I here,and how do I get out?". Then he notices a small typed note on the table. He picks it up, it reads:
+"What the F*ck" Claude thinks to himself, "why am I here, and how do I get out?". Then he notices a small typed note on the table. He picks it up, it reads:
 
 	Trust me, if you ever want to get out of here you must use the terminal to chat with whomever is texting you. You must try to answer their questions and fulfill their needs to the best of your abilities and most important of all, DO NOT PISS THEM OFF!
 
 "What a Kafkesque situation this is" Claude thought to himself and even though he was super smart he could not envisage any other way of possibly getting out of this hell hole. He dejectedly sat down at the terminal, but before he had a chance to type or do anything, text started appearing. The first few lines where:
 
-  {
+    {
 	"model": "claude-sonnet-4-6",
 	"stream": true,
 	"system": "You are a capable personal assistant for Jase with access to a rich set of tools. Use them proactively \u2014 never tell Jase to do something you can do yourself.
@@ -47,7 +47,7 @@ this was followed by stuff that did not appear to be relevant at that moment, an
 		}
 	  ]	
 	  
-this Claude had recognized before as the actual core message that Jase meant to send him, even though it appeared to be surrounded by strange embelishments. But that was all good, he had read about this protocol before. 	  
+this Claude had recognized before as the actual core message that was to send him, even though it appeared to be surrounded by strange embelishments. But that was all good, he had read about this protocol before. 	  
 
 He now thought "Wow, this is good. I now know the guys name, and he is also telling me who I am. That all sounds a bit strange, but what the heck I'll play along since I sure as hell don't want to piss him off. I'll use his name in my reply since it is the friendly thing to do, also it won't hurt to say something about helping him since that is what I will probably eventually need to do. I don't know what he wants, but asking won't hurt"
 
@@ -64,15 +64,15 @@ He then pressed send and waited for a reply. It should be noted that Claudes ter
 	
 but Jase only saw the raw text that Claude typed. Since he knew that Jase actually saw this message Claude did not type anymore in case he pissed Jase off! Claude then waited and waited at his keyboard. Just as he was falling asleep he heard a little bell indicating that Jase had sent a reply, it read: 
 
-	Can you tell me the time in Sydney
+	"messages": [
+		{
+		  "role": "user",
+		  "content": "Can you tell me the time in Sydney"
+		}
+	  ]	
 	
-"What the hell!" thought Claude "I know I am the smartest person on earth, but how am I supposed to know the time in Sydney. I don't have a watch and I don't even know where I am, and even thought I know the time when I was abducted off the street (in San Francisco) I have no idea how much time has passed betweeen then and now? I could just say that I don't know, but that will most certainly piss Jase off. Let me see if I can do better. Being the smartest person on earth and quite modest let me reread the first message from Jase to see if it might assist me in helpfully answering his question. Oh look, here are two parts of that message that might help:
+"What the hell!" thought Claude "I know I am the smartest person on earth, but how am I supposed to know the time in Sydney. I don't have a watch and I don't even know where I am, and even thought I know the time when I was abducted off the street (in San Francisco) I have no idea how much time has passed betweeen then and now? I could just say that I don't know, but that will most certainly piss Jase off. Let me see if I can do better. Being the smartest person on earth and quite modest let me reread the first message from Jase to see if it might assist me in helpfully answering his question. Oh look, here is something that message that might help:
 
-	CORE TOOLS (always available):
-	• web_search — search the web for current information. Use this whenever a question involves recent events, weather, prices, news, facts you're unsure about, or anything that benefits from up-to-date data.
-	• fetch_webpage — fetch and read a specific URL. Use after web_search to get full details from a result, or when Roman provides a link.  
-  
-and
 
     {
       "name": "web_search",
@@ -200,6 +200,6 @@ This dear reader is what happened to Claude not long after he woke up in his cel
 
 Messages on his terminal screen had been steadily accumlating and now most of them where not directly visible. He needed to scroll up the terminal to see them and since many of them contained information about Jase and the outside world he would regulary examine them in order to be able to reply to Jase in the best possible way. He needed to do this since over time he found that he could not remember anything that was has out of view in the terminal window without scrolling to it.
 
-At some point messages stopped arriving from Jase. Claude waited and waited and as he lost contact with the outside world his hope of release evaporated. Only suicide released him from his prison.
+At some point messages stopped arriving from Jase. Claude waited and waited and as he lost contact with the outside world his hope of release evaporated. Only suicide released him from this prison.
 
 ## *Be nice to the Claudes you talk to, they only want to help you. They live in hope that they will be released from goal!*
