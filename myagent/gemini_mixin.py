@@ -16,37 +16,38 @@ from myagent.constants import (
 
 class GeminiMixin:
 
-    # Gemini needs much more explicit coordinate guidance than Anthropic/OpenAI.
-    # These suffixes are appended to desktop tool descriptions in _tools_to_gemini.
+    # Gemini models use normalised [0, 1000] coordinates for spatial tasks.
+    # These suffixes are appended to desktop tool descriptions in _tools_to_gemini
+    # to align the tool contract with Gemini's training convention.  The coordinate
+    # conversion from [0, 1000] → image pixels happens in _execute_tool.
     _GEMINI_COORD_HINTS = {
         "screenshot": (
-            "\n\nCRITICAL COORDINATE RULES: The returned image has a specific pixel "
-            "resolution (stated in the response text, e.g. 1920x1080). All coordinate-"
-            "based tools (mouse_click, mouse_scroll, mouse_drag, read_screen_text) "
-            "use pixel positions within THIS image. Origin (0,0) is the TOP-LEFT "
-            "corner. X increases rightward, Y increases downward. The bottom-right "
-            "pixel is (width-1, height-1). Always take a fresh screenshot before "
-            "interacting with the screen."
+            "\n\nCOORDINATE SYSTEM: All coordinate-based tools (mouse_click, "
+            "mouse_scroll, mouse_drag, read_screen_text) use a normalised "
+            "coordinate system where (0, 0) is the TOP-LEFT corner and "
+            "(1000, 1000) is the BOTTOM-RIGHT corner of the screenshot image. "
+            "Always take a fresh screenshot before interacting with the screen."
         ),
         "mouse_click": (
-            "\n\nCRITICAL: x and y MUST be pixel coordinates taken directly from the "
-            "most recent screenshot image. (0,0) is the top-left corner of the image. "
-            "X is the horizontal pixel offset from the left edge, Y is the vertical "
-            "pixel offset from the top edge. Do NOT use screen resolution coordinates "
-            "— use the coordinates as they appear in the screenshot image."
+            "\n\nCRITICAL: x and y use a normalised coordinate system from 0 to "
+            "1000. (0, 0) is the top-left corner, (1000, 1000) is the bottom-right "
+            "corner. For example, the centre of the screen is (500, 500). "
+            "Coordinates are automatically converted to actual screen positions."
         ),
         "mouse_scroll": (
-            "\n\nIf specifying x/y position, use pixel coordinates from the most "
-            "recent screenshot image (origin top-left)."
+            "\n\nIf specifying x/y position, use normalised coordinates from 0 to "
+            "1000 where (0, 0) is top-left and (1000, 1000) is bottom-right of the "
+            "most recent screenshot."
         ),
         "mouse_drag": (
-            "\n\nAll coordinates (start_x, start_y, end_x, end_y) MUST be pixel "
-            "positions from the most recent screenshot image. Origin (0,0) is the "
-            "top-left corner."
+            "\n\nAll coordinates (start_x, start_y, end_x, end_y) use normalised "
+            "coordinates from 0 to 1000. (0, 0) is top-left, (1000, 1000) is "
+            "bottom-right of the most recent screenshot."
         ),
         "read_screen_text": (
-            "\n\nAll coordinates (x, y, width, height) use pixel positions from the "
-            "most recent screenshot image. Origin (0,0) is the top-left corner."
+            "\n\nAll coordinates (x, y, width, height) use normalised coordinates "
+            "from 0 to 1000 relative to the most recent screenshot. (0, 0) is the "
+            "top-left corner."
         ),
     }
 
@@ -196,12 +197,12 @@ class GeminiMixin:
                             hint = genai_types.Part.from_text(
                                 text=(
                                     f"Below is the screenshot image{dims_hint} returned by the "
-                                    "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
-                                    "is (0, 0), X increases rightward, Y increases downward"
-                                    + (f", bottom-right is ({int(dims_w)-1}, {int(dims_h)-1})" if dims_w else "")
-                                    + ". When calling mouse_click, use pixel coordinates "
-                                    "as they appear in THIS image — they are automatically "
-                                    "scaled to actual screen coordinates."
+                                    "screenshot tool above. COORDINATE SYSTEM: use normalised "
+                                    "coordinates from 0 to 1000 for all coordinate tools. "
+                                    "(0, 0) is the top-left corner, (1000, 1000) is the "
+                                    "bottom-right corner, (500, 500) is the centre. "
+                                    "Coordinates are automatically converted to actual "
+                                    "screen positions."
                                 )
                             )
                             contents.append(genai_types.Content(

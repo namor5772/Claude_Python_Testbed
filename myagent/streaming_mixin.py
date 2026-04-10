@@ -1,6 +1,7 @@
 import json
 import copy
 import time
+import re
 import base64
 import threading
 import concurrent.futures
@@ -57,29 +58,34 @@ class StreamingMixin:
                         (isinstance(b, dict) and b.get("type") == "tool_result") for b in content
                     )
                     if has_tool_result:
+                        # Collect any images from tool results to send as a
+                        # separate user message after all function_call_output
+                        # items.  GPT models process images more reliably from
+                        # user messages than from function_call_output content.
+                        deferred_images = []
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
                                 tc_content = block.get("content", "")
                                 call_id = block.get("tool_use_id", "")
                                 # Handle content that is a list (e.g. with image blocks)
                                 if isinstance(tc_content, list):
-                                    parts = []
+                                    text_parts = []
                                     for part in tc_content:
                                         if isinstance(part, dict) and part.get("type") == "image":
                                             src = part.get("source", {})
                                             data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
-                                            parts.append({
+                                            deferred_images.append({
                                                 "type": "input_image",
                                                 "image_url": data_url,
                                             })
                                         elif isinstance(part, dict) and part.get("type") == "text":
-                                            parts.append({"type": "input_text", "text": part.get("text", "")})
+                                            text_parts.append(part.get("text", ""))
                                         else:
-                                            parts.append({"type": "input_text", "text": str(part)})
+                                            text_parts.append(str(part))
                                     result.append({
                                         "type": "function_call_output",
                                         "call_id": call_id,
-                                        "output": parts,
+                                        "output": "\n".join(text_parts),
                                     })
                                 else:
                                     result.append({
@@ -87,6 +93,33 @@ class StreamingMixin:
                                         "call_id": call_id,
                                         "output": str(tc_content) if tc_content else "",
                                     })
+                        # Send deferred images as a user message so the model
+                        # processes them through its normal vision pipeline
+                        if deferred_images:
+                            # Extract dimensions from the tool output text
+                            dims_hint = ""
+                            for item in reversed(result):
+                                out = item.get("output", "")
+                                if isinstance(out, str):
+                                    m = re.search(r"\((\d+)x(\d+)\)", out)
+                                    if m:
+                                        w, h = m.group(1), m.group(2)
+                                        dims_hint = f" ({w}x{h} pixels)"
+                                        break
+                            hint_text = (
+                                f"Below is the screenshot image{dims_hint} returned by the "
+                                "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
+                                "is (0, 0), X increases rightward, Y increases downward. "
+                                "When calling mouse_click, use the pixel (x, y) coordinates "
+                                "as they appear in THIS image — they are automatically "
+                                "scaled to actual screen coordinates."
+                            )
+                            result.append({
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": hint_text},
+                                ] + deferred_images,
+                            })
                     else:
                         # User message with text + images
                         parts = []
@@ -186,7 +219,7 @@ class StreamingMixin:
                             url = part.get("image_url", "")
                             if isinstance(url, str) and url.startswith("data:"):
                                 part["image_url"] = url[:60] + "...[truncated]"
-                # Also truncate images in function_call_output
+                # Also truncate images in function_call_output (legacy format)
                 if item.get("type") == "function_call_output" and isinstance(item.get("output"), list):
                     for part in item["output"]:
                         if isinstance(part, dict) and part.get("type") == "input_image":
@@ -299,6 +332,13 @@ class StreamingMixin:
             })
         return tools
 
+    def _gemini_norm_to_pixels(self, nx, ny):
+        """Convert Gemini normalised [0, 1000] coordinates to image pixel coordinates."""
+        iw, ih = self._screenshot_dims
+        if iw and ih:
+            return nx / 1000 * iw, ny / 1000 * ih
+        return nx, ny
+
     def _execute_tool(self, block):
         """Execute a single tool_use block and return the result.
 
@@ -354,7 +394,15 @@ class StreamingMixin:
                 self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
-                    region = (inp["x"], inp["y"], inp["width"], inp["height"])
+                    rx, ry = inp["x"], inp["y"]
+                    rw, rh = inp["width"], inp["height"]
+                    if self.provider == "Gemini":
+                        rx, ry = self._gemini_norm_to_pixels(rx, ry)
+                        iw, ih = self._screenshot_dims
+                        if iw and ih:
+                            rw = rw / 1000 * iw
+                            rh = rh / 1000 * ih
+                    region = (rx, ry, rw, rh)
                 return self.do_screenshot(region, display=display)
             elif block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
@@ -364,6 +412,8 @@ class StreamingMixin:
                         cx, cy = coord[0], coord[1]
                     else:
                         return f"mouse_click error: missing x/y coordinates. Got: {inp}"
+                if self.provider == "Gemini":
+                    cx, cy = self._gemini_norm_to_pixels(cx, cy)
                 self.queue.put({"type": "tool_info", "content": f"Clicking at ({cx}, {cy})...\n"})
                 return self.do_mouse_click(
                     cx, cy,
@@ -381,8 +431,11 @@ class StreamingMixin:
                 return self.do_press_key(keys)
             elif block.name == "mouse_scroll":
                 clicks_val = int(inp.get("clicks", 0))
+                sx, sy = inp.get("x"), inp.get("y")
+                if self.provider == "Gemini" and sx is not None and sy is not None:
+                    sx, sy = self._gemini_norm_to_pixels(sx, sy)
                 self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
-                return self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
+                return self.do_mouse_scroll(clicks_val, x=sx, y=sy)
             elif block.name == "open_application":
                 app_name = inp.get("name", "")
                 app_args = inp.get("args")
@@ -409,6 +462,13 @@ class StreamingMixin:
                 rx, ry, rw, rh = inp.get("x"), inp.get("y"), inp.get("width"), inp.get("height")
                 if None in (rx, ry, rw, rh):
                     return f"read_screen_text error: missing region parameters. Got: {inp}"
+                if self.provider == "Gemini":
+                    rx, ry = self._gemini_norm_to_pixels(rx, ry)
+                    # Width/height are also in [0, 1000] range
+                    iw, ih = self._screenshot_dims
+                    if iw and ih:
+                        rw = rw / 1000 * iw
+                        rh = rh / 1000 * ih
                 self.queue.put({"type": "tool_info", "content": f"OCR region ({rx},{ry} {rw}x{rh})...\n"})
                 return self.do_read_screen_text(rx, ry, rw, rh)
             elif block.name == "find_image_on_screen":
@@ -420,6 +480,9 @@ class StreamingMixin:
                 ex, ey = inp.get("end_x"), inp.get("end_y")
                 if None in (sx, sy, ex, ey):
                     return f"mouse_drag error: missing coordinates. Got: {inp}"
+                if self.provider == "Gemini":
+                    sx, sy = self._gemini_norm_to_pixels(sx, sy)
+                    ex, ey = self._gemini_norm_to_pixels(ex, ey)
                 self.queue.put({"type": "tool_info", "content": f"Dragging ({sx},{sy}) to ({ex},{ey})...\n"})
                 return self.do_mouse_drag(
                     sx, sy, ex, ey,
@@ -521,6 +584,8 @@ class StreamingMixin:
                 label_emitted = True
 
             call_num = 0
+            user_prompt_count = 0
+            user_prompt_nudges = 0
             while True:
                 # Check stop request between API calls
                 if self.stop_requested:
@@ -620,9 +685,27 @@ class StreamingMixin:
                     # After user_prompt, reset label so next response gets a fresh "Agent:" heading
                     if had_user_prompt:
                         label_emitted = False
+                        user_prompt_count += 1
+                        user_prompt_nudges = 0
 
                     messages.append({"role": "user", "content": tool_results_ordered})
                 else:
+                    # If the model has called user_prompt 2+ times (established chatbot
+                    # loop pattern) but ended this turn without calling it, nudge it.
+                    # A single user_prompt call could be a one-off info request, so
+                    # we only nudge when a repeating pattern has been established.
+                    if user_prompt_count >= 2 and full_text and user_prompt_nudges < 3:
+                        user_prompt_nudges += 1
+                        messages.append({"role": "assistant", "content": full_text})
+                        messages.append({
+                            "role": "user",
+                            "content": "[System: You ended your turn without calling user_prompt. "
+                                       "You must call user_prompt now to get the user's next message.]"
+                        })
+                        self.queue.put({"type": "tool_info",
+                                        "content": "Model forgot user_prompt — nudging...\n"})
+                        label_emitted = False
+                        continue
                     break
 
             if full_text:
