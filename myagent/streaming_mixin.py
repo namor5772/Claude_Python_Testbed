@@ -101,7 +101,7 @@ class StreamingMixin:
                             for item in reversed(result):
                                 out = item.get("output", "")
                                 if isinstance(out, str):
-                                    m = re.search(r"\((\d+)x(\d+)\)", out)
+                                    m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", out)
                                     if m:
                                         w, h = m.group(1), m.group(2)
                                         dims_hint = f" ({w}x{h} pixels)"
@@ -208,7 +208,10 @@ class StreamingMixin:
             tools = self._get_tools()
             responses_tools = self._tools_to_responses(tools) if tools else []
             responses_tools.append({"type": "web_search_preview"})
-            responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+            # Code interpreter is gated off when desktop tools are enabled —
+            # see _stream_responses_call for the rationale.
+            if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+                responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
             responses_input = self._messages_to_responses(display_msgs)
             # Truncate input_image data in Responses API input
             for item in responses_input:
@@ -308,6 +311,9 @@ class StreamingMixin:
                             "just that area for pixel-accurate coordinates."
                         )
                     break
+            # find_element is Gemini-only — strip it out for other providers so they don't see a tool they can't use
+            if self.provider != "Gemini":
+                desktop = [t for t in desktop if t["name"] != "find_element"]
             tools.extend(desktop)
         if self.browser_enabled.get():
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
@@ -331,13 +337,6 @@ class StreamingMixin:
                 },
             })
         return tools
-
-    def _gemini_norm_to_pixels(self, nx, ny):
-        """Convert Gemini normalised [0, 1000] coordinates to image pixel coordinates."""
-        iw, ih = self._screenshot_dims
-        if iw and ih:
-            return nx / 1000 * iw, ny / 1000 * ih
-        return nx, ny
 
     def _execute_tool(self, block):
         """Execute a single tool_use block and return the result.
@@ -382,28 +381,21 @@ class StreamingMixin:
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
                              "wait_for_window", "read_screen_text",
-                             "find_image_on_screen", "mouse_drag"):
+                             "find_image_on_screen", "mouse_drag", "find_element"):
             if not self.desktop_enabled.get():
                 return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
             inp = block.input
+            click_display = inp.get("display")
+            if click_display is not None:
+                click_display = int(click_display)
             if block.name == "screenshot":
-                display = inp.get("display")  # None = all displays
-                if display is not None:
-                    display = int(display)  # Gemini proto returns floats
+                display = click_display  # alias for clarity in screenshot path
                 disp_label = f"display {display}" if display is not None else "all displays"
                 self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
-                    rx, ry = inp["x"], inp["y"]
-                    rw, rh = inp["width"], inp["height"]
-                    if self.provider == "Gemini":
-                        rx, ry = self._gemini_norm_to_pixels(rx, ry)
-                        iw, ih = self._screenshot_dims
-                        if iw and ih:
-                            rw = rw / 1000 * iw
-                            rh = rh / 1000 * ih
-                    region = (rx, ry, rw, rh)
-                return self.do_screenshot(region, display=display)
+                    region = (inp["x"], inp["y"], inp["width"], inp["height"])
+                return self.do_screenshot(region, display=display, grid=bool(inp.get("grid", False)))
             elif block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
                 if cx is None or cy is None:
@@ -412,13 +404,12 @@ class StreamingMixin:
                         cx, cy = coord[0], coord[1]
                     else:
                         return f"mouse_click error: missing x/y coordinates. Got: {inp}"
-                if self.provider == "Gemini":
-                    cx, cy = self._gemini_norm_to_pixels(cx, cy)
                 self.queue.put({"type": "tool_info", "content": f"Clicking at ({cx}, {cy})...\n"})
                 return self.do_mouse_click(
                     cx, cy,
                     button=inp.get("button", "left"),
                     clicks=int(inp.get("clicks", 1)),
+                    display=click_display,
                 )
             elif block.name == "type_text":
                 text = inp.get("text", "")
@@ -432,10 +423,8 @@ class StreamingMixin:
             elif block.name == "mouse_scroll":
                 clicks_val = int(inp.get("clicks", 0))
                 sx, sy = inp.get("x"), inp.get("y")
-                if self.provider == "Gemini" and sx is not None and sy is not None:
-                    sx, sy = self._gemini_norm_to_pixels(sx, sy)
                 self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
-                return self.do_mouse_scroll(clicks_val, x=sx, y=sy)
+                return self.do_mouse_scroll(clicks_val, x=sx, y=sy, display=click_display)
             elif block.name == "open_application":
                 app_name = inp.get("name", "")
                 app_args = inp.get("args")
@@ -462,15 +451,8 @@ class StreamingMixin:
                 rx, ry, rw, rh = inp.get("x"), inp.get("y"), inp.get("width"), inp.get("height")
                 if None in (rx, ry, rw, rh):
                     return f"read_screen_text error: missing region parameters. Got: {inp}"
-                if self.provider == "Gemini":
-                    rx, ry = self._gemini_norm_to_pixels(rx, ry)
-                    # Width/height are also in [0, 1000] range
-                    iw, ih = self._screenshot_dims
-                    if iw and ih:
-                        rw = rw / 1000 * iw
-                        rh = rh / 1000 * ih
                 self.queue.put({"type": "tool_info", "content": f"OCR region ({rx},{ry} {rw}x{rh})...\n"})
-                return self.do_read_screen_text(rx, ry, rw, rh)
+                return self.do_read_screen_text(rx, ry, rw, rh, display=click_display)
             elif block.name == "find_image_on_screen":
                 path = inp.get("image_path", "")
                 self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
@@ -480,15 +462,22 @@ class StreamingMixin:
                 ex, ey = inp.get("end_x"), inp.get("end_y")
                 if None in (sx, sy, ex, ey):
                     return f"mouse_drag error: missing coordinates. Got: {inp}"
-                if self.provider == "Gemini":
-                    sx, sy = self._gemini_norm_to_pixels(sx, sy)
-                    ex, ey = self._gemini_norm_to_pixels(ex, ey)
                 self.queue.put({"type": "tool_info", "content": f"Dragging ({sx},{sy}) to ({ex},{ey})...\n"})
                 return self.do_mouse_drag(
                     sx, sy, ex, ey,
                     duration=inp.get("duration", 0.5),
                     button=inp.get("button", "left"),
+                    display=click_display,
                 )
+            elif block.name == "find_element":
+                if self.provider != "Gemini":
+                    return "find_element is only available for the Gemini provider. Use a region screenshot or grid=true overlay instead."
+                description = inp.get("description", "")
+                if not description:
+                    return "find_element error: missing 'description' parameter."
+                disp_str = f" (display {click_display})" if click_display is not None else ""
+                self.queue.put({"type": "tool_info", "content": f"Locating: {description}{disp_str}\n"})
+                return self.do_gemini_find_element(description, display=click_display)
         elif block.name in ("browser_open", "browser_navigate",
                               "browser_click", "browser_fill",
                               "browser_get_text", "browser_run_js",
@@ -570,6 +559,42 @@ class StreamingMixin:
         else:
             return f"Unknown tool: {block.name}"
 
+    def _weak_desktop_combo_warning(self):
+        """Returns a warning string when the active provider/model has known
+        weak spatial precision for desktop click tasks, or None if no warning
+        applies. Surfaced once at agent start so the user knows why a desktop
+        task may iterate or miss small targets."""
+        if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+            return None
+        if self.provider == "OpenAI":
+            # gpt-5 family with reasoning effort 'none' / 'minimal' struggles
+            # on precise spatial targets — verified empirically on Notepad++
+            # close-button tests where the same model with effort=low or higher
+            # converges quickly.
+            if self._is_gpt5_family() and self.thinking_effort in ("none", "minimal"):
+                return (
+                    f"gpt-5 family with reasoning='{self.thinking_effort}' has limited "
+                    "spatial precision for small UI targets like close buttons. "
+                    "Consider switching to reasoning='low' or higher for desktop work."
+                )
+            if self._is_gpt5_chat_model():
+                return (
+                    "gpt-5 'Instant' chat variants have no reasoning capacity and tend "
+                    "to miss small UI targets. Consider a non-chat gpt-5 model with "
+                    "reasoning enabled for desktop work."
+                )
+        elif self.provider == "Gemini":
+            # Gemini 2.x has noticeably weaker UI spatial reasoning than 3.x —
+            # verified empirically on Notepad++ close-button tests where 2.5 Pro
+            # consistently misidentified targets while 3.1 Pro Preview hit them.
+            if self.model.startswith("gemini-2."):
+                return (
+                    f"{self.model} has limited spatial precision for small UI targets "
+                    "like close buttons. Consider switching to gemini-3.1-pro-preview "
+                    "(or any gemini-3.x) for desktop work."
+                )
+        return None
+
     def stream_worker(self, messages):
         try:
             # Sync temperature from spinbox
@@ -577,6 +602,16 @@ class StreamingMixin:
                 self.temperature = max(0.0, min(1.0, self._temp_var.get()))
             except (tk.TclError, ValueError):
                 pass
+
+            # Surface a warning at agent start when the active provider/model is
+            # known to be weak at small-target click work. The user can switch
+            # models without restarting if they want better accuracy.
+            weak_warning = self._weak_desktop_combo_warning()
+            if weak_warning:
+                self.queue.put({
+                    "type": "tool_info",
+                    "content": f"⚠ {weak_warning}\n",
+                })
 
             label_emitted = False
             if not self.thinking_enabled:

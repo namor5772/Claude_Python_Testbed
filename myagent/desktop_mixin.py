@@ -149,18 +149,82 @@ class DesktopMixin:
         except Exception:
             return None, 0, 0
 
-    def _capture_single_display(self, display_idx, region=None):
+    def _resolve_coord_state(self, display=None):
+        """Return (scale, (ox, oy), (iw, ih)) for the given display index, or current state.
+        When display is given but not found in _display_states, returns the current state
+        (so the caller can detect a missing screenshot via the (0, 0) dims check)."""
+        if display is not None and display in self._display_states:
+            return self._display_states[display]
+        return (self._screenshot_scale, self._screenshot_offset, self._screenshot_dims)
+
+    def _draw_coord_grid(self, img):
+        """Overlay a faint coordinate grid every 100px with labels at intersections.
+        Drawn on a copy of the image so the original is unchanged."""
+        try:
+            from PIL import ImageDraw, ImageFont
+        except Exception:
+            return img
+        img = img.convert("RGB").copy()
+        draw = ImageDraw.Draw(img)
+        w, h = img.size
+        grid_color = (255, 0, 255)   # magenta — uncommon in UIs, easy for vision models to see
+        label_bg = (255, 255, 255)
+        label_fg = (255, 0, 255)
+        try:
+            font = ImageFont.truetype("arial.ttf", 10)
+        except Exception:
+            try:
+                font = ImageFont.truetype("DejaVuSans.ttf", 10)
+            except Exception:
+                font = ImageFont.load_default()
+        spacing = 100
+        for x in range(spacing, w, spacing):
+            draw.line([(x, 0), (x, h)], fill=grid_color, width=1)
+        for y in range(spacing, h, spacing):
+            draw.line([(0, y), (w, y)], fill=grid_color, width=1)
+        # Labels at intersections (skip 0,0 to avoid clutter at top-left)
+        for x in range(0, w, spacing):
+            for y in range(0, h, spacing):
+                if x == 0 and y == 0:
+                    continue
+                label = f"{x},{y}"
+                tx, ty = x + 3, y + 3
+                try:
+                    bbox = draw.textbbox((tx, ty), label, font=font)
+                    draw.rectangle(bbox, fill=label_bg)
+                except Exception:
+                    pass
+                draw.text((tx, ty), label, fill=label_fg, font=font)
+        return img
+
+    def _capture_single_display(self, display_idx, region=None, grid=False):
         """Capture a single display (or region), resize to API limit, update scale/offset.
         Returns list of content blocks [text, image] or error string."""
+        # Diagnostic: log the full capture parameters up front (only when Diag checkbox is on)
+        if self.diag_enabled.get():
+            try:
+                _diag_rects = self._get_display_rects()
+                _diag_all_rects_str = ", ".join(
+                    f"#{i}=({l},{t},{r-l}x{b-t})" for i, (l, t, r, b) in enumerate(_diag_rects)
+                ) if _diag_rects else "(none)"
+                self.queue.put({"type": "tool_info", "content": (
+                    f"[DIAG capture] display_idx={display_idx} region={region} "
+                    f"all_display_rects={_diag_all_rects_str}\n"
+                )})
+            except Exception as _diag_e:
+                self.queue.put({"type": "tool_info", "content": f"[DIAG capture] error: {_diag_e}\n"})
+        # Snapshot the active scale/offset BEFORE any state mutation so region→screen
+        # conversion always uses the coordinate space the model was just looking at,
+        # even when chaining region screenshots (region-inside-region).
+        entry_scale = self._screenshot_scale
+        entry_offset = self._screenshot_offset
         if region:
-            # Convert image coordinates to screen coordinates using current scale/offset
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            rx, ry, rw, rh = int(region[0]), int(region[1]), int(region[2]), int(region[3])
-            screen_x = round(rx * scale) + ox
-            screen_y = round(ry * scale) + oy
-            screen_w = max(round(rw * scale), 1)
-            screen_h = max(round(rh * scale), 1)
+            ox, oy = entry_offset
+            rx, ry, rw, rh = round(float(region[0])), round(float(region[1])), round(float(region[2])), round(float(region[3]))
+            screen_x = round(rx * entry_scale) + ox
+            screen_y = round(ry * entry_scale) + oy
+            screen_w = max(round(rw * entry_scale), 1)
+            screen_h = max(round(rh * entry_scale), 1)
             if IS_WINDOWS:
                 # ImageGrab supports all_screens for multi-monitor; bbox is (l, t, r, b)
                 img = ImageGrab.grab(bbox=(screen_x, screen_y,
@@ -206,9 +270,25 @@ class DesktopMixin:
         logical_w, logical_h = img.size
         # Resize to API image limit (provider-specific)
         if self.provider == "Gemini":
-            max_long_edge, max_megapixels = 1568, 1_150_000  # match Anthropic; prevents silent API resizing
+            # Gemini supports much higher resolution than Anthropic via its tile system
+            # (each image broken into 768x768 tiles, up to many tiles per request).
+            # Bumping above the previous Anthropic-matched 1568/1.15MP cap gives older
+            # models like Gemini 2.5 Pro substantially more pixel density on small UI
+            # elements (close buttons, icons, menu items), which they otherwise struggle
+            # to localize. 2048/4M is safe under Gemini's tile budget.
+            max_long_edge, max_megapixels = 2048, 4_000_000
         elif self.provider == "OpenAI":
-            max_long_edge, max_megapixels = 2048, 2_000_000
+            # OpenAI's vision pipeline silently resizes images to ~2048 long edge
+            # server-side, regardless of what we send. Verified empirically: when
+            # we sent 2560x1440 the model's code_interpreter loaded the cached
+            # bytes and PIL reported 2048x1152. Capping ourselves at 2048 ensures
+            # _screenshot_scale matches what the model actually sees — otherwise
+            # our scale=1.0 lies about the relationship between image pixels and
+            # screen pixels, and any model that inspects dimensions via code
+            # interpreter gets confused and pre-scales coordinates.
+            # 5M megapixels is a permissive cap (well above 2048x2048=4.2MP) so
+            # the long-edge constraint is the only one that ever bites.
+            max_long_edge, max_megapixels = 2048, 5_000_000
         else:
             max_long_edge, max_megapixels = 1568, 1_150_000
         longest = max(logical_w, logical_h)
@@ -231,18 +311,86 @@ class DesktopMixin:
             self._screenshot_scale = 1.0
             img_w, img_h = logical_w, logical_h
         self._screenshot_dims = (img_w, img_h)
+        # Diagnostic: log the full pipeline result so we can see exactly what
+        # dims/scale/offset the coordinate math will use (Diag checkbox only).
+        if self.diag_enabled.get():
+            try:
+                self.queue.put({"type": "tool_info", "content": (
+                    f"[DIAG capture] phys={phys_w}x{phys_h} logical={logical_w}x{logical_h} "
+                    f"sent_to_model={img_w}x{img_h} scale={self._screenshot_scale:.4f} "
+                    f"offset={self._screenshot_offset}\n"
+                )})
+            except Exception:
+                pass
+        # Cache raw pre-grid image bytes for find_element re-use (Gemini pointing tool)
+        raw_buf = io.BytesIO()
+        img.save(raw_buf, format="PNG")
+        raw_bytes = raw_buf.getvalue()
+        self._last_screenshot_bytes = raw_bytes
+        # Optional grid overlay — drawn AFTER resize so labels match the image the model sees
+        if grid:
+            img = self._draw_coord_grid(img)
+        # Track per-display coordinate state AND raw image bytes so the model can
+        # disambiguate clicks AND find_element calls in multi-display setups.
+        # Full-display captures populate BOTH "most recent" (_display_states /
+        # _display_images) AND "full display" (_display_full_states / _display_full_images).
+        # Region captures populate only "most recent" — the full state is preserved
+        # so subsequent region screenshots compute their coordinates against the
+        # actual full display image, not against a stacked previous region.
+        if not region:
+            self._display_states[display_idx] = (
+                self._screenshot_scale, self._screenshot_offset, self._screenshot_dims,
+            )
+            self._display_images[display_idx] = raw_bytes
+            self._display_full_states[display_idx] = (
+                self._screenshot_scale, self._screenshot_offset, self._screenshot_dims,
+            )
+            self._display_full_images[display_idx] = raw_bytes
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
         return img_w, img_h, b64_data
 
-    def do_screenshot(self, region=None, display=None):
+    def do_screenshot(self, region=None, display=None, grid=False):
         try:
+            grid_note = " (grid overlay enabled)" if grid else ""
             if region:
-                # Region screenshot on the last-captured display
-                img_w, img_h, b64_data = self._capture_single_display(0, region=region)
+                # Region screenshot. The model's region coordinates are always
+                # interpreted relative to the FULL display image space — not
+                # relative to whatever was captured most recently. So we restore
+                # the FULL display state from _display_full_states[N] before
+                # computing the region origin. This is the key difference from
+                # mouse_click, which uses the "most recent capture" state in
+                # _display_states[N] (which may be a region).
+                target_display = display if display is not None else 0
+                if display is not None and display in self._display_full_states:
+                    ds_scale, ds_offset, ds_dims = self._display_full_states[display]
+                    self._screenshot_scale = ds_scale
+                    self._screenshot_offset = ds_offset
+                    self._screenshot_dims = ds_dims
+                img_w, img_h, b64_data = self._capture_single_display(target_display, region=region, grid=grid)
+                # Update the "most recent capture" state for this display so
+                # subsequent mouse_click(display=N) interprets its coordinates in
+                # the region image we just sent. _display_full_states[N] is left
+                # alone — chained region captures keep using the full display
+                # space for region coordinates.
+                if display is not None:
+                    self._display_states[display] = (
+                        self._screenshot_scale,
+                        self._screenshot_offset,
+                        self._screenshot_dims,
+                    )
+                    if self._last_screenshot_bytes is not None:
+                        self._display_images[display] = self._last_screenshot_bytes
+                disp_hint = f", display={display}" if display is not None else ""
                 return [
-                    {"type": "text", "text": f"Region screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click."},
+                    {"type": "text", "text": (
+                        f"Region screenshot. The image you see is exactly {img_w}x{img_h} pixels.{grid_note} "
+                        f"Use pixel coordinates AS YOU READ THEM from this image for mouse_click{disp_hint}. "
+                        "Do NOT scale or convert coordinates to a different resolution — the system handles "
+                        "scaling internally. Note: if you want another region screenshot, the x/y coordinates "
+                        "for that next call should be relative to the FULL display image (not this region)."
+                    )},
                     {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
                 ]
             # Determine how many displays to capture
@@ -250,41 +398,88 @@ class DesktopMixin:
             num_displays = len(rects) if rects else 1
             if display is not None:
                 # Specific display requested
-                img_w, img_h, b64_data = self._capture_single_display(display)
+                img_w, img_h, b64_data = self._capture_single_display(display, grid=grid)
                 return [
-                    {"type": "text", "text": f"Display {display} screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click — coordinates are automatically mapped to the correct screen."},
+                    {"type": "text", "text": (
+                        f"Display {display} screenshot. The image you see is exactly {img_w}x{img_h} pixels.{grid_note} "
+                        f"Use pixel coordinates AS YOU READ THEM from this image for mouse_click(display={display}). "
+                        "Do NOT scale or convert coordinates to a different resolution — the system handles "
+                        "scaling internally."
+                    )},
                     {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
                 ]
             # No display specified — capture ALL displays
             result = []
             for i in range(num_displays):
-                img_w, img_h, b64_data = self._capture_single_display(i)
-                result.append({"type": "text", "text": f"Display {i} ({img_w}x{img_h}):"})
+                img_w, img_h, b64_data = self._capture_single_display(i, grid=grid)
+                result.append({"type": "text", "text": f"Display {i} ({img_w}x{img_h} pixels){grid_note}:"})
                 result.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}})
-            result.append({"type": "text", "text": "To click on a target, first call screenshot with that display number, THEN use mouse_click with coordinates from that specific display's screenshot."})
-            # Set offset to primary display (display 0) as default for subsequent clicks
-            if num_displays > 1:
-                self._capture_single_display(0)  # reset scale/offset to display 0
+            result.append({"type": "text", "text": (
+                "Use pixel coordinates AS YOU READ THEM from each image for mouse_click — do NOT scale or convert. "
+                "When clicking, pass display=N to specify which display the coordinates are from. "
+                "For precision on small targets, take a region screenshot of that display first."
+            )})
+            # Note: we no longer re-capture display 0 here. _display_states is
+            # populated for every captured display in the loop above, so the
+            # model can disambiguate via the `display` parameter on mouse_click.
             return result
         except Exception as e:
             return f"Screenshot error: {e}"
 
-    def do_mouse_click(self, x, y, button="left", clicks=1):
+    def do_mouse_click(self, x, y, button="left", clicks=1, display=None):
         try:
-            x, y = int(x), int(y)
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            iw, ih = self._screenshot_dims
-            # Clamp to screenshot image bounds to prevent gross misclicks
+            scale, (ox, oy), (iw, ih) = self._resolve_coord_state(display)
+            # Diagnostic: log the full click math before any bounds/rounding (Diag checkbox only)
+            if self.diag_enabled.get():
+                try:
+                    self.queue.put({"type": "tool_info", "content": (
+                        f"[DIAG click] input=(x={x}, y={y}) display={display} "
+                        f"state: dims={iw}x{ih} scale={scale:.4f} offset=({ox},{oy})\n"
+                    )})
+                except Exception:
+                    pass
+            if not (iw and ih):
+                return ("Take a screenshot first — no screenshot has been captured "
+                        "yet, so click coordinates cannot be mapped to the screen.")
+            x, y = round(float(x)), round(float(y))
+            # Tiered out-of-bounds handling: silent for tiny rounding (≤2px),
+            # warn-and-clamp for moderate overflow, refuse for gross overflow.
             warning = ""
-            if iw and ih and (x < 0 or y < 0 or x >= iw or y >= ih):
-                warning = f" ⚠ coords ({x},{y}) outside screenshot {iw}x{ih} — clamped"
+            dx = max(0, -x, x - (iw - 1))
+            dy = max(0, -y, y - (ih - 1))
+            if dx or dy:
+                tol_pct = 0.02
+                tol_x = max(2, int(iw * tol_pct))
+                tol_y = max(2, int(ih * tol_pct))
+                if dx > tol_x or dy > tol_y:
+                    return (
+                        f"Click coords ({x},{y}) are outside screenshot bounds {iw}x{ih} "
+                        f"by ({dx},{dy})px. Re-take a screenshot, or take a region "
+                        "screenshot zoomed into the target and use coordinates from that image."
+                    )
+                if dx > 2 or dy > 2:
+                    warning = f" ⚠ coords ({x},{y}) outside screenshot {iw}x{ih} — clamped"
                 x = max(0, min(x, iw - 1))
                 y = max(0, min(y, ih - 1))
             screen_x = round(x * scale) + ox
             screen_y = round(y * scale) + oy
+            # Diagnostic: log the computed screen coords just before pyautogui fires (Diag checkbox only)
+            if self.diag_enabled.get():
+                try:
+                    self.queue.put({"type": "tool_info", "content": (
+                        f"[DIAG click] computed: image_clamped=({x},{y}) "
+                        f"→ screen=({screen_x},{screen_y}) via {x}*{scale:.4f}+{ox}, "
+                        f"{y}*{scale:.4f}+{oy}\n"
+                    )})
+                except Exception:
+                    pass
             pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
-            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image ({x},{y}) of {iw}x{ih}, scale {scale:.2f}x, offset ({ox},{oy})]{warning}"
+            time.sleep(0.05)  # let the click register before the next screenshot
+            disp_note = f", display {display}" if display is not None else ""
+            return (
+                f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) "
+                f"[image ({x},{y}) of {iw}x{ih}, scale {scale:.2f}x, offset ({ox},{oy}){disp_note}]{warning}"
+            )
         except Exception as e:
             return f"Click error: {e}"
 
@@ -322,15 +517,18 @@ class DesktopMixin:
         except Exception as e:
             return f"Key press error: {e}"
 
-    def do_mouse_scroll(self, clicks, x=None, y=None):
+    def do_mouse_scroll(self, clicks, x=None, y=None, display=None):
         try:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
+            scale, (ox, oy), (iw, ih) = self._resolve_coord_state(display)
             kwargs = {}
-            if x is not None:
-                kwargs["x"] = round(int(x) * scale) + ox
-            if y is not None:
-                kwargs["y"] = round(int(y) * scale) + oy
+            if x is not None or y is not None:
+                if not (iw and ih):
+                    return ("Take a screenshot first — no screenshot has been captured "
+                            "yet, so scroll coordinates cannot be mapped to the screen.")
+                if x is not None:
+                    kwargs["x"] = round(round(float(x)) * scale) + ox
+                if y is not None:
+                    kwargs["y"] = round(round(float(y)) * scale) + oy
             pyautogui.scroll(clicks, **kwargs)
             direction = "up" if clicks > 0 else "down"
             pos = f" at ({x}, {y})" if x is not None else ""
@@ -440,14 +638,16 @@ class DesktopMixin:
         except Exception as e:
             return f"Wait for window error: {e}"
 
-    def do_read_screen_text(self, x, y, width, height):
+    def do_read_screen_text(self, x, y, width, height, display=None):
         try:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            sx = round(int(x) * scale) + ox
-            sy = round(int(y) * scale) + oy
-            sw = max(round(int(width) * scale), 1)
-            sh = max(round(int(height) * scale), 1)
+            scale, (ox, oy), (iw, ih) = self._resolve_coord_state(display)
+            if not (iw and ih):
+                return ("Take a screenshot first — no screenshot has been captured "
+                        "yet, so OCR region cannot be mapped to the screen.")
+            sx = round(round(float(x)) * scale) + ox
+            sy = round(round(float(y)) * scale) + oy
+            sw = max(round(round(float(width)) * scale), 1)
+            sh = max(round(round(float(height)) * scale), 1)
             if IS_WINDOWS:
                 img = ImageGrab.grab(bbox=(sx, sy, sx + sw, sy + sh), all_screens=True)
             else:
@@ -507,18 +707,21 @@ class DesktopMixin:
         except Exception as e:
             return f"Find image error: {e}"
 
-    def do_mouse_drag(self, start_x, start_y, end_x, end_y, duration=0.5, button="left"):
+    def do_mouse_drag(self, start_x, start_y, end_x, end_y, duration=0.5, button="left", display=None):
         try:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            sx = round(int(start_x) * scale) + ox
-            sy = round(int(start_y) * scale) + oy
-            ex = round(int(end_x) * scale) + ox
-            ey = round(int(end_y) * scale) + oy
+            scale, (ox, oy), (iw, ih) = self._resolve_coord_state(display)
+            if not (iw and ih):
+                return ("Take a screenshot first — no screenshot has been captured "
+                        "yet, so drag coordinates cannot be mapped to the screen.")
+            sx = round(round(float(start_x)) * scale) + ox
+            sy = round(round(float(start_y)) * scale) + oy
+            ex = round(round(float(end_x)) * scale) + ox
+            ey = round(round(float(end_y)) * scale) + oy
             pyautogui.moveTo(sx, sy, duration=0.1)
             pyautogui.mouseDown(button=button)
             pyautogui.moveTo(ex, ey, duration=duration)
             pyautogui.mouseUp(button=button)
+            time.sleep(0.05)
             return (
                 f"Dragged from ({start_x},{start_y}) to ({end_x},{end_y}) "
                 f"with {button} button over {duration}s"

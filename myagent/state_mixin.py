@@ -330,6 +330,7 @@ class StateMixin:
         state["save_thinking"] = self.save_thinking.get()
         state["debug_enabled"] = self.debug_enabled.get()
         state["tool_calls_enabled"] = self.tool_calls_enabled.get()
+        state["diag_enabled"] = self.diag_enabled.get()
         with open(self._state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -392,6 +393,8 @@ class StateMixin:
             self.debug_enabled.set(state["debug_enabled"])
         if "tool_calls_enabled" in state:
             self.tool_calls_enabled.set(state["tool_calls_enabled"])
+        if "diag_enabled" in state:
+            self.diag_enabled.set(state["diag_enabled"])
 
     def _periodic_save(self):
         try:

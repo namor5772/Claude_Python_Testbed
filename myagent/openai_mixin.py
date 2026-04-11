@@ -9,6 +9,7 @@ from myagent.constants import (
     OPENAI_RESPONSES_PREFIXES,
     OPENAI_FALLBACK_MODELS,
     OPENAI_DEFAULT_MODEL,
+    _HAS_DESKTOP,
 )
 
 
@@ -253,7 +254,19 @@ class OpenAIMixin:
         tools = self._get_tools()
         responses_tools = self._tools_to_responses(tools) if tools else []
         responses_tools.append({"type": "web_search_preview"})
-        responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+        # Code interpreter is actively harmful for desktop click tasks: gpt-5.2
+        # uses it to load screenshot bytes via PIL, sees the API-resized image
+        # dimensions, and pre-scales coordinates instead of just visually
+        # identifying the click target. Strip it whenever Desktop tools are on.
+        # For non-desktop tasks (data analysis, math, file processing) it stays.
+        if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+            responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+        # Strip any server-side tools this model is known to reject (learned
+        # from prior 400 errors in this session). Avoids re-hitting the same
+        # error on every call.
+        unsupported = self._openai_unsupported_tools.get(self.model, set())
+        if unsupported:
+            responses_tools = [t for t in responses_tools if t.get("type") not in unsupported]
         responses_input = self._messages_to_responses(messages)
         is_reasoning = self._is_openai_reasoning_model()
         has_none = self._has_reasoning_none()
@@ -314,8 +327,9 @@ class OpenAIMixin:
                     self._stream_responses(api_kwargs, label_emitted)
                 break  # success
             except openai.BadRequestError as e:
+                err_str = str(e)
                 # Some models reject temperature — retry without it
-                if "temperature" in str(e) and "temperature" in api_kwargs:
+                if "temperature" in err_str and "temperature" in api_kwargs:
                     del api_kwargs["temperature"]
                     self.queue.put({
                         "type": "tool_info",
@@ -323,9 +337,33 @@ class OpenAIMixin:
                     })
                     full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
                         self._stream_responses(api_kwargs, label_emitted)
-                else:
-                    raise
-                break  # success
+                    break  # success
+                # Some models reject specific server-side tools (e.g. gpt-5.2-pro
+                # rejects code_interpreter). Parse the rejected tool name out of the
+                # error, strip it from this request and cache it for future calls.
+                import re as _re
+                tool_match = _re.search(r"[Tt]ool\s+'([^']+)'\s+is\s+not\s+supported", err_str)
+                if tool_match:
+                    bad_tool = tool_match.group(1)
+                    # Cache rejection for this model
+                    self._openai_unsupported_tools.setdefault(self.model, set()).add(bad_tool)
+                    # Strip from current request and retry
+                    before_count = len(api_kwargs.get("tools", []))
+                    api_kwargs["tools"] = [
+                        t for t in api_kwargs.get("tools", [])
+                        if t.get("type") != bad_tool
+                    ]
+                    after_count = len(api_kwargs["tools"])
+                    if after_count < before_count:
+                        self.queue.put({
+                            "type": "tool_info",
+                            "content": f"Model '{self.model}' does not support tool '{bad_tool}' — retrying without it (cached for this session)...\n",
+                        })
+                        full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
+                            self._stream_responses(api_kwargs, label_emitted)
+                        break  # success
+                # Unrecognised BadRequestError — propagate
+                raise
             except openai.APITimeoutError:
                 # Reset timer for next attempt
                 self._oai_first_content = threading.Event()

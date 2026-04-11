@@ -160,6 +160,12 @@ class UIMixin:
         )
         self.save_thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+        self.diag_toggle = tk.Checkbutton(
+            checkbox_frame, text="Diag", variable=self.diag_enabled,
+            font=("Arial", 9),
+        )
+        self.diag_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
 
     # ── Model / Thinking Helpers ────────────────────────────────────────
 

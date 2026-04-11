@@ -294,12 +294,16 @@ DESKTOP_TOOLS = [
             "properties": {
                 "display": {
                     "type": "integer",
-                    "description": "Which display to capture (0 = primary, 1 = secondary, etc.). Default: 0 (primary). Use this to see and interact with windows on different monitors.",
+                    "description": "Which display to capture (0=primary, 1=secondary, ...). OMIT this parameter to capture ALL displays at once as separate images — that's the default and the recommended first step when you don't yet know which display has your target. When you DO know which display the target is on, pass display=N to capture only that one. For region screenshots (x/y/width/height), pass display=N to specify which display the region coordinates are relative to.",
                 },
-                "x": {"type": "integer", "description": "Left edge of region to capture (use coordinates from the screenshot image)"},
-                "y": {"type": "integer", "description": "Top edge of region to capture (use coordinates from the screenshot image)"},
-                "width": {"type": "integer", "description": "Width of region to capture"},
-                "height": {"type": "integer", "description": "Height of region to capture"},
+                "x": {"type": "integer", "description": "Left edge of region to capture (image-space coordinates from the screenshot of the specified display)"},
+                "y": {"type": "integer", "description": "Top edge of region to capture (image-space coordinates from the screenshot of the specified display)"},
+                "width": {"type": "integer", "description": "Width of region to capture (image-space pixels)"},
+                "height": {"type": "integer", "description": "Height of region to capture (image-space pixels)"},
+                "grid": {
+                    "type": "boolean",
+                    "description": "Overlay a coordinate grid every 100px with labels at intersections. Use this when clicking small or visually-dense targets to get pixel-accurate coordinates. Default: false.",
+                },
             },
             "required": [],
         },
@@ -308,15 +312,18 @@ DESKTOP_TOOLS = [
         "name": "mouse_click",
         "description": (
             "Click the mouse at the given (x, y) position. Take a screenshot first to identify "
-            "the correct coordinates — use pixel positions as seen in the screenshot image. "
-            "Coordinates are automatically mapped to the actual screen. "
-            "Supports left/right/middle button and single/double click."
+            "the correct coordinates. CRITICAL: pass the pixel coordinates EXACTLY as you read them "
+            "from the screenshot image — do NOT scale, multiply, or convert them to a different "
+            "resolution. Even if you used code_interpreter to inspect the image and noticed it has "
+            "different dimensions than the physical screen, just pass the image-space coordinates. "
+            "The system handles all scaling and offset translation internally to map image pixels "
+            "to actual screen pixels. Supports left/right/middle button and single/double click."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "x": {"type": "integer", "description": "X coordinate to click"},
-                "y": {"type": "integer", "description": "Y coordinate to click"},
+                "x": {"type": "integer", "description": "X coordinate to click (in screenshot image space)"},
+                "y": {"type": "integer", "description": "Y coordinate to click (in screenshot image space)"},
                 "button": {
                     "type": "string", "enum": ["left", "right", "middle"],
                     "description": "Mouse button (default: left)",
@@ -324,6 +331,10 @@ DESKTOP_TOOLS = [
                 "clicks": {
                     "type": "integer", "enum": [1, 2],
                     "description": "Number of clicks: 1=single, 2=double (default: 1)",
+                },
+                "display": {
+                    "type": "integer",
+                    "description": "Optional display index (0=primary, 1=secondary, ...). Use this when you took a multi-display screenshot and want to click on a target you saw in a non-primary display, without re-capturing it first. Omit to click on the most recently captured display/region.",
                 },
             },
             "required": ["x", "y"],
@@ -370,7 +381,7 @@ DESKTOP_TOOLS = [
         "name": "mouse_scroll",
         "description": (
             "Scroll the mouse wheel. Positive clicks = scroll up, negative = scroll down. "
-            "Optionally specify (x, y) to scroll at a specific position."
+            "Optionally specify (x, y) — in screenshot image coordinates — to scroll at a specific position."
         ),
         "input_schema": {
             "type": "object",
@@ -379,8 +390,12 @@ DESKTOP_TOOLS = [
                     "type": "integer",
                     "description": "Scroll amount: positive=up, negative=down",
                 },
-                "x": {"type": "integer", "description": "X coordinate to scroll at (optional)"},
-                "y": {"type": "integer", "description": "Y coordinate to scroll at (optional)"},
+                "x": {"type": "integer", "description": "X coordinate to scroll at (optional, in screenshot image space)"},
+                "y": {"type": "integer", "description": "Y coordinate to scroll at (optional, in screenshot image space)"},
+                "display": {
+                    "type": "integer",
+                    "description": "Optional display index for multi-display setups. See mouse_click for details.",
+                },
             },
             "required": ["clicks"],
         },
@@ -482,10 +497,14 @@ DESKTOP_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "x": {"type": "integer", "description": "Left edge of region"},
-                "y": {"type": "integer", "description": "Top edge of region"},
+                "x": {"type": "integer", "description": "Left edge of region (screenshot image space)"},
+                "y": {"type": "integer", "description": "Top edge of region (screenshot image space)"},
                 "width": {"type": "integer", "description": "Width of region"},
                 "height": {"type": "integer", "description": "Height of region"},
+                "display": {
+                    "type": "integer",
+                    "description": "Optional display index for multi-display setups. See mouse_click for details.",
+                },
             },
             "required": ["x", "y", "width", "height"],
         },
@@ -520,10 +539,10 @@ DESKTOP_TOOLS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "start_x": {"type": "integer", "description": "Starting X coordinate"},
-                "start_y": {"type": "integer", "description": "Starting Y coordinate"},
-                "end_x": {"type": "integer", "description": "Ending X coordinate"},
-                "end_y": {"type": "integer", "description": "Ending Y coordinate"},
+                "start_x": {"type": "integer", "description": "Starting X coordinate (screenshot image space)"},
+                "start_y": {"type": "integer", "description": "Starting Y coordinate (screenshot image space)"},
+                "end_x": {"type": "integer", "description": "Ending X coordinate (screenshot image space)"},
+                "end_y": {"type": "integer", "description": "Ending Y coordinate (screenshot image space)"},
                 "duration": {
                     "type": "number",
                     "description": "Duration of drag in seconds (default: 0.5)",
@@ -532,8 +551,40 @@ DESKTOP_TOOLS = [
                     "type": "string",
                     "description": "Mouse button: 'left', 'right', or 'middle' (default: 'left')",
                 },
+                "display": {
+                    "type": "integer",
+                    "description": "Optional display index for multi-display setups. See mouse_click for details.",
+                },
             },
             "required": ["start_x", "start_y", "end_x", "end_y"],
+        },
+    },
+    {
+        "name": "find_element",
+        "description": (
+            "Locate a UI element on a captured screenshot by natural-language description, "
+            "and return its image coordinates. Use this BEFORE mouse_click for any non-trivial "
+            "target — it leverages Gemini's native spatial reasoning for higher accuracy than "
+            "guessing coordinates by eye. Returns coordinates in the same image space mouse_click "
+            "expects, ready to pass directly. Only available with the Gemini provider. "
+            "CRITICAL for multi-display setups: ALWAYS pass the 'display' parameter to specify "
+            "which display's screenshot to search — without it, find_element falls back to whichever "
+            "display was captured most recently, which is often NOT where your target is. "
+            "Requires a screenshot to have been taken in the current session."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "description": "Natural-language description of the element to find. Be specific: 'the blue Submit button at the bottom of the form', 'the X close button in the top right corner', 'the search input field labelled Email'.",
+                },
+                "display": {
+                    "type": "integer",
+                    "description": "Which display to search (0=primary, 1=secondary, ...). Required for multi-display setups — pass the display index where the target is. When you pass display=N to find_element, also pass display=N to the resulting mouse_click.",
+                },
+            },
+            "required": ["description"],
         },
     },
 ]
@@ -887,7 +938,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "GUIDELINES:\n"
     "• Execute the task autonomously — chain tools together without hesitation.\n"
     "• When multiple tools can achieve a goal, chain them together without asking.\n"
-    "• For desktop automation: screenshot first, then act on what you see.\n"
+    "• For desktop automation: take a screenshot first, then act on what you see. Re-screenshot after any UI change before clicking again.\n"
     "• For browser tasks: use browser tools (not desktop tools) for precision.\n"
     "• CRITICAL: If you need user input, confirmation, or action, or your output ends with a question — you MUST call the user_prompt tool. "
     "NEVER just output text and stop. Outputting a question or request as plain text ends your turn "

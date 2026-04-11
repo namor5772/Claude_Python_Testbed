@@ -405,7 +405,7 @@ Both SelfBot.py and MyAgent.py (via `myagent/constants.py`) use a runtime `IS_WI
 | Instance detection (SelfBot) | Named mutex (`CreateMutexW`) | Lock file + PID verification |
 | Duo peer detection (SelfBot) | `pygetwindow` window enumeration | Not available (each instance runs independently) |
 | Monitor geometry (MyAgent) | Win32 `EnumDisplayMonitors` | CoreGraphics `CGGetActiveDisplayList` |
-| DPI awareness | `SetProcessDpiAwareness(2)` | Not needed (macOS handles scaling natively) |
+| DPI awareness | SelfBot: `SetProcessDpiAwareness(2)` (v1). MyAgent: `SetProcessDpiAwarenessContext(-4)` (v2 PER_MONITOR_AWARE_V2) — fixes broken multi-monitor behaviour at mixed DPIs | Not needed (macOS handles scaling natively) |
 | Dialog multi-monitor | `transient(parent)` (works across screens) | `transient()` skipped (macOS restricts transient dialogs to parent's screen) |
 | Monospace font | Consolas | Menlo |
 
@@ -561,7 +561,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **Text editor** | Multi-line area for writing the task description |
 | **Attach Images** button | Select image files to attach to the instruction |
 | **Remove Selected** button | Delete selected images from the image list |
-| **Desktop** checkbox | Enable/disable the 13 desktop automation tools for this instruction |
+| **Desktop** checkbox | Enable/disable the 13 desktop automation tools (plus the Gemini-only `find_element`) for this instruction |
 | **Browser** checkbox | Enable/disable the 11 browser automation tools for this instruction |
 | **Meta** checkbox | Enable/disable the 3 meta-agent tools (`manage_instructions`, `manage_skills`, `run_instruction`) for this instruction |
 | **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
@@ -623,7 +623,7 @@ Provider, model, temperature, thinking settings, and text verbosity are all pers
 
 #### Tool Use
 
-MyAgent has thirty-one built-in tools and the dynamic `get_skill` tool, organised into four categories:
+MyAgent has thirty-two built-in tools (including the Gemini-only `find_element`) and the dynamic `get_skill` tool, organised into four categories:
 
 **Core Tools (always available):** `run_powershell`/`run_shell`, `csv_search`, `user_prompt`, plus `web_search` and `fetch_webpage` (Gemini only — see below).
 
@@ -637,7 +637,7 @@ MyAgent has thirty-one built-in tools and the dynamic `get_skill` tool, organise
 
 Server-side code execution outputs (plots, charts) are displayed inline in the chat widget (scaled to max 600px) and saved to `saved_chats/` as PNG files. OpenAI returns images as base64 data URLs; Anthropic returns file IDs downloaded via the Files API
 
-**Desktop Tools (enabled via Desktop checkbox):** `screenshot`, `mouse_click`, `type_text`, `press_key`, `mouse_scroll`, `open_application`, `find_window`, `clipboard_read`, `clipboard_write`, `wait_for_window`, `read_screen_text`, `find_image_on_screen`, `mouse_drag`
+**Desktop Tools (enabled via Desktop checkbox):** `screenshot`, `mouse_click`, `type_text`, `press_key`, `mouse_scroll`, `open_application`, `find_window`, `clipboard_read`, `clipboard_write`, `wait_for_window`, `read_screen_text`, `find_image_on_screen`, `mouse_drag`, `find_element` (Gemini-only — uses Gemini's native pointing API to locate UI elements by description; see "Provider-specific coordinate handling" below)
 
 **Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
 
@@ -650,13 +650,29 @@ Server-side code execution outputs (plots, charts) are displayed inline in the c
 
 All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Chrome/Edge, PowerShell safety guardrails, image compression) is identical to SelfBot. See the SelfBot.py tool sections above for full details.
 
-**Provider-specific coordinate handling** — Unlike SelfBot (Anthropic-only), MyAgent routes desktop tools through three different provider back-ends, and each family processes spatial information differently. MyAgent uses a per-provider strategy to maximise click accuracy:
+**Provider-specific coordinate handling** — Unlike SelfBot (Anthropic-only), MyAgent routes desktop tools through three different provider back-ends. After extensive testing across Claude 4.x, gpt-5.2, and Gemini 2.5/3.x models, all providers now use the **same convention**: pixel coordinates as they appear in the screenshot image, with the system handling all scaling and offset translation internally. The only per-provider variation is the image resolution cap, which matches each provider's actual API limit:
 
-- **Anthropic** — Screenshot image is embedded directly inside the `tool_result` block. Claude uses raw pixel coordinates from the image. Works out of the box since Anthropic has been extensively trained for computer-use workflows. Screenshots are sized to the Anthropic limit of 1568px/1.15MP.
-- **OpenAI** — Screenshot image is delivered as a separate `user` message following the `function_call_output` item (not embedded in the tool output). GPT models process images more reliably from user messages than from tool output content. Raw pixel coordinates are used. Screenshots are sized to the OpenAI limit of 2048px/2MP.
-- **Gemini** — Tool descriptions instruct the model to use **normalised [0, 1000] coordinates** (Google's standard spatial convention where (0, 0) is top-left and (1000, 1000) is bottom-right). The image is sent as a separate user `Content` block with explicit coordinate-system guidance. `_execute_tool()` in `streaming_mixin.py` converts [0, 1000] values to image pixels via `_gemini_norm_to_pixels()` before calling `do_mouse_click`, `do_mouse_scroll`, `do_mouse_drag`, `do_read_screen_text`, and region `screenshot`. Screenshots are sized to the same 1568px/1.15MP budget as Anthropic.
+- **Anthropic** — Screenshot image is embedded directly inside the `tool_result` block. Claude uses raw pixel coordinates from the image. Screenshots capped at **1568px long edge / 1.15 MP** (Anthropic's vision API limit; the API silently downscales above this anyway).
+- **OpenAI** — Screenshot image is delivered as a separate `user` message following the `function_call_output` item (not embedded in the tool output). GPT models process images more reliably from user messages than from tool output content. Screenshots capped at **2048px long edge / 5 MP** — empirically verified as OpenAI's actual hard limit (we previously tried 2560 but discovered via gpt-5.2's `code_interpreter` PIL inspection that the API silently downscales above 2048, which broke the scale calculation).
+- **Gemini** — Image is sent as a separate user `Content` block (Gemini doesn't reliably handle mixed image + function_response Parts in the same Content). Screenshots capped at **2048px long edge / 4 MP** — bumped above the Anthropic-matched 1568 because Gemini's tile system supports higher resolution, giving older models like Gemini 2.5 Pro more pixel density on small UI elements. Earlier versions used Google's documented [0, 1000] normalised convention but switched to pixels because the [0, 1000] abstraction forced the model to do mental arithmetic which introduced systematic ~1-pixel drift on Gemini 3 with reasoning enabled.
 
-**Click accuracy tuning** — For raw-pixel providers (Anthropic/OpenAI), lowering thinking effort improves click accuracy — extended reasoning chains tend to drift on numerical pixel estimates. Gemini's [0, 1000] abstraction is thinking-resilient because spatial answers ("centre is 500") are conceptual rather than computed, so the Gemini path tolerates higher thinking budgets without drift.
+**Click accuracy improvements** — Several refinements landed across the coordinate pipeline to eliminate small-target miss patterns:
+
+- **Round, don't truncate** — `do_mouse_click`/`do_mouse_scroll`/`do_mouse_drag`/`do_read_screen_text` use `round(float(x))` instead of `int(x)`, eliminating up-to-1-pixel truncation bias.
+- **Pre-screenshot guard** — Click/scroll/drag/OCR refuse with a "Take a screenshot first" error when `_screenshot_dims == (0, 0)`, preventing silent misclicks before any capture.
+- **Tiered out-of-bounds policy** — ≤2px overflow silently clamps (handles model rounding), >2% of image dimension refuses with a "re-take a screenshot" message, in-between clamps with a `⚠ clamped` warning. Replaces the prior always-clamp-and-click which masked perception errors.
+- **Post-click settle** — A 50ms `time.sleep` after `pyautogui.click` lets the post-click UI settle before the next screenshot, preventing the model from thinking the click missed when it actually landed.
+- **Region scale snapshot** — `_capture_single_display` snapshots `entry_scale`/`entry_offset` at function entry so chained region screenshots compute correctly without drifting through stacked offsets.
+- **Per-display state tracking** — Two parallel dicts track per-display state: `_display_states[N]` (most recent capture, full or region) for `mouse_click`/`find_element`, and `_display_full_states[N]` (most recent FULL display capture) for region screenshot conversions. Without this two-slot separation, chained region screenshots on the same display drift through stacked offsets.
+- **`display=N` parameter** — `mouse_click`, `mouse_scroll`, `mouse_drag`, `read_screen_text`, and `find_element` all accept an optional `display` parameter so the model can disambiguate which screen to act on without re-screenshotting. When omitted, falls back to the most recent capture's coordinate space.
+- **DPI awareness v2** (Windows) — MyAgent uses `SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)` instead of v1 `SetProcessDpiAwareness(2)`. v2 fixes broken multi-monitor behavior under v1 when monitors have different DPI scaling (e.g. 100% primary + 225% secondary): v1 reports the secondary's rect as a logically-scaled smaller size, causing `ImageGrab` to return a low-res image and `pyautogui` clicks to land in the wrong place.
+- **OpenAI code interpreter gating** — `code_interpreter` is stripped from OpenAI tool lists when desktop tools are enabled. Empirically, gpt-5.2 with code_interpreter access loads screenshot bytes via PIL, sees the API-resized image dimensions, and pre-scales coordinates ITSELF before calling `mouse_click` — collides with our scale calculation and produces double-scaled misclicks. CI remains available for non-desktop OpenAI tasks.
+
+**`find_element` tool (Gemini-only)** — Uses Gemini's native spatial pointing API to locate UI elements by natural-language description. Implemented in `gemini_mixin.py:do_gemini_find_element` using Google's documented pointing prompt format (`"Point to the X. The answer should follow the json format: [{\"point\": <point>, \"label\": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000."`) — using the exact official phrasing is critical because the trained pointing capability only activates with that prompt. Accepts an optional `display` parameter so the cached image lookup hits the right display via `_display_images[display]`; without this, find_element after a multi-display screenshot would always search whichever display was captured last in the loop. Returns pixel coordinates ready to pass directly to `mouse_click`. Filtered out of `_get_tools()` for non-Gemini providers since it requires the Google API.
+
+**Grid overlay** — `screenshot` accepts an optional `grid=true` parameter that draws a 100-pixel coordinate grid (magenta gridlines + (x,y) labels) on top of the captured image after the API-limit resize but before PNG encoding. Drawn in `_draw_coord_grid` so the labels match the dimensions the model actually sees. Opt-in default off (gridlines obscure small UI text on regular screenshots); the tool description suggests using it for small/dense UI targets where pixel-level precision matters.
+
+**Weak combo warning** — At agent start, `stream_worker` checks for known-weak provider/model combinations with desktop tools enabled and posts a `⚠` warning to the activity output. Currently warns for: gpt-5 family with reasoning effort = `none`/`minimal`, gpt-5 `-chat` Instant variants, and any `gemini-2.x` model. Informational only — does not change behaviour. Helps catch user-error model picks early.
 
 #### Parallel Tool Execution
 
@@ -694,19 +710,20 @@ Chat saving is opt-in — there is no manual SAVE button, and **no chat is saved
 
 #### Display Toggles
 
-Four checkboxes on the main window control what is shown in the output display (all default to **off** on first run, then **persist across sessions** via `agent_state.json`):
+Six checkboxes on the main window control what is shown in the output display. All persist across sessions via `agent_state.json`. Most default to **off** on first run; **Diag** defaults to **on** (toggle off when not actively debugging coordinate issues).
 
-| Checkbox | What it controls |
-|---|---|
-| **Debug** | Full API payload JSON with each request |
-| **Tool Calls** | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
-| **Activity** | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
-| **Show Thinking** | Extended thinking blocks in amber/gold italic text |
-| **Save Thinking** | Preserve thinking blocks in saved chat JSON for reasoning continuity on reload |
+| Checkbox | Default | What it controls |
+|---|---|---|
+| **Debug** | off | Full API payload JSON with each request |
+| **Tool Calls** | off | Tool name, call ID, and input arguments in teal `--- TOOL CALL ---` blocks |
+| **Activity** | off | Tool activity status lines (e.g., "Searching: ...", "Fetching: ...", "Taking screenshot...") |
+| **Show Thinking** | off | Extended thinking blocks in amber/gold italic text |
+| **Save Thinking** | off | Preserve thinking blocks in saved chat JSON for reasoning continuity on reload |
+| **Diag** | on | `[DIAG capture]` and `[DIAG click]` lines showing the full coordinate-mapping trail (display rects, physical/logical/sent_to_model dims, scale, offset, raw input, computed screen pixels). Independent of Debug — Diag focuses purely on the desktop coordinate pipeline so you can verify clicks are landing where the model intended |
 
 Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction inside the Instruction Editor.
 
-The **Call #N** counter badges are hidden only when all three of Activity, Debug, and Tool Calls are unchecked.
+The **Call #N** counter badges are hidden only when all of Activity, Debug, Tool Calls, and Diag are unchecked.
 
 #### LaTeX to Unicode Conversion
 
@@ -757,7 +774,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 |---|---|
 | **Row 0** | Chat toolbar: START button, STOP button, Instruction button, model info label, Save Chat as entry (fills remaining space) |
 | **Row 1** | Chat display: read-only text area with scrollbar, colour-coded output |
-| **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Save Thinking |
+| **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Diag |
 
 **Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
@@ -848,7 +865,8 @@ Adding a new tool to MyAgent requires changes in up to 4 files:
 - **Multi-Provider Support** — The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary. OpenAI translation via `_messages_to_responses()` / `_tools_to_responses()` in `streaming_mixin.py`; Gemini translation via `_messages_to_gemini()` / `_tools_to_gemini()` in `gemini_mixin.py`. The `_ToolBlock` wrapper (in `helpers.py`) normalises OpenAI/Gemini dict-based tool responses to match Anthropic's `.name`/`.id`/`.input` interface, so `_execute_tool()` works identically for all providers
 - **Agentic Loop** — `stream_worker()` in `streaming_mixin.py` runs a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` (each in their own mixin), processes the response, executes any requested tools via `_execute_tool()`, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, `stream_worker()` partitions them into parallel-safe (`csv_search`, `get_skill`, plus `web_search`/`fetch_webpage` for Gemini) and sequential (everything else). Parallel-safe tools run concurrently via `ThreadPoolExecutor`; sequential tools run one at a time. Results are placed into a pre-allocated list indexed by original position, preserving API-expected ordering
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, tool toggles, provider, model parameters, skill modes, and PS Safety overrides), `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` / `agent_state_N.json` for per-instance preferences and dialog geometries, and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, tool toggles, provider, model parameters, skill modes, and PS Safety overrides), `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` / `agent_state_N.json` for per-instance preferences (including the `diag_enabled` toggle) and dialog geometries, and `skills.json` (shared with SelfBot) for the skills library
+- **Per-display coordinate state** — `_display_states[N]` and `_display_images[N]` track each display's most-recent capture (full or region) for `mouse_click` and `find_element` lookups; `_display_full_states[N]` and `_display_full_images[N]` track each display's most-recent FULL display capture for region screenshot conversions. The two-dict design prevents chained region screenshots from drifting through stacked offsets while still letting clicks reference whatever the model most recently saw of each display
 - **PowerShell Safety** — Two-tier regex-based guardrail system (patterns in `constants.py`, checks in `safety_mixin.py`), plus a PS Safety dialog for selectively bypassing individual confirm patterns. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in the provider-specific streaming methods handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
 - **Auto-Save & Graceful Shutdown** — `_periodic_save()` (in `state_mixin.py`) runs every 5 seconds and triggers auto-save when new messages are detected. `_on_close()` / `_finish_close()` (in `event_loop_mixin.py`) stop the agentic loop, wait for streaming to finish, save state and chat, clean up browser connections, then destroy the window

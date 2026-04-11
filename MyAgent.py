@@ -4,14 +4,26 @@ IS_WINDOWS = sys.platform == "win32"
 import ctypes
 if IS_WINDOWS:
     import ctypes.wintypes
-    # Fix DPI scaling for desktop automation tools — must run before any window creation.
+    # DPI awareness for desktop automation. Must run before any window creation.
+    # Prefer PER_MONITOR_AWARE_V2 (DPI_AWARENESS_CONTEXT = -4) over v1:
+    # v1 PROCESS_PER_MONITOR_DPI_AWARE is broken for multi-monitor setups with
+    # mixed DPIs — a 2560x1440 @ 225% secondary next to a 100% primary reports
+    # as ~1138x640 in EnumDisplayMonitors under v1, causing ImageGrab to return
+    # a low-res image and mouse clicks to land in the wrong place. V2 gives
+    # consistent physical pixels across all monitors regardless of per-monitor DPI.
+    # V2 is available on Windows 10 1703+ and Windows 11.
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(
+            ctypes.c_void_p(-4)  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        )
     except Exception:
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # v1 fallback
         except Exception:
-            pass
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
 import tkinter as tk
 from tkinter import messagebox
@@ -96,6 +108,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._openai_model_display_names = {}
         self._gemini_model_display_names = {}
         self._model_display_names = {}
+        # Per-model cache of OpenAI server-side tools that the model rejected
+        # with a 400 BadRequestError. Newer models like gpt-5.2-pro don't support
+        # code_interpreter; older models did. The first call learns, subsequent
+        # calls in the same session skip the unsupported tool upfront.
+        self._openai_unsupported_tools = {}  # model_id → set of unsupported "type" strings
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False
@@ -105,11 +122,30 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._screenshot_scale = 1.0
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
         self._screenshot_dims = (0, 0)    # (width, height) of last screenshot sent to model
+        # Per-display "most recent capture" — updated on BOTH full and region
+        # captures. Used by mouse_click and find_element so the model can click
+        # using coordinates from whatever it most recently saw of that display
+        # (full screen or zoomed region).
+        self._display_states = {}         # display_idx → (scale, (ox, oy), (w, h))
+        self._display_images = {}         # display_idx → raw PNG bytes (pre-grid)
+        # Per-display "full display state" — updated ONLY on full-display captures.
+        # Used by region screenshots: when the model says "screenshot display=1
+        # region (880, 250, 320, 160)", those coordinates are relative to display
+        # 1's FULL image, not relative to whatever region was captured most recently.
+        # Without this separation, chained region screenshots on the same display
+        # would drift through stacked offsets.
+        self._display_full_states = {}    # display_idx → (scale, (ox, oy), (w, h))
+        self._display_full_images = {}    # display_idx → raw PNG bytes
+        self._last_screenshot_bytes = None  # raw resized image bytes (pre-PNG) — fallback for find_element when no display specified
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
         self.show_thinking = tk.BooleanVar(value=False)
         self.save_thinking = tk.BooleanVar(value=False)
+        # Independent toggle for [DIAG] capture/click trace logging — separate
+        # from Debug (which shows the API JSON payload). Defaults ON for now;
+        # uncheck "Diag" in the main window to silence the diagnostic lines.
+        self.diag_enabled = tk.BooleanVar(value=True)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self.meta_enabled = tk.BooleanVar(value=False)

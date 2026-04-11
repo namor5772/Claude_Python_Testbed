@@ -1,5 +1,6 @@
 import base64
 import copy
+import json
 import re
 import time
 
@@ -16,38 +17,15 @@ from myagent.constants import (
 
 class GeminiMixin:
 
-    # Gemini models use normalised [0, 1000] coordinates for spatial tasks.
-    # These suffixes are appended to desktop tool descriptions in _tools_to_gemini
-    # to align the tool contract with Gemini's training convention.  The coordinate
-    # conversion from [0, 1000] → image pixels happens in _execute_tool.
+    # Gemini uses pixel coordinates from the screenshot image (same convention
+    # as Anthropic and OpenAI). The previous [0, 1000] normalised system forced
+    # the model to mentally convert pixel-space visual perception into [0, 1000]
+    # — which empirically introduced arithmetic errors, especially at higher
+    # thinking budgets where the reasoning had more chances to drift. Direct
+    # pixel coordinates let the model click where it visually sees the target.
     _GEMINI_COORD_HINTS = {
         "screenshot": (
-            "\n\nCOORDINATE SYSTEM: All coordinate-based tools (mouse_click, "
-            "mouse_scroll, mouse_drag, read_screen_text) use a normalised "
-            "coordinate system where (0, 0) is the TOP-LEFT corner and "
-            "(1000, 1000) is the BOTTOM-RIGHT corner of the screenshot image. "
-            "Always take a fresh screenshot before interacting with the screen."
-        ),
-        "mouse_click": (
-            "\n\nCRITICAL: x and y use a normalised coordinate system from 0 to "
-            "1000. (0, 0) is the top-left corner, (1000, 1000) is the bottom-right "
-            "corner. For example, the centre of the screen is (500, 500). "
-            "Coordinates are automatically converted to actual screen positions."
-        ),
-        "mouse_scroll": (
-            "\n\nIf specifying x/y position, use normalised coordinates from 0 to "
-            "1000 where (0, 0) is top-left and (1000, 1000) is bottom-right of the "
-            "most recent screenshot."
-        ),
-        "mouse_drag": (
-            "\n\nAll coordinates (start_x, start_y, end_x, end_y) use normalised "
-            "coordinates from 0 to 1000. (0, 0) is top-left, (1000, 1000) is "
-            "bottom-right of the most recent screenshot."
-        ),
-        "read_screen_text": (
-            "\n\nAll coordinates (x, y, width, height) use normalised coordinates "
-            "from 0 to 1000 relative to the most recent screenshot. (0, 0) is the "
-            "top-left corner."
+            "\n\nAlways take a fresh screenshot before interacting with the screen."
         ),
     }
 
@@ -189,20 +167,19 @@ class GeminiMixin:
                             dims_hint = ""
                             dims_w, dims_h = "", ""
                             for tp in all_text_parts:
-                                m = re.search(r"\((\d+)x(\d+)\)", tp)
+                                m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", tp)
                                 if m:
                                     dims_w, dims_h = m.group(1), m.group(2)
                                     dims_hint = f" ({dims_w}x{dims_h} pixels)"
                                     break
                             hint = genai_types.Part.from_text(
                                 text=(
-                                    f"Below is the screenshot image{dims_hint} returned by the "
-                                    "screenshot tool above. COORDINATE SYSTEM: use normalised "
-                                    "coordinates from 0 to 1000 for all coordinate tools. "
-                                    "(0, 0) is the top-left corner, (1000, 1000) is the "
-                                    "bottom-right corner, (500, 500) is the centre. "
-                                    "Coordinates are automatically converted to actual "
-                                    "screen positions."
+                                    f"Below is the screenshot image{dims_hint} returned by "
+                                    "the screenshot tool above. Use pixel (x, y) coordinates "
+                                    "directly from this image when calling mouse_click — "
+                                    "top-left is (0, 0), X increases rightward, Y increases "
+                                    "downward. Coordinates are automatically mapped to the "
+                                    "actual screen."
                                 )
                             )
                             contents.append(genai_types.Content(
@@ -417,6 +394,109 @@ class GeminiMixin:
             content_blocks.append(block)
 
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted
+
+    def do_gemini_find_element(self, description, display=None):
+        """Locate a UI element on a screenshot using Gemini's native spatial
+        pointing. When display=N is specified, searches the cached image of
+        that specific display — critical for multi-display setups where the
+        target may be on a different display than whatever was captured last.
+        Falls back to the most recent screenshot when display is omitted."""
+        if not self.gemini_client:
+            return "find_element error: Gemini client not available."
+        # Resolve which image to search and which dims to use for the [0, 1000] → pixel conversion
+        if display is not None and display in getattr(self, "_display_images", {}):
+            image_bytes = self._display_images[display]
+            _scale, _offset, dims_tuple = self._display_states[display]
+            iw, ih = dims_tuple
+            search_label = f"display {display}"
+        else:
+            image_bytes = getattr(self, "_last_screenshot_bytes", None)
+            iw, ih = self._screenshot_dims
+            search_label = f"display {display} (NOT FOUND, falling back to most recent capture)" if display is not None else "most recent screenshot"
+        if not image_bytes:
+            return ("Take a screenshot first — find_element needs a recent screenshot "
+                    "to search.")
+        if not (iw and ih):
+            return "Take a screenshot first — no screenshot dimensions available."
+        try:
+            image_part = genai_types.Part.from_bytes(
+                data=image_bytes,
+                mime_type="image/png",
+            )
+            # Official Gemini pointing prompt — phrasing matches the Google docs
+            # exactly so the trained pointing capability activates. Asking for a
+            # custom JSON shape (single object) bypasses the trained behavior and
+            # makes the model hallucinate plausible-looking but wrong coordinates.
+            prompt = (
+                f"Point to the {description}. "
+                "The answer should follow the json format: "
+                '[{"point": <point>, "label": <label1>}, ...]. '
+                "The points are in [y, x] format normalized to 0-1000."
+            )
+            config = genai_types.GenerateContentConfig(
+                temperature=0.0,
+            )
+            response = self.gemini_client.models.generate_content(
+                model=self.model,
+                contents=[image_part, prompt],
+                config=config,
+            )
+            text = (response.text or "").strip()
+            # Strip code fences defensively
+            if text.startswith("```"):
+                text = text.strip("`")
+                if text.lower().startswith("json"):
+                    text = text[4:].lstrip()
+                if text.endswith("```"):
+                    text = text[:-3].rstrip()
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError:
+                # Fallback: regex-extract the first [y, x] pair from the raw text
+                m = re.search(r"\[\s*(\d+)\s*,\s*(\d+)\s*\]", text)
+                if not m:
+                    return (f"find_element: could not parse Gemini's response. "
+                            f"Raw output: {text[:300]}")
+                data = [{"point": [int(m.group(1)), int(m.group(2))], "label": description}]
+            # Gemini's official pointing format is an array of {point, label} objects.
+            # Accept both array-of-dicts (official) and single dict (legacy/custom).
+            if isinstance(data, list):
+                if not data:
+                    return (f"find_element: '{description}' was not found in the most "
+                            "recent screenshot. Try a different description or "
+                            "take a fresh screenshot if the UI has changed.")
+                first = data[0] if isinstance(data[0], dict) else {}
+            elif isinstance(data, dict):
+                first = data
+            else:
+                return f"find_element: unexpected response shape: {type(data).__name__}"
+            point = first.get("point")
+            label = first.get("label", description)
+            if not point or not isinstance(point, (list, tuple)) or len(point) < 2:
+                return (f"find_element: '{description}' was not found in the most "
+                        "recent screenshot. Try a different description, take a "
+                        "region screenshot zoomed into the suspected area, or take "
+                        "a fresh screenshot if the UI has changed.")
+            ny, nx = int(point[0]), int(point[1])
+            # Gemini's pointing API returns [0, 1000] normalised coordinates.
+            # We convert to pixels so the model can pass them directly to
+            # mouse_click, which expects pixel coordinates (same convention
+            # as Anthropic/OpenAI).
+            ny = max(0, min(ny, 1000))
+            nx = max(0, min(nx, 1000))
+            px = round(nx / 1000 * iw)
+            py = round(ny / 1000 * ih)
+            click_hint = (
+                f"mouse_click(x={px}, y={py}, display={display})"
+                if display is not None
+                else f"mouse_click(x={px}, y={py})"
+            )
+            return (
+                f"Found '{label}' at pixel ({px}, {py}) in the {iw}x{ih} {search_label}. "
+                f"Call {click_hint} to click on it."
+            )
+        except Exception as e:
+            return f"find_element error: {e}"
 
     def _fetch_gemini_models(self):
         """Fetch available Gemini generative models."""
