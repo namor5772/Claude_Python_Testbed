@@ -1,0 +1,1072 @@
+================================================================================
+MyAgent / SelfBot — Complete Tool Reference
+================================================================================
+
+This document describes every tool available to MyAgent (the autonomous task
+agent) and SelfBot (the chatbot), highlighting differences based on:
+
+  * Which AI provider is active (Anthropic / OpenAI / Gemini)
+  * Which model is selected within each provider
+  * Whether the host OS is Windows or macOS
+  * Which checkboxes (Desktop / Browser / Meta) are enabled in the UI
+
+Tool counts at a glance (MyAgent):
+
+  Core tools .................. 5
+  Meta tools .................. 3   (gated by Meta checkbox)
+  Desktop tools ............... 14  (gated by Desktop checkbox)
+  Browser tools ............... 11  (gated by Browser checkbox)
+  Dynamic tools ............... 1   (get_skill — when on-demand skills exist)
+  Server-side tools (Anthropic) 2   (web_search, code_execution)
+  Server-side tools (OpenAI) .. 2   (web_search_preview, code_interpreter)
+  Server-side tools (Gemini) .. 0   (Gemini API forbids built-in + custom mix)
+                               ────
+  Total possible (Anthropic) .. 35
+  Total possible (OpenAI) ..... 35
+  Total possible (Gemini) ..... 34   (find_element is Gemini-only;
+                                      no server-side tools)
+
+SelfBot has the same Core / Desktop / Browser tools as MyAgent (Anthropic only)
+but no Meta tools, no find_element, and no provider switching.
+
+
+================================================================================
+SECTION 1 — TOOL AVAILABILITY MATRIX
+================================================================================
+
+Legend:
+  Yes      = Available
+  No       = Not available
+  Native   = Replaced by a provider-native server-side tool
+  Local    = Custom local implementation (DuckDuckGo, etc.)
+  Gem-only = Only available when Gemini provider is selected
+
+                                  | Anthropic | OpenAI    | Gemini    |
+  --------------------------------|-----------|-----------|-----------|
+  CORE TOOLS                      |           |           |           |
+    web_search                    | Native    | Native    | Local     |
+    fetch_webpage                 | Native    | Native    | Local     |
+    run_command                   | Yes       | Yes       | Yes       |
+    csv_search                    | Yes       | Yes       | Yes       |
+    user_prompt                   | Yes       | Yes       | Yes       |
+                                  |           |           |           |
+  SERVER-SIDE TOOLS               |           |           |           |
+    Web search (native)           | Yes       | Yes       | No        |
+    Code execution / interpreter  | Yes       | Yes (*)   | No        |
+                                  |           |           |           |
+  DESKTOP TOOLS (Desktop ON)      |           |           |           |
+    screenshot                    | Yes       | Yes       | Yes       |
+    mouse_click                   | Yes       | Yes       | Yes       |
+    type_text                     | Yes       | Yes       | Yes       |
+    press_key                     | Yes       | Yes       | Yes       |
+    mouse_scroll                  | Yes       | Yes       | Yes       |
+    mouse_drag                    | Yes       | Yes       | Yes       |
+    open_application              | Yes       | Yes       | Yes       |
+    find_window                   | Yes       | Yes       | Yes       |
+    wait_for_window               | Yes       | Yes       | Yes       |
+    clipboard_read                | Yes       | Yes       | Yes       |
+    clipboard_write               | Yes       | Yes       | Yes       |
+    read_screen_text              | Yes       | Yes       | Yes       |
+    find_image_on_screen          | Yes       | Yes       | Yes       |
+    find_element                  | No        | No        | Gem-only  |
+                                  |           |           |           |
+  BROWSER TOOLS (Browser ON)      |           |           |           |
+    browser_open                  | Yes       | Yes       | Yes       |
+    browser_navigate              | Yes       | Yes       | Yes       |
+    browser_click                 | Yes       | Yes       | Yes       |
+    browser_fill                  | Yes       | Yes       | Yes       |
+    browser_get_text              | Yes       | Yes       | Yes       |
+    browser_run_js                | Yes       | Yes       | Yes       |
+    browser_screenshot            | Yes       | Yes       | Yes       |
+    browser_close                 | Yes       | Yes       | Yes       |
+    browser_wait_for              | Yes       | Yes       | Yes       |
+    browser_select                | Yes       | Yes       | Yes       |
+    browser_get_elements          | Yes       | Yes       | Yes       |
+                                  |           |           |           |
+  META TOOLS (Meta ON)            |           |           |           |
+    manage_instructions           | Yes       | Yes       | Yes       |
+    manage_skills                 | Yes       | Yes       | Yes       |
+    run_instruction               | Yes       | Yes       | Yes       |
+                                  |           |           |           |
+  DYNAMIC TOOLS                   |           |           |           |
+    get_skill                     | Yes       | Yes       | Yes       |
+    (only when at least one on-demand skill exists)
+
+  (*) OpenAI's code_interpreter is automatically STRIPPED from the request when
+      the Desktop checkbox is enabled. See Section 4.1 for the rationale.
+
+
+================================================================================
+SECTION 2 — CORE TOOLS (always available, sent on every request)
+================================================================================
+
+These five tools are in the TOOLS list in myagent/constants.py and are sent on
+every API call regardless of checkbox state. The web_search and fetch_webpage
+custom tools are stripped from the tool list for Anthropic and OpenAI because
+those providers offer native server-side equivalents (see Section 3).
+
+--------------------------------------------------------------------------------
+2.1  web_search
+--------------------------------------------------------------------------------
+Description : Search the web for information using DuckDuckGo (Gemini only).
+              For Anthropic and OpenAI, this custom tool is replaced by the
+              provider-native server-side web search (see Section 3).
+Inputs      : query (string)
+Returns     : Plain-text search results with titles, URLs, and snippets
+Provider    : Gemini only (the local DuckDuckGo path)
+OS          : Identical on Windows / macOS
+Parallel    : Yes (parallel-safe)
+Notes       : Uses the `ddgs` Python package. The Gemini API does not allow
+              combining its built-in `google_search` tool with custom function
+              declarations, so Gemini falls back to the local DuckDuckGo path.
+
+--------------------------------------------------------------------------------
+2.2  fetch_webpage
+--------------------------------------------------------------------------------
+Description : Fetch the full content of a specific URL and extract readable
+              text. For Anthropic and OpenAI, this custom tool is replaced by
+              the provider-native server-side web search which handles URL
+              fetching automatically.
+Inputs      : url (string)
+Returns     : Plain-text page content (HTML stripped, ~20 KB max)
+Provider    : Gemini only
+OS          : Identical on Windows / macOS
+Parallel    : Yes (parallel-safe)
+Notes       : Uses httpx + HTMLTextExtractor (a HTMLParser subclass that
+              skips <script>/<style>/<noscript> blocks and inserts newlines at
+              block-level element boundaries).
+
+--------------------------------------------------------------------------------
+2.3  run_command   (alias: run_powershell on Windows, run_shell on macOS)
+--------------------------------------------------------------------------------
+Description : Execute a command on the local machine and return stdout/stderr.
+Inputs      : command (string)
+Returns     : Output text, capped at 20,000 characters with a 30-second timeout
+Provider    : All providers
+OS          : Different shell per platform:
+              * Windows -> PowerShell (run_powershell)
+              * macOS   -> bash (run_shell)
+              The tool name is the same in the API ("run_command") but the
+              shell that executes it differs.
+Parallel    : No (sequential — modifies shared filesystem state)
+Safety      : Two-tier guardrail system:
+              * Tier 1 — Hard-blocked (rejected outright):
+                  Windows: Format-Volume, Stop-Computer, Restart-Computer,
+                           Set-ExecutionPolicy, bcdedit, diskpart, etc.
+                  macOS:   sudo rm -rf /, mkfs, dd of=/dev/, shutdown,
+                           reboot, diskutil eraseDisk, etc.
+              * Tier 2 — Confirmation required (Yes/No dialog):
+                  Windows: Remove-Item, rm, del, Move-Item, Set-Content,
+                           Out-File, Stop-Process, Invoke-Expression,
+                           Start-Process, -Recurse, -Force, etc. (24 patterns)
+                  macOS:   rm, mv, kill, chmod, chown, sudo, brew install,
+                           pip install, npm install, etc.
+              * Per-instruction PS Safety bypass: individual confirmation
+                patterns can be unchecked per instruction; bypassed patterns
+                still emit a "warning" queue message in the activity output.
+Notes       : Tool description instructs the model to use Start-Process
+              (Windows) or `open -a` (macOS) for GUI launches so the tool
+              returns immediately instead of blocking the agentic loop.
+              Subprocess uses CREATE_NO_WINDOW on Windows so consoles do
+              not flash.
+
+--------------------------------------------------------------------------------
+2.4  csv_search
+--------------------------------------------------------------------------------
+Description : Search a delimited file (CSV/TSV/TXT/etc.) for records matching
+              a value. The file must have a header row.
+Inputs      : file_path (string)
+              search_value (string)
+              column (string, optional — search all columns if omitted)
+              match_mode ("contains" / "exact" / "starts_with",
+                          default "contains", case-insensitive)
+              max_results (integer, default 50)
+              delimiter (string, optional — auto-detected from first 8 KB
+                         using csv.Sniffer)
+Returns     : Formatted key-value rows for each match, capped at 20,000 chars
+Provider    : All providers
+OS          : Identical on Windows / macOS
+Parallel    : Yes (parallel-safe — read-only file access)
+
+--------------------------------------------------------------------------------
+2.5  user_prompt
+--------------------------------------------------------------------------------
+Description : Pause the agentic loop and display a modal dialog asking the
+              user a question. Waits for the user's typed reply before
+              continuing.
+Inputs      : message (string)
+Returns     : The user's typed response, or "[User submitted empty response —
+              stopping agent]" if they hit Enter with no text (which also
+              terminates the agent).
+Provider    : All providers
+OS          : Identical on Windows / macOS, with one difference:
+              * Windows -> dialog uses transient(parent) which works across
+                screens
+              * macOS   -> transient() is skipped entirely; the dialog floats
+                as a standalone window because macOS restricts transient
+                dialogs to the parent's screen
+Parallel    : No (sequential — needs human attention)
+Notes       : This is the ONLY way the agent can get user input mid-task.
+              Plain-text questions in assistant output do NOT pause the
+              agent — the system prompt strongly instructs the model to
+              always use this tool when it needs user input. Submitting an
+              empty response immediately stops the agent (an explicit exit
+              gesture). The user's response is echoed in the chat as
+              "You: [text]" and the agent's next response gets a fresh
+              "Agent:" heading.
+
+
+================================================================================
+SECTION 3 — SERVER-SIDE TOOLS (provider-native)
+================================================================================
+
+These tools run inside the provider's infrastructure rather than locally. They
+are appended to the API request automatically when supported. None of them
+correspond to a function the agent code dispatches — the API handles them and
+sends results back as part of the streaming response.
+
+--------------------------------------------------------------------------------
+3.1  Anthropic — web_search_20250305
+--------------------------------------------------------------------------------
+Type        : "web_search_20250305"
+Beta header : "web-search-2025-03-05"
+Replaces    : Custom local web_search and fetch_webpage tools
+Behaviour   : Anthropic's API runs the search server-side, fetches relevant
+              pages, and synthesises results with citations into the response
+              stream. No local schema, no local code path. Activity output
+              shows "Searching the web..." when the model invokes it.
+Available   : All Claude models that support beta tool types (Sonnet 3.5+,
+              Sonnet 4.x, Opus 4.x, Haiku 4.x)
+
+--------------------------------------------------------------------------------
+3.2  Anthropic — code_execution_20250825
+--------------------------------------------------------------------------------
+Type        : "code_execution_20250825"
+Beta headers: "code-execution-2025-08-25", "files-api-2025-04-14"
+              (the files-api beta is required to download generated images)
+Replaces    : Nothing — purely additive
+Behaviour   : Server-side Bash + Python sandbox. The model can write code,
+              execute it, and produce text output and image files (charts,
+              plots, etc.). File outputs are extracted from final_message
+              .content post-stream (file IDs are not available during
+              streaming) and downloaded via client.beta.files.download().
+              Saved to saved_chats/ci_output_{timestamp}.png and displayed
+              inline in the chat widget (scaled to max 600px).
+Available   : All Claude models with the beta tool family
+
+--------------------------------------------------------------------------------
+3.3  OpenAI — web_search_preview
+--------------------------------------------------------------------------------
+Type        : "web_search_preview"
+Replaces    : Custom local web_search and fetch_webpage tools
+Behaviour   : OpenAI's Responses API runs server-side web search with
+              automatic citations.
+Available   : All OpenAI models the user can select via the Provider combobox
+
+--------------------------------------------------------------------------------
+3.4  OpenAI — code_interpreter
+--------------------------------------------------------------------------------
+Type        : "code_interpreter" with container "auto"
+Include     : ["code_interpreter_call.outputs"] in the request — required to
+              receive image data back
+Replaces    : Nothing — additive Python sandbox
+Behaviour   : Server-side Python execution. Output and image data stream back
+              via the Responses API. Images are saved to
+              saved_chats/ci_output_*.png and displayed inline.
+Available   : Most OpenAI models, BUT:
+              * Stripped automatically when the Desktop checkbox is enabled
+                (see Section 4.1 — gpt-5.2 was double-scaling click coords
+                after inspecting screenshot dimensions via PIL)
+              * Some newer models reject this tool with HTTP 400. The
+                rejection is caught, the tool is removed, the model is
+                cached in self._openai_unsupported_tools, and the call is
+                retried automatically. The cache persists for the rest of
+                the session so subsequent calls skip the tool upfront.
+                Currently known: gpt-5.2-pro rejects code_interpreter.
+
+--------------------------------------------------------------------------------
+3.5  Gemini — (none)
+--------------------------------------------------------------------------------
+The Gemini API does NOT allow combining its built-in tools (google_search,
+code_execution) with custom function declarations in the same request. Since
+MyAgent always sends custom function declarations for desktop / browser /
+meta / core tools, Gemini cannot use any built-in tool. Gemini falls back to
+the local DuckDuckGo web_search and fetch_webpage paths instead. Gemini also
+loses access to Google's server-side code execution sandbox — for that
+functionality, the agent uses run_command + locally-installed Python.
+
+This is an API-level restriction enforced by Google, not a MyAgent limitation.
+
+
+================================================================================
+SECTION 4 — DESKTOP TOOLS (Desktop checkbox required)
+================================================================================
+
+The fourteen desktop tools live in the DESKTOP_TOOLS list in
+myagent/constants.py. They are only sent to the API when the Desktop checkbox
+is enabled in the Instruction Editor (per-instruction setting). When disabled,
+the model does not even see them in the tool list.
+
+Implementation lives in myagent/desktop_mixin.py. All coordinate-based tools
+share three pieces of state:
+  * _screenshot_scale  — multiplier from image pixels to screen pixels
+  * _screenshot_offset — virtual desktop origin of the captured area
+  * _screenshot_dims   — dimensions of the image actually sent to the model
+
+Plus two per-display dicts (introduced for multi-monitor accuracy):
+  * _display_states[N] / _display_images[N]      — most recent capture per
+                                                    display (full or region),
+                                                    used by mouse_click and
+                                                    find_element
+  * _display_full_states[N] / _display_full_images[N] — most recent FULL
+                                                    display capture per display,
+                                                    used by region screenshot
+                                                    coordinate conversions
+
+The two-slot design prevents chained region screenshots from drifting through
+stacked offsets while still letting clicks reference whatever the model most
+recently saw of each display.
+
+--------------------------------------------------------------------------------
+4.1  CRITICAL — Code interpreter gating (OpenAI desktop)
+--------------------------------------------------------------------------------
+When the Desktop checkbox is enabled AND the provider is OpenAI, the
+code_interpreter server-side tool is automatically stripped from the API
+request (see Section 3.4). The reason: gpt-5.2 with code_interpreter access
+loads screenshot bytes via PIL, sees the API-resized image dimensions
+(typically smaller than the source), and pre-scales coordinates ITSELF before
+calling mouse_click. Our pipeline then ALSO applies a scale factor, producing
+double-scaled clicks that miss by ~25% of the screen.
+
+Stripping CI when desktop is on forces the model to use direct visual
+perception, which produces correct image-space coordinates. CI remains
+available for non-desktop OpenAI tasks (data analysis, file processing).
+
+--------------------------------------------------------------------------------
+4.2  Provider differences in image handling
+--------------------------------------------------------------------------------
+Each provider has different image-size limits and different image-delivery
+patterns. After empirical testing, the cap for each provider matches the
+actual API hard limit:
+
+  Provider   | Image cap         | Delivery to model
+  -----------|-------------------|------------------------------------------
+  Anthropic  | 1568 px / 1.15 MP | Embedded directly in tool_result block
+  OpenAI     | 2048 px / 5 MP    | Separate user message AFTER
+             |                   | function_call_output (GPT models process
+             |                   | images more reliably from user messages
+             |                   | than from tool output content)
+  Gemini     | 2048 px / 4 MP    | Separate user Content block AFTER the
+             |                   | function_response Content (Gemini cannot
+             |                   | reliably handle mixed image + function-
+             |                   | response Parts in the same Content)
+
+OpenAI was previously bumped to 2560 in this session, but gpt-5.2's
+code_interpreter PIL inspection revealed that OpenAI silently downscales any
+image above 2048 long edge server-side, breaking the scale calculation.
+Reverted to 2048 to match the actual API limit.
+
+All providers use IMAGE-SPACE PIXEL coordinates (not normalized [0, 1000])
+since the Gemini coordinate switch in this session. The model passes
+coordinates as it reads them from the screenshot image; the system handles
+scaling and offset translation internally via _screenshot_scale and
+_screenshot_offset.
+
+--------------------------------------------------------------------------------
+4.3  screenshot
+--------------------------------------------------------------------------------
+Description : Capture one display, all displays, or a rectangular region.
+Inputs      : display (integer, optional — 0=primary, 1=secondary, ...)
+              x, y, width, height (integer, optional — region capture)
+              grid (boolean, optional — overlay 100-px coordinate grid)
+Returns     : List of [text, image] content blocks
+Modes       :
+  * No display, no region: capture ALL displays as separate images
+                            (recommended first step on multi-monitor setups)
+  * display=N, no region:  capture display N as a single image
+  * region (x,y,w,h):       capture a sub-region of display N (defaults to
+                            display 0 if display omitted)
+OS          :
+  * Windows:
+      EnumDisplayMonitors via Win32 API for per-display rects.
+      ImageGrab.grab(bbox=..., all_screens=True) for capture.
+      DPI v2 (PER_MONITOR_AWARE_V2) is used so multi-monitor mixed-DPI
+      setups (e.g. 100% primary + 225% secondary) report true physical
+      pixels per monitor — the older v1 awareness reports
+      logically-scaled smaller rects for high-DPI secondary monitors,
+      which broke ImageGrab capture quality and pyautogui click accuracy.
+  * macOS:
+      CGGetActiveDisplayList via Quartz CoreGraphics for per-display rects.
+      CGWindowListCreateImage with a per-display CGRect for capture
+      (because pyautogui.screenshot() only captures the primary display).
+      Captures at physical pixel resolution; image is then resized to the
+      display's logical dimensions (from CGDisplayBounds) so coordinates
+      align with pyautogui's logical coordinate space.
+Grid overlay: When grid=true, _draw_coord_grid draws 100-px-spaced magenta
+              gridlines with (x,y) labels at intersections (skipping (0,0)
+              to avoid clutter). Drawn AFTER the API-limit resize so the
+              labels match the dimensions the model actually sees. Useful
+              for pixel-precision targeting on small UI elements.
+
+--------------------------------------------------------------------------------
+4.4  mouse_click
+--------------------------------------------------------------------------------
+Description : Click the mouse at given (x, y) image coordinates.
+Inputs      : x, y (integer, image-space coordinates as you read them from
+                    the screenshot)
+              button ("left" / "right" / "middle", default "left")
+              clicks (1 or 2, default 1)
+              display (integer, optional — disambiguates which display's
+                       coordinate space the (x, y) refer to)
+Returns     : Diagnostic string with screen coords, image coords, scale,
+              offset, and any clamping warning
+Behaviour   : Looks up the per-display state via _resolve_coord_state(display)
+              if a display parameter is supplied; otherwise uses the most
+              recent capture state. Computes:
+                screen_x = round(x * scale) + offset_x
+                screen_y = round(y * scale) + offset_y
+              Then calls pyautogui.click() and sleeps 50 ms (post-click
+              settle delay so subsequent screenshots see the post-click UI).
+OS          : Identical logic; pyautogui handles platform-specific cursor
+              control. With v2 DPI awareness on Windows, all coordinates are
+              physical pixels.
+Pre-screenshot guard:
+              Refuses with "Take a screenshot first..." if _screenshot_dims
+              is (0, 0). Prevents silent misclicks from coordinates passed
+              before any capture.
+Bounds policy:
+              * <=2 px out of bounds — silent clamp (handles model rounding)
+              * >2% of image dimension — refuse with retake-screenshot hint
+              * In between — clamp + warn ("⚠ coords (X,Y) outside ... clamped")
+Critical hint in description:
+              "CRITICAL: pass the pixel coordinates EXACTLY as you read them
+              from the screenshot image — do NOT scale, multiply, or convert
+              them to a different resolution. Even if you used
+              code_interpreter to inspect the image and noticed it has
+              different dimensions than the physical screen, just pass the
+              image-space coordinates."
+              (This wording was added after gpt-5.2 was caught pre-scaling
+              coordinates after inspecting image dims via PIL.)
+
+--------------------------------------------------------------------------------
+4.5  type_text
+--------------------------------------------------------------------------------
+Description : Type text at the current cursor position.
+Inputs      : text (string)
+              interval (number, default 0.02 — seconds between keystrokes)
+Returns     : "Typed N characters"
+OS          :
+  * ASCII text   — pyautogui.write() with the given interval (cross-platform)
+  * Non-ASCII    — pyperclip clipboard paste, then Ctrl+V (Windows) or
+                   Cmd+V (macOS). Falls back to an error message if pyperclip
+                   is not installed.
+
+--------------------------------------------------------------------------------
+4.6  press_key
+--------------------------------------------------------------------------------
+Description : Press a key or key combination.
+Inputs      : keys (string — e.g. "enter", "ctrl+c", "alt+tab",
+                              "command+q", "ctrl+shift+s")
+Returns     : "Pressed: <keys>"
+OS          : Common aliases are normalised per platform:
+  * Windows: "windows" -> "win", "control" -> "ctrl", "return" -> "enter",
+              "esc" -> "escape"
+  * macOS:   "windows"/"win"/"cmd" -> "command", "control" -> "ctrl",
+              "option" -> "alt", "return" -> "enter", "esc" -> "escape"
+
+--------------------------------------------------------------------------------
+4.7  mouse_scroll
+--------------------------------------------------------------------------------
+Description : Scroll the mouse wheel.
+Inputs      : clicks (integer — positive = up, negative = down)
+              x, y (integer, optional — image-space coords for the scroll
+                    target; uses current state if omitted)
+              display (integer, optional)
+Returns     : "Scrolled <up/down> N clicks at (X, Y)"
+Behaviour   : Same coordinate translation as mouse_click. Pre-screenshot
+              guard applies when x/y are specified.
+
+--------------------------------------------------------------------------------
+4.8  mouse_drag
+--------------------------------------------------------------------------------
+Description : Drag from one point to another (drag-and-drop, sliders, etc.)
+Inputs      : start_x, start_y, end_x, end_y (integers, image-space)
+              duration (number, default 0.5 — seconds)
+              button ("left" / "right" / "middle", default "left")
+              display (integer, optional)
+Returns     : "Dragged from (sx,sy) to (ex,ey) with <button> button over Ns"
+Behaviour   : pyautogui.moveTo + mouseDown + moveTo + mouseUp. Both
+              coordinate pairs are translated through the same scale/offset
+              as mouse_click. 50 ms post-click settle delay applied.
+
+--------------------------------------------------------------------------------
+4.9  open_application
+--------------------------------------------------------------------------------
+Description : Launch an application by common name or full path.
+Inputs      : name (string — known names like "chrome", "notepad++", "code",
+                            or a full executable path)
+              args (string, optional — arguments such as a file path to open)
+Returns     : "Opened <name> (command: <command>)"
+OS          : Different KNOWN_APPS dictionaries per platform:
+  * Windows known names: chrome, firefox, edge, notepad, notepad++,
+                         calculator (calc), excel, word, powerpoint,
+                         explorer, cmd, powershell, vscode (code), spotify,
+                         discord, slack, teams
+  * macOS known names:   chrome, firefox, edge, safari, calculator (calc),
+                         terminal, finder, explorer, vscode (code), spotify,
+                         discord, slack, teams
+  * Subprocess flags:    Windows uses CREATE_NO_WINDOW so the launcher
+                         console does not flash; macOS uses default flags.
+                         Both use Popen so the call returns immediately.
+
+--------------------------------------------------------------------------------
+4.10  find_window
+--------------------------------------------------------------------------------
+Description : Find windows matching a title pattern (case-insensitive
+              substring). Optionally activate (bring to foreground) the
+              first match.
+Inputs      : title (string — pattern to match)
+              activate (boolean, default false)
+Returns     : List of matching windows with title, position, and size
+OS          :
+  * Windows: pygetwindow.getWindowsWithTitle. Activation calls
+             window.activate() (and window.restore() if minimised).
+  * macOS:   Quartz CGWindowListCopyWindowInfo enumeration. Activation uses
+             AppleScript ("tell application X to activate").
+
+--------------------------------------------------------------------------------
+4.11  wait_for_window
+--------------------------------------------------------------------------------
+Description : Poll for a window matching the given title until it appears
+              or times out.
+Inputs      : title (string)
+              timeout (number, default 10 seconds)
+Returns     : Window info once found, or "Timed out" message
+OS          : Uses the same per-platform window enumeration as find_window.
+              Polls every 0.5 seconds.
+
+--------------------------------------------------------------------------------
+4.12  clipboard_read
+--------------------------------------------------------------------------------
+Description : Read the current text contents of the system clipboard.
+Inputs      : (none)
+Returns     : "Clipboard contents:\n<text>" or an error if empty / non-text
+OS          : Uses tkinter's clipboard_get() — works identically on both
+              platforms via the Tk integration. Returns an error message if
+              the clipboard is empty or contains non-text data
+              (TclError).
+
+--------------------------------------------------------------------------------
+4.13  clipboard_write
+--------------------------------------------------------------------------------
+Description : Write text to the system clipboard, replacing any current
+              content.
+Inputs      : text (string)
+Returns     : "Copied to clipboard (N chars): <preview>"
+OS          : Uses tkinter's clipboard_clear() + clipboard_append() — works
+              identically on both platforms.
+
+--------------------------------------------------------------------------------
+4.14  read_screen_text
+--------------------------------------------------------------------------------
+Description : OCR a region of the screen and return the recognised text.
+Inputs      : x, y, width, height (integers, image-space coordinates)
+              display (integer, optional)
+Returns     : "OCR text from (x,y w x h):\n<text>" or "OCR returned no text"
+OS          : Different OCR engines per platform:
+  * Windows: winocr (Windows.Media.Ocr — built into Windows 10/11). No
+             additional install needed beyond `pip install winocr`.
+  * macOS:   Vision framework (VNRecognizeTextRequest, recognition level 0
+             = accurate). Loaded via objc and Quartz bindings.
+  * Neither requires Tesseract.
+
+--------------------------------------------------------------------------------
+4.15  find_image_on_screen
+--------------------------------------------------------------------------------
+Description : Locate a reference image file on the screen using template
+              matching.
+Inputs      : image_path (string — absolute path to a PNG/JPG file)
+              confidence (number, 0.0–1.0, default 0.8)
+Returns     : Region location, screen-space center, AND image-space center
+              (so the model can pass the image-space center to mouse_click)
+OS          : Identical via pyautogui.locateOnScreen — but requires
+              `opencv-python` for confidence-based matching. Without
+              opencv-python, only exact-match works.
+
+--------------------------------------------------------------------------------
+4.16  find_element  (Gemini-only)
+--------------------------------------------------------------------------------
+Description : Locate a UI element on the most recent screenshot using
+              Gemini's native spatial pointing API. Filtered out of the
+              tool list for non-Gemini providers via _get_tools().
+Inputs      : description (string — natural language, e.g. "the X close
+                            button in the top-right corner of the Notepad++
+                            window")
+              display (integer, optional — CRITICAL for multi-display setups
+                       so the cached image lookup hits the right display)
+Returns     : "Found '<label>' at pixel (px, py) in the WxH <display N>.
+              Call mouse_click(x=px, y=py, display=N) to click on it."
+Provider    : Gemini only
+OS          : Identical on Windows / macOS
+Implementation:
+              myagent/gemini_mixin.py:do_gemini_find_element. Uses Google's
+              documented OFFICIAL pointing prompt format:
+                "Point to the X. The answer should follow the json format:
+                 [{\"point\": <point>, \"label\": <label1>}, ...]. The points
+                 are in [y, x] format normalized to 0-1000."
+              Using the exact official phrasing is essential — the trained
+              spatial pointing capability only activates with that prompt.
+              Custom prompts produce hallucinated coordinates.
+              Parses both the official array shape and a single-object
+              fallback. Calls gemini_client.models.generate_content() with
+              temperature=0.0 and the cached image bytes from
+              _display_images[display]. Converts [0, 1000] to image pixels
+              internally and tells the model to call mouse_click with those
+              pixel values.
+Notes       : Older Gemini models (e.g. gemini-2.5-pro) have weaker spatial
+              perception and may misidentify small UI elements. The Weak
+              Combo Warning (Section 6) flags gemini-2.x models when desktop
+              tools are enabled. gemini-3.1-pro-preview is significantly
+              more accurate.
+
+
+================================================================================
+SECTION 5 — BROWSER TOOLS (Browser checkbox required)
+================================================================================
+
+The eleven browser tools live in BROWSER_TOOLS in myagent/constants.py.
+Implementation lives in myagent/browser_mixin.py and uses Playwright's CDP
+(Chrome DevTools Protocol) connection to a system-installed Chrome or Edge
+browser. NO `playwright install` is required because the bundled browser
+binaries are not used.
+
+Connection lifecycle (`_ensure_browser`):
+  1. Probe port 9222 for an existing CDP-enabled browser
+  2. If not found, launch Chrome/Edge with --remote-debugging-port=9222 and
+     a separate temp --user-data-dir to avoid conflicts with the user's
+     normal browser session
+  3. Wait up to 15 seconds for the debug port to open
+  4. Connect Playwright via CDP and reuse the first open tab as the active page
+  5. If the connection dies between tool calls, the next tool call
+     auto-reconnects
+
+OS differences:
+  * Windows: launches Microsoft Edge by default. Can also launch Chrome.
+             Common install paths checked:
+             "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+             "C:\Program Files\Google\Chrome\Application\chrome.exe"
+  * macOS:   launches Google Chrome by default. Can also launch Edge.
+             Common install paths checked:
+             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+             "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+
+Browser tool inventory:
+
+  browser_open          Connect or launch a browser, navigate to a URL
+  browser_navigate      Navigate the current page to a new URL
+  browser_click         Click an element by CSS selector or visible text
+  browser_fill          Fill a form field instantly (no per-character typing)
+  browser_get_text      Read the page or element text (truncated to 20 KB)
+  browser_run_js        Execute JavaScript on the page; supports `return`
+                        statements for value extraction
+  browser_screenshot    Take a visual screenshot (max 1280 px wide)
+  browser_close         Disconnect the Playwright connection (browser stays
+                        open with all tabs intact)
+  browser_wait_for      Wait for an element to appear via page.wait_for_selector
+  browser_select        Select an option from a <select> by value or label
+  browser_get_elements  Get tag, text, attributes, visibility, and bounding
+                        rect for elements matching a CSS selector
+                        (default limit: 10)
+
+All browser tools work identically across providers (Anthropic / OpenAI /
+Gemini) since they do not depend on any provider-specific image processing.
+
+
+================================================================================
+SECTION 6 — META TOOLS (Meta checkbox required)
+================================================================================
+
+Three tools that let the agent manage its own instruction library, shared
+skills, and launch other agent processes. All three are conditionally added
+to the tool list when the Meta checkbox is enabled in the Instruction Editor.
+None are parallel-safe (they mutate shared state or spawn processes).
+
+--------------------------------------------------------------------------------
+6.1  manage_instructions
+--------------------------------------------------------------------------------
+Description : List, read, create, update, or delete saved instructions on
+              disk (`agent_instructions.json`). Can read or update the
+              currently-running instruction — changes are saved to disk and
+              take effect the next time it is loaded (the live session is
+              not affected).
+Inputs      : action ("list" / "read" / "create" / "update" / "delete")
+              name (string — required for all except list)
+              text (string — required for create, optional for update)
+              desktop, browser, meta (boolean, optional)
+              provider ("Anthropic" / "OpenAI" / "Gemini", optional)
+              model (string, optional)
+              temperature (number, optional)
+              thinking_enabled (boolean, optional)
+              thinking_effort (string, optional)
+              thinking_budget (integer, optional)
+              thinking_mode (string, optional)
+              skill_modes (object, optional — map of skill names to
+                           "disabled"/"enabled"/"on_demand")
+Returns     : Action-specific text response
+Notes       : The `read` action returns all model parameters. The `update`
+              action accepts the same parameters as optional fields. Skill
+              modes use merge semantics — omitted skills keep their current
+              mode. The `create` action inherits the agent's current
+              provider/model/thinking settings as defaults.
+
+--------------------------------------------------------------------------------
+6.2  manage_skills
+--------------------------------------------------------------------------------
+Description : List, read, create, update, or delete entries in the shared
+              skills library (`skills.json`).
+Inputs      : action ("list" / "read" / "create" / "update" / "delete")
+              name (string — required for all except list)
+              content (string — skill text)
+              mode ("disabled" / "enabled" / "on_demand")
+Returns     : Action-specific text response
+Notes       : Updates the in-memory skills dict and triggers a thread-safe
+              UI refresh via _post_skill_ui_refresh() so the Skills button
+              label updates immediately.
+
+--------------------------------------------------------------------------------
+6.3  run_instruction
+--------------------------------------------------------------------------------
+Description : Launch a saved instruction as a separate MyAgent process
+              (fire-and-forget). The child process runs independently and
+              returns immediately.
+Inputs      : name (string — name of the saved instruction)
+              headless (boolean, default true — set false to show the GUI
+                        window)
+Returns     : "Launched <name> (PID <pid>) headless=<bool>"
+OS          : Uses subprocess.Popen with sys.executable and the parent's
+              MyAgent.py path. Works identically on Windows and macOS.
+Notes       : Use manage_instructions(action="list") first to see available
+              names. None of the meta tools are parallel-safe.
+
+
+================================================================================
+SECTION 7 — DYNAMIC TOOLS
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1  get_skill
+--------------------------------------------------------------------------------
+Description : Retrieve the full content of an on-demand skill by name.
+Inputs      : skill_name (string — constrained via enum to the list of
+                          on-demand skills)
+Returns     : The skill's content text, or an error if not found
+Provider    : All providers
+OS          : Identical
+Parallel    : Yes (parallel-safe)
+Conditional : Only added to the tool list when at least one skill has mode
+              "on_demand". The enum is dynamically generated from the
+              current on-demand skill names. If no on-demand skills exist,
+              this tool is not sent to the API.
+Skills modes:
+  * disabled  — Skill exists in skills.json but is not used
+  * enabled   — Skill content is appended to the system prompt on every
+                API call as `## Skill: <name>` sections
+  * on_demand — Skill name is listed in the system prompt; content is
+                fetched via get_skill when needed (saves prompt tokens for
+                large skill libraries)
+
+
+================================================================================
+SECTION 8 — PROVIDER-SPECIFIC BEHAVIOUR SUMMARY
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1  Anthropic
+--------------------------------------------------------------------------------
+SDK              : `anthropic` package
+Endpoint         : client.beta.messages.stream() with beta headers:
+                   - web-search-2025-03-05
+                   - code-execution-2025-08-25
+                   - files-api-2025-04-14
+Server-side tools: web_search_20250305, code_execution_20250825
+Web/fetch tools  : Stripped from local TOOLS list (replaced by server-side)
+Image cap        : 1568 px long edge, 1.15 MP
+Image delivery   : Embedded inside tool_result block
+Coordinate basis : Pixel coordinates (image-space)
+Thinking         : Adaptive (Opus 4.6, Sonnet 4.6) with mode combobox, or
+                   Manual (Sonnet 4.5, Haiku 4.5, Opus 4.5, Sonnet 3.5)
+                   with token-budget combobox. Thinking blocks (and
+                   redacted_thinking blocks with cryptographic signatures)
+                   are preserved during tool-use loops for reasoning
+                   continuity. Stripped from saved chats unless Save
+                   Thinking is enabled.
+Click accuracy   : Excellent across all current models. No known weak combos.
+
+--------------------------------------------------------------------------------
+8.2  OpenAI
+--------------------------------------------------------------------------------
+SDK              : `openai` package
+Endpoint         : openai_client.responses.stream() (Responses API)
+Server-side tools: web_search_preview, code_interpreter (with auto container)
+Web/fetch tools  : Stripped from local TOOLS list (replaced by server-side)
+Image cap        : 2048 px long edge, 5 MP (matches OpenAI's actual API limit
+                   — verified by gpt-5.2's code_interpreter PIL inspection)
+Image delivery   : Separate user message AFTER function_call_output items
+Coordinate basis : Pixel coordinates (image-space)
+Reasoning        : * GPT-5.1+: Reasoning combobox (None / Low / Medium /
+                                High / Xhigh for 5.2+/codex-max).
+                                Mini/nano variants cap at High.
+                   * GPT-5.0:  Effort levels (minimal / low / medium / high)
+                   * o1/o3/o4: Effort levels (low / medium / high)
+                   * GPT-5.x-chat-* Instant variants: no reasoning, only
+                                Verbosity (Low / Medium / High)
+                   All gpt-5 family models show a Verbosity combobox that
+                   maps to text.verbosity in the API.
+Temperature      : Hidden for OpenAI reasoning models (API rejects it).
+                   GPT-5.0–5.3 always hide it. GPT-5.4+ shows it only when
+                   reasoning effort is "None". GPT-5.x-chat-* never shows
+                   it (API rejects). Standard models (gpt-4o, gpt-4.1) show
+                   it normally.
+Code interpreter : Stripped automatically when Desktop checkbox is enabled
+                   (prevents the model from inspecting image dims via PIL
+                   and pre-scaling coordinates). Available for non-desktop
+                   tasks.
+Tool rejection   : When a model rejects a server-side tool with HTTP 400
+                   ("Tool 'X' is not supported"), the offending tool is
+                   regex-extracted, removed from the request, retried, and
+                   cached in self._openai_unsupported_tools[model_id] for
+                   the rest of the session. Currently auto-handles
+                   gpt-5.2-pro rejecting code_interpreter.
+Click accuracy   : * gpt-5.2 with reasoning >=low: good (with iteration)
+                   * gpt-5.2 with reasoning=none/minimal: WEAK on small
+                     UI targets — flagged by Weak Combo Warning
+                   * gpt-5.x-chat-* Instant variants: WEAK — flagged
+                   * gpt-4o, gpt-4.1: good
+Stream timeout   : 180-second first-content timeout cancels the stream if
+                   the model produces no visible output (thinking, text,
+                   or tool calls) within that window.
+
+--------------------------------------------------------------------------------
+8.3  Gemini
+--------------------------------------------------------------------------------
+SDK              : `google-genai` package
+Endpoint         : gemini_client.models.generate_content_stream()
+Server-side tools: NONE — Gemini API forbids combining built-in tools
+                   (google_search, code_execution) with custom function
+                   declarations
+Web/fetch tools  : Local DuckDuckGo (`ddgs`) and httpx-based fetch retained
+Image cap        : 2048 px long edge, 4 MP (Gemini's tile system supports
+                   higher resolution than Anthropic; bumped to give older
+                   models more pixel density on small UI elements)
+Image delivery   : Separate user Content block AFTER the function_response
+                   Content (Gemini does not reliably handle mixed image +
+                   function_response Parts in the same Content)
+Coordinate basis : Pixel coordinates (image-space) — switched in this
+                   session from the previous [0, 1000] normalized convention
+                   because the [0, 1000] abstraction forced mental
+                   arithmetic that introduced systematic ~1-pixel drift on
+                   Gemini 3 with reasoning enabled
+Thinking         : Gemini 2.5+ supports ThinkingConfig with effort mapping:
+                       low    -> 1024 tokens
+                       medium -> 8192 tokens
+                       high   -> 24576 tokens
+                       max    -> 32768 tokens
+                   Models with "lite" in the name are excluded from thinking
+                   support.
+Tool argument    : Protobuf Struct returns all numbers as float64. Edge
+normalization      cases produce string-encoded numbers like "500.0";
+                   _normalize_gemini_args() converts these back to int/float
+                   so downstream int(x) calls do not break.
+find_element     : Gemini-only spatial pointing tool (Section 4.16)
+Click accuracy   : * gemini-3.1-pro-preview: good
+                   * gemini-2.x (any model): WEAK on small UI targets
+                     — flagged by Weak Combo Warning
+
+
+================================================================================
+SECTION 9 — WEAK DESKTOP COMBO WARNING
+================================================================================
+
+When the Desktop checkbox is enabled and the active provider/model has
+known-weak spatial precision for small UI click targets,
+_weak_desktop_combo_warning() in myagent/streaming_mixin.py posts a single
+"⚠ ..." line to the activity output at agent start. Informational only —
+does not change behaviour or override the model.
+
+Currently flagged combinations:
+
+  Provider   | Condition                           | Warning
+  -----------|-------------------------------------|--------------------
+  OpenAI     | gpt-5 family + reasoning='none'     | "limited spatial
+             | OR reasoning='minimal'              |  precision... use
+             |                                     |  reasoning='low' or
+             |                                     |  higher"
+  OpenAI     | gpt-5.x-chat-* (Instant variants)   | "no reasoning
+             |                                     |  capacity... use
+             |                                     |  non-chat gpt-5"
+  Gemini     | model.startswith("gemini-2.")       | "weaker spatial
+             |                                     |  perception... use
+             |                                     |  gemini-3.1-pro-
+             |                                     |  preview"
+
+Combinations that pass without warning:
+  * Anthropic (all current models)
+  * gpt-4.1, gpt-4o, o-series
+  * gpt-5 family with reasoning >=low
+  * gemini-3.x
+
+
+================================================================================
+SECTION 10 — DIAG CHECKBOX
+================================================================================
+
+The Diag checkbox in MyAgent's main window (added in this session) gates
+[DIAG capture] and [DIAG click] lines that surface the full coordinate-mapping
+trail to the activity output. Defaults ON; persisted in agent_state.json as
+diag_enabled. Independent of the Debug checkbox (which controls full API
+JSON payload display).
+
+Sample output when Diag is ON:
+
+  [DIAG capture] display_idx=0 region=None all_display_rects=...
+  [DIAG capture] phys=2560x1440 logical=2560x1440 sent_to_model=2048x1152
+                 scale=1.2500 offset=(0, 0)
+  [DIAG click] input=(x=994, y=175) display=0 state: dims=2048x1152
+               scale=1.2500 offset=(0,0)
+  [DIAG click] computed: image_clamped=(994,175) → screen=(1242,219)
+               via 994*1.2500+0, 175*1.2500+0
+
+Use it to debug coordinate issues; toggle off when not needed for less noise.
+
+
+================================================================================
+SECTION 11 — PARALLEL TOOL EXECUTION
+================================================================================
+
+When the model requests multiple tools in a single turn, MyAgent partitions
+them into parallel-safe and sequential tools. Parallel-safe tools run
+concurrently via concurrent.futures.ThreadPoolExecutor; sequential tools run
+one at a time in their original order. Results are placed into a pre-allocated
+list indexed by original position so the API sees them in the expected order.
+
+PARALLEL_SAFE_TOOLS = {
+    "web_search",      # Network I/O, stateless
+    "fetch_webpage",   # Network I/O, stateless
+    "csv_search",      # Read-only file access
+    "get_skill",       # Read-only dict lookup
+}
+
+Everything else runs sequentially because it interacts with shared state
+(screen, browser session, filesystem, user attention, OS process spawn, etc.).
+
+A "Running N tools in parallel..." status message appears in the Activity
+output when more than one parallel tool is in flight at once.
+
+
+================================================================================
+SECTION 12 — SELFBOT.PY DIFFERENCES
+================================================================================
+
+SelfBot is a single-file (~4100 line) tkinter chatbot for Anthropic only. It
+shares most desktop and browser tools with MyAgent (the implementations were
+extracted into the myagent/ package for the modular split, but SelfBot still
+has its own copies in SelfBot.py). Differences:
+
+  * SelfBot is Anthropic-only — no Provider combobox
+  * SelfBot has NO meta tools (manage_instructions, manage_skills,
+    run_instruction)
+  * SelfBot has NO find_element tool (Gemini-only feature)
+  * SelfBot has NO Diag checkbox
+  * SelfBot uses v1 DPI awareness (SetProcessDpiAwareness(2)) on Windows.
+    MyAgent uses v2 (SetProcessDpiAwarenessContext(-4)). The v2 upgrade
+    fixes broken multi-monitor mixed-DPI behaviour and was added to MyAgent
+    in this session for the cross-monitor click testing.
+  * SelfBot has NO per-display state tracking (_display_states /
+    _display_full_states); it uses single-shot _screenshot_scale /
+    _screenshot_offset / _screenshot_dims state. Multi-display targeting
+    is therefore less robust on SelfBot than on MyAgent.
+  * SelfBot's TOOLS count is 27 + 2 server-side + 1 dynamic = 30 (no meta,
+    no find_element)
+  * SelfBot has dual-instance mode (two Claude instances chatting to each
+    other) which MyAgent does not have
+  * SelfBot has the same PowerShell Safety system as MyAgent but without
+    the per-instruction bypass dialog (PS Safety button is MyAgent-only)
+
+
+================================================================================
+SECTION 13 — COMMON OS-LEVEL TABLE
+================================================================================
+
+Feature                       | Windows                  | macOS
+------------------------------|--------------------------|---------------------
+Shell tool                    | run_powershell           | run_shell
+                              | (PowerShell)             | (bash)
+                              |                          |
+Screenshot capture            | ImageGrab.grab           | CGWindowListCreate-
+                              | (bbox=, all_screens=     | Image (Quartz)
+                              |  True)                   |
+                              |                          |
+Display enumeration           | Win32                    | CoreGraphics
+                              | EnumDisplayMonitors      | CGGetActiveDisplay-
+                              |                          | List
+                              |                          |
+DPI awareness (MyAgent)       | SetProcessDpiAwareness-  | Not needed (macOS
+                              | Context(-4) i.e.         | handles scaling
+                              | PER_MONITOR_AWARE_V2     | natively)
+                              | (falls back to v1, then  |
+                              |  legacy SetProcessDPIA-  |
+                              |  ware)                   |
+                              |                          |
+DPI awareness (SelfBot)       | SetProcessDpiAwareness(2)| (same as MyAgent)
+                              | i.e. PER_MONITOR (v1)    |
+                              |                          |
+Window enumeration            | pygetwindow              | Quartz CGWindowList-
+                              |                          | CopyWindowInfo
+                              |                          |
+Window activation             | window.activate() (and   | osascript "tell
+                              | restore() if minimised)  | application X to
+                              |                          | activate"
+                              |                          |
+OCR engine                    | winocr                   | Vision framework
+                              | (Windows.Media.Ocr —     | (VNRecognizeText-
+                              | built into Win 10/11)    | Request)
+                              |                          |
+Subprocess flags              | CREATE_NO_WINDOW (so     | (default — no
+                              | console launchers do     | console flash on
+                              | not flash a console)     | macOS)
+                              |                          |
+Browser default               | Microsoft Edge           | Google Chrome
+                              | (also supports Chrome)   | (also supports Edge)
+                              |                          |
+Dialog transient(parent)      | Used (works across       | Skipped entirely
+                              | screens correctly)       | (macOS restricts
+                              |                          | transient dialogs
+                              |                          | to parent's screen,
+                              |                          | preventing drag to
+                              |                          | secondary monitors)
+                              |                          |
+Instance detection (SelfBot)  | Named mutex              | Lock file + PID
+                              | (CreateMutexW)           | verification
+                              |                          |
+Stale lock cleanup (MyAgent)  | OpenProcess +            | os.kill(pid, 0) +
+                              | psapi.GetModuleBase-     | ps -p verification
+                              | NameW verification of    |
+                              | PID's executable         |
+                              |                          |
+Monospace font                | Consolas                 | Menlo
+                              |                          |
+Image attachment paste        | Ctrl+V                   | Cmd+V
+                              | (in type_text non-ASCII  | (in type_text non-
+                              | path)                    | ASCII path)
+                              |                          |
+Key alias normalisation       | "windows"->"win",        | "windows"/"win"/
+                              | "control"->"ctrl",       | "cmd"->"command",
+                              | "return"->"enter",       | "control"->"ctrl",
+                              | "esc"->"escape"          | "option"->"alt",
+                              |                          | "return"->"enter",
+                              |                          | "esc"->"escape"
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
