@@ -125,6 +125,9 @@ class UIMixin:
             "thinking_label", foreground="#b8860b", background="#fffde7",
             font=(MONO_FONT, 9, "bold italic")
         )
+        self.chat_display.tag_config(
+            "cost_info", foreground="#0277bd", font=(MONO_FONT, 9)
+        )
 
         # Row 2: Checkbox row
         checkbox_frame = tk.Frame(self.root)

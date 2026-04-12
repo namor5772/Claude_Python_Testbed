@@ -12,6 +12,7 @@ from myagent.constants import (
     IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS,
     PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _BASE_DIR, CHATS_DIR,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
+    ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING,
 )
 from myagent.helpers import _ToolBlock
 
@@ -595,6 +596,33 @@ class StreamingMixin:
                 )
         return None
 
+    @staticmethod
+    def _get_pricing(provider, model_name):
+        """Look up per-token pricing for a model.
+        Returns a dict with per-token prices, or None if no match.
+        Anthropic: {input, output, cache_write, cache_read}
+        OpenAI/Gemini: {input, output}"""
+        table = {"Anthropic": ANTHROPIC_PRICING,
+                 "OpenAI": OPENAI_PRICING,
+                 "Gemini": GEMINI_PRICING}.get(provider)
+        if not table:
+            return None
+        # Match longest prefix first for specificity
+        best_match = None
+        best_len = 0
+        for prefix, prices in table.items():
+            if model_name.startswith(prefix) and len(prefix) > best_len:
+                best_match = prices
+                best_len = len(prefix)
+        if best_match is None:
+            return None
+        # Convert from per-million to per-token
+        per_token = tuple(p / 1_000_000 for p in best_match)
+        if provider == "Anthropic":
+            return {"input": per_token[0], "output": per_token[1],
+                    "cache_write": per_token[2], "cache_read": per_token[3]}
+        return {"input": per_token[0], "output": per_token[1]}
+
     def stream_worker(self, messages):
         try:
             # Sync temperature from spinbox
@@ -621,6 +649,12 @@ class StreamingMixin:
             call_num = 0
             user_prompt_count = 0
             user_prompt_nudges = 0
+            # Cost tracking (Anthropic only)
+            total_cost = 0.0
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cache_write_tokens = 0
+            total_cache_read_tokens = 0
             while True:
                 # Check stop request between API calls
                 if self.stop_requested:
@@ -638,14 +672,43 @@ class StreamingMixin:
 
                 # Dispatch to provider-specific streaming
                 if self.provider == "OpenAI":
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
                         self._stream_responses_call(messages, max_retries, label_emitted)
                 elif self.provider == "Gemini":
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
                         self._stream_gemini_call(messages, max_retries, label_emitted)
                 else:
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted = \
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
+
+                # Accumulate cost
+                if usage:
+                    pricing = self._get_pricing(self.provider, self.model)
+                    if pricing:
+                        call_input = usage.get("input_tokens", 0)
+                        call_output = usage.get("output_tokens", 0)
+                        call_cache_write = usage.get("cache_creation_input_tokens", 0)
+                        call_cache_read = usage.get("cache_read_input_tokens", 0)
+                        total_input_tokens += call_input
+                        total_output_tokens += call_output
+                        total_cache_write_tokens += call_cache_write
+                        total_cache_read_tokens += call_cache_read
+                        call_cost = (call_input * pricing["input"]
+                                     + call_output * pricing["output"]
+                                     + call_cache_write * pricing.get("cache_write", 0)
+                                     + call_cache_read * pricing.get("cache_read", 0))
+                        total_cost += call_cost
+                        self.queue.put({
+                            "type": "cost_update",
+                            "call_cost": call_cost,
+                            "total_cost": total_cost,
+                            "input_tokens": call_input,
+                            "output_tokens": call_output,
+                            "cache_write_tokens": call_cache_write,
+                            "cache_read_tokens": call_cache_read,
+                            "total_input_tokens": total_input_tokens,
+                            "total_output_tokens": total_output_tokens,
+                        })
 
                 # Post-process LaTeX in the just-completed text segment
                 if full_text:

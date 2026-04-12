@@ -274,17 +274,20 @@ class GeminiMixin:
         had_thinking = False
         thinking_text = ""  # accumulate thinking for message history
         tool_calls = []  # list of {name, id, input}
+        usage_dict = None
 
         for attempt in range(max_retries):
             try:
                 in_thinking = False
                 tool_index = 0
+                last_chunk = None
                 response_stream = self.gemini_client.models.generate_content_stream(
                     model=self.model,
                     contents=gemini_contents,
                     config=config,
                 )
                 for chunk in response_stream:
+                    last_chunk = chunk
                     if self.stop_requested:
                         break
                     if not chunk.candidates:
@@ -332,6 +335,22 @@ class GeminiMixin:
                             tool_calls.append(tc_entry)
                 if in_thinking:
                     self.queue.put({"type": "thinking_end"})
+                # Extract usage from last streaming chunk
+                # Try last chunk first, then fall back to iterating all chunks
+                for source in ([last_chunk] if last_chunk else []):
+                    um = getattr(source, "usage_metadata", None)
+                    if um:
+                        inp = (getattr(um, "prompt_token_count", None)
+                               or getattr(um, "input_tokens", None)
+                               or (um.get("prompt_token_count") if isinstance(um, dict) else None)
+                               or 0)
+                        out = (getattr(um, "candidates_token_count", None)
+                               or getattr(um, "output_tokens", None)
+                               or (um.get("candidates_token_count") if isinstance(um, dict) else None)
+                               or 0)
+                        if inp or out:
+                            usage_dict = {"input_tokens": inp, "output_tokens": out}
+                            break
                 break  # success
             except Exception as e:
                 err_str = str(e)
@@ -393,7 +412,7 @@ class GeminiMixin:
                 block["thought_signature"] = base64.b64encode(ts).decode("ascii") if isinstance(ts, bytes) else ts
             content_blocks.append(block)
 
-        return stop_reason, content_blocks, full_text, had_thinking, label_emitted
+        return stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict
 
     def do_gemini_find_element(self, description, display=None):
         """Locate a UI element on a screenshot using Gemini's native spatial

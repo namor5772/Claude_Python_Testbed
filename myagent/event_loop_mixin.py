@@ -164,6 +164,34 @@ class EventLoopMixin:
                     self.chat_display.insert(tk.END, msg["content"], "warning")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
+                elif msg["type"] == "cost_update" and not self.show_activity.get():
+                    pass
+                elif msg["type"] == "cost_update":
+                    call_cost = msg["call_cost"]
+                    total_cost = msg["total_cost"]
+                    inp = msg["input_tokens"]
+                    out = msg["output_tokens"]
+                    cw = msg["cache_write_tokens"]
+                    cr = msg["cache_read_tokens"]
+                    t_inp = msg["total_input_tokens"]
+                    t_out = msg["total_output_tokens"]
+                    # Format: this call tokens + cost, then running total
+                    parts = [f"in:{inp:,}  out:{out:,}"]
+                    if cw:
+                        parts.append(f"cache_write:{cw:,}")
+                    if cr:
+                        parts.append(f"cache_read:{cr:,}")
+                    token_str = "  ".join(parts)
+                    # Use appropriate precision based on cost magnitude
+                    if total_cost < 0.01:
+                        cost_line = f"  ${call_cost:.4f} this call  |  ${total_cost:.4f} total  ({token_str})\n"
+                    else:
+                        cost_line = f"  ${call_cost:.4f} this call  |  ${total_cost:.2f} total  ({token_str})\n"
+                    self.chat_display.config(state="normal")
+                    self._ensure_newline()
+                    self.chat_display.insert(tk.END, cost_line, "cost_info")
+                    self.chat_display.see(tk.END)
+                    self.chat_display.config(state="disabled")
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()

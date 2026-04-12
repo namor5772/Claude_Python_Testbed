@@ -158,7 +158,20 @@ class OpenAIMixin:
                 "input": parsed_args,
             })
 
-        return full_text, stop_reason, content_blocks, had_thinking, label_emitted
+        # Extract usage for cost tracking
+        usage_dict = None
+        try:
+            final_resp = stream.get_final_response()
+            usage = getattr(final_resp, "usage", None)
+            if usage:
+                usage_dict = {
+                    "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+                    "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+                }
+        except Exception:
+            pass
+
+        return full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict
 
     def _fetch_openai_models(self):
         """Fetch available OpenAI chat models suitable for agentic tool use."""
@@ -249,7 +262,8 @@ class OpenAIMixin:
 
     def _stream_responses_call(self, messages, max_retries, label_emitted):
         """Execute one OpenAI Responses API call with streaming and retry logic.
-        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage)."""
+        usage_dict = None
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
         responses_tools = self._tools_to_responses(tools) if tools else []
@@ -323,7 +337,7 @@ class OpenAIMixin:
 
         for attempt in range(max_retries):
             try:
-                full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
+                full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                     self._stream_responses(api_kwargs, label_emitted)
                 break  # success
             except openai.BadRequestError as e:
@@ -335,7 +349,7 @@ class OpenAIMixin:
                         "type": "tool_info",
                         "content": "Model does not support temperature — retrying without it...\n",
                     })
-                    full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
+                    full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                         self._stream_responses(api_kwargs, label_emitted)
                     break  # success
                 # Some models reject specific server-side tools (e.g. gpt-5.2-pro
@@ -359,7 +373,7 @@ class OpenAIMixin:
                             "type": "tool_info",
                             "content": f"Model '{self.model}' does not support tool '{bad_tool}' — retrying without it (cached for this session)...\n",
                         })
-                        full_text, stop_reason, content_blocks, had_thinking, label_emitted = \
+                        full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                             self._stream_responses(api_kwargs, label_emitted)
                         break  # success
                 # Unrecognised BadRequestError — propagate
@@ -400,4 +414,4 @@ class OpenAIMixin:
 
         # Stop the ticker thread
         self._oai_first_content.set()
-        return stop_reason, content_blocks, full_text, had_thinking, label_emitted
+        return stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict

@@ -9,7 +9,7 @@ class AnthropicMixin:
 
     def _stream_anthropic_call(self, messages, max_retries, label_emitted):
         """Execute one Anthropic API call with streaming and retry logic.
-        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage)."""
         full_text = ""
         had_thinking = False
 
@@ -82,12 +82,12 @@ class AnthropicMixin:
                                 in_thinking = False
                     if self.stop_requested:
                         # Stream interrupted by user — synthesize a stop result
-                        return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted
+                        return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted, None
                     try:
                         final_message = stream.get_final_message()
                     except Exception:
                         # Stream may be incomplete — synthesize a stop result
-                        return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted
+                        return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted, None
                 # Extract code execution images from final message
                 # (file IDs are only available after streaming completes)
                 for block in final_message.content:
@@ -134,4 +134,15 @@ class AnthropicMixin:
                 else:
                     raise
 
-        return final_message.stop_reason, final_message.content, full_text, had_thinking, label_emitted
+        # Extract usage for cost tracking
+        usage = getattr(final_message, "usage", None)
+        usage_dict = None
+        if usage:
+            usage_dict = {
+                "input_tokens": getattr(usage, "input_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+                "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", 0) or 0,
+                "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", 0) or 0,
+            }
+
+        return final_message.stop_reason, final_message.content, full_text, had_thinking, label_emitted, usage_dict

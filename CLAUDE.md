@@ -42,13 +42,13 @@ There are no tests, linter, or build steps — these are testbed apps.
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~4100 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
 - `MyAgent.py` — Entry point (~170 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
-  - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, file paths
+  - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING), file paths
   - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock
   - `ui_mixin.py` — setup_ui(), model/provider/thinking widget handlers
   - `state_mixin.py` — Instance management, display geometry, state persistence
   - `instructions_mixin.py` — Instruction CRUD, editor Toplevel dialog
   - `skills_mixin.py` — Skills CRUD, editor dialog, system prompt building
-  - `streaming_mixin.py` — stream_worker (agentic loop), _execute_tool, _get_tools, message translation
+  - `streaming_mixin.py` — stream_worker (agentic loop), _execute_tool, _get_tools, _get_pricing (cost lookup), message translation
   - `anthropic_mixin.py` — _stream_anthropic_call
   - `openai_mixin.py` — OpenAI helpers, _stream_responses, _stream_responses_call
   - `gemini_mixin.py` — Gemini helpers, _tools_to_gemini, _messages_to_gemini, _stream_gemini_call
@@ -193,6 +193,8 @@ There are no tests, linter, or build steps — these are testbed apps.
 
 
 **STOP during streaming** — The STOP button sets `stop_requested`, which is checked inside the stream event loop for all three providers (not just between API calls), allowing mid-stream cancellation.
+
+**API cost tracking** — `stream_worker()` tracks real-time API costs across all three providers. Each provider's streaming method returns a usage dict (6th tuple element) with token counts extracted from the API response: Anthropic via `final_message.usage` (includes `cache_creation_input_tokens`, `cache_read_input_tokens`), OpenAI via `stream.get_final_response().usage`, Gemini via the last streaming chunk's `usage_metadata`. The static `_get_pricing(provider, model)` method in `streaming_mixin.py` does a longest-prefix match against hardcoded pricing tables in `constants.py` (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`), returning per-token prices. Costs accumulate across all API calls in a run and are emitted as `cost_update` queue messages, displayed in blue monospace (`cost_info` tag) and gated by the Activity checkbox. Models with no matching prefix silently skip cost display. The `MyAgent_Pricing.txt` file documents all pricing entries. Early returns (STOP, incomplete stream) return `None` for usage, skipping cost for that call.
 
 **State restore fallback** — `_restore_model_params()` validates that the saved model exists in the saved provider's model list. If mismatched (e.g., Anthropic model saved with OpenAI provider due to a race in auto-save), falls back to the first available model for that provider.
 

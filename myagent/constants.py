@@ -918,6 +918,101 @@ GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
+
+# ── Anthropic API pricing (USD per million tokens) ────────────────────────────
+# Each entry: (input_price, output_price, cache_write_price, cache_read_price)
+# Prefixes are matched longest-first against model names.
+ANTHROPIC_PRICING = {
+    # (input, output, 5min_cache_write, cache_read) per million tokens
+    # Claude 4.5+ family (new lower pricing)
+    "claude-opus-4-6":     (5.00, 25.00, 6.25, 0.50),
+    "claude-opus-4-5":     (5.00, 25.00, 6.25, 0.50),
+    "claude-sonnet-4-6":   (3.00, 15.00, 3.75, 0.30),
+    "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
+    # Claude 4.0/4.1 family (original pricing)
+    "claude-opus-4-1":     (15.00, 75.00, 18.75, 1.50),
+    "claude-opus-4":       (15.00, 75.00, 18.75, 1.50),
+    "claude-sonnet-4":     (3.00, 15.00, 3.75, 0.30),
+    # Claude 3.5 / Haiku 4.5
+    "claude-haiku-4":      (1.00, 5.00, 1.25, 0.10),
+    "claude-3-5-sonnet":   (3.00, 15.00, 3.75, 0.30),
+    "claude-3-5-haiku":    (0.80, 4.00, 1.00, 0.08),
+    # Claude 3 family
+    "claude-3-opus":       (15.00, 75.00, 18.75, 1.50),
+    "claude-3-sonnet":     (3.00, 15.00, 3.75, 0.30),
+    "claude-3-haiku":      (0.25, 1.25, 0.30, 0.03),
+}
+
+# OpenAI API pricing (USD per million tokens)
+# Each entry: (input_price, output_price)
+# Reasoning/thinking tokens are billed at output rate.
+# Prefix-matched longest-first, same as Anthropic.
+OPENAI_PRICING = {
+    # GPT-5.4 family  (input, output)
+    "gpt-5.4-pro":         (30.00, 180.00),
+    "gpt-5.4-mini":        (0.75, 4.50),
+    "gpt-5.4-nano":        (0.20, 1.25),
+    "gpt-5.4":             (2.50, 15.00),
+    # GPT-5.3 family
+    "gpt-5.3-chat":        (1.75, 14.00),
+    "gpt-5.3-codex":       (1.75, 14.00),
+    "gpt-5.3":             (1.75, 14.00),
+    # GPT-5.2 family
+    "gpt-5.2-pro":         (10.50, 84.00),
+    "gpt-5.2-chat":        (1.75, 14.00),
+    "gpt-5.2-codex":       (1.75, 14.00),
+    "gpt-5.2":             (0.875, 7.00),
+    # GPT-5.1 family
+    "gpt-5.1-codex-mini":  (0.25, 2.00),
+    "gpt-5.1-codex-max":   (1.25, 10.00),
+    "gpt-5.1-codex":       (1.25, 10.00),
+    "gpt-5.1-chat":        (0.625, 5.00),
+    "gpt-5.1":             (0.625, 5.00),
+    # GPT-5.0 family
+    "gpt-5-pro":           (15.00, 120.00),
+    "gpt-5-codex":         (1.25, 10.00),
+    "gpt-5-chat":          (1.25, 10.00),
+    "gpt-5-mini":          (0.125, 1.00),
+    "gpt-5-nano":          (0.05, 0.40),
+    "gpt-5":               (0.625, 5.00),
+    # GPT-4.1 family
+    "gpt-4.1-mini":        (0.20, 0.80),
+    "gpt-4.1-nano":        (0.05, 0.20),
+    "gpt-4.1":             (2.00, 8.00),
+    # GPT-4o family
+    "gpt-4o-mini":         (0.15, 0.60),
+    "gpt-4o":              (2.50, 10.00),
+    # GPT-4.5
+    "gpt-4.5":             (75.00, 150.00),
+    # o-series reasoning
+    "o4-mini":             (1.10, 4.40),
+    "o3-pro":              (20.00, 80.00),
+    "o3-mini":             (1.10, 4.40),
+    "o3":                  (2.00, 8.00),
+    "o1-pro":              (150.00, 600.00),
+    "o1-mini":             (0.55, 2.20),
+    "o1":                  (15.00, 60.00),
+    # Codex
+    "codex-mini":          (0.75, 3.00),
+}
+
+# Gemini API pricing (USD per million tokens)
+# Each entry: (input_price, output_price)
+# Note: Gemini has a free tier (under rate limits) — these are paid-tier prices.
+GEMINI_PRICING = {
+    # Gemini 3.1 family  (input, output per million tokens)
+    "gemini-3.1-flash-lite": (0.25, 1.50),
+    "gemini-3.1-pro":      (2.00, 12.00),
+    # Gemini 3 family
+    "gemini-3-pro-image":  (2.00, 12.00),
+    "gemini-3-pro":        (2.00, 12.00),
+    "gemini-3-flash":      (0.50, 3.00),
+    "gemini-3":            (0.50, 3.00),
+    # Gemini 2.5 family
+    "gemini-2.5-flash-lite": (0.10, 0.40),
+    "gemini-2.5-flash":    (0.30, 2.50),
+    "gemini-2.5-pro":      (1.25, 10.00),
+}
 PROVIDERS = ["Anthropic", "OpenAI", "Gemini"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"

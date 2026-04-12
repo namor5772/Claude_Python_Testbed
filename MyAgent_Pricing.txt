@@ -1,0 +1,205 @@
+================================================================================
+  MyAgent.py — API Model Pricing Reference
+  All prices in USD per million tokens
+  Verified: April 12, 2026
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ANTHROPIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Anthropic models include prompt caching pricing (5-minute cache writes
+  and cache reads). Cache writes cost 1.25x base input; cache reads cost
+  0.1x base input.
+
+  Claude 4.5+ Family (Current Generation)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cache Write  Cache Read
+  ──────────────────────────────────────────────────────────────────────────
+  claude-opus-4-6        $5.00    $25.00   $6.25        $0.50
+  claude-opus-4-5        $5.00    $25.00   $6.25        $0.50
+  claude-sonnet-4-6      $3.00    $15.00   $3.75        $0.30
+  claude-sonnet-4-5      $3.00    $15.00   $3.75        $0.30
+
+  Claude 4.0/4.1 Family (Legacy — Higher Pricing)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cache Write  Cache Read
+  ──────────────────────────────────────────────────────────────────────────
+  claude-opus-4-1        $15.00   $75.00   $18.75       $1.50
+  claude-opus-4          $15.00   $75.00   $18.75       $1.50
+  claude-sonnet-4        $3.00    $15.00   $3.75        $0.30
+
+  Claude Haiku / 3.5 / 3 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cache Write  Cache Read
+  ──────────────────────────────────────────────────────────────────────────
+  claude-haiku-4         $1.00    $5.00    $1.25        $0.10
+  claude-3-5-sonnet      $3.00    $15.00   $3.75        $0.30
+  claude-3-5-haiku       $0.80    $4.00    $1.00        $0.08
+  claude-3-opus          $15.00   $75.00   $18.75       $1.50
+  claude-3-sonnet        $3.00    $15.00   $3.75        $0.30
+  claude-3-haiku         $0.25    $1.25    $0.30        $0.03
+
+  Sources:
+    https://platform.claude.com/docs/en/about-claude/pricing
+    https://platform.claude.com/docs/en/docs/about-claude/models
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  OPENAI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  OpenAI reasoning/thinking tokens are billed at the output token rate.
+  Server-side web search has an additional per-search charge (not tracked).
+
+  GPT-5.4 Family (Flagship)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5.4-pro            $30.00   $180.00
+  gpt-5.4                $2.50    $15.00
+  gpt-5.4-mini           $0.75    $4.50
+  gpt-5.4-nano           $0.20    $1.25
+
+  GPT-5.3 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5.3-chat           $1.75    $14.00
+  gpt-5.3-codex          $1.75    $14.00
+  gpt-5.3                $1.75    $14.00
+
+  GPT-5.2 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5.2-pro            $10.50   $84.00
+  gpt-5.2                $0.875   $7.00
+  gpt-5.2-chat           $1.75    $14.00
+  gpt-5.2-codex          $1.75    $14.00
+
+  GPT-5.1 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5.1                $0.625   $5.00
+  gpt-5.1-chat           $0.625   $5.00
+  gpt-5.1-codex          $1.25    $10.00
+  gpt-5.1-codex-max      $1.25    $10.00
+  gpt-5.1-codex-mini     $0.25    $2.00
+
+  GPT-5.0 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5-pro              $15.00   $120.00
+  gpt-5                  $0.625   $5.00
+  gpt-5-chat             $1.25    $10.00
+  gpt-5-codex            $1.25    $10.00
+  gpt-5-mini             $0.125   $1.00
+  gpt-5-nano             $0.05    $0.40
+
+  GPT-4.1 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-4.1                $2.00    $8.00
+  gpt-4.1-mini           $0.20    $0.80
+  gpt-4.1-nano           $0.05    $0.20
+
+  GPT-4o Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-4o                 $2.50    $10.00
+  gpt-4o-mini            $0.15    $0.60
+
+  GPT-4.5
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-4.5                $75.00   $150.00
+
+  O-Series Reasoning Models
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  o4-mini                $1.10    $4.40
+  o3-pro                 $20.00   $80.00
+  o3                     $2.00    $8.00
+  o3-mini                $1.10    $4.40
+  o1-pro                 $150.00  $600.00
+  o1                     $15.00   $60.00
+  o1-mini                $0.55    $2.20
+
+  Codex
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  codex-mini             $0.75    $3.00
+
+  Sources:
+    https://developers.openai.com/api/docs/pricing
+    https://pricepertoken.com/pricing-page/provider/openai
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  GEMINI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Gemini has a free tier (under rate limits). Prices below are paid tier.
+  Thinking tokens are included in output token count.
+
+  Gemini 3.1 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-3.1-pro         $2.00    $12.00
+  gemini-3.1-flash-lite  $0.25    $1.50
+
+  Gemini 3 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-3-pro           $2.00    $12.00
+  gemini-3-pro-image     $2.00    $12.00
+  gemini-3-flash         $0.50    $3.00
+  gemini-3  (fallback)   $0.50    $3.00
+
+  Gemini 2.5 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-2.5-pro         $1.25    $10.00
+  gemini-2.5-flash       $0.30    $2.50
+  gemini-2.5-flash-lite  $0.10    $0.40
+
+  Sources:
+    https://ai.google.dev/gemini-api/docs/pricing
+
+
+================================================================================
+  NOTES
+================================================================================
+
+  - Prices are matched by longest model-name prefix. For example, the model
+    "claude-opus-4-6-20250414" matches "claude-opus-4-6" (not "claude-opus-4").
+
+  - Models not matching any prefix will show no cost line in the output.
+
+  - Anthropic cache pricing uses the 5-minute cache write multiplier (1.25x
+    base input). There is also a 1-hour cache write at 2x base input, but
+    MyAgent uses the default 5-minute TTL.
+
+  - OpenAI server-side web search costs $10 per 1,000 searches (not tracked
+    in token-based cost display).
+
+  - This file is auto-generated from the ANTHROPIC_PRICING, OPENAI_PRICING,
+    and GEMINI_PRICING tables in myagent/constants.py.
+
+  - To update pricing: edit the tables in myagent/constants.py and regenerate
+    this file.
+
+  Last updated: April 12, 2026
+================================================================================

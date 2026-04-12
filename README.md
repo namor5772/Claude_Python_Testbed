@@ -12,6 +12,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
 - **requirements.txt** — Python dependencies for pip install
+- **MyAgent_Pricing.txt** — Reference document listing all API model pricing used by MyAgent's cost tracking feature (Anthropic, OpenAI, Gemini)
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
@@ -725,6 +726,32 @@ Desktop/Browser tool toggles, PS Safety, and Skills are managed per-instruction 
 
 The **Call #N** counter badges are hidden only when all of Activity, Debug, Tool Calls, and Diag are unchecked.
 
+#### API Cost Tracking
+
+MyAgent tracks and displays **real-time API costs** for all three providers during agentic runs. After each API call, a blue cost line appears in the output window (gated by the **Activity** checkbox) showing per-call cost, running total, and token breakdown:
+
+```
+  $0.0023 this call  |  $0.0023 total  (in:312  out:45)
+  $0.0051 this call  |  $0.0074 total  (in:498  out:112  cache_read:312)
+```
+
+**How it works:**
+1. Each provider's streaming method extracts token usage data from the API response:
+   - **Anthropic** — `final_message.usage` provides `input_tokens`, `output_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`
+   - **OpenAI** — `stream.get_final_response().usage` provides `input_tokens`, `output_tokens` (reasoning tokens included in output)
+   - **Gemini** — Last streaming chunk's `usage_metadata` provides `prompt_token_count`, `candidates_token_count`
+2. Token counts are multiplied by per-model pricing from hardcoded tables in `myagent/constants.py` (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`)
+3. Costs accumulate across all API calls within a single agentic run
+
+**Pricing lookup** — Model names are matched by **longest prefix**. For example, `claude-opus-4-6-20250414` matches the `claude-opus-4-6` entry ($5/$25) rather than the shorter `claude-opus-4` entry ($15/$75). Models with no matching prefix show no cost line. See `MyAgent_Pricing.txt` for the complete pricing reference.
+
+**Key details:**
+- Cost lines are styled in blue monospace (`cost_info` tag) and appear after each **Call #N** counter
+- Anthropic cost lines include cache token breakdowns when prompt caching is active
+- Cost data is **not** stored in the `.json` chat file (it's display-only), but it **is** captured in the `.txt` export since that file is a verbatim copy of the output window
+- If the API stream is interrupted (STOP button or incomplete stream), no cost line appears for that call
+- Cost precision adapts: 4 decimal places when total is under $0.01, 2 decimal places above
+
 #### LaTeX to Unicode Conversion
 
 Assistant responses containing LaTeX math notation are automatically converted to Unicode after each streaming segment completes. The raw LaTeX streams in real-time for visual feedback, then a post-processing pass converts it in-place. All common delimiter styles are handled:
@@ -776,7 +803,7 @@ The window is 1050x930 (default). Grid layout with 4 rows:
 | **Row 1** | Chat display: read-only text area with scrollbar, colour-coded output |
 | **Row 2** | Checkbox row: Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Diag |
 
-**Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
+**Colour coding:** User/instruction text in blue, agent responses in green, errors in red, tool activity in grey italics, cost tracking in blue monospace, debug payloads in amber monospace, tool call details in teal monospace, call counters as white-on-red badges, thinking blocks in gold italic on pale yellow.
 
 ### Key Differences from SelfBot.py
 
@@ -817,24 +844,24 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 
 | Module | Lines | Responsibility |
 |---|---:|---|
-| **`MyAgent.py`** | 174 | Entry point: DPI setup, `App` class with `__init__`, mixin inheritance, argparse CLI |
-| **`myagent/constants.py`** | 901 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, file paths, default prompts |
+| **`MyAgent.py`** | 210 | Entry point: DPI setup, `App` class with `__init__`, mixin inheritance, argparse CLI |
+| **`myagent/constants.py`** | 1047 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, API pricing tables (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`), file paths, default prompts |
 | **`myagent/helpers.py`** | 44 | `HTMLTextExtractor` (HTML→text), `extract_text_from_html()`, `_ToolBlock` (provider-neutral tool wrapper) |
-| **`myagent/ui_mixin.py`** | 508 | `setup_ui()`, model/provider/thinking widget handlers, `_update_title()` |
-| **`myagent/state_mixin.py`** | 445 | Instance lock management, multi-monitor geometry detection, state persistence (`_save_last_state`, `_load_last_state`), auto-launch |
+| **`myagent/ui_mixin.py`** | 517 | `setup_ui()`, model/provider/thinking widget handlers, `_update_title()` |
+| **`myagent/state_mixin.py`** | 448 | Instance lock management, multi-monitor geometry detection, state persistence (`_save_last_state`, `_load_last_state`), auto-launch |
 | **`myagent/instructions_mixin.py`** | 573 | Instruction CRUD, the Instruction Editor Toplevel dialog, `do_manage_instructions()` tool |
 | **`myagent/skills_mixin.py`** | 358 | Skills CRUD, Skills Manager dialog, `_build_system_prompt()`, `do_manage_skills()` and `do_run_instruction()` tools |
-| **`myagent/streaming_mixin.py`** | 635 | `stream_worker()` (the agentic loop), `_execute_tool()` (tool dispatcher), `_get_tools()`, message translation (`_messages_to_responses`, `_tools_to_responses`) |
-| **`myagent/anthropic_mixin.py`** | 137 | `_stream_anthropic_call()` — Anthropic API streaming with server-side tools and thinking |
-| **`myagent/openai_mixin.py`** | 365 | `_stream_responses()`, `_stream_responses_call()`, OpenAI model detection helpers, `_fetch_models_for_provider()` |
-| **`myagent/gemini_mixin.py`** | 444 | `_stream_gemini_call()`, `_messages_to_gemini()`, `_tools_to_gemini()`, Gemini coordinate hints |
-| **`myagent/desktop_mixin.py`** | 527 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
+| **`myagent/streaming_mixin.py`** | 816 | `stream_worker()` (the agentic loop), `_execute_tool()` (tool dispatcher), `_get_tools()`, `_get_pricing()` (cost lookup), message translation (`_messages_to_responses`, `_tools_to_responses`) |
+| **`myagent/anthropic_mixin.py`** | 148 | `_stream_anthropic_call()` — Anthropic API streaming with server-side tools, thinking, and usage extraction |
+| **`myagent/openai_mixin.py`** | 417 | `_stream_responses()`, `_stream_responses_call()`, OpenAI model detection helpers, usage extraction, `_fetch_models_for_provider()` |
+| **`myagent/gemini_mixin.py`** | 544 | `_stream_gemini_call()`, `_messages_to_gemini()`, `_tools_to_gemini()`, Gemini coordinate hints, usage extraction |
+| **`myagent/desktop_mixin.py`** | 730 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
 | **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
 | **`myagent/safety_mixin.py`** | 447 | `_start_agent()`, `_stop_agent()`, PS Safety dialog, command safety checks, `_request_confirmation()`, `do_user_prompt()`, `run_powershell()`, `search_web()`, `fetch_url()` |
 | **`myagent/chat_mixin.py`** | 332 | Chat save/serialize, image attachment/compression, LaTeX→Unicode post-processing |
-| **`myagent/event_loop_mixin.py`** | 223 | `check_queue()` (main event loop), `_on_close()`, `_finish_close()` |
+| **`myagent/event_loop_mixin.py`** | 251 | `check_queue()` (main event loop with cost display handler), `_on_close()`, `_finish_close()` |
 
-**Total: ~6,400 lines across 17 files** (the original single-file was ~6,200 lines; the ~200-line overhead is import boilerplate across modules).
+**Total: ~7,150 lines across 17 files** (the original single-file was ~6,200 lines).
 
 #### How the Mixin Pattern Works
 
