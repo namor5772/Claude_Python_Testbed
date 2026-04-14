@@ -6,13 +6,14 @@ A repo containing various Python scripts written using Claude Code. The two main
 ## Contents
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
-- **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting Anthropic, OpenAI, and Gemini providers (see details below)
-- **myagent/** — Package containing MyAgent's 14 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
+- **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting **Anthropic, OpenAI, Gemini, and Ollama (local inference)** providers (see details below)
+- **myagent/** — Package containing MyAgent's 15 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
 - **requirements.txt** — Python dependencies for pip install
-- **MyAgent_Pricing.txt** — Reference document listing all API model pricing used by MyAgent's cost tracking feature (Anthropic, OpenAI, Gemini)
+- **MyAgent_Pricing.txt** — Reference document listing all API model pricing used by MyAgent's cost tracking feature (Anthropic, OpenAI, Gemini — Ollama inference is free and emits no cost line)
+- **Qwen25VL-tools.Modelfile**, **Llama32Vision-tools.Modelfile**, **Gemma3-tools.Modelfile** — Custom Ollama Modelfiles that graft Qwen3's tool-calling template onto three vision models, unlocking structured `tool_calls` that Ollama's default Modelfiles don't expose. See the **Ollama (Local Inference)** section for build instructions and the rationale
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
@@ -368,7 +369,7 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Deskt
 
 - **Windows 10/11** or **macOS** (both fully supported from the same codebase)
 - Python 3.10+ with tkinter (on macOS, install via `brew install python-tk@3.13` — the system Python's Tk is too old)
-- At least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY`/`GOOGLE_API_KEY` environment variables (MyAgent supports all three; SelfBot requires Anthropic)
+- At least one of: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY` environment variables, **OR** a running local Ollama server (MyAgent supports all four providers; SelfBot requires Anthropic). Ollama needs no API key — availability is probed by checking if `http://localhost:11434/api/tags` responds within 500 ms at app startup
 
 #### Python Dependencies
 
@@ -377,7 +378,8 @@ All checkboxes (Debug, Tool Calls, Activity, Show Thinking, Save Thinking, Deskt
 anthropic
 openai
 google-genai
-ddgs          # MyAgent only (Gemini provider uses local DuckDuckGo search)
+ollama        # MyAgent only (Ollama provider for local inference)
+ddgs          # MyAgent only (Gemini/Ollama providers use local DuckDuckGo search)
 httpx         # MyAgent only (Gemini provider uses httpx for fetch_webpage)
 pyautogui
 pygetwindow
@@ -432,6 +434,8 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY="your-key-here"
 export OPENAI_API_KEY="your-key-here"      # optional, for MyAgent OpenAI support
 export GEMINI_API_KEY="your-key-here"      # optional, for MyAgent Gemini support
+# Ollama local inference is auto-detected at localhost:11434 — no key required
+# (override the server URL via OLLAMA_BASE_URL if you run Ollama remotely)
 ```
 
 **macOS:**
@@ -454,6 +458,11 @@ pip install -r requirements.txt
 echo 'export ANTHROPIC_API_KEY="your-key-here"' >> ~/.zshrc
 echo 'export OPENAI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
 echo 'export GEMINI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
+# Ollama is auto-detected at localhost:11434 — no key needed.
+# Optional tuning env vars for Ollama (see Ollama section below):
+# echo 'export OLLAMA_BASE_URL="http://localhost:11434"' >> ~/.zshrc
+# echo 'export OLLAMA_NUM_CTX_CAP="32768"' >> ~/.zshrc    # KV cache ceiling
+# echo 'export OLLAMA_KEEP_ALIVE="24h"' >> ~/.zshrc       # keep models hot
 source ~/.zshrc
 ```
 
@@ -508,7 +517,7 @@ The application is a single-file tkinter app structured around the `App` class:
 
 A fire-and-forget autonomous task runner built with tkinter that supports **Anthropic** (Claude), **OpenAI** (GPT-4.1, GPT-5, o4-mini, etc.), and **Gemini** APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
-**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 14 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
+**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 15 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
 
 ### How the Agentic Loop Works
 
@@ -594,12 +603,13 @@ A "Default" instruction is automatically created on first run if missing. Old-fo
 
 #### Provider Selection & Model Selection
 
-A **Provider** combobox on the model toolbar switches between **Anthropic**, **OpenAI**, and **Gemini**. Only providers with valid API keys are shown (set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and/or `GEMINI_API_KEY`/`GOOGLE_API_KEY`). The provider combobox is **locked (disabled) while the agent is running** to prevent mid-run changes.
+A **Provider** combobox on the model toolbar switches between **Anthropic**, **OpenAI**, **Gemini**, and **Ollama** (local inference). Only providers with valid API keys — or, for Ollama, a reachable local server — are shown. The provider combobox is **locked (disabled) while the agent is running** to prevent mid-run changes.
 
 When switching providers, the **Model** dropdown refreshes with available models for that provider:
 - **Anthropic** — Fetches models live from the Anthropic API (falls back to Claude Sonnet 4.5, Opus 4.6, Haiku 4.5)
 - **OpenAI** — Fetches models from the OpenAI API, filtered to Responses API compatible families only: `gpt-4o`, `gpt-4.1`, `gpt-4.5`, `gpt-5`, `o1`, `o3`, `o4` (falls back to GPT-5, GPT-5-mini, GPT-4.1, GPT-4.1-mini, o4-mini). Legacy models (gpt-3.5-turbo, base gpt-4, gpt-4-turbo) are excluded as they don't support the Responses API. `gpt-5.x-chat-*` "Instant" variants are non-reasoning models that support verbosity but not temperature
 - **Gemini** — Fetches models from the Gemini API, filtering out non-generative models (falls back to Gemini 2.5 Flash, 2.5 Pro, 2.0 Flash). Uses the `google-genai` unified SDK
+- **Ollama** — Fetches locally-installed models from the Ollama server (`/api/tags`). Whatever you've `ollama pull`-ed shows up. No filtering — all local models are listed (text, vision, thinking, tool-capable, etc.). Per-model capabilities (thinking, tool calling, vision, context length) are **auto-detected at runtime** by calling `/api/show` and caching the result — so the UI adapts per model without hand-coded prefix lists. See the **Ollama (Local Inference)** section below for full details
 
 A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox with **Strength** combobox enables extended thinking/reasoning.
 
@@ -613,6 +623,8 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 | OpenAI | **Standard** (GPT-4o, GPT-4.1, etc.) | Not supported | N/A |
 | Gemini | **Thinking** (Gemini 2.5 series) | `thinking_config: {thinking_budget: N}` | Effort level: low (1K), medium (8K), high (24K) |
 | Gemini | **Standard** (Gemini 2.0, etc.) | Not supported | N/A |
+| Ollama | **Thinking** (Qwen3, DeepSeek-R1, gpt-oss) | `think: true/false` on `/api/chat` | Boolean checkbox only — Ollama's `think` flag is boolean today, so the strength combo is hidden to avoid showing a control that does nothing. Effort granularity will return when upstream exposes a per-request thinking budget |
+| Ollama | **Vision / Standard** (Qwen2.5-VL, Gemma 3, Llama 3.2 Vision, etc.) | Not supported | Temperature only |
 
 **GPT-5.x extended reasoning** — GPT-5.1+ models use a **Reasoning** mode combobox (None/Low/Medium/High/Xhigh) instead of the checkbox+strength pattern. Selecting "None" sends `reasoning: {effort: "none"}`, any other sends the corresponding effort level. Xhigh is available for GPT-5.2+ and codex-max models, but **not** for mini/nano variants (which cap at High). All GPT-5 family models (including `-chat` Instant variants) show a **Verbosity** combobox (Low/Medium/High) that controls `text.verbosity` in the API, defaulting to Medium. GPT-5.4+ models show the Temp spinner when reasoning is set to "None" (the API accepts temperature in that mode); older GPT-5 models (5.0–5.3) keep temperature hidden at all times.
 
@@ -621,6 +633,62 @@ A **Temp** spinbox controls temperature (0.0–1.0), and a **Thinking** checkbox
 **Temperature and thinking controls are model-aware** — GPT-5.0–5.3 models have temperature fixed at 1.0 (the Temp spinner is hidden). GPT-5.4+ models show the Temp spinner only when reasoning effort is "None". `gpt-5.x-chat-*` Instant variants never show temperature (API rejects it). Other OpenAI reasoning models (o1/o3/o4) also hide temperature. Standard OpenAI models (gpt-4o, gpt-4.1) show the Temp spinner normally. Gemini accepts temperature even with thinking enabled, so the Temp spinner stays active for all Gemini models. For Anthropic, when thinking is enabled (any mode except Off), temperature controls are hidden. This is enforced across all code paths: model selection, thinking toggle, and state restore.
 
 Provider, model, temperature, thinking settings, and text verbosity are all persisted across sessions in `agent_state.json` and saved/restored per Agent Instruction.
+
+#### Ollama (Local Inference)
+
+Ollama runs LLMs locally on your machine — weights live in `~/.ollama/models/`, inference happens through llama.cpp under the hood, and the Ollama daemon exposes an HTTP API at `http://localhost:11434`. No API key, no cost, no network egress during inference. The tradeoff is speed: a 32B Q4 vision model on Apple Silicon runs at ~10-30 tokens/sec vs sub-second cloud latency, and spatial precision on UI elements is weaker than Gemini's trained pointing capability.
+
+**Install & pull models:**
+
+```bash
+# Install Ollama from https://ollama.com/download, then:
+ollama serve                           # starts the background daemon
+ollama pull qwen3:32b-q4_K_M           # text + tool-calling + thinking (20 GB)
+ollama pull qwen2.5vl:32b              # vision (21 GB, 128K context)
+ollama pull llama3.2-vision:11b        # fast vision (8 GB, 128K context)
+ollama pull gemma3:27b                 # strong vision (17 GB, 128K context)
+```
+
+MyAgent's model dropdown auto-populates from whatever is installed. No code changes needed when you pull a new model.
+
+**Capability auto-detection** — `_get_ollama_model_caps()` in `myagent/ollama_mixin.py` queries `/api/show` on first use of each model and caches the response per-session. The response tells MyAgent:
+
+- `capabilities` — whether the model supports `tools`, `vision`, `thinking`, `completion`. Each capability gates a distinct part of the pipeline:
+  - `tools` present → `tools` parameter is passed to `/api/chat`; if absent, tools are silently dropped and a one-time `⚠` warning is surfaced
+  - `vision` present → the `_is_ollama_vision_model()` / weak-combo warning suppresses the "text-only model can't see screenshots" warning when desktop tools are enabled
+  - `thinking` present → `think: true/false` is passed explicitly on every call (omitting `think` falls back to the model's training default, which is thinking-**ON** for Qwen3; only explicit `false` reliably suppresses reasoning)
+- `context_length` — extracted from `modelinfo["{arch}.context_length"]` and passed as `num_ctx` in the request. Capped at `OLLAMA_NUM_CTX_CAP` (default 32768) to prevent KV cache memory pressure on Mac mini 32 GB setups where the model's full advertised context (40K-128K) would push the system into disk swap
+
+**Env-var tuning:**
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Where MyAgent looks for the Ollama server. Set to a remote host to use a networked Ollama instance |
+| `OLLAMA_NUM_CTX_CAP` | `32768` | Maximum `num_ctx` MyAgent will send. Raise to 65536 or 131072 on 64 GB+ hardware; lower to 16384 if you hit swap pressure |
+| `OLLAMA_KEEP_ALIVE` | `5m` (Ollama's default) | How long Ollama keeps a model resident after last use. Set to `24h` for an all-day working session to avoid repeat 10-15 second cold loads |
+
+**Qwen3's `<message>` wrapper** — Qwen3's tool-calling chat template wraps plain-text replies in `<message>...</message>` tags when tools are present in the request. This is a protocol marker that Ollama's non-streaming code path strips but its streaming path leaks. `_stream_ollama_call` strips the wrapper in the streaming path via a small lookahead buffer — tags never reach the UI, and the buffer holds back only the last 10 chars (the length of `</message>`) so live streaming stays responsive.
+
+**Custom Modelfiles (vision + tools)** — Ollama's default Modelfiles for multimodal models (Qwen2.5-VL, Llama 3.2 Vision, Gemma 3) ship with templates that expose only `[completion, vision]` — tool calling is **not** wired up even though the underlying model weights support it. This repo ships three custom Modelfiles that graft Qwen3's proven `{{ .Tools }}` preamble + `<tool_call>` XML marker format onto each vision model's chat tokens:
+
+| Modelfile | Base model | Build command |
+|---|---|---|
+| `Qwen25VL-tools.Modelfile` | `qwen2.5vl:32b` | `ollama create qwen2.5vl-tools:32b -f Qwen25VL-tools.Modelfile` |
+| `Llama32Vision-tools.Modelfile` | `llama3.2-vision:11b` | `ollama create llama3.2-vision-tools:11b -f Llama32Vision-tools.Modelfile` |
+| `Gemma3-tools.Modelfile` | `gemma3:27b` | `ollama create gemma3-tools:27b -f Gemma3-tools.Modelfile` |
+
+After `ollama create`, each variant's `/api/show` response advertises `[completion, vision, tools]`, MyAgent's caps auto-detection picks up the flip automatically, and tool calls return as structurally-parsed `tool_calls` entries (not text containing `<tool_call>` tags) — verified end-to-end for all three models. **Note:** the `FROM` line in each Modelfile references a specific blob SHA256 path under `~/.ollama/models/blobs/` — if you re-pull the base model after a major Ollama update, the blob path may change and you'll need to edit the `FROM` line to match the new path (check via `ollama show <base-model> --modelfile | head`).
+
+**Performance expectations on Mac mini 32 GB:**
+
+| Task | 32B model (Qwen3 / Qwen2.5-VL / Gemma 3) | 11B model (Llama 3.2 Vision) |
+|---|---|---|
+| First response after cold load | ~15-30 seconds | ~5-10 seconds |
+| Text-only round trip (no vision) | ~10-40 seconds | ~3-10 seconds |
+| Vision round trip (screenshot → describe) | ~40-90 seconds | ~15-30 seconds |
+| Agentic loop (screenshot → click → screenshot → ...) | 2-5 min per iteration | 30-90 sec per iteration |
+
+Use `llama3.2-vision-tools:11b` for iteration/testing, and the 32B variants when quality matters and the wait is acceptable.
 
 #### Tool Use
 
@@ -635,6 +703,7 @@ MyAgent has thirty-two built-in tools (including the Gemini-only `find_element`)
 | **OpenAI** | `web_search_preview` — server-side search with citations | `code_interpreter` — Python sandbox with auto container (`include: ["code_interpreter_call.outputs"]` for image data) |
 | **Anthropic** | `web_search_20250305` — beta server-side search | `code_execution_20250825` — beta Bash/Python sandbox (requires `betas` flags and `files-api-2025-04-14` for file downloads via `beta.files.download()`) |
 | **Gemini** | Local DuckDuckGo (`ddgs`) | Not available — Gemini API does not allow combining built-in tools with custom function declarations |
+| **Ollama** | Local DuckDuckGo (`ddgs`) | Not available — local models rely on the same DuckDuckGo + fetch_webpage tools as Gemini |
 
 Server-side code execution outputs (plots, charts) are displayed inline in the chat widget (scaled to max 600px) and saved to `saved_chats/` as PNG files. OpenAI returns images as base64 data URLs; Anthropic returns file IDs downloaded via the Files API
 
@@ -673,7 +742,7 @@ All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Chro
 
 **Grid overlay** — `screenshot` accepts an optional `grid=true` parameter that draws a 100-pixel coordinate grid (magenta gridlines + (x,y) labels) on top of the captured image after the API-limit resize but before PNG encoding. Drawn in `_draw_coord_grid` so the labels match the dimensions the model actually sees. Opt-in default off (gridlines obscure small UI text on regular screenshots); the tool description suggests using it for small/dense UI targets where pixel-level precision matters.
 
-**Weak combo warning** — At agent start, `stream_worker` checks for known-weak provider/model combinations with desktop tools enabled and posts a `⚠` warning to the activity output. Currently warns for: gpt-5 family with reasoning effort = `none`/`minimal`, gpt-5 `-chat` Instant variants, and any `gemini-2.x` model. Informational only — does not change behaviour. Helps catch user-error model picks early.
+**Weak combo warning** — At agent start, `stream_worker` checks for known-weak provider/model combinations with desktop tools enabled and posts a `⚠` warning to the activity output. Currently warns for: gpt-5 family with reasoning effort = `none`/`minimal`, gpt-5 `-chat` Instant variants, any `gemini-2.x` model, and any Ollama model that is **not** a vision model (e.g. text-only Qwen3 cannot see screenshots even though Ollama won't error when images are sent). A second Ollama-specific warning fires from `_stream_ollama_call` when the selected model's `/api/show` response does not advertise the `tools` capability — the tools parameter is silently dropped and the user is informed once per model/session. Informational only — does not change behaviour. Helps catch user-error model picks early.
 
 #### Parallel Tool Execution
 
@@ -728,7 +797,7 @@ The **Call #N** counter badges are hidden only when all of Activity, Debug, Tool
 
 #### API Cost Tracking
 
-MyAgent tracks and displays **real-time API costs** for all three providers during agentic runs. After each API call, a blue cost line appears in the output window (gated by the **Activity** checkbox) showing per-call cost, running total, and token breakdown:
+MyAgent tracks and displays **real-time API costs** for all three cloud providers (Anthropic, OpenAI, Gemini) during agentic runs. Ollama is local inference — no cost is incurred and no cost line is emitted (the `OLLAMA_PRICING` table is deliberately empty, so `_get_pricing` returns `None` and the accumulator silently skips — keeping the activity pane clean for local runs). After each cloud-provider API call, a blue cost line appears in the output window (gated by the **Activity** checkbox) showing per-call cost, running total, and token breakdown:
 
 ```
   $0.0023 this call  |  $0.0023 total  (in:312  out:45)
@@ -838,14 +907,14 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 ### Architecture
 
-MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 14 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
+MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 15 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
 
 #### Module Breakdown
 
 | Module | Lines | Responsibility |
 |---|---:|---|
 | **`MyAgent.py`** | 210 | Entry point: DPI setup, `App` class with `__init__`, mixin inheritance, argparse CLI |
-| **`myagent/constants.py`** | 1047 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, API pricing tables (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`), file paths, default prompts |
+| **`myagent/constants.py`** | 1060 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, API pricing tables (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`, `OLLAMA_PRICING` — empty, local is free), Ollama prefix lists (`OLLAMA_THINKING_PREFIXES`, `OLLAMA_VISION_PREFIXES`), `OLLAMA_NUM_CTX_CAP` KV-cache ceiling (env-overridable), file paths, default prompts |
 | **`myagent/helpers.py`** | 44 | `HTMLTextExtractor` (HTML→text), `extract_text_from_html()`, `_ToolBlock` (provider-neutral tool wrapper) |
 | **`myagent/ui_mixin.py`** | 517 | `setup_ui()`, model/provider/thinking widget handlers, `_update_title()` |
 | **`myagent/state_mixin.py`** | 448 | Instance lock management, multi-monitor geometry detection, state persistence (`_save_last_state`, `_load_last_state`), auto-launch |
@@ -855,20 +924,22 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 | **`myagent/anthropic_mixin.py`** | 148 | `_stream_anthropic_call()` — Anthropic API streaming with server-side tools, thinking, and usage extraction |
 | **`myagent/openai_mixin.py`** | 417 | `_stream_responses()`, `_stream_responses_call()`, OpenAI model detection helpers, usage extraction, `_fetch_models_for_provider()` |
 | **`myagent/gemini_mixin.py`** | 544 | `_stream_gemini_call()`, `_messages_to_gemini()`, `_tools_to_gemini()`, Gemini coordinate hints, usage extraction |
+| **`myagent/ollama_mixin.py`** | 310 | `_stream_ollama_call()` (native `/api/chat` streaming with `think` flag, tool-capability gating, Qwen3 `<message>` wrapper stripping), `_messages_to_ollama()`, `_tools_to_ollama()`, `_fetch_ollama_models()`, `_get_ollama_model_caps()` (caches per-model `/api/show` result for capabilities + `context_length`), `_is_ollama_thinking_model()`, `_is_ollama_vision_model()` |
 | **`myagent/desktop_mixin.py`** | 730 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
 | **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
 | **`myagent/safety_mixin.py`** | 447 | `_start_agent()`, `_stop_agent()`, PS Safety dialog, command safety checks, `_request_confirmation()`, `do_user_prompt()`, `run_powershell()`, `search_web()`, `fetch_url()` |
 | **`myagent/chat_mixin.py`** | 332 | Chat save/serialize, image attachment/compression, LaTeX→Unicode post-processing |
 | **`myagent/event_loop_mixin.py`** | 251 | `check_queue()` (main event loop with cost display handler), `_on_close()`, `_finish_close()` |
 
-**Total: ~7,150 lines across 17 files** (the original single-file was ~6,200 lines).
+**Total: ~7,460 lines across 18 files** (the original single-file was ~6,200 lines).
 
 #### How the Mixin Pattern Works
 
 ```python
-# MyAgent.py — the App class inherits from all 14 mixins
+# MyAgent.py — the App class inherits from all 15 mixins
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
+          OllamaMixin,
           DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
           EventLoopMixin):
     def __init__(self, root, launch_instruction=None, headless=False):

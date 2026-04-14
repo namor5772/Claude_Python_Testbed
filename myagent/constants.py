@@ -929,6 +929,14 @@ GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
 OLLAMA_FALLBACK_MODELS = ["qwen3:32b-q4_K_M"]
 OLLAMA_DEFAULT_MODEL = OLLAMA_FALLBACK_MODELS[0]
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
+# Pragmatic ceiling on num_ctx for Ollama calls. Without this we'd pass the
+# model's full advertised context (128K for vision variants, 40K for Qwen3),
+# which forces Ollama to pre-allocate huge KV cache blocks that dominate
+# memory on unified-memory Macs — causing disk swap and 3-5x slowdowns.
+# 32K fits comfortably on a 32 GB Mac mini alongside a 32B Q4 model and
+# leaves plenty of headroom for long agent conversations. Override via
+# the OLLAMA_NUM_CTX_CAP env var if you have more RAM.
+OLLAMA_NUM_CTX_CAP = int(os.environ.get("OLLAMA_NUM_CTX_CAP", "32768"))
 # Models that accept `think: true` on /api/chat and emit reasoning in the
 # separate `thinking` stream field. Ollama's `think` flag is boolean-only
 # today — all effort levels (low/medium/high) map to `think: true`.

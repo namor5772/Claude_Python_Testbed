@@ -6,6 +6,7 @@ from myagent.constants import (
     OLLAMA_FALLBACK_MODELS,
     OLLAMA_THINKING_PREFIXES,
     OLLAMA_VISION_PREFIXES,
+    OLLAMA_NUM_CTX_CAP,
 )
 
 
@@ -201,7 +202,11 @@ class OllamaMixin:
 
         options = {"temperature": self.temperature}
         if caps["context_length"]:
-            options["num_ctx"] = caps["context_length"]
+            # Cap at OLLAMA_NUM_CTX_CAP to avoid memory pressure / swap on
+            # unified-memory Macs. The model's full advertised max (40K-128K)
+            # is almost never needed for agent loops and triples the KV cache
+            # footprint. Override via env var if you have bigger hardware.
+            options["num_ctx"] = min(caps["context_length"], OLLAMA_NUM_CTX_CAP)
 
         request_kwargs = {
             "model": self.model,
