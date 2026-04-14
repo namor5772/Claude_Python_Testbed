@@ -3,9 +3,10 @@ from tkinter import ttk
 
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
-    GEMINI_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, MANUAL_THINKING_PREFIXES,
-    EFFORT_LEVELS, ADAPTIVE_MODE_VALUES, ADAPTIVE_MODE_VALUES_NO_MAX,
-    BUDGET_PRESETS, GEMINI_THINKING_PREFIXES,
+    GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS,
+    MANUAL_THINKING_PREFIXES, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
+    ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, GEMINI_THINKING_PREFIXES,
+    OLLAMA_THINKING_PREFIXES,
 )
 
 
@@ -206,6 +207,8 @@ class UIMixin:
             default = OPENAI_DEFAULT_MODEL
         elif new_provider == "Gemini":
             default = GEMINI_DEFAULT_MODEL
+        elif new_provider == "Ollama":
+            default = OLLAMA_DEFAULT_MODEL
         else:
             default = DEFAULT_MODEL
         if default in self.available_models:
@@ -270,14 +273,17 @@ class UIMixin:
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
             elif support is not None:
-                # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength
+                # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength.
+                # Ollama is an exception — its `think` flag is boolean-only today,
+                # so we hide the strength combo and show only the checkbox.
                 self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
                 self._thinking_check.config(state="normal")
                 self._update_thinking_strength_options()
                 if self.thinking_enabled:
-                    self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
-                    self._thinking_strength_combo.config(state="readonly")
-                    if self.provider == "Gemini":
+                    if self.provider != "Ollama":
+                        self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+                        self._thinking_strength_combo.config(state="readonly")
+                    if self.provider in ("Gemini", "Ollama"):
                         self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
                 else:
@@ -317,6 +323,7 @@ class UIMixin:
         except (tk.TclError, ValueError):
             self.temperature = 1.0
         self._temp_var.set(self.temperature)
+        self._update_title()
         self._save_last_state()
 
     def _model_supports_thinking(self, model_id=None):
@@ -329,6 +336,12 @@ class UIMixin:
             return None
         if self.provider == "Gemini":
             return "adaptive" if self._is_gemini_thinking_model(mid) else None
+        if self.provider == "Ollama":
+            # Qwen3 / DeepSeek-R1 / gpt-oss get the manual checkbox+strength UI.
+            # Strength is display-only for now — Ollama's `think` flag is
+            # boolean-only; all effort levels map to think=True until upstream
+            # exposes a per-request budget.
+            return "manual" if any(mid.startswith(p) for p in OLLAMA_THINKING_PREFIXES) else None
         if mid in ADAPTIVE_THINKING_MODELS:
             return "adaptive"
         for prefix in MANUAL_THINKING_PREFIXES:
@@ -351,7 +364,8 @@ class UIMixin:
         if saved_provider != self.provider:
             can_switch = (saved_provider == "Anthropic" and self._has_anthropic) or \
                          (saved_provider == "OpenAI" and self._has_openai) or \
-                         (saved_provider == "Gemini" and self._has_gemini)
+                         (saved_provider == "Gemini" and self._has_gemini) or \
+                         (saved_provider == "Ollama" and self._has_ollama)
             if can_switch:
                 self.provider = saved_provider
                 self._provider_var.set(saved_provider)
@@ -466,6 +480,7 @@ class UIMixin:
             self.thinking_effort = val
         elif support == "manual":
             self.thinking_budget = BUDGET_PRESETS.get(val, 8192)
+        self._update_title()
         self._save_last_state()
 
     def _on_thinking_mode_changed(self):
@@ -500,15 +515,71 @@ class UIMixin:
             else:
                 self._temp_label.pack_forget()
                 self._temp_spin.pack_forget()
+        self._update_title()
         self._save_last_state()
 
     def _on_verbosity_changed(self):
         self.text_verbosity = self._text_verbosity_var.get().lower()
+        self._update_title()
         self._save_last_state()
+
+    def _get_model_param_summary(self):
+        """Build a compact string of the parameters actually in effect for
+        the current provider/model. Mirrors the per-model widget-visibility
+        logic in _on_model_selected so the title reflects what's truly being
+        sent to the API — not a generic dump of every possible parameter."""
+        parts = []
+        support = self._model_supports_thinking()
+        mode = (self.thinking_mode or "").lower()
+
+        if support == "adaptive" and self.provider == "Anthropic":
+            parts.append(f"mode={mode.capitalize() or 'Off'}")
+            if mode == "off":
+                parts.append(f"temp={self.temperature:g}")
+        elif support == "extended" and self.provider == "OpenAI":
+            parts.append(f"reasoning={mode.capitalize() or 'None'}")
+            if self._has_openai_verbosity():
+                parts.append(f"verbosity={self.text_verbosity}")
+            if mode in ("", "none") and self._gpt5_supports_temp_at_none():
+                parts.append(f"temp={self.temperature:g}")
+        elif support is not None:
+            if self.thinking_enabled:
+                if self.provider == "Ollama":
+                    # Ollama's `think` flag is boolean-only — no strength knob.
+                    parts.append("thinking=on")
+                elif support == "manual" and self.provider == "Anthropic":
+                    # Anthropic manual (Haiku 4.5 / Sonnet 4.5 / older) uses a
+                    # token budget (1K/4K/8K/16K/32K). thinking_effort is stale
+                    # for these — use thinking_budget reverse-mapped to its label.
+                    label = next(
+                        (k for k, v in BUDGET_PRESETS.items() if v == self.thinking_budget),
+                        f"{self.thinking_budget}tok",
+                    )
+                    parts.append(f"thinking={label}")
+                else:
+                    # Gemini / OpenAI adaptive (gpt-5 reasoning pre-5.1) — effort string
+                    parts.append(f"thinking={self.thinking_effort}")
+                if self.provider in ("Gemini", "Ollama"):
+                    parts.append(f"temp={self.temperature:g}")
+            else:
+                parts.append("thinking=off")
+                if not (self.provider == "OpenAI" and self._is_openai_reasoning_model()):
+                    parts.append(f"temp={self.temperature:g}")
+            if self._has_openai_verbosity():
+                parts.append(f"verbosity={self.text_verbosity}")
+        else:
+            if not self._is_gpt5_chat_model():
+                parts.append(f"temp={self.temperature:g}")
+            if self._has_openai_verbosity():
+                parts.append(f"verbosity={self.text_verbosity}")
+
+        return " ".join(parts)
 
     def _update_title(self):
         model_display = self._get_display_name(self.model)
-        model_info = f"{self.provider} / {model_display}"
+        param_summary = self._get_model_param_summary()
+        param_suffix = f" | {param_summary}" if param_summary else ""
+        model_info = f"{self.provider} / {model_display}{param_suffix}"
         inst_num = getattr(self, '_instance_num', 1)
         suffix = f" ({inst_num})" if inst_num > 1 else ""
         if self.agent_instruction_name:

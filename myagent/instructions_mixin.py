@@ -4,9 +4,10 @@ from tkinter import messagebox, filedialog, ttk
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, DEFAULT_GEOMETRY,
     PROVIDERS, FALLBACK_MODELS, OPENAI_FALLBACK_MODELS, GEMINI_FALLBACK_MODELS,
-    EFFORT_LEVELS, ADAPTIVE_MODE_VALUES, ADAPTIVE_MODE_VALUES_NO_MAX,
-    BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP, DEFAULT_MODEL,
-    OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
+    OLLAMA_FALLBACK_MODELS, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
+    ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP,
+    DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
+    OLLAMA_DEFAULT_MODEL,
 )
 
 
@@ -230,7 +231,8 @@ class InstructionsMixin:
         available_providers = [p for p in PROVIDERS
                                if (p == "Anthropic" and self._has_anthropic)
                                or (p == "OpenAI" and self._has_openai)
-                               or (p == "Gemini" and self._has_gemini)]
+                               or (p == "Gemini" and self._has_gemini)
+                               or (p == "Ollama" and self._has_ollama)]
         self._provider_combo = ttk.Combobox(
             model_frame, textvariable=self._provider_var, state="readonly",
             font=("Arial", 9), width=10, values=available_providers,
@@ -509,9 +511,12 @@ class InstructionsMixin:
         elif self._has_openai:
             default_provider = "OpenAI"
             default_model = OPENAI_DEFAULT_MODEL
-        else:
+        elif self._has_gemini:
             default_provider = "Gemini"
             default_model = GEMINI_DEFAULT_MODEL
+        else:
+            default_provider = "Ollama"
+            default_model = OLLAMA_DEFAULT_MODEL
         self._provider_var.set(default_provider)
         if default_provider != self.provider:
             self._on_provider_changed()

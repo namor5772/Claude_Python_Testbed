@@ -203,6 +203,8 @@ class OpenAIMixin:
             return self._fetch_openai_models()
         if self.provider == "Gemini":
             return self._fetch_gemini_models()
+        if self.provider == "Ollama":
+            return self._fetch_ollama_models()
         return self._fetch_available_models()
 
     def _is_openai_reasoning_model(self, model_id=None):

@@ -12,7 +12,7 @@ from myagent.constants import (
     IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS,
     PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _BASE_DIR, CHATS_DIR,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
-    ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING,
+    ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
 )
 from myagent.helpers import _ToolBlock
 
@@ -594,6 +594,15 @@ class StreamingMixin:
                     "like close buttons. Consider switching to gemini-3.1-pro-preview "
                     "(or any gemini-3.x) for desktop work."
                 )
+        elif self.provider == "Ollama":
+            # Text-only local models cannot see screenshots — Ollama accepts
+            # image parts without error but non-vision models drop them.
+            if not self._is_ollama_vision_model():
+                return (
+                    f"{self.model} is a text-only model — it cannot see screenshots. "
+                    "Desktop/browser tools will not work with this model. "
+                    "Pull a vision variant (e.g. `ollama pull qwen2.5-vl:32b`) for desktop work."
+                )
         return None
 
     @staticmethod
@@ -604,7 +613,8 @@ class StreamingMixin:
         OpenAI/Gemini: {input, output}"""
         table = {"Anthropic": ANTHROPIC_PRICING,
                  "OpenAI": OPENAI_PRICING,
-                 "Gemini": GEMINI_PRICING}.get(provider)
+                 "Gemini": GEMINI_PRICING,
+                 "Ollama": OLLAMA_PRICING}.get(provider)
         if not table:
             return None
         # Match longest prefix first for specificity
@@ -677,6 +687,9 @@ class StreamingMixin:
                 elif self.provider == "Gemini":
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
                         self._stream_gemini_call(messages, max_retries, label_emitted)
+                elif self.provider == "Ollama":
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
+                        self._stream_ollama_call(messages, max_retries, label_emitted)
                 else:
                     stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
@@ -721,8 +734,8 @@ class StreamingMixin:
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})
 
-                    # Wrap dict-based blocks (OpenAI/Gemini) in _ToolBlock for uniform attribute access
-                    if self.provider in ("OpenAI", "Gemini"):
+                    # Wrap dict-based blocks (OpenAI/Gemini/Ollama) in _ToolBlock for uniform attribute access
+                    if self.provider in ("OpenAI", "Gemini", "Ollama"):
                         tool_blocks = [
                             _ToolBlock(b["name"], b["id"], b["input"])
                             for b in content_blocks if isinstance(b, dict) and b.get("type") == "tool_use"

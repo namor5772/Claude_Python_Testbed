@@ -34,10 +34,12 @@ import httpx
 import queue
 import os
 import time
+import urllib.request
 
 from myagent.constants import (
     DEFAULT_GEOMETRY, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
-    OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
+    OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
+    OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA,
     AGENT_STATE_FILE, _BASE_DIR,
 )
 from myagent.ui_mixin import UIMixin
@@ -48,17 +50,22 @@ from myagent.streaming_mixin import StreamingMixin
 from myagent.anthropic_mixin import AnthropicMixin
 from myagent.openai_mixin import OpenAIMixin
 from myagent.gemini_mixin import GeminiMixin
+from myagent.ollama_mixin import OllamaMixin
 from myagent.desktop_mixin import DesktopMixin
 from myagent.browser_mixin import BrowserMixin
 from myagent.safety_mixin import SafetyMixin
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
 
+if _HAS_OLLAMA:
+    import ollama
+
 
 # ── Main Application ────────────────────────────────────────────────────────
 
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
+          OllamaMixin,
           DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
           EventLoopMixin):
 
@@ -72,10 +79,23 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self._has_openai = bool(os.environ.get("OPENAI_API_KEY"))
         self._has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
-        if not self._has_anthropic and not self._has_openai and not self._has_gemini:
+        # Ollama needs no API key — availability = local server responds on the
+        # base URL. A quick HEAD on /api/tags with a short timeout catches the
+        # common "Ollama not running" case without blocking UI init if the user
+        # has Ollama installed but stopped.
+        self._has_ollama = False
+        self._ollama_base_url = os.environ.get("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL)
+        if _HAS_OLLAMA:
+            try:
+                with urllib.request.urlopen(f"{self._ollama_base_url}/api/tags", timeout=0.5):
+                    self._has_ollama = True
+            except Exception:
+                self._has_ollama = False
+        if not (self._has_anthropic or self._has_openai or self._has_gemini or self._has_ollama):
             messagebox.showerror(
                 "API Key Missing",
-                "Please set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY.",
+                "Please set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or "
+                "GEMINI_API_KEY — or start a local Ollama server.",
             )
             self.root.destroy()
             return
@@ -99,14 +119,18 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             api_key=gemini_key,
             http_options={"timeout": 120_000},  # 120s read timeout to prevent hung streams
         ) if self._has_gemini else None
+        self.ollama_client = ollama.Client(host=self._ollama_base_url) if self._has_ollama else None
         if self._has_anthropic:
             self.provider = "Anthropic"
         elif self._has_openai:
             self.provider = "OpenAI"
-        else:
+        elif self._has_gemini:
             self.provider = "Gemini"
+        else:
+            self.provider = "Ollama"
         self._openai_model_display_names = {}
         self._gemini_model_display_names = {}
+        self._ollama_model_display_names = {}
         self._model_display_names = {}
         # Per-model cache of OpenAI server-side tools that the model rejected
         # with a 400 BadRequestError. Newer models like gpt-5.2-pro don't support
@@ -155,7 +179,14 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._page = None
         self._edge_process = None
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self.model = DEFAULT_MODEL if self.provider == "Anthropic" else (OPENAI_DEFAULT_MODEL if self.provider == "OpenAI" else GEMINI_DEFAULT_MODEL)
+        if self.provider == "Anthropic":
+            self.model = DEFAULT_MODEL
+        elif self.provider == "OpenAI":
+            self.model = OPENAI_DEFAULT_MODEL
+        elif self.provider == "Gemini":
+            self.model = GEMINI_DEFAULT_MODEL
+        else:
+            self.model = OLLAMA_DEFAULT_MODEL
         self.temperature = 1.0
         self.thinking_enabled = False
         self.thinking_effort = "high"

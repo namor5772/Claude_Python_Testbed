@@ -1,6 +1,7 @@
 anthropic
 openai
 google-genai
+ollama
 ddgs
 httpx
 pyautogui

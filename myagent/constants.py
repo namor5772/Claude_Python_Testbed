@@ -27,6 +27,14 @@ if IS_WINDOWS:
     except Exception:
         pass
 
+# Ollama SDK for local-inference provider (Qwen3 etc). Optional — absence just
+# hides the Ollama provider in the UI; import failure is not fatal.
+_HAS_OLLAMA = True
+try:
+    import ollama  # noqa: F401
+except Exception:
+    _HAS_OLLAMA = False
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -917,6 +925,21 @@ OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
 GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
+# Ollama (local inference) — no API key needed; availability probed at startup.
+OLLAMA_FALLBACK_MODELS = ["qwen3:32b-q4_K_M"]
+OLLAMA_DEFAULT_MODEL = OLLAMA_FALLBACK_MODELS[0]
+OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
+# Models that accept `think: true` on /api/chat and emit reasoning in the
+# separate `thinking` stream field. Ollama's `think` flag is boolean-only
+# today — all effort levels (low/medium/high) map to `think: true`.
+OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss")
+# Vision-capable local models. When a non-vision Ollama model is paired with
+# the Desktop/Browser tool checkboxes, the weak-combo warning surfaces.
+# Ollama's library uses no dash between the base name and "vl" (e.g.
+# "qwen2.5vl:32b"), but some external references use a dash — both covered.
+OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
+                          "llava", "llama3.2-vision", "bakllava",
+                          "moondream", "minicpm-v", "granite3.2-vision")
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
 
 # ── Anthropic API pricing (USD per million tokens) ────────────────────────────
@@ -1013,7 +1036,10 @@ GEMINI_PRICING = {
     "gemini-2.5-flash":    (0.30, 2.50),
     "gemini-2.5-pro":      (1.25, 10.00),
 }
-PROVIDERS = ["Anthropic", "OpenAI", "Gemini"]
+# Local inference is free — empty table makes _get_pricing return None and the
+# cost line is silently skipped by the accumulator.
+OLLAMA_PRICING = {}
+PROVIDERS = ["Anthropic", "OpenAI", "Gemini", "Ollama"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
