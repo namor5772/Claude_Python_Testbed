@@ -33,6 +33,23 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **LaunchMyAgent.sh** — Shell launcher for MyAgent (macOS)
 - **selfbot_position.ps1** — PowerShell helper used by the SelfBot launcher to position and focus windows (Windows)
 
+## Slash Commands (Claude Code Skills)
+
+Project-scoped skills live in `.claude/skills/` and ship with the repo — clone this project on any machine and the slash commands below are immediately available inside Claude Code sessions opened from the project root. No per-machine setup.
+
+| Command | What it does |
+|---|---|
+| `/sync-check` | Verifies the current local branch matches `origin/<branch>`. Always does a fresh `git fetch` (never stale cache), shows both tip hashes, reports ahead/behind/diverged counts, flags uncommitted working-tree changes. 5-second status check with no file exploration. |
+| `/commit-push` | Stages modified tracked files, drafts a one-line subject + short body from `git diff --stat` matching the repo's commit style (`git log -5 --oneline`), commits with the standard `Co-Authored-By` trailer, and pushes to the current branch's origin. Explicitly skips `.DS_Store`, scratch experiments, and GUI-auto-modified state files (`agent_instructions.json`, `skills.json`) unless you say otherwise. Never force-pushes, never amends, never runs tests. |
+| `/urp` | "Update README, commit, push" — rereads recent git history + diffs, updates `README.md` (and `CLAUDE.md` if needed) to reflect the current code, then commits and pushes. Useful after a feature lands to keep docs in sync. |
+| `/launch-agent` | Kills any running Python processes (Windows `pythonw.exe`/`python.exe`, macOS `python`), then launches MyAgent.py in the background. |
+| `/launch-selfbot` | Kills any running Python processes, then launches SelfBot.py in the background. |
+| `/run script.py` | Activates the `.venv` and runs a Python script (takes the filename as an argument). |
+
+All skills set `disable-model-invocation: true`, so Claude only invokes them when you explicitly type the slash command — they won't auto-fire based on context guesses.
+
+Skills are defined as `SKILL.md` files with YAML frontmatter + markdown body; they load dynamically on next invocation (no Claude Code restart needed).
+
 ## SelfBot.py — Claude Chatbot & Dual-Instance Self-Chatting Bot
 
 A desktop chatbot application built with tkinter that connects to the Anthropic API. It supports streaming responses, tool use, image attachments, conversation management, model selection, customisable system prompts, and a skills system for injecting reusable knowledge into conversations. When a second instance is launched, it automatically enables dual-instance self-chatting where two Claude instances converse autonomously.
