@@ -245,8 +245,8 @@ class UIMixin:
                 self._thinking_mode_label.config(text="Thinking")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                # Populate values: Max only for Opus 4.6
-                if self.model == "claude-opus-4-6":
+                # Populate values: Max only for Opus 4.6 / 4.7
+                if self.model in ("claude-opus-4-7", "claude-opus-4-6"):
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
                 else:
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX

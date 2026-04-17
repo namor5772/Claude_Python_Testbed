@@ -688,7 +688,7 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-opus-20240229": 4096,
     "claude-3-sonnet-20240229": 4096,
 }
-ADAPTIVE_THINKING_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
+ADAPTIVE_THINKING_MODELS = {"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
 MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
@@ -1214,7 +1214,7 @@ class App:
             self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
             self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
             # Set values with/without Max based on model
-            if "opus-4-6" in self.model:
+            if "opus-4-7" in self.model or "opus-4-6" in self.model:
                 self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
             else:
                 self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
