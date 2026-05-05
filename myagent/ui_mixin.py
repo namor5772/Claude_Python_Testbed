@@ -259,15 +259,19 @@ class UIMixin:
                 self._thinking_mode_label.config(text="Reasoning")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                # Build values based on model capabilities
-                values = ["None", "Low", "Medium", "High"]
+                # Build values based on model capabilities. -pro variants reject
+                # 'none' and 'low' with HTTP 400 — minimum supported effort is 'medium'.
+                if "-pro" in self.model and self._is_gpt5_family():
+                    values = ["Medium", "High"]
+                else:
+                    values = ["None", "Low", "Medium", "High"]
                 if self._has_reasoning_xhigh():
                     values.append("Xhigh")
                 self._thinking_mode_combo["values"] = values
                 # Validate current selection
                 current = self._thinking_mode_var.get()
                 if current not in values:
-                    self._thinking_mode_var.set("None")
+                    self._thinking_mode_var.set(values[0])
                 self._on_thinking_mode_changed()
                 # Show verbosity after mode combo
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))

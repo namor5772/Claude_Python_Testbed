@@ -378,6 +378,24 @@ class OpenAIMixin:
                         full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                             self._stream_responses(api_kwargs, label_emitted)
                         break  # success
+                # Some models reject specific reasoning.effort values (e.g. -pro
+                # variants reject 'none' and 'low'). Parse the supported values
+                # out of the error and retry with the lowest one.
+                if "reasoning.effort" in err_str and "reasoning" in api_kwargs:
+                    sup_match = _re.search(r"[Ss]upported values are:\s*([^.]+)", err_str)
+                    if sup_match:
+                        supported = _re.findall(r"'([^']+)'", sup_match.group(1))
+                        if supported:
+                            old_effort = api_kwargs["reasoning"].get("effort", "?")
+                            new_effort = supported[0]
+                            api_kwargs["reasoning"]["effort"] = new_effort
+                            self.queue.put({
+                                "type": "tool_info",
+                                "content": f"Model '{self.model}' rejected reasoning.effort='{old_effort}' — retrying with '{new_effort}' (supported: {', '.join(supported)})...\n",
+                            })
+                            full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
+                                self._stream_responses(api_kwargs, label_emitted)
+                            break  # success
                 # Unrecognised BadRequestError — propagate
                 raise
             except openai.APITimeoutError:

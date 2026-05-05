@@ -28,3 +28,6 @@ launch_err.txt
 # Claude Code config
 .claude/*
 !.claude/skills/
+
+# macOS Finder metadata
+.DS_Store
