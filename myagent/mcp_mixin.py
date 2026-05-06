@@ -15,10 +15,16 @@ Architecture notes:
   coroutines via ``asyncio.run_coroutine_threadsafe``. This keeps MyAgent's
   existing threading model unchanged — callers see synchronous ``do_mcp_call``.
 
-* All server connections (each layered: ``stdio_client`` then ``ClientSession``)
-  are held open inside one ``AsyncExitStack`` for the entire app lifetime.
-  ``_disconnect_mcp_servers`` unwinds the stack on close, terminating the
-  spawned MCP server subprocesses cleanly.
+* All server connections live inside one long-lived **runner coroutine**
+  (``_mcp_runner``) that owns the ``AsyncExitStack`` and parks on a shutdown
+  event for the entire app lifetime. The runner pattern is required because
+  ``stdio_client`` and ``ClientSession`` use anyio task groups internally,
+  whose cancel scopes are bound to the originating task. Splitting the
+  lifecycle across multiple ``run_coroutine_threadsafe`` calls would let the
+  task that opened the stack end, taking the anyio reader/writer pumps with
+  it — connection succeeds, then the next operation fails with
+  ``Connection closed``. Keeping one task alive for the whole session avoids
+  that structured-concurrency mismatch.
 
 * Tool names are namespaced as ``<server>__<tool>`` so a server collision
   (two servers both named ``send``) is impossible and dispatch is unambiguous.
@@ -32,6 +38,7 @@ Architecture notes:
 """
 
 import asyncio
+import gc
 import json
 import os
 import socket
@@ -69,6 +76,9 @@ class MCPMixin:
         self._mcp_sessions = {}             # server_name -> ClientSession
         self._mcp_tools_by_name = {}        # full_name -> (server_name, real_tool_name)
         self._mcp_connected = False         # True once at least one server is up
+        self._mcp_runner_future = None      # concurrent.Future of the runner task
+        self._mcp_shutdown_event = None     # asyncio.Event signalling runner exit
+        self._mcp_ready_event = None        # threading.Event signalling startup done
 
     def _load_mcp_config(self):
         """Read MCP_SERVERS_PATH. Returns the ``servers`` dict or {} on any
@@ -87,12 +97,14 @@ class MCPMixin:
             return {}
 
     def _connect_mcp_servers(self):
-        """Spawn the dedicated asyncio loop thread, connect to all servers
-        listed in ``mcp_servers.json``, and populate ``MCP_TOOLS``.
+        """Spawn the dedicated asyncio loop thread and a long-lived runner
+        coroutine that owns every MCP server connection. The runner connects
+        all configured servers, lists their tools, then parks on a shutdown
+        event until app close.
 
         Safe to call when ``_HAS_MCP`` is False or no servers are configured —
         returns immediately in either case. Per-server connection failures are
-        logged via the queue (when available) but never raise."""
+        logged via the queue but never raise."""
         if not _HAS_MCP:
             return
         config = self._load_mcp_config()
@@ -117,25 +129,54 @@ class MCPMixin:
         self._mcp_thread.start()
         loop_ready.wait()
 
-        # Connect every server inside one AsyncExitStack so close-on-shutdown
-        # is a single _aexit_ unwind. 30 s budget total — slow servers are
-        # logged-and-skipped rather than blocking the rest of app startup.
-        future = asyncio.run_coroutine_threadsafe(
-            self._connect_all(config), self._mcp_loop
+        # Launch the runner — one long-lived task that owns every connection.
+        # Block this thread until the runner has finished connecting + listing
+        # tools (signalled via the threading.Event), so callers see a fully
+        # populated MCP_TOOLS list when this method returns.
+        self._mcp_ready_event = threading.Event()
+        self._mcp_runner_future = asyncio.run_coroutine_threadsafe(
+            self._mcp_runner(config), self._mcp_loop
         )
-        try:
-            future.result(timeout=30)
-            self._mcp_connected = True
-        except Exception as e:
-            self._mcp_log(f"⚠ MCP connection batch failed: {e}\n")
+        if self._mcp_ready_event.wait(timeout=30):
+            self._mcp_connected = bool(self._mcp_sessions)
+        else:
+            self._mcp_log("⚠ MCP startup timed out\n")
 
-        self._refresh_mcp_tools()
+    async def _mcp_runner(self, config):
+        """Long-lived task owning all MCP connections for the app's lifetime.
+
+        Sequence: open AsyncExitStack → connect all servers → list their tools
+        → signal ready → park on shutdown event → unwind on shutdown. Every
+        operation that touches anyio task groups happens inside this single
+        task, so the cancel scopes survive for the whole MyAgent session and
+        subsequent ``run_coroutine_threadsafe`` calls (``call_tool`` from
+        ``do_mcp_call``) see a live connection."""
+        self._mcp_shutdown_event = asyncio.Event()
+        self._mcp_exit_stack = AsyncExitStack()
+        try:
+            async with self._mcp_exit_stack:
+                await self._connect_all(config)
+                await self._refresh_mcp_tools_async()
+                self._mcp_ready_event.set()
+                await self._mcp_shutdown_event.wait()
+            # Drain pending Windows ProactorEventLoop pipe-close callbacks
+            # while the loop is still alive. Without this, asyncio subprocess
+            # transports inside `stdio_client` get GC'd at interpreter exit
+            # (after the loop has closed) and emit harmless-but-ugly
+            # `RuntimeError: Event loop is closed` finalizer tracebacks.
+            gc.collect()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        except Exception as e:
+            self._mcp_log(f"⚠ MCP runner error: {e}\n")
+        finally:
+            if self._mcp_ready_event is not None and not self._mcp_ready_event.is_set():
+                self._mcp_ready_event.set()
 
     async def _connect_all(self, config):
         """Open every configured stdio server in parallel and store their
-        sessions in ``self._mcp_sessions``."""
-        self._mcp_exit_stack = AsyncExitStack()
-        await self._mcp_exit_stack.__aenter__()
+        sessions in ``self._mcp_sessions``. Must be called from inside the
+        runner task — it relies on ``self._mcp_exit_stack`` being open."""
 
         async def _connect_one(name, spec):
             try:
@@ -187,21 +228,18 @@ class MCPMixin:
         )
 
     def _disconnect_mcp_servers(self):
-        """Tear down the AsyncExitStack (closes every session and terminates
-        spawned subprocess servers) and stop the loop thread. Safe to call
-        more than once."""
+        """Signal the runner to exit, which unwinds the AsyncExitStack
+        (closing every session and terminating spawned subprocess servers),
+        then stop the loop thread. Safe to call more than once."""
         if not self._mcp_loop or not self._mcp_loop.is_running():
             return
-        if self._mcp_exit_stack is not None:
-            future = asyncio.run_coroutine_threadsafe(
-                self._mcp_exit_stack.__aexit__(None, None, None),
-                self._mcp_loop,
-            )
+        if self._mcp_shutdown_event is not None:
+            self._mcp_loop.call_soon_threadsafe(self._mcp_shutdown_event.set)
+        if self._mcp_runner_future is not None:
             try:
-                future.result(timeout=10)
+                self._mcp_runner_future.result(timeout=10)
             except Exception:
                 pass
-            self._mcp_exit_stack = None
         self._mcp_sessions.clear()
         self._mcp_tools_by_name.clear()
         MCP_TOOLS.clear()
@@ -210,25 +248,27 @@ class MCPMixin:
             self._mcp_thread.join(timeout=5)
         self._mcp_loop = None
         self._mcp_thread = None
+        self._mcp_exit_stack = None
+        self._mcp_runner_future = None
+        self._mcp_shutdown_event = None
         self._mcp_connected = False
 
     # ── Tool discovery ───────────────────────────────────────────────────────
 
-    def _refresh_mcp_tools(self):
+    async def _refresh_mcp_tools_async(self):
         """Re-fetch tools from every connected server and rebuild MCP_TOOLS
-        + the lookup table. Mutates the module-level MCP_TOOLS list in place
-        so existing references in streaming_mixin keep pointing to the same
-        object."""
+        + the lookup table. Async version — called inline from the runner
+        task during startup, so each ``session.list_tools()`` runs while the
+        owning task is still alive. Mutates the module-level MCP_TOOLS list
+        in place so existing references in streaming_mixin keep pointing to
+        the same object."""
         MCP_TOOLS.clear()
         self._mcp_tools_by_name.clear()
-        if not self._mcp_sessions or not self._mcp_loop:
+        if not self._mcp_sessions:
             return
         for server_name, session in self._mcp_sessions.items():
             try:
-                future = asyncio.run_coroutine_threadsafe(
-                    session.list_tools(), self._mcp_loop
-                )
-                result = future.result(timeout=10)
+                result = await session.list_tools()
             except Exception as e:
                 self._mcp_log(f"⚠ MCP server '{server_name}' list_tools failed: {e}\n")
                 continue
@@ -241,6 +281,22 @@ class MCPMixin:
                                     or {"type": "object", "properties": {}},
                 })
                 self._mcp_tools_by_name[full_name] = (server_name, tool.name)
+
+    def _refresh_mcp_tools(self):
+        """Sync wrapper around ``_refresh_mcp_tools_async``. Schedules onto
+        the MCP event loop. Safe to call from any thread once the runner is
+        up — ``list_tools`` reuses the existing session connection (no new
+        anyio task groups)."""
+        if not self._mcp_loop or not self._mcp_loop.is_running():
+            MCP_TOOLS.clear()
+            self._mcp_tools_by_name.clear()
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._refresh_mcp_tools_async(), self._mcp_loop
+            ).result(timeout=10)
+        except Exception as e:
+            self._mcp_log(f"⚠ MCP refresh failed: {e}\n")
 
     # ── Dispatch ─────────────────────────────────────────────────────────────
 
@@ -284,14 +340,20 @@ class MCPMixin:
     # ── Helpers ──────────────────────────────────────────────────────────────
 
     def _mcp_log(self, message):
-        """Surface MCP messages through MyAgent's queue when available; fall
-        back to stderr during early init before the queue exists."""
+        """Surface MCP messages through MyAgent's queue (visible in the GUI
+        activity widget) AND mirror to stderr (visible when launching from
+        a console or with stderr captured). The dual-sink mirror is free on
+        ``pythonw.exe`` where stderr is normally discarded, but invaluable
+        for diagnostic launches that capture stderr to a file."""
+        import sys
+        try:
+            sys.stderr.write(message)
+            sys.stderr.flush()
+        except Exception:
+            pass
         queue = getattr(self, "queue", None)
         if queue is not None:
             try:
                 queue.put({"type": "tool_info", "content": message})
-                return
             except Exception:
                 pass
-        import sys
-        sys.stderr.write(message)

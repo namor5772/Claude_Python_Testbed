@@ -29,6 +29,8 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (Windows)
 - **LaunchMyAgent.bat** — One-click launcher for MyAgent (Windows)
+- **myagent.ico** — Windows desktop-shortcut icon for MyAgent (multi-resolution: 16/24/32/48/64/128/256 px). Robot face on a deep-blue rounded square with cyan eyes and an amber antenna dot — readable at every Windows icon size. Generate or regenerate via `python make_icon.py`
+- **make_icon.py** — Standalone PIL-based icon generator. Renders a supersampled 1024-px source, Lanczos-downsamples to 256, and saves a multi-size `.ico` plus a `MyAgent_preview.png`. Tweak the colour constants at the top to recolour without redrawing
 - **My Agent.app** — macOS desktop shortcut for MyAgent (each click launches a new instance; blue/yellow icon)
 - **My Agent.command** — Double-click launcher for MyAgent (macOS, opens Terminal). Exports Homebrew bin paths to `PATH` so MCP servers spawned via `npx` are reachable from GUI launches
 - **LaunchMyAgent.sh** — Shell launcher for MyAgent (macOS)
@@ -789,7 +791,7 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
 
 **Architecture:**
 - A dedicated asyncio event loop runs in a background thread (MCP's Python SDK is async-only; MyAgent is sync). Tool calls dispatch via `asyncio.run_coroutine_threadsafe`
-- All server connections are held inside one `AsyncExitStack` for the lifetime of the app — close-on-shutdown unwinds them in `_finish_close` and terminates the spawned subprocesses cleanly
+- All server connections are held inside one `AsyncExitStack` owned by a long-lived **runner coroutine** (`_mcp_runner`) that connects, lists tools, then parks on a shutdown event for the whole app session. Splitting that lifecycle across multiple `run_coroutine_threadsafe` calls would let the connecting task end and take anyio's stdio reader/writer pumps with it (manifesting as `Connection closed` on the next `list_tools` call) — the runner pattern keeps every anyio cancel scope bound to a live task. Close-on-shutdown signals the runner, the stack unwinds in LIFO order, and the spawned subprocesses terminate cleanly
 - Tool names are namespaced as `<server>__<tool>` (double underscore — accepted by all four providers' tool-name regexes)
 - `_HAS_MCP` availability flag mirrors `_HAS_OLLAMA`: if the `mcp` Python package is not installed, the entire mixin is a graceful no-op and the MCP checkbox in the editor is disabled
 
@@ -835,6 +837,16 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
 **Token-budget awareness** — When MCP is on, every connected server's tool catalog is sent in the API request's `tools` parameter on every call. With ~55 Gmail tools that's ~5–10K input tokens per turn before the user's content. On 200K-context models this is a non-issue; on Ollama's 32K cap (Qwen3) it can matter for long agent loops. The MCP checkbox toggles all MCP tools at once — leave it off for tasks that don't need them.
 
 **Cross-platform** — MyAgent's MCP integration works identically on macOS and Windows after `git pull` plus a per-machine setup of `pip install mcp`, `mcp_servers.json`, and OAuth credentials. The MCP Python SDK handles Windows-specific subprocess quirks internally (resolving `npx` to `npx.cmd`, using Job Objects for cleanup). On Windows the credential path is `%USERPROFILE%\.gmail-mcp\` instead of `~/.gmail-mcp/`.
+
+**Debugging MCP** — Every `MCPMixin._mcp_log` call is dual-sinked to both MyAgent's queue (visible in the GUI activity widget) and `sys.stderr`. Under `pythonw.exe` stderr is silently discarded by the OS, so production behaviour is unchanged. For diagnostic launches that need to see the full MCP message stream from outside the GUI, redirect stderr at launch time:
+```bash
+# Windows (cmd.exe / PowerShell)
+.venv\Scripts\pythonw.exe MyAgent.py 2> mcp.log
+
+# macOS / Linux
+./.venv/bin/python MyAgent.py 2> mcp.log
+```
+The `mcp.log` file then captures every `✓ MCP server '<name>' connected` / `⚠ MCP server '<name>' failed` / `⚠ MCP refresh failed` line as it happens — useful when a server hangs at handshake, when the GUI activity widget is buried under a long agent loop's tool output, or when validating a fix without manually reading the GUI.
 
 #### Conversational Mode
 
