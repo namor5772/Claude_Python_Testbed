@@ -422,6 +422,8 @@ class StateMixin:
         self.desktop_enabled.set(entry.get("desktop", False))
         self.browser_enabled.set(entry.get("browser", False))
         self.meta_enabled.set(entry.get("meta", False))
+        self.mcp_enabled.set(entry.get("mcp", False))
+        self.conversational_enabled.set(entry.get("conversational", False))
         model_restored = "model" in entry
         if model_restored:
             self._restore_model_params(entry)

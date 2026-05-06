@@ -5,7 +5,7 @@ from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, DEFAULT_GEOMETRY,
     PROVIDERS, FALLBACK_MODELS, OPENAI_FALLBACK_MODELS, GEMINI_FALLBACK_MODELS,
     OLLAMA_FALLBACK_MODELS, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
-    ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP,
+    ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL,
 )
@@ -60,7 +60,9 @@ class InstructionsMixin:
                 desktop = "desktop" if entry.get("desktop") else ""
                 browser = "browser" if entry.get("browser") else ""
                 meta = "meta" if entry.get("meta") else ""
-                flags = " ".join(f for f in [desktop, browser, meta] if f)
+                mcp = "mcp" if entry.get("mcp") else ""
+                convo = "convo" if entry.get("conversational") else ""
+                flags = " ".join(f for f in [desktop, browser, meta, mcp, convo] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
                 lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
             return "\n".join(lines)
@@ -78,6 +80,8 @@ class InstructionsMixin:
                 "desktop": entry.get("desktop", False),
                 "browser": entry.get("browser", False),
                 "meta": entry.get("meta", False),
+                "mcp": entry.get("mcp", False),
+                "conversational": entry.get("conversational", False),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
                 "temperature": entry.get("temperature", 1.0),
@@ -103,6 +107,8 @@ class InstructionsMixin:
                 "desktop": params.get("desktop", False),
                 "browser": params.get("browser", False),
                 "meta": params.get("meta", False),
+                "mcp": params.get("mcp", False),
+                "conversational": params.get("conversational", False),
                 "provider": self.provider,
                 "model": self.model,
                 "temperature": self.temperature,
@@ -122,8 +128,8 @@ class InstructionsMixin:
         elif action == "update":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
-            updatable = ("text", "desktop", "browser", "meta", "skill_modes",
-                         "provider", "model", "temperature",
+            updatable = ("text", "desktop", "browser", "meta", "mcp", "conversational",
+                         "skill_modes", "provider", "model", "temperature",
                          "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity")
             if all(params.get(k) is None for k in updatable):
@@ -134,7 +140,7 @@ class InstructionsMixin:
                     "'thinking_mode', or 'text_verbosity' must be provided for update."
                 )
             entry = instructions[name]
-            for key in ("text", "desktop", "browser", "meta",
+            for key in ("text", "desktop", "browser", "meta", "mcp", "conversational",
                         "provider", "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity"):
@@ -321,6 +327,8 @@ class InstructionsMixin:
         self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get() if _HAS_DESKTOP else False)
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
         self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
+        self._editor_mcp = tk.BooleanVar(value=self.mcp_enabled.get() if _HAS_MCP else False)
+        self._editor_conversational = tk.BooleanVar(value=self.conversational_enabled.get())
         _desktop_cb = tk.Checkbutton(
             img_frame, text="Desktop", variable=self._editor_desktop,
             font=("Arial", 9),
@@ -334,6 +342,17 @@ class InstructionsMixin:
         ).pack(side=tk.LEFT, padx=(5, 0))
         tk.Checkbutton(
             img_frame, text="Meta", variable=self._editor_meta,
+            font=("Arial", 9),
+        ).pack(side=tk.LEFT, padx=(5, 0))
+        _mcp_cb = tk.Checkbutton(
+            img_frame, text="MCP", variable=self._editor_mcp,
+            font=("Arial", 9),
+        )
+        _mcp_cb.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_MCP:
+            _mcp_cb.config(state=tk.DISABLED)
+        tk.Checkbutton(
+            img_frame, text="Convo", variable=self._editor_conversational,
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
@@ -447,6 +466,8 @@ class InstructionsMixin:
         self.desktop_enabled.set(self._editor_desktop.get())
         self.browser_enabled.set(self._editor_browser.get())
         self.meta_enabled.set(self._editor_meta.get())
+        self.mcp_enabled.set(self._editor_mcp.get())
+        self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = name
         # Persist to disk
@@ -460,6 +481,8 @@ class InstructionsMixin:
             "desktop": self.desktop_enabled.get(),
             "browser": self.browser_enabled.get(),
             "meta": self.meta_enabled.get(),
+            "mcp": self.mcp_enabled.get(),
+            "conversational": self.conversational_enabled.get(),
             "provider": self.provider,
             "model": self.model,
             "temperature": self.temperature,
@@ -502,6 +525,8 @@ class InstructionsMixin:
         self._editor_desktop.set(False)
         self._editor_browser.set(False)
         self._editor_meta.set(False)
+        self._editor_mcp.set(False)
+        self._editor_conversational.set(False)
         self._disabled_confirm_patterns = set()
         self._update_ps_safety_button()
         # Reset model controls to defaults
@@ -550,6 +575,8 @@ class InstructionsMixin:
             self._editor_desktop.set(entry.get("desktop", False))
             self._editor_browser.set(entry.get("browser", False))
             self._editor_meta.set(entry.get("meta", False))
+            self._editor_mcp.set(entry.get("mcp", False))
+            self._editor_conversational.set(entry.get("conversational", False))
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
             self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
@@ -566,6 +593,8 @@ class InstructionsMixin:
         self.desktop_enabled.set(self._editor_desktop.get())
         self.browser_enabled.set(self._editor_browser.get())
         self.meta_enabled.set(self._editor_meta.get())
+        self.mcp_enabled.set(self._editor_mcp.get())
+        self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
         # Restore skill modes from whichever instruction is loaded in editor

@@ -31,3 +31,6 @@ launch_err.txt
 
 # macOS Finder metadata
 .DS_Store
+
+# MCP server config — per-user, may contain commands or env-stored tokens
+mcp_servers.json

@@ -9,8 +9,8 @@ import os
 import tkinter as tk
 
 from myagent.constants import (
-    IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS,
-    PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _BASE_DIR, CHATS_DIR,
+    IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
+    PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _BASE_DIR, CHATS_DIR,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
 )
@@ -320,6 +320,11 @@ class StreamingMixin:
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
         if self.meta_enabled.get():
             tools.extend(copy.deepcopy(META_TOOLS))
+        # MCP tools are populated by MCPMixin._refresh_mcp_tools at connect-time.
+        # Empty when no servers configured or _HAS_MCP is False, so this is a
+        # no-op for users who haven't set up MCP.
+        if _HAS_MCP and getattr(self, "mcp_enabled", None) and self.mcp_enabled.get() and MCP_TOOLS:
+            tools.extend(copy.deepcopy(MCP_TOOLS))
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
             tools.append({
@@ -346,6 +351,14 @@ class StreamingMixin:
         csv_search, get_skill). Sequential tools (desktop, browser,
         run_powershell, user_prompt) must only be called from one thread.
         """
+        # MCP tools are namespaced "<server>__<tool>" — route them to the
+        # MCP mixin before the static tool dispatch chain. The lookup table
+        # keyed by full name is the authoritative test (substring on "__"
+        # would have false positives like a future native tool with two
+        # underscores in its name).
+        if _HAS_MCP and block.name in getattr(self, "_mcp_tools_by_name", {}):
+            self.queue.put({"type": "tool_info", "content": f"MCP: {block.name}\n"})
+            return self.do_mcp_call(block.name, block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")
             self.queue.put({"type": "tool_info", "content": f"Searching: {query}\n"})
@@ -801,6 +814,33 @@ class StreamingMixin:
 
                     messages.append({"role": "user", "content": tool_results_ordered})
                 else:
+                    # Conversational mode: when the per-instruction toggle is on,
+                    # MyAgent enforces a chatbot loop by invoking do_user_prompt
+                    # directly whenever the model ends a turn without calling
+                    # user_prompt itself. This is the strong fallback for smaller
+                    # open-weights models (Qwen3, Llama, etc.) that don't reliably
+                    # follow "always call user_prompt" meta-rules — the model's
+                    # behaviour no longer matters because MyAgent itself prompts
+                    # the user and feeds the response back as a user message.
+                    convo_mode = (getattr(self, "conversational_enabled", None)
+                                  and self.conversational_enabled.get())
+                    if convo_mode and full_text:
+                        messages.append({"role": "assistant", "content": full_text})
+                        next_msg = self.do_user_prompt(
+                            "Reply, or type empty / 'quit' / 'exit' / 'stop' to end."
+                        )
+                        if (not next_msg
+                                or next_msg.strip().lower() in ("quit", "exit", "stop")):
+                            self.queue.put({"type": "tool_info",
+                                            "content": "Conversation ended.\n"})
+                            full_text = ""  # already appended above; don't double-add
+                            break
+                        # do_user_prompt already emits user_prompt_echo from
+                        # safety_mixin — no second echo needed here.
+                        messages.append({"role": "user", "content": next_msg})
+                        full_text = ""
+                        label_emitted = False
+                        continue
                     # If the model has called user_prompt 2+ times (established chatbot
                     # loop pattern) but ended this turn without calling it, nudge it.
                     # A single user_prompt call could be a one-off info request, so

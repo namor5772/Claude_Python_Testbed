@@ -35,6 +35,15 @@ try:
 except Exception:
     _HAS_OLLAMA = False
 
+# MCP (Model Context Protocol) client for connecting to external tool servers
+# (Gmail, GitHub, Slack, etc.). Optional — absence hides the MCP checkbox and
+# leaves MyAgent's behaviour unchanged. Install via `pip install mcp` to enable.
+_HAS_MCP = True
+try:
+    import mcp  # noqa: F401
+except Exception:
+    _HAS_MCP = False
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -188,6 +197,14 @@ META_TOOLS = [
                 "meta": {
                     "type": "boolean",
                     "description": "Enable meta tools (default false on create)",
+                },
+                "mcp": {
+                    "type": "boolean",
+                    "description": "Enable MCP (Model Context Protocol) tools — external servers from mcp_servers.json (default false on create)",
+                },
+                "conversational": {
+                    "type": "boolean",
+                    "description": "Enable Conversational mode — MyAgent enforces a chatbot loop by invoking user_prompt automatically when the model ends a turn without it (default false on create). Useful for smaller models that don't reliably follow always-call-user_prompt rules.",
                 },
                 "provider": {
                     "type": "string",
@@ -949,6 +966,25 @@ OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
                           "llava", "llama3.2-vision", "bakllava",
                           "moondream", "minicpm-v", "granite3.2-vision")
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
+
+# ── MCP (Model Context Protocol) ─────────────────────────────────────────────
+# MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the
+# configured MCP servers have been connected. Tool names are namespaced with
+# the server name (e.g. "gmail__send_email") so dispatch can route to the right
+# server in _execute_tool. Empty by default — appended to _get_tools() output
+# only when self.mcp_enabled.get() is True AND _HAS_MCP is True.
+MCP_TOOLS = []
+
+# Per-user MCP server configuration. JSON shape mirrors Claude Desktop / Cursor:
+#   {"servers": {"<name>": {"command": "<bin>", "args": [...], "env": {...}}, ...}}
+# Allows existing community MCP servers (gmail, github, slack, etc.) to drop
+# in by config alone, no Python changes required.
+MCP_SERVERS_PATH = "mcp_servers.json"
+
+# Tool-name separator used to namespace MCP tools. The model sees
+# "<server>__<tool>" (double underscore) which is allowed by all four
+# providers' tool name regexes and unambiguously splittable.
+MCP_NAME_SEP = "__"
 
 # ── Anthropic API pricing (USD per million tokens) ────────────────────────────
 # Each entry: (input_price, output_price, cache_write_price, cache_read_price)

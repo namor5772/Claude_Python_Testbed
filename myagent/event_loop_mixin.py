@@ -247,5 +247,6 @@ class EventLoopMixin:
         self._save_last_state()
         self._auto_save_on_close()
         self._cleanup_browser()
+        self._disconnect_mcp_servers()
         self._release_instance_lock()
         self.root.destroy()

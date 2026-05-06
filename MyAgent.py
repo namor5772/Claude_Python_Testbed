@@ -39,7 +39,7 @@ import urllib.request
 from myagent.constants import (
     DEFAULT_GEOMETRY, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
     OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
-    OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA,
+    OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA, _HAS_MCP,
     AGENT_STATE_FILE, _BASE_DIR,
 )
 from myagent.ui_mixin import UIMixin
@@ -51,6 +51,7 @@ from myagent.anthropic_mixin import AnthropicMixin
 from myagent.openai_mixin import OpenAIMixin
 from myagent.gemini_mixin import GeminiMixin
 from myagent.ollama_mixin import OllamaMixin
+from myagent.mcp_mixin import MCPMixin
 from myagent.desktop_mixin import DesktopMixin
 from myagent.browser_mixin import BrowserMixin
 from myagent.safety_mixin import SafetyMixin
@@ -65,7 +66,7 @@ if _HAS_OLLAMA:
 
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
-          OllamaMixin,
+          OllamaMixin, MCPMixin,
           DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
           EventLoopMixin):
 
@@ -173,6 +174,13 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self.meta_enabled = tk.BooleanVar(value=False)
+        self.mcp_enabled = tk.BooleanVar(value=False)
+        self._init_mcp_state()
+        # Conversational mode: when on, MyAgent enforces a chatbot loop by
+        # invoking do_user_prompt directly whenever the model ends a turn
+        # without calling user_prompt itself. Useful for smaller models that
+        # don't reliably follow "always call user_prompt" meta-rules.
+        self.conversational_enabled = tk.BooleanVar(value=False)
         self._disabled_confirm_patterns = set()
         self._playwright = None
         self._browser = None
@@ -216,6 +224,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Connect MCP servers after the UI is up so a slow stdio handshake never
+        # blocks app launch. The mixin no-ops if no mcp_servers.json exists.
+        if _HAS_MCP:
+            self.root.after(100, self._connect_mcp_servers)
 
         if self._headless:
             self.root.withdraw()
