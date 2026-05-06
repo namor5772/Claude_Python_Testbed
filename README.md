@@ -7,7 +7,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting **Anthropic, OpenAI, Gemini, and Ollama (local inference)** providers (see details below)
-- **myagent/** — Package containing MyAgent's 15 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
+- **myagent/** — Package containing MyAgent's 16 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
@@ -17,6 +17,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
+- **mcp_servers.json** — Per-user MCP (Model Context Protocol) server configuration for MyAgent — JSON-RPC stdio servers (e.g. shinzo-labs Gmail) that expose external tool catalogs. Created manually, gitignored (may contain commands or env-stored secrets). See the **MCP Integration** section under MyAgent for setup
 - **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
@@ -29,7 +30,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **LaunchSelfBot.bat** — One-click launcher that starts both SelfBot instances side by side (Windows)
 - **LaunchMyAgent.bat** — One-click launcher for MyAgent (Windows)
 - **My Agent.app** — macOS desktop shortcut for MyAgent (each click launches a new instance; blue/yellow icon)
-- **My Agent.command** — Double-click launcher for MyAgent (macOS, opens Terminal)
+- **My Agent.command** — Double-click launcher for MyAgent (macOS, opens Terminal). Exports Homebrew bin paths to `PATH` so MCP servers spawned via `npx` are reachable from GUI launches
 - **LaunchMyAgent.sh** — Shell launcher for MyAgent (macOS)
 - **selfbot_position.ps1** — PowerShell helper used by the SelfBot launcher to position and focus windows (Windows)
 
@@ -409,6 +410,8 @@ playwright      # Browser tools — connects to Edge/Chrome via CDP, no `playwri
 pyperclip       # Desktop tools — Unicode text input via clipboard paste
 winocr          # Desktop tools — OCR via Windows.Media.Ocr (read_screen_text, Windows only)
 opencv-python   # Desktop tools — image matching (find_image_on_screen)
+mcp             # MCP (Model Context Protocol) client — required only if you want to connect external MCP servers (Gmail, GitHub, Slack, etc.) via mcp_servers.json. Pulls in starlette/uvicorn/jsonschema and ~14 transitive deps. See MyAgent's MCP Integration section
+pywin32         # Windows-only — required by mcp for Job Object subprocess cleanup. Install if MCP server cleanup behaves oddly on Windows
 ```
 
 > **Note:** `playwright install` is **not** required. The app connects to the system-installed Microsoft Edge (or Google Chrome on macOS) via CDP, so no bundled browser binaries are needed.
@@ -453,6 +456,11 @@ export OPENAI_API_KEY="your-key-here"      # optional, for MyAgent OpenAI suppor
 export GEMINI_API_KEY="your-key-here"      # optional, for MyAgent Gemini support
 # Ollama local inference is auto-detected at localhost:11434 — no key required
 # (override the server URL via OLLAMA_BASE_URL if you run Ollama remotely)
+
+# Optional: external MCP server support (Gmail, GitHub, Slack, etc.)
+pip install mcp pywin32                    # pywin32 needed on Windows for clean subprocess cleanup
+# Then create mcp_servers.json at the project root with your server configs
+# (gitignored — see MyAgent's "MCP Integration" section for the format and OAuth setup)
 ```
 
 **macOS:**
@@ -475,6 +483,14 @@ pip install -r requirements.txt
 echo 'export ANTHROPIC_API_KEY="your-key-here"' >> ~/.zshrc
 echo 'export OPENAI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
 echo 'export GEMINI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
+# Tip: paste API keys via `echo 'export ... >> ~/.zshrc'` (not by editing ~/.zshrc in a
+# terminal-embedded editor) to avoid bracketed-paste-mode escape sequences leaking
+# into the file. A corrupted key shows up as `\x1b[200~sk-proj-...~` and causes
+# HTTP 400 errors on every API call.
+
+# Optional: external MCP server support
+pip install mcp                                                # adds Gmail / GitHub / Slack etc. via mcp_servers.json
+
 # Ollama is auto-detected at localhost:11434 — no key needed.
 # Optional tuning env vars for Ollama (see Ollama section below):
 # echo 'export OLLAMA_BASE_URL="http://localhost:11434"' >> ~/.zshrc
@@ -534,7 +550,9 @@ The application is a single-file tkinter app structured around the `App` class:
 
 A fire-and-forget autonomous task runner built with tkinter that supports **Anthropic** (Claude), **OpenAI** (GPT-4.1, GPT-5, o4-mini, etc.), and **Gemini** APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
-**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 15 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
+**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 16 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
+
+**External tool integration** — In addition to its 32 built-in tools (desktop, browser, meta), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like Gmail, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
 
 ### How the Agentic Loop Works
 
@@ -591,11 +609,13 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **Desktop** checkbox | Enable/disable the 13 desktop automation tools (plus the Gemini-only `find_element`) for this instruction |
 | **Browser** checkbox | Enable/disable the 11 browser automation tools for this instruction |
 | **Meta** checkbox | Enable/disable the 3 meta-agent tools (`manage_instructions`, `manage_skills`, `run_instruction`) for this instruction |
+| **MCP** checkbox | Enable/disable external MCP (Model Context Protocol) tools loaded from `mcp_servers.json`. Disabled if the `mcp` Python package is not installed. See **MCP Integration** below |
+| **Convo** checkbox | Enable Conversational mode — MyAgent enforces a chatbot loop by automatically invoking `user_prompt` whenever the model ends a turn without calling it. Designed for smaller open-weights models (Qwen3, Llama, gpt-oss) that don't reliably follow "always call user_prompt" meta-rules. See **Conversational Mode** below |
 | **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
 | **PS Safety** button | Open the PowerShell Safety dialog to selectively bypass individual confirmation patterns; the button label shows a count when patterns are bypassed (e.g., `PS Safety (3 bypassed)`) |
 | **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
 
-**Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser/Meta toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
+**Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser/Meta/MCP/Convo toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
 
 | Action | Makes it active | Saves to disk | Closes editor |
 |---|---|---|---|
@@ -606,7 +626,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Images persist with instructions** — When you save a named instruction, any attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
 
-**Tool toggles persist with instructions** — Each saved instruction stores its Desktop, Browser, and Meta checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window.
+**Tool toggles persist with instructions** — Each saved instruction stores its Desktop, Browser, Meta, MCP, and Convo checkbox states. Loading an instruction restores these toggles in the editor; SAVE or Apply commits them to the main window. The `python MyAgent.py -l "Name"` auto-launch path also restores all five toggles correctly so headless command-line runs behave identically to GUI-driven loads.
 
 **Provider and model parameters persist with instructions** — Each saved instruction stores the provider (Anthropic, OpenAI, or Gemini), model, temperature, and thinking settings. Loading an instruction from the dropdown immediately restores the provider, refreshes the model list, and sets the model and thinking parameters on the main toolbar.
 
@@ -728,6 +748,8 @@ Server-side code execution outputs (plots, charts) are displayed inline in the c
 
 **Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
 
+**MCP Tools (enabled via MCP checkbox):** Dynamically loaded from any MCP servers configured in `mcp_servers.json`. Tool names are namespaced as `<server>__<tool>` (double underscore) — so a `gmail` server contributes `gmail__send_email`, `gmail__search_emails`, etc. The set is empty when no servers are configured. See **MCP Integration** below for setup.
+
 **Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — tools for the agent to manage its own instruction library, shared skills, and launch other agents. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions — including the currently-running instruction (changes are saved to disk and take effect the next time the instruction is loaded, without affecting the live session). Read/create/update actions include `skill_modes` (a map of skill names to disabled/enabled/on_demand modes), and update uses merge semantics so omitted skills keep their current mode. `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget via `subprocess.Popen`); defaults to headless mode, with an optional `headless=false` parameter to show the GUI window — the launched process runs independently and the PID is returned. None of these tools are parallel-safe since they modify shared state or spawn processes.
 
 **User Interaction Tool:**
@@ -760,6 +782,83 @@ All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Chro
 **Grid overlay** — `screenshot` accepts an optional `grid=true` parameter that draws a 100-pixel coordinate grid (magenta gridlines + (x,y) labels) on top of the captured image after the API-limit resize but before PNG encoding. Drawn in `_draw_coord_grid` so the labels match the dimensions the model actually sees. Opt-in default off (gridlines obscure small UI text on regular screenshots); the tool description suggests using it for small/dense UI targets where pixel-level precision matters.
 
 **Weak combo warning** — At agent start, `stream_worker` checks for known-weak provider/model combinations with desktop tools enabled and posts a `⚠` warning to the activity output. Currently warns for: gpt-5 family with reasoning effort = `none`/`minimal`, gpt-5 `-chat` Instant variants, any `gemini-2.x` model, and any Ollama model that is **not** a vision model (e.g. text-only Qwen3 cannot see screenshots even though Ollama won't error when images are sent). A second Ollama-specific warning fires from `_stream_ollama_call` when the selected model's `/api/show` response does not advertise the `tools` capability — the tools parameter is silently dropped and the user is informed once per model/session. Informational only — does not change behaviour. Helps catch user-error model picks early.
+
+#### MCP Integration
+
+MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/mcp_mixin.py`) that connects to external MCP servers — JSON-RPC stdio servers like Gmail, GitHub, Slack, Postgres, filesystem, etc. — and exposes their tools through the same agent loop as native tools. The integration works across **all four providers** (Anthropic, OpenAI, Gemini, Ollama) since MCP tool schemas flow through MyAgent's existing `_get_tools()` assembler and each provider's translator.
+
+**Architecture:**
+- A dedicated asyncio event loop runs in a background thread (MCP's Python SDK is async-only; MyAgent is sync). Tool calls dispatch via `asyncio.run_coroutine_threadsafe`
+- All server connections are held inside one `AsyncExitStack` for the lifetime of the app — close-on-shutdown unwinds them in `_finish_close` and terminates the spawned subprocesses cleanly
+- Tool names are namespaced as `<server>__<tool>` (double underscore — accepted by all four providers' tool-name regexes)
+- `_HAS_MCP` availability flag mirrors `_HAS_OLLAMA`: if the `mcp` Python package is not installed, the entire mixin is a graceful no-op and the MCP checkbox in the editor is disabled
+
+**Setup:**
+
+1. **Install the MCP Python SDK:**
+   ```bash
+   pip install mcp
+   ```
+
+2. **Create `mcp_servers.json` at the project root** with one or more server entries. Format mirrors Claude Desktop / Cursor:
+   ```json
+   {
+     "servers": {
+       "gmail": {
+         "command": "npx",
+         "args": ["-y", "@shinzolabs/gmail-mcp"],
+         "env": { "PORT": "${RANDOM_PORT}" }
+       },
+       "filesystem": {
+         "command": "npx",
+         "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/projects"]
+       }
+     }
+   }
+   ```
+   This file is **gitignored** (`mcp_servers.json` may contain commands or env-stored tokens — never commit it).
+
+3. **For Gmail specifically (shinzo-labs server)** — go through the Google Cloud OAuth setup once:
+   - Create a Google Cloud project, enable the Gmail API, set up the OAuth consent screen, add yourself as a test user
+   - Create OAuth 2.0 **Desktop app** credentials, download as `~/.gmail-mcp/gcp-oauth.keys.json`
+   - Run `npx -y @shinzolabs/gmail-mcp auth` to complete the browser-based grant flow — refresh token saved to `~/.gmail-mcp/credentials.json`
+   - Restart MyAgent, tick the MCP checkbox in the instruction editor, save, and run
+
+4. **`${RANDOM_PORT}` placeholder for multi-instance support** — Some MCP servers (notably shinzo-labs gmail-mcp) bind a fixed TCP port at startup. Without `${RANDOM_PORT}`, two simultaneous MyAgent instances would collide on the default port (`EADDRINUSE`). The mixin substitutes any `${RANDOM_PORT}` token in env values with an OS-assigned free port at spawn time, so each instance gets its own port.
+
+5. **macOS GUI launches** — Both `My Agent.command` (the macOS launcher) and `mcp_mixin.py:_connect_one()` augment the spawned subprocess's PATH with `/opt/homebrew/bin` and `/usr/local/bin` so `npx` is reachable. macOS GUI launches inherit a stripped-down PATH from `launchctl` that excludes Homebrew by default — without this fix, MCP server spawn fails with `[Errno 2]`.
+
+**Tools available with the shinzo-labs Gmail server:** ~55 endpoints including `send_email`, `read_email`, `search_emails`, `draft_email`, `list_email_labels`, `create_filter`, vacation responder controls, S/MIME, send-as aliases, batch operations, and more. The model sees these as `gmail__send_email`, `gmail__search_emails`, etc.
+
+**Per-instruction toggle** — The MCP checkbox is per-instruction, persisted in `agent_instructions.json` alongside Desktop/Browser/Meta. Each saved instruction can independently enable or disable MCP without affecting others.
+
+**Token-budget awareness** — When MCP is on, every connected server's tool catalog is sent in the API request's `tools` parameter on every call. With ~55 Gmail tools that's ~5–10K input tokens per turn before the user's content. On 200K-context models this is a non-issue; on Ollama's 32K cap (Qwen3) it can matter for long agent loops. The MCP checkbox toggles all MCP tools at once — leave it off for tasks that don't need them.
+
+**Cross-platform** — MyAgent's MCP integration works identically on macOS and Windows after `git pull` plus a per-machine setup of `pip install mcp`, `mcp_servers.json`, and OAuth credentials. The MCP Python SDK handles Windows-specific subprocess quirks internally (resolving `npx` to `npx.cmd`, using Job Objects for cleanup). On Windows the credential path is `%USERPROFILE%\.gmail-mcp\` instead of `~/.gmail-mcp/`.
+
+#### Conversational Mode
+
+Smaller open-weights models (Qwen3:32B, Llama 3.x, gpt-oss) don't reliably follow "ALWAYS call `user_prompt` after every response" meta-rules — they often treat task completion as their own permission to end the turn, regardless of what the instruction says. The pre-existing `user_prompt` nudge in `stream_worker` only kicks in once the model has *already* called `user_prompt` 2+ times to "establish" chatbot mode, which means it never helps when the model never starts.
+
+The **Convo checkbox** in the instruction editor enables a stronger fallback: when the model ends a turn without calling `user_prompt` AND `conversational_enabled` is on, MyAgent itself invokes `do_user_prompt` directly, appends the user's response as a regular user message, and continues the loop. The model's compliance no longer matters — the chatbot loop is enforced at the agent-loop level.
+
+**Behaviour summary:**
+
+| Convo state | Behaviour when model ends turn without calling `user_prompt` |
+|---|---|
+| **Off (default)** | The existing 2+-calls nudge fires only if the model has already called `user_prompt` twice in the conversation — otherwise the loop exits cleanly (single-shot task semantics) |
+| **On** | MyAgent invokes `do_user_prompt` directly. The user's reply is appended as a user message and the loop continues. Empty / `quit` / `exit` / `stop` replies end the conversation cleanly |
+
+**When to use it:**
+- Long-running chatbot conversations with Ollama models (especially Qwen3, gpt-oss, Llama 3.x)
+- Any instruction where the agent should always wait for the next user input rather than terminate
+- Combined with MCP (e.g. Gmail) for an open-ended chatbot that can take real actions
+
+**When to leave it off:**
+- Single-shot task instructions (e.g. "Search the web for X and summarise") where ending on completion is correct
+- Frontier cloud models (Claude, GPT-5, Gemini 2.5+) that already follow always-call-user_prompt rules reliably — Convo mode is unnecessary overhead there but not harmful
+
+The Convo checkbox is per-instruction, persisted in `agent_instructions.json` alongside the other tool toggles. The two recovery layers (existing nudge + Convo mode) coexist: large frontier models follow the meta-rule and trigger neither; mid-tier models drift after a while and the nudge catches them; small models that don't even try get the Convo-mode hard fallback.
 
 #### Parallel Tool Execution
 
@@ -924,14 +1023,14 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 ### Architecture
 
-MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 15 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
+MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 16 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
 
 #### Module Breakdown
 
 | Module | Lines | Responsibility |
 |---|---:|---|
 | **`MyAgent.py`** | 210 | Entry point: DPI setup, `App` class with `__init__`, mixin inheritance, argparse CLI |
-| **`myagent/constants.py`** | 1060 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, API pricing tables (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`, `OLLAMA_PRICING` — empty, local is free), Ollama prefix lists (`OLLAMA_THINKING_PREFIXES`, `OLLAMA_VISION_PREFIXES`), `OLLAMA_NUM_CTX_CAP` KV-cache ceiling (env-overridable), file paths, default prompts |
+| **`myagent/constants.py`** | 1090 | Tool schemas (`TOOLS`, `META_TOOLS`, `DESKTOP_TOOLS`, `BROWSER_TOOLS`, `MCP_TOOLS` — runtime-populated), safety patterns (`COMMAND_BLOCKED`, `COMMAND_CONFIRM`), model constants, API pricing tables (`ANTHROPIC_PRICING`, `OPENAI_PRICING`, `GEMINI_PRICING`, `OLLAMA_PRICING` — empty, local is free), Ollama prefix lists (`OLLAMA_THINKING_PREFIXES`, `OLLAMA_VISION_PREFIXES`), `OLLAMA_NUM_CTX_CAP` KV-cache ceiling (env-overridable), MCP feature flag (`_HAS_MCP`), `MCP_SERVERS_PATH`, `MCP_NAME_SEP`, file paths, default prompts |
 | **`myagent/helpers.py`** | 44 | `HTMLTextExtractor` (HTML→text), `extract_text_from_html()`, `_ToolBlock` (provider-neutral tool wrapper) |
 | **`myagent/ui_mixin.py`** | 517 | `setup_ui()`, model/provider/thinking widget handlers, `_update_title()` |
 | **`myagent/state_mixin.py`** | 448 | Instance lock management, multi-monitor geometry detection, state persistence (`_save_last_state`, `_load_last_state`), auto-launch |
@@ -942,21 +1041,22 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 | **`myagent/openai_mixin.py`** | 417 | `_stream_responses()`, `_stream_responses_call()`, OpenAI model detection helpers, usage extraction, `_fetch_models_for_provider()` |
 | **`myagent/gemini_mixin.py`** | 544 | `_stream_gemini_call()`, `_messages_to_gemini()`, `_tools_to_gemini()`, Gemini coordinate hints, usage extraction |
 | **`myagent/ollama_mixin.py`** | 310 | `_stream_ollama_call()` (native `/api/chat` streaming with `think` flag, tool-capability gating, Qwen3 `<message>` wrapper stripping), `_messages_to_ollama()`, `_tools_to_ollama()`, `_fetch_ollama_models()`, `_get_ollama_model_caps()` (caches per-model `/api/show` result for capabilities + `context_length`), `_is_ollama_thinking_model()`, `_is_ollama_vision_model()` |
+| **`myagent/mcp_mixin.py`** | 220 | MCP (Model Context Protocol) client — `_connect_mcp_servers()`, `_disconnect_mcp_servers()`, `_refresh_mcp_tools()`, `do_mcp_call()`. Runs a dedicated asyncio loop in a background thread (MCP SDK is async-only), holds all server connections inside one `AsyncExitStack`, augments subprocess PATH for macOS GUI launches, substitutes `${RANDOM_PORT}` placeholders for multi-instance support |
 | **`myagent/desktop_mixin.py`** | 730 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
 | **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
 | **`myagent/safety_mixin.py`** | 447 | `_start_agent()`, `_stop_agent()`, PS Safety dialog, command safety checks, `_request_confirmation()`, `do_user_prompt()`, `run_powershell()`, `search_web()`, `fetch_url()` |
 | **`myagent/chat_mixin.py`** | 332 | Chat save/serialize, image attachment/compression, LaTeX→Unicode post-processing |
 | **`myagent/event_loop_mixin.py`** | 251 | `check_queue()` (main event loop with cost display handler), `_on_close()`, `_finish_close()` |
 
-**Total: ~7,460 lines across 18 files** (the original single-file was ~6,200 lines).
+**Total: ~7,710 lines across 19 files** (the original single-file was ~6,200 lines).
 
 #### How the Mixin Pattern Works
 
 ```python
-# MyAgent.py — the App class inherits from all 15 mixins
+# MyAgent.py — the App class inherits from all 16 mixins
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
-          OllamaMixin,
+          OllamaMixin, MCPMixin,
           DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
           EventLoopMixin):
     def __init__(self, root, launch_instruction=None, headless=False):
@@ -980,7 +1080,7 @@ Adding a new tool to MyAgent requires changes in up to 4 files:
 - **Multi-Provider Support** — The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary. OpenAI translation via `_messages_to_responses()` / `_tools_to_responses()` in `streaming_mixin.py`; Gemini translation via `_messages_to_gemini()` / `_tools_to_gemini()` in `gemini_mixin.py`. The `_ToolBlock` wrapper (in `helpers.py`) normalises OpenAI/Gemini dict-based tool responses to match Anthropic's `.name`/`.id`/`.input` interface, so `_execute_tool()` works identically for all providers
 - **Agentic Loop** — `stream_worker()` in `streaming_mixin.py` runs a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` (each in their own mixin), processes the response, executes any requested tools via `_execute_tool()`, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button
 - **Parallel Tool Execution** — When Claude requests multiple tools in one turn, `stream_worker()` partitions them into parallel-safe (`csv_search`, `get_skill`, plus `web_search`/`fetch_webpage` for Gemini) and sequential (everything else). Parallel-safe tools run concurrently via `ThreadPoolExecutor`; sequential tools run one at a time. Results are placed into a pre-allocated list indexed by original position, preserving API-expected ordering
-- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, tool toggles, provider, model parameters, skill modes, and PS Safety overrides), `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` / `agent_state_N.json` for per-instance preferences (including the `diag_enabled` toggle) and dialog geometries, and `skills.json` (shared with SelfBot) for the skills library
+- **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, all five tool toggles — Desktop/Browser/Meta/MCP/Convo — provider, model parameters, skill modes, and PS Safety overrides), `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` / `agent_state_N.json` for per-instance preferences (including the `diag_enabled` toggle) and dialog geometries, `skills.json` (shared with SelfBot) for the skills library, and `mcp_servers.json` for per-user MCP server configuration (gitignored)
 - **Per-display coordinate state** — `_display_states[N]` and `_display_images[N]` track each display's most-recent capture (full or region) for `mouse_click` and `find_element` lookups; `_display_full_states[N]` and `_display_full_images[N]` track each display's most-recent FULL display capture for region screenshot conversions. The two-dict design prevents chained region screenshots from drifting through stacked offsets while still letting clicks reference whatever the model most recently saw of each display
 - **PowerShell Safety** — Two-tier regex-based guardrail system (patterns in `constants.py`, checks in `safety_mixin.py`), plus a PS Safety dialog for selectively bypassing individual confirm patterns. Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`
 - **Rate-Limit Retry** — Exponential backoff in the provider-specific streaming methods handles HTTP 429 and 529 errors with up to 10 retries. Rate-limit backoff capped at 60s; overload backoff capped at 90s
