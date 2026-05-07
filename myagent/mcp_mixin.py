@@ -58,8 +58,18 @@ def _free_port():
 from myagent.constants import _HAS_MCP, MCP_NAME_SEP, MCP_SERVERS_PATH, MCP_TOOLS, IS_WINDOWS as _IS_WINDOWS
 
 if _HAS_MCP:
-    from mcp import ClientSession, StdioServerParameters
+    from mcp import ClientSession, StdioServerParameters, types as mcp_types
     from mcp.client.stdio import stdio_client
+
+
+    async def _list_roots_callback(context):
+        """Return an empty ListRootsResult instead of the SDK's default ErrorData.
+        Some servers (e.g. @modelcontextprotocol/server-filesystem) interact
+        poorly when the client returns an error response to roots/list — the
+        anyio cancel scope around the response handling can close the
+        underlying stream, breaking the next real RPC with ClosedResourceError.
+        Returning a valid empty ListRootsResult keeps the channel healthy."""
+        return mcp_types.ListRootsResult(roots=[])
 
 
 class MCPMixin:
@@ -79,6 +89,7 @@ class MCPMixin:
         self._mcp_runner_future = None      # concurrent.Future of the runner task
         self._mcp_shutdown_event = None     # asyncio.Event signalling runner exit
         self._mcp_ready_event = None        # threading.Event signalling startup done
+        self._mcp_errlog = None             # file handle passed as subprocess stderr
 
     def _load_mcp_config(self):
         """Read MCP_SERVERS_PATH. Returns the ``servers`` dict or {} on any
@@ -111,23 +122,48 @@ class MCPMixin:
         if not config:
             return
 
+        # Open a stable stderr sink for child stdio servers. Must be a real
+        # file handle, not sys.stderr — under pythonw.exe sys.stderr can be
+        # None or a corrupted NUL stub, and asyncio's Windows ProactorEventLoop
+        # subprocess transport mishandles it, producing ClosedResourceError on
+        # the first real RPC. os.devnull works on every platform.
+        if self._mcp_errlog is None:
+            self._mcp_errlog = open(os.devnull, "w")
+
         # Spin up the dedicated event loop on a background thread.
-        self._mcp_loop = asyncio.new_event_loop()
+        # CRITICAL: the loop must be CREATED inside the runner thread, not
+        # on the main thread. On Windows, ProactorEventLoop's IOCP (I/O
+        # completion port) is owned by the thread that constructs the
+        # loop. Subprocess transports register stdio pipe handles to that
+        # IOCP. If we create the loop on the main thread but run it on a
+        # background thread, IOCP completion events are queued to the
+        # original thread but drained from the runner thread — most
+        # operations survive but bursty subprocess stdio (initialize →
+        # list_tools in rapid succession against
+        # @modelcontextprotocol/server-filesystem) hits spurious EOF and
+        # surfaces ``ClosedResourceError`` on the client side. Creating
+        # the loop inside the runner is what ``asyncio.run()`` does
+        # implicitly, which is why standalone async scripts don't hit
+        # this bug while MyAgent's threaded setup does.
         loop_ready = threading.Event()
+        loop_holder = []
 
         def _loop_runner():
-            asyncio.set_event_loop(self._mcp_loop)
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop_holder.append(loop)
             loop_ready.set()
             try:
-                self._mcp_loop.run_forever()
+                loop.run_forever()
             finally:
-                self._mcp_loop.close()
+                loop.close()
 
         self._mcp_thread = threading.Thread(
             target=_loop_runner, daemon=True, name="MCPLoop"
         )
         self._mcp_thread.start()
         loop_ready.wait()
+        self._mcp_loop = loop_holder[0]
 
         # Launch the runner — one long-lived task that owns every connection.
         # Block this thread until the runner has finished connecting + listing
@@ -203,60 +239,83 @@ class MCPMixin:
         exists. Sequential connects keep every scope bound to the runner
         task itself, so the lifecycle is consistent across platforms."""
         for name, spec in config.items():
-            try:
-                # Build subprocess env: inherit current process env, then layer
-                # any user-supplied env on top, then augment PATH with the dirs
-                # where Homebrew / standard local tools live. macOS GUI launches
-                # (Finder double-click, Dock, .app bundles) inherit a stripped
-                # PATH from launchctl that excludes /opt/homebrew/bin, so spawning
-                # `npx` / `uvx` / `bunx` fails with [Errno 2]. Augmenting here
-                # makes MCP work regardless of how MyAgent was launched.
-                env = dict(os.environ)
-                env.update(spec.get("env") or {})
-                # Substitute ${RANDOM_PORT} in env values with an OS-assigned
-                # free port. Lets multiple MyAgent instances run MCP servers
-                # that bind a TCP port (e.g. shinzo-labs gmail-mcp listens on
-                # PORT=3000 by default) without colliding on EADDRINUSE.
-                for k, v in list(env.items()):
-                    if isinstance(v, str) and "${RANDOM_PORT}" in v:
-                        env[k] = v.replace("${RANDOM_PORT}", str(_free_port()))
-                if not _IS_WINDOWS:
-                    path_parts = env.get("PATH", "").split(os.pathsep)
-                    for extra in ("/opt/homebrew/bin", "/usr/local/bin",
-                                  "/opt/homebrew/sbin"):
-                        if extra not in path_parts:
-                            path_parts.append(extra)
-                    env["PATH"] = os.pathsep.join(p for p in path_parts if p)
-                params = StdioServerParameters(
-                    command=spec.get("command", ""),
-                    args=list(spec.get("args", []) or []),
-                    env=env,
-                )
-                # stdio_client returns (read_stream, write_stream) — both must
-                # stay open for the lifetime of the ClientSession layered on top.
-                streams = await self._mcp_exit_stack.enter_async_context(
-                    stdio_client(params)
-                )
-                session = await self._mcp_exit_stack.enter_async_context(
-                    ClientSession(*streams)
-                )
-                await session.initialize()
-                self._mcp_sessions[name] = session
-                self._mcp_log(f"✓ MCP server '{name}' connected\n")
+            session = await self._open_server_session(name, spec)
+            if session is None:
+                continue
+            self._mcp_sessions[name] = session
+            self._mcp_log(f"✓ MCP server '{name}' connected\n")
+            # List this server's tools IMMEDIATELY before any other server's
+            # setup runs. With multiple stdio_client contexts entered on the
+            # same AsyncExitStack, the next ``enter_async_context`` can
+            # nudge the previous session's anyio scope into a partial-close
+            # state, manifesting as ``ClosedResourceError`` on the older
+            # session's first use. By listing tools while this session is
+            # still the most-recently-set-up resource, we capture them
+            # before any interference window opens. Errors here don't
+            # abort the connect loop — the server still gets added to
+            # ``_mcp_sessions`` and ``do_mcp_call`` can recover later.
+            await self._list_tools_for_server(name, spec)
 
-                # List this server's tools IMMEDIATELY before any other server's
-                # setup runs. With multiple stdio_client contexts entered on the
-                # same AsyncExitStack, the next ``enter_async_context`` can
-                # nudge the previous session's anyio scope into a partial-close
-                # state, manifesting as ``ClosedResourceError`` on the older
-                # session's first use. By listing tools while this session is
-                # still the most-recently-set-up resource, we capture them
-                # before any interference window opens. Errors here don't
-                # abort the connect loop — the server still gets added to
-                # ``_mcp_sessions`` and ``do_mcp_call`` can recover later.
-                await self._list_tools_for_server(name)
-            except Exception as e:
-                self._mcp_log(f"⚠ MCP server '{name}' failed to connect: {e}\n")
+    async def _open_server_session(self, name, spec):
+        """Spawn a single stdio MCP server and return an initialized
+        ``ClientSession``, or ``None`` on failure. Pulled out of
+        ``_connect_all`` so the same setup can be reused by
+        ``_list_tools_for_server`` to reconnect a server whose stdio stream
+        closed between ``initialize()`` and the first real RPC (a known
+        intermittent failure mode for ``@modelcontextprotocol/server-filesystem``
+        on Windows). The new session enters the same ``_mcp_exit_stack`` so
+        its resources unwind correctly at app shutdown alongside the dead
+        session's stale entries."""
+        try:
+            # Build subprocess env: inherit current process env, then layer
+            # any user-supplied env on top, then augment PATH with the dirs
+            # where Homebrew / standard local tools live. macOS GUI launches
+            # (Finder double-click, Dock, .app bundles) inherit a stripped
+            # PATH from launchctl that excludes /opt/homebrew/bin, so spawning
+            # `npx` / `uvx` / `bunx` fails with [Errno 2]. Augmenting here
+            # makes MCP work regardless of how MyAgent was launched.
+            env = dict(os.environ)
+            env.update(spec.get("env") or {})
+            # Substitute ${RANDOM_PORT} in env values with an OS-assigned
+            # free port. Lets multiple MyAgent instances run MCP servers
+            # that bind a TCP port (e.g. shinzo-labs gmail-mcp listens on
+            # PORT=3000 by default) without colliding on EADDRINUSE.
+            for k, v in list(env.items()):
+                if isinstance(v, str) and "${RANDOM_PORT}" in v:
+                    env[k] = v.replace("${RANDOM_PORT}", str(_free_port()))
+            if not _IS_WINDOWS:
+                path_parts = env.get("PATH", "").split(os.pathsep)
+                for extra in ("/opt/homebrew/bin", "/usr/local/bin",
+                              "/opt/homebrew/sbin"):
+                    if extra not in path_parts:
+                        path_parts.append(extra)
+                env["PATH"] = os.pathsep.join(p for p in path_parts if p)
+            params = StdioServerParameters(
+                command=spec.get("command", ""),
+                args=list(spec.get("args", []) or []),
+                env=env,
+            )
+            # stdio_client returns (read_stream, write_stream) — both must
+            # stay open for the lifetime of the ClientSession layered on top.
+            # We pass an explicit ``errlog`` (sink for the subprocess's stderr)
+            # because the mcp SDK's default is ``sys.stderr`` — under
+            # ``pythonw.exe`` (no console attached, e.g. desktop shortcut or
+            # .bat without redirect) sys.stderr is None / a NUL stub, and
+            # passing it as the subprocess's stderr handle corrupts asyncio's
+            # subprocess pipe setup on Windows ProactorEventLoop, producing
+            # ``ClosedResourceError`` on the first real RPC after initialize.
+            # Routing to ``os.devnull`` always gives a valid handle.
+            streams = await self._mcp_exit_stack.enter_async_context(
+                stdio_client(params, errlog=self._mcp_errlog)
+            )
+            session = await self._mcp_exit_stack.enter_async_context(
+                ClientSession(*streams, list_roots_callback=_list_roots_callback)
+            )
+            await session.initialize()
+            return session
+        except Exception as e:
+            self._mcp_log(f"⚠ MCP server '{name}' failed to connect: {e}\n")
+            return None
 
     def _disconnect_mcp_servers(self):
         """Signal the runner to exit, which unwinds the AsyncExitStack
@@ -283,10 +342,16 @@ class MCPMixin:
         self._mcp_runner_future = None
         self._mcp_shutdown_event = None
         self._mcp_connected = False
+        if self._mcp_errlog is not None:
+            try:
+                self._mcp_errlog.close()
+            except Exception:
+                pass
+            self._mcp_errlog = None
 
     # ── Tool discovery ───────────────────────────────────────────────────────
 
-    async def _list_tools_for_server(self, server_name):
+    async def _list_tools_for_server(self, server_name, spec=None):
         """List a single server's tools and append them to MCP_TOOLS. Called
         inline from ``_connect_all`` immediately after each ``session.initialize()``
         succeeds — listing right then catches the tools while the session is
@@ -298,17 +363,55 @@ class MCPMixin:
         a list_tools failure for one server should not abort the connect loop
         for the others, and ``do_mcp_call`` can still attempt to use the
         session if the model invokes a tool that someone happens to know about
-        (e.g. cached schema from a previous session)."""
+        (e.g. cached schema from a previous session).
+
+        Reconnect-on-close: if the session's stdio stream closed between
+        ``initialize()`` and the first ``list_tools`` call (an intermittent
+        race with ``@modelcontextprotocol/server-filesystem`` on Windows),
+        anyio raises ``ClosedResourceError``. Retrying against the same
+        session is futile — the resource is terminal-closed. Instead, we
+        spawn a fresh session via ``_open_server_session``, swap it into
+        ``_mcp_sessions``, and try once more. The dead session's stack
+        entries linger until app shutdown but LIFO unwind tolerates them.
+        ``spec`` is required for the reconnect path; pass it from callers
+        that have it, or omit and we'll re-read the config from disk."""
         session = self._mcp_sessions.get(server_name)
         if session is None:
             return
-        try:
-            result = await session.list_tools()
-        except BaseException as e:
-            self._mcp_log(
-                f"⚠ MCP server '{server_name}' list_tools failed: "
-                f"{type(e).__name__}: {e}\n"
-            )
+        await asyncio.sleep(0.05)
+        result = None
+        for attempt in range(2):
+            try:
+                result = await session.list_tools()
+                break
+            except BaseException as e:
+                msg = f"{type(e).__name__}: {e}".lower()
+                stream_closed = "connection closed" in msg or "closedresource" in msg
+                if stream_closed and attempt == 0:
+                    self._mcp_log(
+                        f"⚠ '{server_name}' stream closed between init and "
+                        f"list_tools — reconnecting and retrying\n"
+                    )
+                    if spec is None:
+                        spec = self._load_mcp_config().get(server_name)
+                    if spec is None:
+                        self._mcp_log(
+                            f"⚠ '{server_name}' reconnect skipped: no config\n"
+                        )
+                        return
+                    new_session = await self._open_server_session(server_name, spec)
+                    if new_session is None:
+                        return
+                    self._mcp_sessions[server_name] = new_session
+                    session = new_session
+                    await asyncio.sleep(0.1)
+                    continue
+                self._mcp_log(
+                    f"⚠ MCP server '{server_name}' list_tools failed: "
+                    f"{type(e).__name__}: {e}\n"
+                )
+                return
+        if result is None:
             return
         for tool in getattr(result, "tools", []) or []:
             full_name = f"{server_name}{MCP_NAME_SEP}{tool.name}"

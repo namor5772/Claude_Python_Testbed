@@ -34,3 +34,7 @@ launch_err.txt
 
 # MCP server config — per-user, may contain commands or env-stored tokens
 mcp_servers.json
+
+# Vendored MCP server packages (installed locally so we can patch them
+# without npx cache volatility — paths are absolute and per-machine)
+.mcp-deps/
