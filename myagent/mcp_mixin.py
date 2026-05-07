@@ -132,15 +132,20 @@ class MCPMixin:
         # Launch the runner — one long-lived task that owns every connection.
         # Block this thread until the runner has finished connecting + listing
         # tools (signalled via the threading.Event), so callers see a fully
-        # populated MCP_TOOLS list when this method returns.
+        # populated MCP_TOOLS list when this method returns. The 5-minute
+        # ceiling is generous on purpose: first-run cold-cache `npx -y`
+        # downloads of fat packages (gmail-mcp pulls in `googleapis` ~100MB)
+        # can take 30-90s on broadband and longer on slower links. Warm-cache
+        # launches complete in 1-3s, so the long ceiling costs nothing in
+        # practice and only fires when a server is genuinely stuck.
         self._mcp_ready_event = threading.Event()
         self._mcp_runner_future = asyncio.run_coroutine_threadsafe(
             self._mcp_runner(config), self._mcp_loop
         )
-        if self._mcp_ready_event.wait(timeout=30):
+        if self._mcp_ready_event.wait(timeout=300):
             self._mcp_connected = bool(self._mcp_sessions)
         else:
-            self._mcp_log("⚠ MCP startup timed out\n")
+            self._mcp_log("⚠ MCP startup timed out after 5 minutes\n")
 
     async def _mcp_runner(self, config):
         """Long-lived task owning all MCP connections for the app's lifetime.
@@ -155,8 +160,14 @@ class MCPMixin:
         self._mcp_exit_stack = AsyncExitStack()
         try:
             async with self._mcp_exit_stack:
+                # _connect_all now lists tools inline per-server immediately
+                # after each successful initialize(), populating MCP_TOOLS
+                # within the same anyio scope as the connect. Calling
+                # _refresh_mcp_tools_async after the loop is no longer needed
+                # and was the source of the ClosedResourceError from listing
+                # against a session whose scope had been disturbed by later
+                # sessions' setup.
                 await self._connect_all(config)
-                await self._refresh_mcp_tools_async()
                 self._mcp_ready_event.set()
                 await self._mcp_shutdown_event.wait()
             # Drain pending Windows ProactorEventLoop pipe-close callbacks
@@ -232,6 +243,18 @@ class MCPMixin:
                 await session.initialize()
                 self._mcp_sessions[name] = session
                 self._mcp_log(f"✓ MCP server '{name}' connected\n")
+
+                # List this server's tools IMMEDIATELY before any other server's
+                # setup runs. With multiple stdio_client contexts entered on the
+                # same AsyncExitStack, the next ``enter_async_context`` can
+                # nudge the previous session's anyio scope into a partial-close
+                # state, manifesting as ``ClosedResourceError`` on the older
+                # session's first use. By listing tools while this session is
+                # still the most-recently-set-up resource, we capture them
+                # before any interference window opens. Errors here don't
+                # abort the connect loop — the server still gets added to
+                # ``_mcp_sessions`` and ``do_mcp_call`` can recover later.
+                await self._list_tools_for_server(name)
             except Exception as e:
                 self._mcp_log(f"⚠ MCP server '{name}' failed to connect: {e}\n")
 
@@ -263,32 +286,52 @@ class MCPMixin:
 
     # ── Tool discovery ───────────────────────────────────────────────────────
 
+    async def _list_tools_for_server(self, server_name):
+        """List a single server's tools and append them to MCP_TOOLS. Called
+        inline from ``_connect_all`` immediately after each ``session.initialize()``
+        succeeds — listing right then catches the tools while the session is
+        still the most-recently-set-up resource and avoids the inter-server
+        interference window that produces ``ClosedResourceError`` if listing
+        is deferred to a later batch step.
+
+        Errors are logged with exception type and message, but never raised —
+        a list_tools failure for one server should not abort the connect loop
+        for the others, and ``do_mcp_call`` can still attempt to use the
+        session if the model invokes a tool that someone happens to know about
+        (e.g. cached schema from a previous session)."""
+        session = self._mcp_sessions.get(server_name)
+        if session is None:
+            return
+        try:
+            result = await session.list_tools()
+        except BaseException as e:
+            self._mcp_log(
+                f"⚠ MCP server '{server_name}' list_tools failed: "
+                f"{type(e).__name__}: {e}\n"
+            )
+            return
+        for tool in getattr(result, "tools", []) or []:
+            full_name = f"{server_name}{MCP_NAME_SEP}{tool.name}"
+            MCP_TOOLS.append({
+                "name": full_name,
+                "description": (tool.description or "")[:1024],
+                "input_schema": getattr(tool, "inputSchema", None)
+                                or {"type": "object", "properties": {}},
+            })
+            self._mcp_tools_by_name[full_name] = (server_name, tool.name)
+
     async def _refresh_mcp_tools_async(self):
-        """Re-fetch tools from every connected server and rebuild MCP_TOOLS
-        + the lookup table. Async version — called inline from the runner
-        task during startup, so each ``session.list_tools()`` runs while the
-        owning task is still alive. Mutates the module-level MCP_TOOLS list
-        in place so existing references in streaming_mixin keep pointing to
-        the same object."""
+        """Re-fetch tools from every connected server and rebuild MCP_TOOLS.
+        Used by the sync ``_refresh_mcp_tools`` wrapper for callers that want
+        to refresh the catalog after startup (e.g., adding a server at
+        runtime). The startup path uses ``_list_tools_for_server`` inline
+        from ``_connect_all`` instead, to avoid the ``ClosedResourceError``
+        that hits when listing is deferred until after every server has set
+        up its anyio scope."""
         MCP_TOOLS.clear()
         self._mcp_tools_by_name.clear()
-        if not self._mcp_sessions:
-            return
-        for server_name, session in self._mcp_sessions.items():
-            try:
-                result = await session.list_tools()
-            except Exception as e:
-                self._mcp_log(f"⚠ MCP server '{server_name}' list_tools failed: {e}\n")
-                continue
-            for tool in getattr(result, "tools", []) or []:
-                full_name = f"{server_name}{MCP_NAME_SEP}{tool.name}"
-                MCP_TOOLS.append({
-                    "name": full_name,
-                    "description": (tool.description or "")[:1024],
-                    "input_schema": getattr(tool, "inputSchema", None)
-                                    or {"type": "object", "properties": {}},
-                })
-                self._mcp_tools_by_name[full_name] = (server_name, tool.name)
+        for server_name in list(self._mcp_sessions.keys()):
+            await self._list_tools_for_server(server_name)
 
     def _refresh_mcp_tools(self):
         """Sync wrapper around ``_refresh_mcp_tools_async``. Schedules onto
