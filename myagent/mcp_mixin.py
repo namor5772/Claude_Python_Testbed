@@ -174,11 +174,24 @@ class MCPMixin:
                 self._mcp_ready_event.set()
 
     async def _connect_all(self, config):
-        """Open every configured stdio server in parallel and store their
-        sessions in ``self._mcp_sessions``. Must be called from inside the
-        runner task — it relies on ``self._mcp_exit_stack`` being open."""
+        """Open every configured stdio server **sequentially in the runner
+        task** and store their sessions in ``self._mcp_sessions``. Must be
+        called from inside the runner task — it relies on
+        ``self._mcp_exit_stack`` being open AND on every ``enter_async_context``
+        call running in the same task that will eventually unwind the stack.
 
-        async def _connect_one(name, spec):
+        Why sequential and not ``asyncio.gather``: ``stdio_client`` and
+        ``ClientSession`` use anyio task groups internally whose cancel scopes
+        bind to the calling task. ``asyncio.gather(_connect_one(...))`` would
+        spawn each connect as a child task; the cancel scopes would bind to
+        those child tasks, which finish as soon as ``_connect_one`` returns —
+        leaving the contexts orphaned in ``_mcp_exit_stack``. On macOS this
+        triggers ``Attempted to exit cancel scope in a different task than it
+        was entered in`` at exit time; on Windows ProactorEventLoop the
+        stricter binding doesn't fire but the same orphan-scope hazard
+        exists. Sequential connects keep every scope bound to the runner
+        task itself, so the lifecycle is consistent across platforms."""
+        for name, spec in config.items():
             try:
                 # Build subprocess env: inherit current process env, then layer
                 # any user-supplied env on top, then augment PATH with the dirs
@@ -221,11 +234,6 @@ class MCPMixin:
                 self._mcp_log(f"✓ MCP server '{name}' connected\n")
             except Exception as e:
                 self._mcp_log(f"⚠ MCP server '{name}' failed to connect: {e}\n")
-
-        await asyncio.gather(
-            *(_connect_one(n, s) for n, s in config.items()),
-            return_exceptions=True,
-        )
 
     def _disconnect_mcp_servers(self):
         """Signal the runner to exit, which unwinds the AsyncExitStack
