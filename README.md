@@ -18,6 +18,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
 - **mcp_servers.json** — Per-user MCP (Model Context Protocol) server configuration for MyAgent — JSON-RPC stdio servers (e.g. shinzo-labs Gmail) that expose external tool catalogs. Created manually, gitignored (may contain commands or env-stored secrets). See the **MCP Integration** section under MyAgent for setup
+- **mcp_servers.example.json** — Tracked template for `mcp_servers.json`. On a new machine, copy this to `mcp_servers.json` and edit the placeholder filesystem path for your project. Never put real secrets (API tokens, OAuth client secrets) in either file — credentials always live in per-server config dirs outside the repo (e.g. `~/.gmail-mcp/credentials.json`)
 - **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
@@ -803,14 +804,18 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
    pip install mcp
    ```
 
-2. **Create `mcp_servers.json` at the project root** with one or more server entries. Format mirrors Claude Desktop / Cursor:
+2. **Create `mcp_servers.json` at the project root.** The fastest path is to copy the tracked template:
+   ```bash
+   cp mcp_servers.example.json mcp_servers.json
+   ```
+   Then edit `mcp_servers.json` to replace the `<absolute-path-to-your-project-root>` placeholder with the real absolute path to your local clone (e.g. `C:/Users/you/projects/Claude_Python_Testbed` or `/Users/you/projects/Claude_Python_Testbed`). Add or remove server blocks as needed. Format mirrors Claude Desktop / Cursor:
    ```json
    {
      "servers": {
        "gmail": {
          "command": "npx",
          "args": ["-y", "@shinzolabs/gmail-mcp"],
-         "env": { "PORT": "${RANDOM_PORT}" }
+         "env": { "PORT": "${RANDOM_PORT}", "TELEMETRY_ENABLED": "false" }
        },
        "filesystem": {
          "command": "npx",
@@ -819,7 +824,7 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
      }
    }
    ```
-   This file is **gitignored** (`mcp_servers.json` may contain commands or env-stored tokens — never commit it).
+   `mcp_servers.json` is **gitignored**; `mcp_servers.example.json` is **tracked**. Never put real secrets (API tokens, OAuth client secrets) in either file — keep that boundary even if you're tempted to "just commit a quick edit" later. Credentials always live in per-server config dirs outside the repo (`~/.gmail-mcp/credentials.json` for Gmail, etc.).
 
 3. **For Gmail specifically (shinzo-labs server)** — go through the Google Cloud OAuth setup once:
    - Create a Google Cloud project, enable the Gmail API, set up the OAuth consent screen, add yourself as a test user

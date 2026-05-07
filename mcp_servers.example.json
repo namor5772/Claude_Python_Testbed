@@ -1,0 +1,24 @@
+{
+  "_README": "Template for mcp_servers.json. On a new machine, copy this file to mcp_servers.json (which is gitignored) and edit the values for your environment. Never put secrets like API tokens or OAuth client secrets in the real mcp_servers.json — those go in per-server credential files outside the repo (e.g. ~/.gmail-mcp/credentials.json for Gmail).",
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "<absolute-path-to-your-project-root>"
+      ]
+    },
+    "gmail": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@shinzolabs/gmail-mcp"
+      ],
+      "env": {
+        "PORT": "${RANDOM_PORT}",
+        "TELEMETRY_ENABLED": "false"
+      }
+    }
+  }
+}
