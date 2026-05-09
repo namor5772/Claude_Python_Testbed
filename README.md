@@ -856,6 +856,30 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
 
 **Sharing OAuth credentials across machines** — Both `~/.gmail-mcp/gcp-oauth.keys.json` and `~/.gmail-mcp/credentials.json` (the OAuth client identity + the user's refresh token) are *machine-independent*. The refresh token is bound to the OAuth client + Google account + scopes triple, not to the host. Copy both files to a second machine's `.gmail-mcp/` directory and Gmail MCP works there immediately without re-running the consent flow. Recommended transfer methods: USB stick, AirDrop, `scp` over LAN, or `magic-wormhole` — anything you control end-to-end. Avoid email, public cloud sync, or chat platforms (these files grant full Gmail account access and shouldn't pass through third-party services). Wipe the source-side copy after the transfer completes.
 
+**Multiple Gmail accounts via separate MCP_CONFIG_DIRs** — `@shinzolabs/gmail-mcp` is single-account-per-process (its OAuth tokens live in one `credentials.json` inside `MCP_CONFIG_DIR`, which defaults to `~/.gmail-mcp/`). To expose a second Gmail account to the agent, declare a *second* server entry in `mcp_servers.json` pointing at the *same* npm install but with `MCP_CONFIG_DIR` env-overridden to a different directory. Each directory holds its own `gcp-oauth.keys.json` (the same OAuth client across accounts is fine — just copy the file) and its own `credentials.json` (the per-account refresh token, written by re-running the auth flow). Example with two accounts:
+```json
+{
+  "servers": {
+    "gmail": {
+      "command": "node",
+      "args": [".mcp-deps/node_modules/@shinzolabs/gmail-mcp/dist/index.js"],
+      "env": { "PORT": "${RANDOM_PORT}", "TELEMETRY_ENABLED": "false" }
+    },
+    "gmail_other": {
+      "command": "node",
+      "args": [".mcp-deps/node_modules/@shinzolabs/gmail-mcp/dist/index.js"],
+      "env": {
+        "MCP_CONFIG_DIR": "C:/Users/you/.gmail-mcp-other",
+        "PORT": "${RANDOM_PORT}",
+        "AUTH_SERVER_PORT": "3456",
+        "TELEMETRY_ENABLED": "false"
+      }
+    }
+  }
+}
+```
+Setup for the second account: `mkdir ~/.gmail-mcp-other && cp ~/.gmail-mcp/gcp-oauth.keys.json ~/.gmail-mcp-other/`, add the second Gmail address as a Test user in the GCP consent screen for the same project, then run the auth flow once with `MCP_CONFIG_DIR` and `AUTH_SERVER_PORT` set: `MCP_CONFIG_DIR=$HOME/.gmail-mcp-other AUTH_SERVER_PORT=3456 node .mcp-deps/node_modules/@shinzolabs/gmail-mcp/dist/index.js auth`. Sign in as the *second* account when the browser opens; `credentials.json` is written into the new dir. Restart MyAgent — both servers connect side-by-side and tools appear under their server-name prefixes (`gmail__send_message`, `gmail_other__send_message`, etc.). The model picks an account by emitting the prefixed tool name; for write-heavy flows (send / draft / delete / trash) add a one-line note to the agent instruction text mapping prefixes to email addresses so account confusion can't silently route a destructive call to the wrong mailbox. Both accounts inherit any local patches to the npm package (e.g. the `https://mail.google.com/` scope addition for permanent-delete) automatically — same `dist/index.js` runs both processes.
+
 **Debugging MCP** — Every `MCPMixin._mcp_log` call is dual-sinked to both MyAgent's queue (visible in the GUI activity widget) and `sys.stderr`. Under `pythonw.exe` stderr is silently discarded by the OS, so production behaviour is unchanged. For diagnostic launches that need to see the full MCP message stream from outside the GUI, redirect stderr at launch time:
 ```bash
 # Windows (cmd.exe / PowerShell)
