@@ -16,10 +16,10 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **Qwen25VL-tools.Modelfile**, **Llama32Vision-tools.Modelfile**, **Gemma3-tools.Modelfile** — Custom Ollama Modelfiles that graft Qwen3's tool-calling template onto three vision models, unlocking structured `tool_calls` that Ollama's default Modelfiles don't expose. See the **Ollama (Local Inference)** section for build instructions and the rationale
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
-- **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images (created at runtime, gitignored)
+- **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images. **Tracked in git** so the instruction library syncs across machines via push/pull (rather than each clone keeping its own divergent set)
 - **mcp_servers.json** — Per-user MCP (Model Context Protocol) server configuration for MyAgent — JSON-RPC stdio servers (e.g. shinzo-labs Gmail) that expose external tool catalogs. Created manually, gitignored (may contain commands or env-stored secrets). See the **MCP Integration** section under MyAgent for setup
 - **mcp_servers.example.json** — Tracked template for `mcp_servers.json`. On a new machine, copy this to `mcp_servers.json` and edit the placeholder filesystem path for your project. Never put real secrets (API tokens, OAuth client secrets) in either file — credentials always live in per-server config dirs outside the repo (e.g. `~/.gmail-mcp/credentials.json`)
-- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file
+- **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file. **Gitignored** — chats are local-only and never committed
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **agent_state.json** — Persistent app settings for MyAgent instance 1 (created at runtime)
