@@ -149,7 +149,7 @@ The **Skills** button in the button bar shows a count summary — e.g., `Skills 
 
 **Included skills:**
 - **Example: Pirate Speak** — A simple enabled skill demonstrating persona injection
-- **NIP Generation** — An on-demand skill for producing FSANZ-compliant Australian Nutrition Information Panels in structured JSON format, using web search to source official product data with AFCD/NUTTAB fallback
+- **NIP Generation** — A skill for producing FSANZ-compliant Australian Nutrition Information Panels in structured JSON format, using web search to source official product data with AFCD/NUTTAB fallback. After generating the panel the skill closes any open Notepad++ instance, writes the JSON to a relevantly-named `.txt` file under `c:\Temp\`, and reopens it in Notepad++ for review
 
 **Skills Manager** provides:
 - **Skill Name** entry + **SAVE** / **DELETE** / **NEW** buttons for CRUD operations
