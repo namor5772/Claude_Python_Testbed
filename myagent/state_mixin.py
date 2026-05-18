@@ -291,6 +291,28 @@ class StateMixin:
             "thinking_budget": self.thinking_budget,
             "thinking_mode": self.thinking_mode,
             "text_verbosity": self.text_verbosity,
+            "applied_instruction": {
+                "text": self.agent_instruction,
+                "images": [
+                    {"data": d, "media_type": mt, "filename": fn}
+                    for d, mt, fn in getattr(self, "pending_images", [])
+                ],
+                "desktop": self.desktop_enabled.get(),
+                "browser": self.browser_enabled.get(),
+                "meta": self.meta_enabled.get(),
+                "mcp": self.mcp_enabled.get(),
+                "conversational": self.conversational_enabled.get(),
+                "provider": self.provider,
+                "model": self.model,
+                "temperature": self.temperature,
+                "thinking_enabled": self.thinking_enabled,
+                "thinking_effort": self.thinking_effort,
+                "thinking_budget": self.thinking_budget,
+                "thinking_mode": self.thinking_mode,
+                "text_verbosity": self.text_verbosity,
+                "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
+                "disabled_confirm_patterns": sorted(getattr(self, "_disabled_confirm_patterns", [])),
+            },
         }
         # Build geometry dict for current monitor configuration
         config_key = self._get_monitor_config_key()
@@ -342,10 +364,15 @@ class StateMixin:
                 state = json.load(f)
         except (json.JSONDecodeError, OSError):
             return
-        # Restore instruction (with its images)
+        # Restore instruction (with its images).
+        # Prefer the snapshot of the last APPLIED state (survives Apply, not just Save).
+        # Fall back to the disk entry for backward compat with older agent_state.json files.
         instr_name = state.get("last_instruction_name", "")
+        applied = state.get("applied_instruction")
         model_restored = False
-        if instr_name:
+        if applied and applied.get("text"):
+            model_restored = self._apply_instruction_entry(instr_name, applied)
+        elif instr_name:
             instructions = self._load_saved_instructions()
             if instr_name in instructions:
                 model_restored = self._apply_instruction_entry(instr_name, instructions[instr_name])

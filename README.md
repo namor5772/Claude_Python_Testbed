@@ -624,8 +624,10 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 |---|---|---|---|
 | **Load Instruction** | No | No | No |
 | **SAVE** | Yes | Yes | No |
-| **Apply** | Yes | No | Yes |
+| **Apply** | Yes | No (but snapshotted to `agent_state.json` — survives restart) | Yes |
 | **Close [X]** | No | No | Yes |
+
+**Apply survives restart** — Although Apply does not write to `agent_instructions.json`, MyAgent snapshots the full live instruction state (text, attached images, Desktop/Browser/Meta/MCP/Convo toggles, provider, model, temperature, all thinking parameters, text verbosity, per-skill modes, and disabled PS Safety patterns) into `agent_state.json` under an `applied_instruction` key on every periodic auto-save and on close. On next launch, this snapshot is preferred over re-loading the disk entry by name. The practical effect: you can edit an instruction, hit Apply, restart MyAgent, and resume exactly where you left off — without needing to SAVE just to survive a restart. The on-disk entry in `agent_instructions.json` remains the canonical "named" version; the snapshot only restores what was actually live in your last session. Older `agent_state.json` files without the snapshot key still fall back to the by-name lookup, so nothing breaks on upgrade.
 
 **Images persist with instructions** — When you save a named instruction, any attached images are embedded as base64 data inside `agent_instructions.json`. Loading that instruction later automatically re-attaches those images. This means a task like "analyse this screenshot and do X" can be saved as a reusable instruction that always includes its reference image.
 
