@@ -755,6 +755,8 @@ Server-side code execution outputs (plots, charts) are displayed inline in the c
 
 **MCP Tools (enabled via MCP checkbox):** Dynamically loaded from any MCP servers configured in `mcp_servers.json`. Tool names are namespaced as `<server>__<tool>` (double underscore) — so a `filesystem` server contributes `filesystem__read_file`, `filesystem__list_directory`, etc. The set is empty when no servers are configured. See **MCP Integration** below for setup.
 
+**Google (Gmail) Tools (enabled via Google checkbox):** Native multi-account Gmail integration via the official `google-api-python-client` library — no MCP server, no subprocess. Sixteen tools: `gmail_search`, `gmail_read` (always returns attachments[] metadata; `format` param for text/html/both body), `gmail_get_attachment` (downloads attachment bytes to a local path; refuses overwrite by default), `gmail_send`, `gmail_reply` (proper Gmail threading via In-Reply-To/References + threadId), `gmail_create_draft`, `gmail_list_drafts`, `gmail_send_draft`, `gmail_trash`, `gmail_untrash`, `gmail_list_labels`, `gmail_create_label`, `gmail_delete_label`, `gmail_modify_labels`, `gmail_mark_read`, `gmail_list_threads`. `gmail_send`, `gmail_reply`, and `gmail_create_draft` all accept an optional `attachments: [filepath, ...]` parameter (combined raw size capped at ~20 MB to stay under Gmail's 25 MB post-base64 ceiling; MIME types auto-detected from file extensions) and an optional `body_html` parameter (multipart/alternative with plain `body` as the fallback for non-HTML clients). Each tool takes an `account` parameter whose enum is patched at runtime from `~/.config/myagent-google/accounts.json`, so the model only sees actually-configured accounts. Destructive operations (`gmail_send`, `gmail_send_draft`, `gmail_trash`) pop a modal Tk confirmation dialog showing recipient/subject/IDs before proceeding. Disabled if `google-api-python-client` / `google-auth-oauthlib` aren't installed. See **Google Integration** below for setup.
+
 **Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — tools for the agent to manage its own instruction library, shared skills, and launch other agents. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions — including the currently-running instruction (changes are saved to disk and take effect the next time the instruction is loaded, without affecting the live session). Read/create/update actions include `skill_modes` (a map of skill names to disabled/enabled/on_demand modes), and update uses merge semantics so omitted skills keep their current mode. `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget via `subprocess.Popen`); defaults to headless mode, with an optional `headless=false` parameter to show the GUI window — the launched process runs independently and the PID is returned. None of these tools are parallel-safe since they modify shared state or spawn processes.
 
 **User Interaction Tool:**
@@ -866,6 +868,103 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
 ./.venv/bin/python MyAgent.py 2> mcp.log
 ```
 The `mcp.log` file then captures every `✓ MCP server '<name>' connected` / `⚠ MCP server '<name>' failed` / `⚠ MCP refresh failed` line as it happens — useful when a server hangs at handshake, when the GUI activity widget is buried under a long agent loop's tool output, or when validating a fix without manually reading the GUI.
+
+#### Google Integration (Native Gmail Tools)
+
+Native multi-account Gmail integration via the official `google-api-python-client` library, with **sixteen tools** spanning read, write, label management, and attachment download. Implemented in `myagent/gmail_mixin.py` — no MCP server, no subprocess, no JSON-RPC marshalling. Tools flow through MyAgent's existing `_get_tools()` and `_execute_tool()` paths exactly like the desktop/browser tool families.
+
+**Tool inventory:**
+
+| Tool | Purpose | Confirm? |
+|---|---|---|
+| `gmail_search` | Search messages by Gmail query syntax | |
+| `gmail_read` | Fetch a message with body (text/html/both) + attachments[] metadata | |
+| `gmail_get_attachment` | Download an attachment to a local file path | |
+| `gmail_send` | Send a new email (text + optional HTML + optional attachments) | ✅ |
+| `gmail_reply` | Reply with proper In-Reply-To / References / threadId so it nests in Gmail's UI | ✅ |
+| `gmail_create_draft` | Create a draft (text + optional HTML + optional attachments) | |
+| `gmail_list_drafts` | List drafts | |
+| `gmail_send_draft` | Send an existing draft | ✅ |
+| `gmail_trash` | Soft-delete to Trash (30-day recoverable) | ✅ |
+| `gmail_untrash` | Restore from Trash | |
+| `gmail_list_labels` | List labels (system + user) | |
+| `gmail_create_label` | Create a new user label (nestable via `/`) | |
+| `gmail_delete_label` | Delete a label (removes it from all messages — irreversible labelling loss) | ✅ |
+| `gmail_modify_labels` | Add/remove labels on messages | |
+| `gmail_mark_read` | Toggle UNREAD label | |
+| `gmail_list_threads` | List threads matching a query | |
+
+**Content support:**
+
+- **Plain text + HTML emails** — `gmail_send`, `gmail_reply`, and `gmail_create_draft` all accept an optional `body_html` parameter. When provided, the message ships as `multipart/alternative` with the plain `body` as the fallback for clients that don't render HTML. The plain `body` stays required even when sending HTML — best practice for spam-filter pass-through and broad client compatibility
+- **Outbound attachments** — same three send-style tools accept an optional `attachments: [filepath, ...]` parameter. Combined raw size capped at 20 MB (Gmail's hard ceiling is 25 MB after base64 encoding; the cap fails locally with a clear message rather than a 413 from Google). MIME types auto-detected from file extensions via `mimetypes.guess_type`
+- **Inbound attachments** — `gmail_read` always includes an `attachments[]` array with metadata (filename, mime_type, size, attachment_id, part_id, inline flag). Pass the `attachment_id` to `gmail_get_attachment(save_to=...)` to download the bytes to disk. Inline attachments (data embedded directly in message body; rare) are flagged `inline=true` and require fetching the message body itself rather than a separate attachment fetch
+- **Body format selection** — `gmail_read` accepts a `format` parameter: `"text"` (default, plain text or stripped HTML fallback), `"html"` (raw HTML only), or `"both"` (returns both `body` and `body_html` as separate fields). Each body is truncated at 50,000 chars with explicit `body_truncated` / `body_html_truncated` flags
+
+**Architecture:**
+
+- **Multi-account by parameter, not by process** — every tool takes an `account` string parameter; the `account` enum on each tool schema is patched at runtime in `_get_tools()` from `~/.config/myagent-google/accounts.json`, so the model only ever sees actually-configured accounts. Switching between accounts in a single instruction (e.g., "send a summary from namor5772 to romangroblicki") is one tool call, not two server connections
+- **OAuth tokens cached per account** at `~/.config/myagent-google/{account}_token.json`; `_gmail_service(account)` runs the `InstalledAppFlow` once per account on first use (browser opens, user picks the right Google account, token saved), then refreshes silently from the refresh token forever after. Tokens are `chmod 600` automatically by MyAgent after write (the underlying library uses the default umask which is too permissive for credential files)
+- **Scope: `gmail.modify`** — covers read, send, draft, label, trash. Does NOT cover permanent delete; trash is recoverable from Gmail's UI for 30 days, permanent delete requires emptying trash via the web UI. Deliberate safety boundary enforced at the OAuth-scope level — even a bug in MyAgent that allowed an unauthorised call to slip through would be rejected server-side with `403 insufficient scope`
+- **Five destructive tools gated by modal confirmation** — `gmail_send`, `gmail_reply`, `gmail_send_draft`, `gmail_trash`, `gmail_delete_label` pop a Tk `messagebox.askyesno` dialog showing recipient/subject/preview before proceeding. Click No to cancel; the tool returns `"user denied: ..."` and the agent loop continues without retrying. Works in `--headless` mode because Tk dialogs float as standalone windows even when the main root is withdrawn
+- **Per-tool confirmation bypass via Shell Safety dialog** — the existing Shell Safety dialog (`PS Safety` on Windows) now has a "Gmail destructive tools" section listing all five confirmation-requiring tools as checkboxes. Uncheck any of them to bypass its confirmation for the current instruction; the bypass is persisted per-instruction in `agent_instructions.json` under the same `disabled_confirm_patterns` field that holds shell regex bypasses. When a bypass fires at runtime, a `⚠ Gmail confirm bypassed for <tool>` warning appears in the activity output as an audit trail (uses the `warning` queue type, which displays regardless of the Activity checkbox state)
+- **`_HAS_GOOGLE` availability flag** mirrors `_HAS_MCP` and `_HAS_OLLAMA`: when the Google API libraries aren't installed, the Google checkbox in the editor is disabled, the GmailMixin methods are graceful no-ops, and behaviour is identical to before this mixin existed
+
+**Setup:**
+
+1. **Install the Google API Python dependencies:**
+   ```bash
+   pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+   ```
+   (Already added to `requirements.txt`, so `pip install -r requirements.txt` on a fresh clone covers it.)
+
+2. **Set up a Google Cloud project and OAuth client:**
+   - In Google Cloud Console, create a project (or use existing), enable the **Gmail API**
+   - Configure the OAuth consent screen (User Type: External; add yourself as a Test user). Add the `https://www.googleapis.com/auth/gmail.modify` scope explicitly when prompted
+   - Create OAuth 2.0 credentials of type **Desktop app**, download the JSON file
+
+3. **Create the MyAgent Google config directory:**
+   ```bash
+   mkdir -p ~/.config/myagent-google
+   mv ~/Downloads/client_secret_*.json ~/.config/myagent-google/oauth_client.json
+   ```
+
+4. **List your accounts in `~/.config/myagent-google/accounts.json`:**
+   ```json
+   {
+     "accounts": {
+       "namor5772": { "email": "namor5772@gmail.com" },
+       "romangroblicki": { "email": "romangroblicki@gmail.com" }
+     }
+   }
+   ```
+   The account key (e.g., `namor5772`) is what the agent uses as the `account` parameter; the `email` field is metadata for your reference. Add as many accounts as you want — each gets its own consent flow on first use.
+
+5. **First-use OAuth flow** — When you first run an instruction that calls a Gmail tool, MyAgent opens your default browser to Google's OAuth consent page. Pick the right Google account (use the `prompt=select_account` URL parameter MyAgent passes, which forces the account chooser even when you're already signed in). Grant the requested scopes. The token saves automatically to `{account}_token.json` and is reused forever after — refresh tokens are long-lived.
+
+**Multi-account workflow:**
+
+In an instruction like _"Forward today's unread emails in namor5772 to romangroblicki"_, the agent would:
+1. `gmail_search(account="namor5772", q="is:unread newer_than:1d")` — list unread
+2. For each: `gmail_read(account="namor5772", message_id=...)` — get content and attachment metadata
+3. (Optional) `gmail_get_attachment(account="namor5772", message_id=..., attachment_id=..., save_to="/tmp/x.pdf")` — pull each attachment to disk
+4. `gmail_send(account="romangroblicki", to="romangroblicki@gmail.com", subject="...", body="...", body_html="...", attachments=["/tmp/x.pdf"])` — single confirmation dialog per send
+
+The agent never confuses which account owns which token — that's enforced by the `account` parameter being on every tool, not by global state.
+
+**Per-instruction toggle:** The Google checkbox is per-instruction, persisted in `agent_instructions.json` alongside Desktop/Browser/Meta/MCP/Convo. Each saved instruction can independently enable or disable Gmail tools without affecting others.
+
+**Why native instead of MCP:** Trade-off discussion captured in commit history. Short version: native gives tight 16-tool catalog vs MCP's 55+ (matters for Ollama's 32K context), multi-account is one parameter instead of two subprocesses, destructive ops get a real confirmation dialog with per-tool bypass rather than fire-and-forget, OAuth scope is hard-locked to `gmail.modify` so permanent delete is impossible by design, and the OAuth + token plumbing is reusable for future Google services (Calendar, Drive, Sheets) without per-service MCP server setup.
+
+**What the tools deliberately CAN'T do** (safety boundaries you should know about, in order of impact):
+
+- **Permanently delete emails** — OAuth scope is `gmail.modify`, which excludes `users.messages.delete`. Trash (recoverable for 30 days) is the only delete the agent can perform. Permanent purge requires emptying Trash via Gmail's web UI
+- **Send from a different `From:` address** (Send-As aliases) — `gmail_send` always sends from the authenticated account; no `from_alias` parameter
+- **Settings management** — no tools for filters, vacation responder, signatures, auto-forwarding, delegates, or IMAP/POP settings (Gmail API exposes these but they're rarely managed programmatically — configure once in the web UI)
+- **UI-only Gmail features that have no API equivalent** — Undo Send, Schedule Send, Snooze, Smart Compose suggestions, Confidential Mode UI (the API supports confidential mode but it's not exposed here)
+- **Cross-account in a single API call** — every Gmail API call is scoped to one authenticated account; multi-account workflows make multiple sequential calls (which the agent does naturally via the `account` parameter)
+
+**Reusing existing shinzo-labs Gmail MCP credentials (optional):** If you previously ran `@shinzolabs/gmail-mcp`, your existing `~/.gmail-mcp/credentials.json` (and `~/.gmail-mcp-*/credentials.json` for additional accounts) contain refresh tokens bound to the same OAuth scopes MyAgent requests. The MyAgent token format is slightly different but the underlying refresh token is interchangeable — re-running OAuth (step 5) is the cleanest path. If you'd rather avoid the consent dance, ask Claude Code to write a migration helper that translates shinzo format to MyAgent format; it's a ~20-line conversion.
 
 #### Conversational Mode
 

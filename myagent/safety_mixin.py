@@ -3,7 +3,7 @@ from tkinter import messagebox
 
 from myagent.constants import (
     IS_WINDOWS, _SUBPROCESS_NOWND, COMMAND_BLOCKED, COMMAND_CONFIRM,
-    MONO_FONT, DEFAULT_INSTRUCTION,
+    GMAIL_CONFIRM_TOOLS, MONO_FONT, DEFAULT_INSTRUCTION, _HAS_GOOGLE,
 )
 from myagent.helpers import extract_text_from_html
 
@@ -119,8 +119,9 @@ class SafetyMixin:
         dlg.resizable(True, True)
 
         tk.Label(
-            dlg, text="Checked patterns require confirmation before execution.\n"
-                       "Uncheck a pattern to bypass the confirmation dialog.",
+            dlg, text="Checked items require confirmation before execution.\n"
+                       "Uncheck to bypass the confirmation dialog. Shell command\n"
+                       "patterns are matched by regex; Gmail entries match the tool name.",
             font=("Arial", 9), justify="left",
         ).pack(padx=15, pady=(12, 6), anchor="w")
 
@@ -137,6 +138,9 @@ class SafetyMixin:
         scrollbar.config(command=text_widget.yview)
         text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        # Section 1: shell command patterns (regex-based, matched in _check_command_safety)
+        shell_label = "── PowerShell command patterns ──" if IS_WINDOWS else "── Shell command patterns ──"
+        text_widget.insert("end", shell_label + "\n")
         for pattern in COMMAND_CONFIRM:
             var = tk.BooleanVar(value=pattern not in self._disabled_confirm_patterns)
             cb = tk.Checkbutton(
@@ -146,6 +150,21 @@ class SafetyMixin:
             )
             text_widget.window_create("end", window=cb, stretch=True)
             text_widget.insert("end", "\n")
+
+        # Section 2: Gmail destructive tools (tool-name match, checked in _confirm_gmail_action).
+        # Only shown when google support is available — keeps the dialog clean
+        # for users who don't have google-api-python-client installed.
+        if _HAS_GOOGLE:
+            text_widget.insert("end", "\n── Gmail destructive tools ──\n")
+            for tool_name in GMAIL_CONFIRM_TOOLS:
+                var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
+                cb = tk.Checkbutton(
+                    text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
+                    anchor="w", bg="white", activebackground="white",
+                    command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
+                )
+                text_widget.window_create("end", window=cb, stretch=True)
+                text_widget.insert("end", "\n")
 
         text_widget.configure(state="disabled")
 

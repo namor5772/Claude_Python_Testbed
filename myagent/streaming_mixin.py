@@ -10,7 +10,8 @@ import tkinter as tk
 
 from myagent.constants import (
     IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
-    PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _BASE_DIR, CHATS_DIR,
+    GOOGLE_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
+    _BASE_DIR, CHATS_DIR,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
 )
@@ -325,6 +326,20 @@ class StreamingMixin:
         # no-op for users who haven't set up MCP.
         if _HAS_MCP and getattr(self, "mcp_enabled", None) and self.mcp_enabled.get() and MCP_TOOLS:
             tools.extend(copy.deepcopy(MCP_TOOLS))
+        # Google (Gmail) native tools — patch the `account` enum on each tool
+        # at runtime so the model only sees actually-configured accounts.
+        # If no accounts are configured, the tools are still exposed but with
+        # an empty enum, which surfaces a clearer error at tool-call time than
+        # silently dropping the tools would.
+        if (_HAS_GOOGLE and getattr(self, "google_enabled", None)
+                and self.google_enabled.get()):
+            account_names = self._get_google_account_names()
+            google_tools = copy.deepcopy(GOOGLE_TOOLS)
+            for t in google_tools:
+                props = t.get("input_schema", {}).get("properties", {})
+                if "account" in props:
+                    props["account"]["enum"] = account_names
+            tools.extend(google_tools)
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
             tools.append({
@@ -359,6 +374,17 @@ class StreamingMixin:
         if _HAS_MCP and block.name in getattr(self, "_mcp_tools_by_name", {}):
             self.queue.put({"type": "tool_info", "content": f"MCP: {block.name}\n"})
             return self.do_mcp_call(block.name, block.input or {})
+        # Gmail (Google) native tools — dispatch any block.name beginning with
+        # `gmail_` to the matching do_<name> method on the GmailMixin. Cheaper
+        # than enumerating every tool name; the GmailMixin owns the namespace.
+        if _HAS_GOOGLE and block.name.startswith("gmail_"):
+            if not getattr(self, "google_enabled", None) or not self.google_enabled.get():
+                return f"Google/Gmail is disabled. Enable the Google checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Gmail tool: {block.name}"
+            self.queue.put({"type": "tool_info", "content": f"Gmail: {block.name}\n"})
+            return method(block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")
             self.queue.put({"type": "tool_info", "content": f"Searching: {query}\n"})

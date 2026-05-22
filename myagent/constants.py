@@ -44,6 +44,17 @@ try:
 except Exception:
     _HAS_MCP = False
 
+# Google API Python client for native Gmail (and future Calendar/Drive) tools.
+# Optional — absence hides the Google checkbox and disables the gmail_* tools.
+# Install via:
+#   pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
+_HAS_GOOGLE = True
+try:
+    import googleapiclient  # noqa: F401
+    import google_auth_oauthlib  # noqa: F401
+except Exception:
+    _HAS_GOOGLE = False
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -201,6 +212,10 @@ META_TOOLS = [
                 "mcp": {
                     "type": "boolean",
                     "description": "Enable MCP (Model Context Protocol) tools — external servers from mcp_servers.json (default false on create)",
+                },
+                "google": {
+                    "type": "boolean",
+                    "description": "Enable native Google (Gmail) tools — gmail_search, gmail_send, gmail_trash, etc. Requires ~/.config/myagent-google/ setup. Default false on create.",
                 },
                 "conversational": {
                     "type": "boolean",
@@ -985,6 +1000,350 @@ MCP_SERVERS_PATH = "mcp_servers.json"
 # "<server>__<tool>" (double underscore) which is allowed by all four
 # providers' tool name regexes and unambiguously splittable.
 MCP_NAME_SEP = "__"
+
+# ── Google (Gmail) native tools ──────────────────────────────────────────────
+# Native MyAgent tools that wrap the Gmail API directly via google-api-python-client
+# (not MCP — see myagent/gmail_mixin.py for the rationale). The `account` parameter
+# on every tool is a placeholder enum here; `_get_tools()` patches in the real
+# enum at runtime from `~/.config/myagent-google/accounts.json` so the model only
+# ever sees actually-configured accounts. Conditionally included in _get_tools()
+# only when self.google_enabled.get() is True AND _HAS_GOOGLE is True.
+GOOGLE_TOOLS = [
+    {
+        "name": "gmail_search",
+        "description": (
+            "Search Gmail messages using Gmail's standard query syntax. Examples: "
+            "'from:alice@example.com is:unread', 'subject:invoice newer_than:7d', "
+            "'has:attachment larger:1M'. Returns id, threadId, snippet, subject, "
+            "from, to, date for each match. Use gmail_read on a specific id to get "
+            "the full body."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Gmail account to search"},
+                "q": {"type": "string", "description": "Gmail search query"},
+                "max_results": {"type": "integer", "description": "Maximum results (default 25, max 500)"},
+            },
+            "required": ["account", "q"],
+        },
+    },
+    {
+        "name": "gmail_read",
+        "description": (
+            "Fetch the full content of a single message by ID, including headers, "
+            "body, AND an attachments array (always included — small payload). "
+            "Use the format parameter to control body representation: "
+            "'text' (default, plain-text body or stripped HTML fallback), "
+            "'html' (raw HTML only — empty if message is text-only), or "
+            "'both' (returns body AND body_html as separate fields). Bodies are "
+            "truncated at 50,000 chars with body_truncated / body_html_truncated "
+            "flags. Each attachment entry has filename, mime_type, size, "
+            "attachment_id, part_id, inline — use attachment_id with "
+            "gmail_get_attachment to download the bytes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Gmail account"},
+                "message_id": {"type": "string", "description": "Gmail message ID (from gmail_search results)"},
+                "format": {
+                    "type": "string", "enum": ["text", "html", "both"],
+                    "description": "Body representation to return (default 'text')",
+                },
+            },
+            "required": ["account", "message_id"],
+        },
+    },
+    {
+        "name": "gmail_get_attachment",
+        "description": (
+            "Download a single attachment from a Gmail message and save it to "
+            "a local file path. First call gmail_read on the message to get "
+            "the attachments[] array; pick the entry you want and pass its "
+            "attachment_id here along with message_id. Non-destructive — "
+            "creates a local file, doesn't modify Gmail state. Refuses to "
+            "overwrite an existing file unless overwrite=true; on refusal "
+            "returns an error string so the agent can choose a different path. "
+            "For inline attachments (inline=true in the attachments[] list), "
+            "the bytes are already in the message body; this tool doesn't "
+            "apply — re-fetch via gmail_read with format='both' instead."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_id": {"type": "string", "description": "Message ID containing the attachment"},
+                "attachment_id": {"type": "string", "description": "Attachment ID from gmail_read's attachments[] field"},
+                "save_to": {"type": "string", "description": "Local file path to save the bytes to (absolute path recommended; parent dirs auto-created)"},
+                "overwrite": {"type": "boolean", "description": "If true, overwrite an existing file at save_to (default false)"},
+            },
+            "required": ["account", "message_id", "attachment_id", "save_to"],
+        },
+    },
+    {
+        "name": "gmail_send",
+        "description": (
+            "Send a new email. ALWAYS prompts the user with a modal confirmation "
+            "dialog showing recipient/subject/body preview before sending. The user "
+            "can deny — if so the tool returns 'user denied'. Use this for any "
+            "outbound message; for safer review-then-send flows, use gmail_create_draft "
+            "first and let the user inspect the draft. Supports optional file "
+            "attachments (combined raw size up to ~20 MB; Gmail's hard ceiling is "
+            "25 MB after base64 encoding)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Gmail account to send from"},
+                "to": {"type": "string", "description": "Recipient email address (comma-separated for multiple)"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain-text email body (always required even when sending HTML — used as the fallback for clients that don't render HTML)"},
+                "body_html": {"type": "string", "description": "Optional HTML body. When provided, sends as multipart/alternative — clients render the HTML version, plain-text body is the fallback. Both should convey the same content."},
+                "cc": {"type": "string", "description": "Optional CC recipients (comma-separated)"},
+                "bcc": {"type": "string", "description": "Optional BCC recipients (comma-separated)"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional list of absolute file paths to attach. MIME type auto-detected from extension.",
+                },
+            },
+            "required": ["account", "to", "subject", "body"],
+        },
+    },
+    {
+        "name": "gmail_reply",
+        "description": (
+            "Reply to an existing message with PROPER GMAIL THREADING. Use this "
+            "(not gmail_send) when replying to a message you've already fetched "
+            "via gmail_search/gmail_read — it sets the In-Reply-To and References "
+            "headers and passes the original's threadId so the reply nests inside "
+            "the existing conversation in Gmail's UI. Defaults the To: to the "
+            "original sender; pass an explicit 'to' to override (e.g., for "
+            "replying to a list address rather than the original poster). "
+            "Prepends 'Re: ' to the subject only if not already present. "
+            "Requires confirmation; supports attachments."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Gmail account to reply from"},
+                "message_id": {"type": "string", "description": "ID of the message being replied to (from gmail_search/gmail_read)"},
+                "body": {"type": "string", "description": "Plain-text reply body (always required even when sending HTML — used as fallback for non-HTML clients)"},
+                "body_html": {"type": "string", "description": "Optional HTML reply body. When provided, sends as multipart/alternative."},
+                "to": {"type": "string", "description": "Optional override of reply target (default: original sender)"},
+                "cc": {"type": "string", "description": "Optional CC"},
+                "bcc": {"type": "string", "description": "Optional BCC"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional file paths to attach",
+                },
+            },
+            "required": ["account", "message_id", "body"],
+        },
+    },
+    {
+        "name": "gmail_create_draft",
+        "description": (
+            "Create a draft (does NOT send). No confirmation dialog — drafts are "
+            "non-destructive. Useful for letting the user inspect a proposed email "
+            "in Gmail's UI before authorising send_draft. Supports attachments "
+            "(same ~20 MB combined limit as gmail_send)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Gmail account"},
+                "to": {"type": "string", "description": "Recipient email address"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain-text email body (always required; fallback for HTML)"},
+                "body_html": {"type": "string", "description": "Optional HTML body. Sends as multipart/alternative when provided."},
+                "cc": {"type": "string", "description": "Optional CC"},
+                "bcc": {"type": "string", "description": "Optional BCC"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional file paths to attach",
+                },
+            },
+            "required": ["account", "to", "subject", "body"],
+        },
+    },
+    {
+        "name": "gmail_list_drafts",
+        "description": "List recent drafts in an account with id, to, subject, snippet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "max_results": {"type": "integer", "description": "Maximum drafts (default 25, max 100)"},
+            },
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "gmail_send_draft",
+        "description": (
+            "Send an existing draft by ID. Prompts the user with a modal "
+            "confirmation showing the recipient and subject before sending."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "draft_id": {"type": "string", "description": "Draft ID from gmail_list_drafts"},
+            },
+            "required": ["account", "draft_id"],
+        },
+    },
+    {
+        "name": "gmail_trash",
+        "description": (
+            "Move one or more messages to Trash (soft delete; recoverable from "
+            "Gmail's UI for 30 days). Prompts the user with a modal confirmation "
+            "showing the count and IDs before trashing. Pass message_ids as a list."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Message IDs to trash",
+                },
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "gmail_untrash",
+        "description": "Restore one or more messages from Trash back to the inbox/labels they had.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Message IDs to untrash",
+                },
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "gmail_list_labels",
+        "description": "List all labels (system + user-created) for an account. Returns id, name, type.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"account": {"type": "string"}},
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "gmail_create_label",
+        "description": (
+            "Create a new user-defined label. Non-destructive — no confirmation. "
+            "Returns the new label's id and name. Errors with 409 if a label with "
+            "this name already exists in the account."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "name": {"type": "string", "description": "Label name (can be nested with '/' e.g. 'Work/Projects/Q1')"},
+                "label_list_visibility": {
+                    "type": "string", "enum": ["labelShow", "labelShowIfUnread", "labelHide"],
+                    "description": "Visibility in the label list sidebar (default: labelShow)",
+                },
+                "message_list_visibility": {
+                    "type": "string", "enum": ["show", "hide"],
+                    "description": "Visibility of the label tag in message lists (default: show)",
+                },
+            },
+            "required": ["account", "name"],
+        },
+    },
+    {
+        "name": "gmail_delete_label",
+        "description": (
+            "Delete a user label. DESTRUCTIVE — removes the label from EVERY "
+            "message that has it (messages themselves are not deleted, but the "
+            "labelling is gone permanently — recreating the label does not "
+            "re-apply it to previously-labelled messages). Requires user "
+            "confirmation via the standard dialog. System labels (INBOX, SENT, "
+            "TRASH, STARRED, etc.) cannot be deleted; Gmail returns 400."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "label_id": {"type": "string", "description": "Label ID from gmail_list_labels"},
+            },
+            "required": ["account", "label_id"],
+        },
+    },
+    {
+        "name": "gmail_modify_labels",
+        "description": (
+            "Add and/or remove labels on one or more messages. Use label IDs from "
+            "gmail_list_labels (system labels: INBOX, UNREAD, STARRED, IMPORTANT, "
+            "TRASH, SPAM, SENT, DRAFT, CATEGORY_*)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {"type": "array", "items": {"type": "string"}},
+                "add_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to add"},
+                "remove_labels": {"type": "array", "items": {"type": "string"}, "description": "Label IDs to remove"},
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "gmail_mark_read",
+        "description": "Mark one or more messages as read (read=true) or unread (read=false).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {"type": "array", "items": {"type": "string"}},
+                "read": {"type": "boolean", "description": "true to mark read (removes UNREAD), false to mark unread"},
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "gmail_list_threads",
+        "description": (
+            "List conversation threads matching a query. Useful when you want to "
+            "operate on whole threads rather than individual messages. Returns "
+            "thread_id, snippet, history_id."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "q": {"type": "string", "description": "Gmail search query"},
+                "max_results": {"type": "integer", "description": "Maximum threads (default 25, max 500)"},
+            },
+            "required": ["account", "q"],
+        },
+    },
+]
+
+# Config paths for the Google integration. See myagent/gmail_mixin.py for OAuth flow.
+GOOGLE_CONFIG_DIR = os.path.expanduser("~/.config/myagent-google")
+GOOGLE_ACCOUNTS_FILE = os.path.join(GOOGLE_CONFIG_DIR, "accounts.json")
+
+# Gmail tools whose destructive nature warrants a modal confirmation dialog by
+# default. The PS Safety / Shell Safety dialog exposes one checkbox per entry
+# here so the user can selectively bypass confirmations per-instruction. Bypass
+# state is stored in the same `_disabled_confirm_patterns` set as the shell
+# regex patterns — tool names and patterns coexist there as opaque strings,
+# distinguished by which code path looks them up.
+GMAIL_CONFIRM_TOOLS = [
+    "gmail_send", "gmail_reply", "gmail_send_draft",
+    "gmail_trash", "gmail_delete_label",
+]
 
 # ── Anthropic API pricing (USD per million tokens) ────────────────────────────
 # Each entry: (input_price, output_price, cache_write_price, cache_read_price)

@@ -6,7 +6,7 @@ from myagent.constants import (
     PROVIDERS, FALLBACK_MODELS, OPENAI_FALLBACK_MODELS, GEMINI_FALLBACK_MODELS,
     OLLAMA_FALLBACK_MODELS, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
     ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
-    DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
+    _HAS_GOOGLE, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL,
 )
 
@@ -61,8 +61,9 @@ class InstructionsMixin:
                 browser = "browser" if entry.get("browser") else ""
                 meta = "meta" if entry.get("meta") else ""
                 mcp = "mcp" if entry.get("mcp") else ""
+                google = "google" if entry.get("google") else ""
                 convo = "convo" if entry.get("conversational") else ""
-                flags = " ".join(f for f in [desktop, browser, meta, mcp, convo] if f)
+                flags = " ".join(f for f in [desktop, browser, meta, mcp, google, convo] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
                 lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
             return "\n".join(lines)
@@ -81,6 +82,7 @@ class InstructionsMixin:
                 "browser": entry.get("browser", False),
                 "meta": entry.get("meta", False),
                 "mcp": entry.get("mcp", False),
+                "google": entry.get("google", False),
                 "conversational": entry.get("conversational", False),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
@@ -108,6 +110,7 @@ class InstructionsMixin:
                 "browser": params.get("browser", False),
                 "meta": params.get("meta", False),
                 "mcp": params.get("mcp", False),
+                "google": params.get("google", False),
                 "conversational": params.get("conversational", False),
                 "provider": self.provider,
                 "model": self.model,
@@ -128,9 +131,9 @@ class InstructionsMixin:
         elif action == "update":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
-            updatable = ("text", "desktop", "browser", "meta", "mcp", "conversational",
-                         "skill_modes", "provider", "model", "temperature",
-                         "thinking_enabled", "thinking_effort",
+            updatable = ("text", "desktop", "browser", "meta", "mcp", "google",
+                         "conversational", "skill_modes", "provider", "model",
+                         "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity")
             if all(params.get(k) is None for k in updatable):
                 return (
@@ -140,8 +143,8 @@ class InstructionsMixin:
                     "'thinking_mode', or 'text_verbosity' must be provided for update."
                 )
             entry = instructions[name]
-            for key in ("text", "desktop", "browser", "meta", "mcp", "conversational",
-                        "provider", "model", "temperature",
+            for key in ("text", "desktop", "browser", "meta", "mcp", "google",
+                        "conversational", "provider", "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity"):
                 val = params.get(key)
@@ -328,6 +331,7 @@ class InstructionsMixin:
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
         self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
         self._editor_mcp = tk.BooleanVar(value=self.mcp_enabled.get() if _HAS_MCP else False)
+        self._editor_google = tk.BooleanVar(value=self.google_enabled.get() if _HAS_GOOGLE else False)
         self._editor_conversational = tk.BooleanVar(value=self.conversational_enabled.get())
         _desktop_cb = tk.Checkbutton(
             img_frame, text="Desktop", variable=self._editor_desktop,
@@ -351,6 +355,13 @@ class InstructionsMixin:
         _mcp_cb.pack(side=tk.LEFT, padx=(5, 0))
         if not _HAS_MCP:
             _mcp_cb.config(state=tk.DISABLED)
+        _google_cb = tk.Checkbutton(
+            img_frame, text="Google", variable=self._editor_google,
+            font=("Arial", 9),
+        )
+        _google_cb.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_GOOGLE:
+            _google_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
             img_frame, text="Convo", variable=self._editor_conversational,
             font=("Arial", 9),
@@ -467,6 +478,7 @@ class InstructionsMixin:
         self.browser_enabled.set(self._editor_browser.get())
         self.meta_enabled.set(self._editor_meta.get())
         self.mcp_enabled.set(self._editor_mcp.get())
+        self.google_enabled.set(self._editor_google.get())
         self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = name
@@ -482,6 +494,7 @@ class InstructionsMixin:
             "browser": self.browser_enabled.get(),
             "meta": self.meta_enabled.get(),
             "mcp": self.mcp_enabled.get(),
+            "google": self.google_enabled.get(),
             "conversational": self.conversational_enabled.get(),
             "provider": self.provider,
             "model": self.model,
@@ -526,6 +539,7 @@ class InstructionsMixin:
         self._editor_browser.set(False)
         self._editor_meta.set(False)
         self._editor_mcp.set(False)
+        self._editor_google.set(False)
         self._editor_conversational.set(False)
         self._disabled_confirm_patterns = set()
         self._update_ps_safety_button()
@@ -576,6 +590,7 @@ class InstructionsMixin:
             self._editor_browser.set(entry.get("browser", False))
             self._editor_meta.set(entry.get("meta", False))
             self._editor_mcp.set(entry.get("mcp", False))
+            self._editor_google.set(entry.get("google", False))
             self._editor_conversational.set(entry.get("conversational", False))
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
@@ -594,6 +609,7 @@ class InstructionsMixin:
         self.browser_enabled.set(self._editor_browser.get())
         self.meta_enabled.set(self._editor_meta.get())
         self.mcp_enabled.set(self._editor_mcp.get())
+        self.google_enabled.set(self._editor_google.get())
         self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
