@@ -36,8 +36,8 @@ except Exception:
     _HAS_OLLAMA = False
 
 # MCP (Model Context Protocol) client for connecting to external tool servers
-# (Gmail, GitHub, Slack, etc.). Optional — absence hides the MCP checkbox and
-# leaves MyAgent's behaviour unchanged. Install via `pip install mcp` to enable.
+# (filesystem, GitHub, Slack, etc.). Optional — absence hides the MCP checkbox
+# and leaves MyAgent's behaviour unchanged. Install via `pip install mcp` to enable.
 _HAS_MCP = True
 try:
     import mcp  # noqa: F401
@@ -970,15 +970,15 @@ PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
 # MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the
 # configured MCP servers have been connected. Tool names are namespaced with
-# the server name (e.g. "gmail__send_email") so dispatch can route to the right
-# server in _execute_tool. Empty by default — appended to _get_tools() output
-# only when self.mcp_enabled.get() is True AND _HAS_MCP is True.
+# the server name (e.g. "filesystem__read_file") so dispatch can route to the
+# right server in _execute_tool. Empty by default — appended to _get_tools()
+# output only when self.mcp_enabled.get() is True AND _HAS_MCP is True.
 MCP_TOOLS = []
 
 # Per-user MCP server configuration. JSON shape mirrors Claude Desktop / Cursor:
 #   {"servers": {"<name>": {"command": "<bin>", "args": [...], "env": {...}}, ...}}
-# Allows existing community MCP servers (gmail, github, slack, etc.) to drop
-# in by config alone, no Python changes required.
+# Allows existing community MCP servers (filesystem, github, slack, etc.) to
+# drop in by config alone, no Python changes required.
 MCP_SERVERS_PATH = "mcp_servers.json"
 
 # Tool-name separator used to namespace MCP tools. The model sees

@@ -1,5 +1,5 @@
 {
-  "_README": "Template for mcp_servers.json. On a new machine, copy this file to mcp_servers.json (which is gitignored) and edit the values for your environment. Never put secrets like API tokens or OAuth client secrets in the real mcp_servers.json — those go in per-server credential files outside the repo (e.g. ~/.gmail-mcp/credentials.json for Gmail).",
+  "_README": "Template for mcp_servers.json. On a new machine, copy this file to mcp_servers.json (which is gitignored) and edit the values for your environment. ${NAME} placeholders inside any env value resolve at startup: ${RANDOM_PORT} is reserved for an OS-assigned free TCP port (use it when a server binds a fixed port and you may run multiple MyAgent instances); any other ${SOMETHING} is looked up in your shell environment via os.environ. This lets you keep tokens/secrets in your shell (~/.zshrc, Windows env vars, etc.) instead of committing them to this file. An unset var substitutes to empty string and emits a one-shot warning in the activity output. Substitution applies ONLY to keys inside the env block — args and command stay literal.",
   "servers": {
     "filesystem": {
       "command": "npx",
@@ -9,15 +9,12 @@
         "<absolute-path-to-your-project-root>"
       ]
     },
-    "gmail": {
+    "_example_with_secret_from_shell_env": {
+      "_comment": "Delete the leading underscore on the key name to activate. Set GITHUB_TOKEN in your shell (export GITHUB_TOKEN=ghp_... in ~/.zshrc or .env) before launching MyAgent — the placeholder is resolved at server-spawn time.",
       "command": "npx",
-      "args": [
-        "-y",
-        "@shinzolabs/gmail-mcp"
-      ],
+      "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
-        "PORT": "${RANDOM_PORT}",
-        "TELEMETRY_ENABLED": "false"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
       }
     }
   }

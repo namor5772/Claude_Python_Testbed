@@ -17,8 +17,8 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **CLAUDE.md** — Project instructions and conventions for Claude Code sessions
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images. **Tracked in git** so the instruction library syncs across machines via push/pull (rather than each clone keeping its own divergent set)
-- **mcp_servers.json** — Per-user MCP (Model Context Protocol) server configuration for MyAgent — JSON-RPC stdio servers (e.g. shinzo-labs Gmail) that expose external tool catalogs. Created manually, gitignored (may contain commands or env-stored secrets). See the **MCP Integration** section under MyAgent for setup
-- **mcp_servers.example.json** — Tracked template for `mcp_servers.json`. On a new machine, copy this to `mcp_servers.json` and edit the placeholder filesystem path for your project. Never put real secrets (API tokens, OAuth client secrets) in either file — credentials always live in per-server config dirs outside the repo (e.g. `~/.gmail-mcp/credentials.json`)
+- **mcp_servers.json** — Per-user MCP (Model Context Protocol) server configuration for MyAgent — JSON-RPC stdio servers (e.g. `@modelcontextprotocol/server-filesystem`) that expose external tool catalogs. Created manually, gitignored (may contain commands or env-stored secrets). See the **MCP Integration** section under MyAgent for setup
+- **mcp_servers.example.json** — Tracked template for `mcp_servers.json`. On a new machine, copy this to `mcp_servers.json` and edit the placeholder filesystem path for your project. Never put real secrets (API tokens, OAuth client secrets) in either file — credentials always live in per-server config dirs outside the repo
 - **saved_chats/** — Directory of saved chat conversations, one `.json` file per chat (created at runtime). A matching `.txt` export of the output window is always saved alongside each `.json` file. **Gitignored** — chats are local-only and never committed
 - **app_state.json** — Persistent app settings for SelfBot instance 1 (created at runtime)
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
@@ -413,7 +413,7 @@ playwright      # Browser tools — connects to Edge/Chrome via CDP, no `playwri
 pyperclip       # Desktop tools — Unicode text input via clipboard paste
 winocr          # Desktop tools — OCR via Windows.Media.Ocr (read_screen_text, Windows only)
 opencv-python   # Desktop tools — image matching (find_image_on_screen)
-mcp             # MCP (Model Context Protocol) client — required only if you want to connect external MCP servers (Gmail, GitHub, Slack, etc.) via mcp_servers.json. Pulls in starlette/uvicorn/jsonschema and ~14 transitive deps. See MyAgent's MCP Integration section
+mcp             # MCP (Model Context Protocol) client — required only if you want to connect external MCP servers (filesystem, GitHub, Slack, etc.) via mcp_servers.json. Pulls in starlette/uvicorn/jsonschema and ~14 transitive deps. See MyAgent's MCP Integration section
 pywin32         # Windows-only — required by mcp for Job Object subprocess cleanup. Install if MCP server cleanup behaves oddly on Windows
 ```
 
@@ -460,10 +460,10 @@ export GEMINI_API_KEY="your-key-here"      # optional, for MyAgent Gemini suppor
 # Ollama local inference is auto-detected at localhost:11434 — no key required
 # (override the server URL via OLLAMA_BASE_URL if you run Ollama remotely)
 
-# Optional: external MCP server support (Gmail, GitHub, Slack, etc.)
+# Optional: external MCP server support (filesystem, GitHub, Slack, etc.)
 pip install mcp pywin32                    # pywin32 needed on Windows for clean subprocess cleanup
 # Then create mcp_servers.json at the project root with your server configs
-# (gitignored — see MyAgent's "MCP Integration" section for the format and OAuth setup)
+# (gitignored — see MyAgent's "MCP Integration" section for the format)
 ```
 
 **macOS:**
@@ -492,7 +492,7 @@ echo 'export GEMINI_API_KEY="your-key-here"' >> ~/.zshrc      # optional
 # HTTP 400 errors on every API call.
 
 # Optional: external MCP server support
-pip install mcp                                                # adds Gmail / GitHub / Slack etc. via mcp_servers.json
+pip install mcp                                                # adds filesystem / GitHub / Slack etc. via mcp_servers.json
 
 # Ollama is auto-detected at localhost:11434 — no key needed.
 # Optional tuning env vars for Ollama (see Ollama section below):
@@ -555,7 +555,7 @@ A fire-and-forget autonomous task runner built with tkinter that supports **Anth
 
 **Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 16 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
 
-**External tool integration** — In addition to its 32 built-in tools (desktop, browser, meta), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like Gmail, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
+**External tool integration** — In addition to its 32 built-in tools (desktop, browser, meta), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like filesystem, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
 
 ### How the Agentic Loop Works
 
@@ -753,7 +753,7 @@ Server-side code execution outputs (plots, charts) are displayed inline in the c
 
 **Browser Tools (enabled via Browser checkbox):** `browser_open`, `browser_navigate`, `browser_click`, `browser_fill`, `browser_get_text`, `browser_run_js`, `browser_screenshot`, `browser_close`, `browser_wait_for`, `browser_select`, `browser_get_elements`
 
-**MCP Tools (enabled via MCP checkbox):** Dynamically loaded from any MCP servers configured in `mcp_servers.json`. Tool names are namespaced as `<server>__<tool>` (double underscore) — so a `gmail` server contributes `gmail__send_email`, `gmail__search_emails`, etc. The set is empty when no servers are configured. See **MCP Integration** below for setup.
+**MCP Tools (enabled via MCP checkbox):** Dynamically loaded from any MCP servers configured in `mcp_servers.json`. Tool names are namespaced as `<server>__<tool>` (double underscore) — so a `filesystem` server contributes `filesystem__read_file`, `filesystem__list_directory`, etc. The set is empty when no servers are configured. See **MCP Integration** below for setup.
 
 **Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — tools for the agent to manage its own instruction library, shared skills, and launch other agents. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions — including the currently-running instruction (changes are saved to disk and take effect the next time the instruction is loaded, without affecting the live session). Read/create/update actions include `skill_modes` (a map of skill names to disabled/enabled/on_demand modes), and update uses merge semantics so omitted skills keep their current mode. `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget via `subprocess.Popen`); defaults to headless mode, with an optional `headless=false` parameter to show the GUI window — the launched process runs independently and the PID is returned. None of these tools are parallel-safe since they modify shared state or spawn processes.
 
@@ -790,7 +790,7 @@ All tool behaviour (DPI-aware coordinate mapping, browser CDP connection to Chro
 
 #### MCP Integration
 
-MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/mcp_mixin.py`) that connects to external MCP servers — JSON-RPC stdio servers like Gmail, GitHub, Slack, Postgres, filesystem, etc. — and exposes their tools through the same agent loop as native tools. The integration works across **all four providers** (Anthropic, OpenAI, Gemini, Ollama) since MCP tool schemas flow through MyAgent's existing `_get_tools()` assembler and each provider's translator.
+MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/mcp_mixin.py`) that connects to external MCP servers — JSON-RPC stdio servers like filesystem, GitHub, Slack, Postgres, etc. — and exposes their tools through the same agent loop as native tools. The integration works across **all four providers** (Anthropic, OpenAI, Gemini, Ollama) since MCP tool schemas flow through MyAgent's existing `_get_tools()` assembler and each provider's translator.
 
 **Architecture:**
 - A dedicated asyncio event loop runs in a background thread (MCP's Python SDK is async-only; MyAgent is sync). Tool calls dispatch via `asyncio.run_coroutine_threadsafe`
@@ -814,11 +814,6 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
    ```json
    {
      "servers": {
-       "gmail": {
-         "command": "npx",
-         "args": ["-y", "@shinzolabs/gmail-mcp"],
-         "env": { "PORT": "${RANDOM_PORT}", "TELEMETRY_ENABLED": "false" }
-       },
        "filesystem": {
          "command": "npx",
          "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/you/projects"]
@@ -826,63 +821,41 @@ MyAgent ships with a generic **Model Context Protocol (MCP)** client (`myagent/m
      }
    }
    ```
-   `mcp_servers.json` is **gitignored**; `mcp_servers.example.json` is **tracked**. Never put real secrets (API tokens, OAuth client secrets) in either file — keep that boundary even if you're tempted to "just commit a quick edit" later. Credentials always live in per-server config dirs outside the repo (`~/.gmail-mcp/credentials.json` for Gmail, etc.).
+   `mcp_servers.json` is **gitignored**; `mcp_servers.example.json` is **tracked**. Never put real secrets (API tokens, OAuth client secrets) in either file — keep that boundary even if you're tempted to "just commit a quick edit" later. Credentials always live in per-server config dirs outside the repo.
 
-3. **For Gmail specifically (shinzo-labs server)** — go through the Google Cloud OAuth setup once:
-   - Create a Google Cloud project, enable the Gmail API, set up the OAuth consent screen, add yourself as a test user
-   - Create OAuth 2.0 **Desktop app** credentials, download as `~/.gmail-mcp/gcp-oauth.keys.json`
-   - Run `npx -y @shinzolabs/gmail-mcp auth` to complete the browser-based grant flow — refresh token saved to `~/.gmail-mcp/credentials.json`
-   - Restart MyAgent, tick the MCP checkbox in the instruction editor, save, and run
+3. **`${NAME}` env-var substitution for secrets** — Any value inside the `env` block of an entry in `mcp_servers.json` can use `${NAME}` placeholders that resolve at server-spawn time. This lets you keep tokens and other secrets in your shell environment (e.g. `~/.zshrc`, Windows User env vars, or a `.env` you source before launch) instead of committing them to `mcp_servers.json`. Example:
+   ```json
+   {
+     "servers": {
+       "github": {
+         "command": "npx",
+         "args": ["-y", "@modelcontextprotocol/server-github"],
+         "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+       }
+     }
+   }
+   ```
+   With `export GITHUB_TOKEN=ghp_...` in your shell, the spawned server sees `GITHUB_PERSONAL_ACCESS_TOKEN=ghp_...`. The JSON file itself stays free of secrets and is safe to track in version control if you want to (though it's still gitignored by default — see the **Tracking `mcp_servers.json`** section below). Multiple placeholders per value work (`postgres://${PG_USER}:${PG_PASS}@host/db`). Substitution applies **only** to values inside the `env` block — `command` and `args` stay literal so process listings don't leak secrets via `ps`/Task Manager. An unset reference substitutes empty (`GITHUB_PERSONAL_ACCESS_TOKEN=`, which fails noisily at the server) and emits a one-shot `⚠ ${NAME} referenced … but not set` warning to the activity output.
 
-4. **`${RANDOM_PORT}` placeholder for multi-instance support** — Some MCP servers (notably shinzo-labs gmail-mcp) bind a fixed TCP port at startup. Without `${RANDOM_PORT}`, two simultaneous MyAgent instances would collide on the default port (`EADDRINUSE`). The mixin substitutes any `${RANDOM_PORT}` token in env values with an OS-assigned free port at spawn time, so each instance gets its own port.
+4. **`${RANDOM_PORT}` placeholder for multi-instance support** — Some MCP servers bind a fixed TCP port at startup. Without `${RANDOM_PORT}`, two simultaneous MyAgent instances would collide on the default port (`EADDRINUSE`). The mixin substitutes `${RANDOM_PORT}` with a fresh OS-assigned free port per occurrence at spawn time — independent per occurrence, so `"--listen=${RANDOM_PORT} --metrics=${RANDOM_PORT}"` produces two different ports. `RANDOM_PORT` is a **reserved name** that never consults `os.environ`, so a shell var literally named `RANDOM_PORT` cannot shadow it.
 
 5. **macOS GUI launches** — Both `My Agent.command` (the macOS launcher) and `mcp_mixin.py:_connect_one()` augment the spawned subprocess's PATH with `/opt/homebrew/bin` and `/usr/local/bin` so `npx` is reachable. macOS GUI launches inherit a stripped-down PATH from `launchctl` that excludes Homebrew by default — without this fix, MCP server spawn fails with `[Errno 2]`.
 
-**Tools available with the shinzo-labs Gmail server:** ~55 endpoints including `send_email`, `read_email`, `search_emails`, `draft_email`, `list_email_labels`, `create_filter`, vacation responder controls, S/MIME, send-as aliases, batch operations, and more. The model sees these as `gmail__send_email`, `gmail__search_emails`, etc.
-
 **Per-instruction toggle** — The MCP checkbox is per-instruction, persisted in `agent_instructions.json` alongside Desktop/Browser/Meta. Each saved instruction can independently enable or disable MCP without affecting others.
 
-**Token-budget awareness** — When MCP is on, every connected server's tool catalog is sent in the API request's `tools` parameter on every call. With ~55 Gmail tools that's ~5–10K input tokens per turn before the user's content. On 200K-context models this is a non-issue; on Ollama's 32K cap (Qwen3) it can matter for long agent loops. The MCP checkbox toggles all MCP tools at once — leave it off for tasks that don't need them.
+**Token-budget awareness** — When MCP is on, every connected server's tool catalog is sent in the API request's `tools` parameter on every call. A large server catalog can add 5–10K input tokens per turn before the user's content. On 200K-context models this is a non-issue; on Ollama's 32K cap (Qwen3) it can matter for long agent loops. The MCP checkbox toggles all MCP tools at once — leave it off for tasks that don't need them.
 
-**Cross-platform** — MyAgent's MCP integration works identically on macOS and Windows after `git pull` plus a per-machine setup of `pip install mcp`, `mcp_servers.json`, and OAuth credentials. The MCP Python SDK handles Windows-specific subprocess quirks internally (resolving `npx` to `npx.cmd`, using Job Objects for cleanup). On Windows the credential path is `%USERPROFILE%\.gmail-mcp\` instead of `~/.gmail-mcp/`.
+**Cross-platform** — MyAgent's MCP integration works identically on macOS and Windows after `git pull` plus a per-machine setup of `pip install mcp` and `mcp_servers.json`. The MCP Python SDK handles Windows-specific subprocess quirks internally (resolving `npx` to `npx.cmd`, using Job Objects for cleanup).
 
-**Per-machine config differs** — `mcp_servers.json` is gitignored *by design*: it can contain spawn commands and env-stored secrets that should never enter version control. Each machine maintains its own copy. Different machines can therefore have different MCP catalogs (e.g. Mac mini runs `gmail` + `filesystem` + `homeassistant`; Windows desktop runs `gmail` + `outlook` + `internal_corp_jira`) — the agent code is identical, but the runtime tool surface varies per host. Saved instructions persist the *MCP checkbox* state, not the *tool list*; loading an instruction with MCP=on uses whatever servers happen to be configured locally. Useful as a feature (machines can specialise), occasionally a footgun (an instruction that names `gmail__send_message` will fail on a machine where the gmail server isn't configured).
+**Per-machine config differs** — `mcp_servers.json` is gitignored *by design*: it can contain spawn commands and env-stored secrets that should never enter version control. Each machine maintains its own copy. Different machines can therefore have different MCP catalogs — the agent code is identical, but the runtime tool surface varies per host. Saved instructions persist the *MCP checkbox* state, not the *tool list*; loading an instruction with MCP=on uses whatever servers happen to be configured locally. Useful as a feature (machines can specialise), occasionally a footgun (an instruction that names `<server>__<tool>` will fail on a machine where that server isn't configured).
 
-**Windows pythonw stderr fix** — The mcp Python SDK's `stdio_client` defaults `errlog=sys.stderr` and propagates that handle into the subprocess as its stderr. Under `pythonw.exe` (no console — every desktop shortcut, every silent `.bat`, anything launched without a redirect), `sys.stderr` is `None`. Asyncio's Windows ProactorEventLoop subprocess transport mishandles a `None` stderr handle, corrupting IOCP routing on the read pump and producing `ClosedResourceError` on the **first real RPC after `initialize()`**. Filesystem-server is the canary because its initialize→list_tools traffic is bursty enough to hit the corruption window before later RPCs would; gmail's slower init→tool-call cadence usually slipped through with the same broken setup. `mcp_mixin.py` opens `os.devnull` once in `_connect_mcp_servers` and passes it as `errlog=` on every `stdio_client` call, so subprocess stderr always has a valid sink regardless of how MyAgent was launched. The fix layers with three other safeguards in the mixin: **(a)** the asyncio loop is created inside the runner thread (not the main thread) so Windows IOCP ownership matches polling; **(b)** an explicit `list_roots_callback` returns `ListRootsResult(roots=[])` instead of the SDK default `ErrorData("List roots not supported")`, sidestepping any path through the error-response handling that some servers don't tolerate; **(c)** `_list_tools_for_server` catches transient stream-closed errors and reconnects via a fresh `stdio_client` + `ClientSession` swap before retrying. Belt-and-braces — only **(a)** and the **errlog fix** address concrete failure modes encountered in practice; the rest are insurance.
+**Windows pythonw stderr fix** — The mcp Python SDK's `stdio_client` defaults `errlog=sys.stderr` and propagates that handle into the subprocess as its stderr. Under `pythonw.exe` (no console — every desktop shortcut, every silent `.bat`, anything launched without a redirect), `sys.stderr` is `None`. Asyncio's Windows ProactorEventLoop subprocess transport mishandles a `None` stderr handle, corrupting IOCP routing on the read pump and producing `ClosedResourceError` on the **first real RPC after `initialize()`**. Filesystem-server is the canary because its initialize→list_tools traffic is bursty enough to hit the corruption window before later RPCs would; slower-init servers usually slip through with the same broken setup. `mcp_mixin.py` opens `os.devnull` once in `_connect_mcp_servers` and passes it as `errlog=` on every `stdio_client` call, so subprocess stderr always has a valid sink regardless of how MyAgent was launched. The fix layers with three other safeguards in the mixin: **(a)** the asyncio loop is created inside the runner thread (not the main thread) so Windows IOCP ownership matches polling; **(b)** an explicit `list_roots_callback` returns `ListRootsResult(roots=[])` instead of the SDK default `ErrorData("List roots not supported")`, sidestepping any path through the error-response handling that some servers don't tolerate; **(c)** `_list_tools_for_server` catches transient stream-closed errors and reconnects via a fresh `stdio_client` + `ClientSession` swap before retrying. Belt-and-braces — only **(a)** and the **errlog fix** address concrete failure modes encountered in practice; the rest are insurance.
 
 **Inline tool listing at connect** — Tool discovery is performed *immediately* after each server's `session.initialize()` completes, inside the same `for` loop iteration that entered its `stdio_client` context — not deferred to a single batch sweep after every server is connected. The motivation: when multiple `stdio_client` contexts are stacked on the same `AsyncExitStack`, entering a *later* server's context can nudge an *earlier* session's anyio cancel scope into a partial-close state, so `list_tools` against the older session raises `ClosedResourceError` even though every connect succeeded. Listing while each session is still the most-recently-set-up resource catches the catalog before any interference window opens. `_list_tools_for_server(name)` is the per-server helper called inline from `_connect_all`; the older `_refresh_mcp_tools_async` still exists for runtime catalog refresh but no longer participates in the startup path. A failure on a single server's list is logged but doesn't abort the rest of the connect loop, and `do_mcp_call` can recover later by re-listing on demand.
 
-**Cold-cache startup timeout (5 min)** — `_connect_mcp_servers` blocks the calling thread on `_mcp_ready_event.wait(timeout=300)` so callers see a fully populated `MCP_TOOLS` list when the method returns. The 5-minute ceiling is intentional headroom for **first-run cold-cache `npx -y` downloads**: `@shinzolabs/gmail-mcp` pulls in `googleapis` (~100MB) the first time it runs on a fresh machine, which takes 30–90 s on broadband and longer on slower links — well past the original 30 s ceiling. Warm-cache launches still complete in 1–3 s, so the longer timeout costs nothing in practice and only fires when a server is genuinely stuck. The timed-out message reads `⚠ MCP startup timed out after 5 minutes` so the cause is unambiguous when it does fire.
+**Cold-cache startup timeout (5 min)** — `_connect_mcp_servers` blocks the calling thread on `_mcp_ready_event.wait(timeout=300)` so callers see a fully populated `MCP_TOOLS` list when the method returns. The 5-minute ceiling is intentional headroom for **first-run cold-cache `npx -y` downloads** of fat packages, which can take 30–90 s on broadband and longer on slower links — well past the original 30 s ceiling. Warm-cache launches still complete in 1–3 s, so the longer timeout costs nothing in practice and only fires when a server is genuinely stuck. The timed-out message reads `⚠ MCP startup timed out after 5 minutes` so the cause is unambiguous when it does fire.
 
-**Vendoring MCP servers** — The repo's `.mcp-deps/` directory (gitignored) supports installing MCP servers locally via `npm install --prefix .mcp-deps <package>` and pointing `mcp_servers.json` at `dist/index.js` via `node` instead of `npx`. Two reasons to vendor: **(1)** patching — if you need to modify a server's source (e.g. broaden OAuth scopes that the upstream package missed), patches in `npx`'s shared cache get wiped on cache refresh; vendored installs persist. **(2)** durability against npm — bypassing `npx -y` removes the cmd.exe → npx.cmd → node.exe shim chain on Windows, which is occasionally implicated in stdio handshake quirks. Cost: per-machine setup step (each clone re-runs `npm install`). Worthwhile only when you actually need to patch or have hit a reproducible npx-related bug.
-
-**Sharing OAuth credentials across machines** — Both `~/.gmail-mcp/gcp-oauth.keys.json` and `~/.gmail-mcp/credentials.json` (the OAuth client identity + the user's refresh token) are *machine-independent*. The refresh token is bound to the OAuth client + Google account + scopes triple, not to the host. Copy both files to a second machine's `.gmail-mcp/` directory and Gmail MCP works there immediately without re-running the consent flow. For multi-account setups, repeat the copy for each per-account directory (e.g. `~/.gmail-mcp-roman/`, `~/.gmail-mcp-other/`) — each one carries its own `credentials.json` refresh token alongside a `gcp-oauth.keys.json` that's typically identical across accounts within the same GCP project. Recommended transfer methods: USB stick, AirDrop, `scp` over LAN, or `magic-wormhole` — anything you control end-to-end. Avoid email, public cloud sync, or chat platforms (these files grant full Gmail account access and shouldn't pass through third-party services). Wipe the source-side copy after the transfer completes.
-
-**macOS USB-stick TCC gotcha** — When the transfer medium is a mounted USB volume *and* the destination machine is macOS, Terminal and anything it spawns (`cp`, `python`, Claude Code's Bash tool, etc.) get blocked by TCC with `Operation not permitted` since Catalina — even though `stat` returns valid metadata, `open()` on the file fails. Three workarounds: **(1)** drag-and-drop the files in Finder, which holds its own removable-volume entitlement; **(2)** grant your terminal app `Files & Folders → Removable Volumes` (or full Full Disk Access) in System Settings → Privacy & Security; **(3)** script the copy via `osascript -e 'tell application "Finder" to duplicate POSIX file "/Volumes/NAME/.gmail-mcp/credentials.json" to POSIX file "/Users/you/.gmail-mcp/" with replacing'` — the duplicate runs inside Finder's process context, so no system-permission change is needed. Option (3) is the cleanest for repeatable scripting; Finder may drop a `.DS_Store` in each touched destination directory, which is harmless and can be `rm`'d afterwards.
-
-**Multiple Gmail accounts via separate MCP_CONFIG_DIRs** — `@shinzolabs/gmail-mcp` is single-account-per-process (its OAuth tokens live in one `credentials.json` inside `MCP_CONFIG_DIR`, which defaults to `~/.gmail-mcp/`). To expose a second Gmail account to the agent, declare a *second* server entry in `mcp_servers.json` pointing at the *same* npm install but with `MCP_CONFIG_DIR` env-overridden to a different directory. Each directory holds its own `gcp-oauth.keys.json` (the same OAuth client across accounts is fine — just copy the file) and its own `credentials.json` (the per-account refresh token, written by re-running the auth flow). Example with two accounts:
-```json
-{
-  "servers": {
-    "gmail": {
-      "command": "node",
-      "args": [".mcp-deps/node_modules/@shinzolabs/gmail-mcp/dist/index.js"],
-      "env": { "PORT": "${RANDOM_PORT}", "TELEMETRY_ENABLED": "false" }
-    },
-    "gmail_other": {
-      "command": "node",
-      "args": [".mcp-deps/node_modules/@shinzolabs/gmail-mcp/dist/index.js"],
-      "env": {
-        "MCP_CONFIG_DIR": "C:/Users/you/.gmail-mcp-other",
-        "PORT": "${RANDOM_PORT}",
-        "AUTH_SERVER_PORT": "3456",
-        "TELEMETRY_ENABLED": "false"
-      }
-    }
-  }
-}
-```
-Setup for the second account: `mkdir ~/.gmail-mcp-other && cp ~/.gmail-mcp/gcp-oauth.keys.json ~/.gmail-mcp-other/`, add the second Gmail address as a Test user in the GCP consent screen for the same project, then run the auth flow once with `MCP_CONFIG_DIR` and `AUTH_SERVER_PORT` set: `MCP_CONFIG_DIR=$HOME/.gmail-mcp-other AUTH_SERVER_PORT=3456 node .mcp-deps/node_modules/@shinzolabs/gmail-mcp/dist/index.js auth`. Sign in as the *second* account when the browser opens; `credentials.json` is written into the new dir. Restart MyAgent — both servers connect side-by-side and tools appear under their server-name prefixes (`gmail__send_message`, `gmail_other__send_message`, etc.). The model picks an account by emitting the prefixed tool name; for write-heavy flows (send / draft / delete / trash) add a one-line note to the agent instruction text mapping prefixes to email addresses so account confusion can't silently route a destructive call to the wrong mailbox. Both accounts inherit any local patches to the npm package (e.g. the `https://mail.google.com/` scope addition for permanent-delete) automatically — same `dist/index.js` runs both processes.
+**Vendoring MCP servers** — The repo's `.mcp-deps/` directory (gitignored) supports installing MCP servers locally via `npm install --prefix .mcp-deps <package>` and pointing `mcp_servers.json` at `dist/index.js` via `node` instead of `npx`. Two reasons to vendor: **(1)** patching — if you need to modify a server's source, patches in `npx`'s shared cache get wiped on cache refresh; vendored installs persist. **(2)** durability against npm — bypassing `npx -y` removes the cmd.exe → npx.cmd → node.exe shim chain on Windows, which is occasionally implicated in stdio handshake quirks. Cost: per-machine setup step (each clone re-runs `npm install`). Worthwhile only when you actually need to patch or have hit a reproducible npx-related bug.
 
 **Debugging MCP** — Every `MCPMixin._mcp_log` call is dual-sinked to both MyAgent's queue (visible in the GUI activity widget) and `sys.stderr`. Under `pythonw.exe` stderr is silently discarded by the OS, so production behaviour is unchanged. For diagnostic launches that need to see the full MCP message stream from outside the GUI, redirect stderr at launch time:
 ```bash
@@ -910,7 +883,7 @@ The **Convo checkbox** in the instruction editor enables a stronger fallback: wh
 **When to use it:**
 - Long-running chatbot conversations with Ollama models (especially Qwen3, gpt-oss, Llama 3.x)
 - Any instruction where the agent should always wait for the next user input rather than terminate
-- Combined with MCP (e.g. Gmail) for an open-ended chatbot that can take real actions
+- Combined with MCP (e.g. filesystem) for an open-ended chatbot that can take real actions
 
 **When to leave it off:**
 - Single-shot task instructions (e.g. "Search the web for X and summarise") where ending on completion is correct

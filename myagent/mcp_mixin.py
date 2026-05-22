@@ -2,10 +2,10 @@
 
 MyAgent's existing tool families (TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, META_TOOLS)
 are static dicts compiled into the codebase. MCP adds a dynamic family: external
-servers (Gmail, GitHub, Slack, etc.) speak the MCP JSON-RPC protocol over stdio
-or HTTP and advertise their tools at runtime. This mixin connects to configured
-servers, enumerates their tools, exposes them through MyAgent's normal tool
-pipeline, and proxies invocations back to the right server.
+servers (filesystem, GitHub, Slack, etc.) speak the MCP JSON-RPC protocol over
+stdio or HTTP and advertise their tools at runtime. This mixin connects to
+configured servers, enumerates their tools, exposes them through MyAgent's
+normal tool pipeline, and proxies invocations back to the right server.
 
 Architecture notes:
 
@@ -41,6 +41,7 @@ import asyncio
 import gc
 import json
 import os
+import re
 import socket
 import threading
 from contextlib import AsyncExitStack
@@ -49,11 +50,54 @@ from contextlib import AsyncExitStack
 def _free_port():
     """Ask the OS for an unused TCP port, then release it. Used to substitute
     ``${RANDOM_PORT}`` placeholders in MCP server env vars so multiple MyAgent
-    instances don't collide on default ports (e.g. shinzo-labs gmail-mcp's
-    hardcoded 3000)."""
+    instances don't collide on default ports when a server binds a fixed
+    TCP port at startup."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+# Matches ``${NAME}`` where NAME is a POSIX-style identifier (letter/underscore
+# start, then letters/digits/underscores). Used by `_substitute_placeholders`.
+_PLACEHOLDER_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _substitute_placeholders(value, *, on_unset=None):
+    """Resolve ``${NAME}`` placeholders inside a string value from
+    ``mcp_servers.json``'s ``env`` block.
+
+    Resolution order:
+    * ``${RANDOM_PORT}`` is reserved — each occurrence is replaced with an
+      independent OS-assigned free TCP port. It does NOT consult ``os.environ``,
+      so shell vars literally named ``RANDOM_PORT`` cannot shadow it.
+    * Any other ``${NAME}`` resolves to ``os.environ[NAME]`` if set,
+      otherwise the empty string. The first time a given unset NAME is
+      encountered within a single call, ``on_unset(NAME)`` is invoked
+      (if provided) so the caller can surface a one-shot warning. Substituting
+      empty rather than leaving the literal placeholder gives a visible
+      failure (``GITHUB_TOKEN=``) rather than a confusing one
+      (``GITHUB_TOKEN=${MISSING}``) at the receiving server.
+
+    Non-string values pass through unchanged so callers can map this over
+    arbitrary env dicts without type-checking each entry.
+    """
+    if not isinstance(value, str):
+        return value
+    seen_unset = set()
+
+    def _resolve(match):
+        name = match.group(1)
+        if name == "RANDOM_PORT":
+            return str(_free_port())
+        val = os.environ.get(name)
+        if val is None:
+            if name not in seen_unset and on_unset is not None:
+                on_unset(name)
+            seen_unset.add(name)
+            return ""
+        return val
+
+    return _PLACEHOLDER_RE.sub(_resolve, value)
 
 from myagent.constants import _HAS_MCP, MCP_NAME_SEP, MCP_SERVERS_PATH, MCP_TOOLS, IS_WINDOWS as _IS_WINDOWS
 
@@ -170,10 +214,10 @@ class MCPMixin:
         # tools (signalled via the threading.Event), so callers see a fully
         # populated MCP_TOOLS list when this method returns. The 5-minute
         # ceiling is generous on purpose: first-run cold-cache `npx -y`
-        # downloads of fat packages (gmail-mcp pulls in `googleapis` ~100MB)
-        # can take 30-90s on broadband and longer on slower links. Warm-cache
-        # launches complete in 1-3s, so the long ceiling costs nothing in
-        # practice and only fires when a server is genuinely stuck.
+        # downloads of fat packages can take 30-90s on broadband and longer
+        # on slower links. Warm-cache launches complete in 1-3s, so the long
+        # ceiling costs nothing in practice and only fires when a server is
+        # genuinely stuck.
         self._mcp_ready_event = threading.Event()
         self._mcp_runner_future = asyncio.run_coroutine_threadsafe(
             self._mcp_runner(config), self._mcp_loop
@@ -276,13 +320,26 @@ class MCPMixin:
             # makes MCP work regardless of how MyAgent was launched.
             env = dict(os.environ)
             env.update(spec.get("env") or {})
-            # Substitute ${RANDOM_PORT} in env values with an OS-assigned
-            # free port. Lets multiple MyAgent instances run MCP servers
-            # that bind a TCP port (e.g. shinzo-labs gmail-mcp listens on
-            # PORT=3000 by default) without colliding on EADDRINUSE.
-            for k, v in list(env.items()):
-                if isinstance(v, str) and "${RANDOM_PORT}" in v:
-                    env[k] = v.replace("${RANDOM_PORT}", str(_free_port()))
+            # Resolve ``${NAME}`` placeholders in the user-supplied env block
+            # only — NOT in the ambient process env, which can legitimately
+            # contain literal ``${...}`` (rare but possible, e.g. shell aliases
+            # that leaked into the env). Scoping to spec.get("env") keys keeps
+            # the substitution surface tight and predictable: only values the
+            # user typed into mcp_servers.json get expanded.
+            user_env_keys = list((spec.get("env") or {}).keys())
+            warned_unset = set()
+            def _on_unset(varname):
+                if varname not in warned_unset:
+                    warned_unset.add(varname)
+                    self._mcp_log(
+                        f"⚠ MCP server '{name}': ${{{varname}}} referenced "
+                        f"in mcp_servers.json env but not set in the process "
+                        f"environment — substituting empty string\n"
+                    )
+            for k in user_env_keys:
+                v = env.get(k)
+                if isinstance(v, str) and "${" in v:
+                    env[k] = _substitute_placeholders(v, on_unset=_on_unset)
             if not _IS_WINDOWS:
                 path_parts = env.get("PATH", "").split(os.pathsep)
                 for extra in ("/opt/homebrew/bin", "/usr/local/bin",

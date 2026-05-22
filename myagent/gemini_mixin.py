@@ -29,41 +29,79 @@ class GeminiMixin:
         ),
     }
 
+    # JSON-Schema fields the google-genai SDK's strict pydantic Schema validator
+    # rejects with `extra_forbidden`. Native MyAgent tools never include them,
+    # but MCP servers commonly do — `@modelcontextprotocol/server-filesystem`
+    # emits `$schema: "http://json-schema.org/draft-07/schema#"` on every tool,
+    # which crashes FunctionDeclaration construction without stripping. Mix of
+    # JSON-Schema dialect markers ($schema/$id/$ref/$defs/definitions) and
+    # pure-metadata fields (title/examples/default) plus the original
+    # additionalProperties (kept here for one consolidated drop list).
+    _GEMINI_SCHEMA_DROPS = frozenset({
+        "$schema", "$id", "$ref", "$defs", "definitions",
+        "title", "examples", "default",
+        "additionalProperties",
+    })
+
     def _tools_to_gemini(self, tools):
-        """Convert Anthropic tool schemas to Gemini FunctionDeclaration objects."""
+        """Convert Anthropic tool schemas to Gemini FunctionDeclaration objects.
+
+        Per-tool conversion is wrapped in try/except so one tool with an exotic
+        JSON-Schema field we haven't taught the stripper about yet won't kill
+        the entire request — the bad tool is skipped with a warning, the rest
+        of the catalog still ships. Important for MCP, where third-party server
+        authors decide what JSON-Schema features their tool inputs use.
+        """
         declarations = []
         for tool in tools:
             schema = copy.deepcopy(tool.get("input_schema", {"type": "object", "properties": {}}))
-            # Strip additionalProperties which some Gemini models reject
-            self._strip_additional_properties(schema)
+            self._clean_schema_for_gemini(schema)
             desc = tool.get("description", "")
-            # Append Gemini-specific coordinate guidance for desktop tools
             desc += self._GEMINI_COORD_HINTS.get(tool["name"], "")
-            declarations.append(genai_types.FunctionDeclaration(
-                name=tool["name"],
-                description=desc,
-                parameters=schema,
-            ))
+            try:
+                declarations.append(genai_types.FunctionDeclaration(
+                    name=tool["name"],
+                    description=desc,
+                    parameters=schema,
+                ))
+            except Exception as e:
+                queue = getattr(self, "queue", None)
+                if queue is not None:
+                    queue.put({
+                        "type": "tool_info",
+                        "content": (
+                            f"⚠ Gemini: skipping tool '{tool.get('name', '?')}' — "
+                            f"schema conversion failed ({type(e).__name__}: {e})\n"
+                        ),
+                    })
         return declarations
 
-    def _strip_additional_properties(self, schema):
-        """Recursively strip additionalProperties and handle enum values for Gemini."""
+    def _clean_schema_for_gemini(self, schema):
+        """Recursively drop JSON-Schema fields the google-genai Schema
+        validator rejects, and normalize enum constraints.
+
+        Two-part cleanup:
+        1. Drop every key in ``_GEMINI_SCHEMA_DROPS`` — dialect markers and
+           pure-metadata fields that Gemini's pydantic Schema doesn't accept.
+        2. For ``enum``, keep only string-typed enums (stringifying the values
+           so the constraint survives the round trip); non-string enums are
+           removed entirely to preserve the original type, because converting
+           e.g. integer params to string confuses Gemini's coordinate reasoning
+           in desktop tools.
+        """
         if isinstance(schema, dict):
-            schema.pop("additionalProperties", None)
-            # Gemini only allows enum on STRING type properties.
-            # For non-string enums (e.g. integer), remove the enum constraint
-            # to keep the original type — converting integer params to string
-            # type confuses Gemini's coordinate reasoning in desktop tools.
+            for k in self._GEMINI_SCHEMA_DROPS:
+                schema.pop(k, None)
             if "enum" in schema and isinstance(schema["enum"], list):
                 if schema.get("type") == "string":
                     schema["enum"] = [str(v) for v in schema["enum"]]
                 else:
                     schema.pop("enum")
             for v in schema.values():
-                self._strip_additional_properties(v)
+                self._clean_schema_for_gemini(v)
         elif isinstance(schema, list):
             for item in schema:
-                self._strip_additional_properties(item)
+                self._clean_schema_for_gemini(item)
 
     @staticmethod
     def _normalize_gemini_args(args_dict):
