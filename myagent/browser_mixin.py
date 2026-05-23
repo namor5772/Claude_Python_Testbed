@@ -8,7 +8,7 @@ import json
 
 from PIL import Image
 
-from myagent.constants import IS_WINDOWS, _SUBPROCESS_NOWND
+from myagent.constants import IS_WINDOWS
 
 
 class BrowserMixin:
@@ -97,22 +97,20 @@ class BrowserMixin:
 
     def do_browser_open(self, url):
         try:
-            self._cleanup_browser()
-            if IS_WINDOWS:
-                subprocess.run(
-                    ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    **_SUBPROCESS_NOWND,
-                )
-            else:
-                subprocess.run(
-                    ["pkill", "-f", "Microsoft Edge"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                time.sleep(0.5)
             page = self._ensure_browser()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            return f"Navigated to {url} — page title: {page.title()}"
+            try:
+                current_url = page.url or ""
+            except Exception:
+                current_url = ""
+            is_blank = (
+                current_url in ("", "about:blank")
+                or current_url.startswith("chrome://newtab")
+                or current_url.startswith("edge://newtab")
+            )
+            if not is_blank:
+                self._page = page.context.new_page()
+            self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            return f"Navigated to {url} — page title: {self._page.title()}"
         except Exception as e:
             return f"Browser open error: {e}"
 
