@@ -113,14 +113,14 @@ class SafetyMixin:
         dlg = tk.Toplevel(parent)
         self._ps_safety_dialog = dlg
         dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
-        dlg.title("PS Safety — Confirm Patterns" if IS_WINDOWS else "Shell Safety — Confirm Patterns")
+        dlg.title("Safety — Confirm Patterns")
         if IS_WINDOWS:
             dlg.transient(parent)
         dlg.resizable(True, True)
 
         tk.Label(
             dlg, text="Checked items require confirmation before execution.\n"
-                       "Uncheck to bypass the confirmation dialog. Shell command\n"
+                       "Uncheck to bypass the confirmation dialog. Command\n"
                        "patterns are matched by regex; Gmail entries match the tool name.",
             font=("Arial", 9), justify="left",
         ).pack(padx=15, pady=(12, 6), anchor="w")

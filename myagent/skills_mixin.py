@@ -167,7 +167,7 @@ class SkillsMixin:
 
     def _update_ps_safety_button(self):
         n = len(self._disabled_confirm_patterns)
-        base = "PS Safety" if IS_WINDOWS else "Shell Safety"
+        base = "Safety"
         label = f"{base} ({n} bypassed)" if n else base
         try:
             self.ps_safety_button.config(text=label)

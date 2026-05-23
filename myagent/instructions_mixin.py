@@ -316,16 +316,9 @@ class InstructionsMixin:
         # Apply current thinking/temp widget states
         self._on_model_selected()
 
-        # Row 4: Image management + tool toggles
-        img_frame = tk.Frame(win)
-        img_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
-
-        tk.Button(
-            img_frame, text="Attach Images", command=self.attach_image, width=14
-        ).pack(side=tk.LEFT, padx=(0, 5))
-        tk.Button(
-            img_frame, text="Remove Selected", command=self._remove_selected_images, width=16
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        # Row 4: Tool toggle checkboxes
+        checks_frame = tk.Frame(win)
+        checks_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get() if _HAS_DESKTOP else False)
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
@@ -334,61 +327,76 @@ class InstructionsMixin:
         self._editor_google = tk.BooleanVar(value=self.google_enabled.get() if _HAS_GOOGLE else False)
         self._editor_conversational = tk.BooleanVar(value=self.conversational_enabled.get())
         _desktop_cb = tk.Checkbutton(
-            img_frame, text="Desktop", variable=self._editor_desktop,
+            checks_frame, text="Desktop", variable=self._editor_desktop,
             font=("Arial", 9),
         )
-        _desktop_cb.pack(side=tk.LEFT, padx=(15, 0))
+        _desktop_cb.pack(side=tk.LEFT, padx=(0, 5))
         if not _HAS_DESKTOP:
             _desktop_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
-            img_frame, text="Browser", variable=self._editor_browser,
+            checks_frame, text="Browser", variable=self._editor_browser,
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
         tk.Checkbutton(
-            img_frame, text="Meta", variable=self._editor_meta,
+            checks_frame, text="Meta", variable=self._editor_meta,
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
         _mcp_cb = tk.Checkbutton(
-            img_frame, text="MCP", variable=self._editor_mcp,
+            checks_frame, text="MCP", variable=self._editor_mcp,
             font=("Arial", 9),
         )
         _mcp_cb.pack(side=tk.LEFT, padx=(5, 0))
         if not _HAS_MCP:
             _mcp_cb.config(state=tk.DISABLED)
         _google_cb = tk.Checkbutton(
-            img_frame, text="Google", variable=self._editor_google,
+            checks_frame, text="Google", variable=self._editor_google,
             font=("Arial", 9),
         )
         _google_cb.pack(side=tk.LEFT, padx=(5, 0))
         if not _HAS_GOOGLE:
             _google_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
-            img_frame, text="Convo", variable=self._editor_conversational,
+            checks_frame, text="Convo", variable=self._editor_conversational,
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
+        # Row 5: Skills + Shell/PS Safety buttons
+        buttons_frame = tk.Frame(win)
+        buttons_frame.grid(row=5, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+
         self.skills_button = tk.Button(
-            img_frame, text="Skills", command=self.open_skills_editor, padx=10
+            buttons_frame, text="Skills", command=self.open_skills_editor, padx=10
         )
-        self.skills_button.pack(side=tk.LEFT, padx=(15, 0))
+        self.skills_button.pack(side=tk.LEFT, padx=(0, 5))
         self._update_skills_button()
 
-        _safety_label = "PS Safety" if IS_WINDOWS else "Shell Safety"
         self.ps_safety_button = tk.Button(
-            img_frame, text=_safety_label, command=self._open_ps_safety_dialog, padx=10
+            buttons_frame, text="Safety", command=self._open_ps_safety_dialog, padx=10
         )
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
         self._update_ps_safety_button()
 
+        # Row 6: Image management buttons
+        img_frame = tk.Frame(win)
+        img_frame.grid(row=6, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+
+        tk.Button(
+            img_frame, text="Attach Images", command=self.attach_image, width=15
+        ).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Button(
+            img_frame, text="Remove Selected", command=self._remove_selected_images, width=15
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        # Row 7: Image listbox
         self._instr_image_listbox = tk.Listbox(
             win, height=4, font=("Arial", 9), foreground="#6a1b9a",
             selectmode=tk.EXTENDED,
         )
         self._instr_image_listbox.grid(
-            row=5, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 5)
+            row=7, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 5)
         )
         img_list_scrollbar = tk.Scrollbar(win, command=self._instr_image_listbox.yview)
-        img_list_scrollbar.grid(row=5, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
+        img_list_scrollbar.grid(row=7, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
         self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
 
         # (Apply button is in row 1, to the right of the Load combo)
