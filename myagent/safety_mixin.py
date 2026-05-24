@@ -172,12 +172,20 @@ class SafetyMixin:
         # _confirm_proton_action. The tools are still named proton_* for
         # backward compatibility with existing instructions, but they route
         # through whichever account the agent picks from accounts.json.
+        # DISPLAY LABEL vs STORED PATTERN: the checkbox shows "IMAP_send"
+        # (etc.) for user-facing accuracy — the integration is no longer
+        # Proton-specific. But the lambda binds p=tool_name with the
+        # original "proton_send" string, so _disabled_confirm_patterns
+        # still stores and checks against the actual tool name. The split
+        # between display text and stored value is cosmetic-only and does
+        # not affect the bypass-detection code path in _confirm_proton_action.
         if _HAS_PROTONMAIL:
             text_widget.insert("end", "\n── IMAP mail destructive tools ──\n")
             for tool_name in PROTON_CONFIRM_TOOLS:
                 var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
+                display_label = tool_name.replace("proton_", "IMAP_", 1)
                 cb = tk.Checkbutton(
-                    text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
+                    text_widget, text=display_label, variable=var, font=(MONO_FONT, 9),
                     anchor="w", bg="white", activebackground="white",
                     command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
                 )
