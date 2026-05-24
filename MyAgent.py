@@ -40,6 +40,7 @@ from myagent.constants import (
     DEFAULT_GEOMETRY, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
     OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
     OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA, _HAS_MCP, _HAS_GOOGLE,
+    _HAS_PROTONMAIL,
     AGENT_STATE_FILE, _BASE_DIR,
 )
 from myagent.ui_mixin import UIMixin
@@ -53,6 +54,7 @@ from myagent.gemini_mixin import GeminiMixin
 from myagent.ollama_mixin import OllamaMixin
 from myagent.mcp_mixin import MCPMixin
 from myagent.gmail_mixin import GmailMixin
+from myagent.protonmail_mixin import ProtonMailMixin
 from myagent.desktop_mixin import DesktopMixin
 from myagent.browser_mixin import BrowserMixin
 from myagent.safety_mixin import SafetyMixin
@@ -67,7 +69,7 @@ if _HAS_OLLAMA:
 
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
-          OllamaMixin, MCPMixin, GmailMixin,
+          OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin,
           DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
           EventLoopMixin):
 
@@ -179,6 +181,8 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._init_mcp_state()
         self.google_enabled = tk.BooleanVar(value=False)
         self._google_init_state()
+        self.proton_enabled = tk.BooleanVar(value=False)
+        self._proton_init_state()
         # Conversational mode: when on, MyAgent enforces a chatbot loop by
         # invoking do_user_prompt directly whenever the model ends a turn
         # without calling user_prompt itself. Useful for smaller models that

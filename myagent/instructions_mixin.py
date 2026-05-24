@@ -6,7 +6,7 @@ from myagent.constants import (
     PROVIDERS, FALLBACK_MODELS, OPENAI_FALLBACK_MODELS, GEMINI_FALLBACK_MODELS,
     OLLAMA_FALLBACK_MODELS, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
     ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
-    _HAS_GOOGLE, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
+    _HAS_GOOGLE, _HAS_PROTONMAIL, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL,
 )
 
@@ -191,13 +191,13 @@ class InstructionsMixin:
         self._instr_name_entry = tk.Entry(win, font=("Arial", 10), width=30)
         self._instr_name_entry.grid(row=0, column=1, padx=5, pady=(10, 5), sticky="ew")
 
-        tk.Button(win, text="SAVE", command=self._save_instruction, width=8).grid(
+        tk.Button(win, text="SAVE", command=self._save_instruction, width=6).grid(
             row=0, column=2, padx=5, pady=(10, 5)
         )
-        tk.Button(win, text="DELETE", command=self._delete_instruction, width=8).grid(
+        tk.Button(win, text="DELETE", command=self._delete_instruction, width=6).grid(
             row=0, column=3, padx=5, pady=(10, 5)
         )
-        tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=8).grid(
+        tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=6).grid(
             row=0, column=4, padx=(5, 10), pady=(10, 5)
         )
 
@@ -215,14 +215,13 @@ class InstructionsMixin:
         self._refresh_instruction_list()
 
         _apply_btn = tk.Button(
-            win, text="Apply", command=self._apply_instruction
+            win, text="Apply", command=self._apply_instruction, width=6
         )
-        # Bold label, sized to match SAVE button column via sticky="ew"
         import tkinter.font as _tkfont
         _f = _tkfont.nametofont(_apply_btn.cget("font")).copy()
         _f.configure(weight="bold")
         _apply_btn.configure(font=_f)
-        _apply_btn.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+        _apply_btn.grid(row=1, column=2, padx=5, pady=5)
 
         # Row 2: Text editor
         self._instr_text = tk.Text(win, wrap=tk.WORD, font=(MONO_FONT, 10))
@@ -325,6 +324,7 @@ class InstructionsMixin:
         self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
         self._editor_mcp = tk.BooleanVar(value=self.mcp_enabled.get() if _HAS_MCP else False)
         self._editor_google = tk.BooleanVar(value=self.google_enabled.get() if _HAS_GOOGLE else False)
+        self._editor_proton = tk.BooleanVar(value=self.proton_enabled.get() if _HAS_PROTONMAIL else False)
         self._editor_conversational = tk.BooleanVar(value=self.conversational_enabled.get())
         _desktop_cb = tk.Checkbutton(
             checks_frame, text="Desktop", variable=self._editor_desktop,
@@ -355,6 +355,13 @@ class InstructionsMixin:
         _google_cb.pack(side=tk.LEFT, padx=(5, 0))
         if not _HAS_GOOGLE:
             _google_cb.config(state=tk.DISABLED)
+        _proton_cb = tk.Checkbutton(
+            checks_frame, text="Proton", variable=self._editor_proton,
+            font=("Arial", 9),
+        )
+        _proton_cb.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_PROTONMAIL:
+            _proton_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
             checks_frame, text="Convo", variable=self._editor_conversational,
             font=("Arial", 9),
@@ -487,6 +494,7 @@ class InstructionsMixin:
         self.meta_enabled.set(self._editor_meta.get())
         self.mcp_enabled.set(self._editor_mcp.get())
         self.google_enabled.set(self._editor_google.get())
+        self.proton_enabled.set(self._editor_proton.get())
         self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = name
@@ -503,6 +511,7 @@ class InstructionsMixin:
             "meta": self.meta_enabled.get(),
             "mcp": self.mcp_enabled.get(),
             "google": self.google_enabled.get(),
+            "proton": self.proton_enabled.get(),
             "conversational": self.conversational_enabled.get(),
             "provider": self.provider,
             "model": self.model,
@@ -548,6 +557,7 @@ class InstructionsMixin:
         self._editor_meta.set(False)
         self._editor_mcp.set(False)
         self._editor_google.set(False)
+        self._editor_proton.set(False)
         self._editor_conversational.set(False)
         self._disabled_confirm_patterns = set()
         self._update_ps_safety_button()
@@ -599,6 +609,7 @@ class InstructionsMixin:
             self._editor_meta.set(entry.get("meta", False))
             self._editor_mcp.set(entry.get("mcp", False))
             self._editor_google.set(entry.get("google", False))
+            self._editor_proton.set(entry.get("proton", False))
             self._editor_conversational.set(entry.get("conversational", False))
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
@@ -618,6 +629,7 @@ class InstructionsMixin:
         self.meta_enabled.set(self._editor_meta.get())
         self.mcp_enabled.set(self._editor_mcp.get())
         self.google_enabled.set(self._editor_google.get())
+        self.proton_enabled.set(self._editor_proton.get())
         self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()

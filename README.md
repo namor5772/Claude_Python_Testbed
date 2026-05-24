@@ -7,7 +7,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting **Anthropic, OpenAI, Gemini, and Ollama (local inference)** providers (see details below)
-- **myagent/** — Package containing MyAgent's 16 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
+- **myagent/** — Package containing MyAgent's 17 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
@@ -16,7 +16,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **Qwen25VL-tools.Modelfile**, **Llama32Vision-tools.Modelfile**, **Gemma3-tools.Modelfile** — Custom Ollama Modelfiles that graft Qwen3's tool-calling template onto three vision models, unlocking structured `tool_calls` that Ollama's default Modelfiles don't expose. See the **Ollama (Local Inference)** section for build instructions and the rationale
 - **CLAUDE.md** — Top-level project instructions and conventions for Claude Code sessions. Imports the three per-app sub-files below via `@CLAUDE_SELFBOT.md` / `@CLAUDE_MYAGENT.md` / `@CLAUDE_ACCOUNT.md` so they load automatically without bloating the root file
 - **CLAUDE_SELFBOT.md** — Architecture notes for SelfBot.py (threading model, dual geometry, skills, DPI handling, auto-save)
-- **CLAUDE_MYAGENT.md** — Architecture notes for MyAgent.py and the `myagent/` package (mixin design, multi-provider message translation, MCP/Gmail integration, click-accuracy pipeline)
+- **CLAUDE_MYAGENT.md** — Architecture notes for MyAgent.py and the `myagent/` package (mixin design, multi-provider message translation, MCP/Gmail/Proton integration, click-accuracy pipeline)
 - **CLAUDE_ACCOUNT.md** — Architecture notes for Account_Activity_WBC.py (CDP connection, DOM stabilisation, CSV conversion)
 - **system_prompts.json** — Saved system prompts for SelfBot (created at runtime)
 - **agent_instructions.json** — Saved agent instructions for MyAgent, with embedded images. **Tracked in git** so the instruction library syncs across machines via push/pull (rather than each clone keeping its own divergent set)
@@ -556,9 +556,9 @@ The application is a single-file tkinter app structured around the `App` class:
 
 A fire-and-forget autonomous task runner built with tkinter that supports **Anthropic** (Claude), **OpenAI** (GPT-4.1, GPT-5, o4-mini, etc.), **Gemini**, and **Ollama** (local inference) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
-**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 16 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
+**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 17 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
 
-**External tool integration** — In addition to its ~48 built-in tools (core, desktop, browser, meta, Gmail), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like filesystem, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
+**External tool integration** — In addition to its ~64 built-in tools (core, desktop, browser, meta, Gmail, Proton), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like filesystem, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
 
 ### How the Agentic Loop Works
 
@@ -618,7 +618,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 | **MCP** checkbox | Enable/disable external MCP (Model Context Protocol) tools loaded from `mcp_servers.json`. Disabled if the `mcp` Python package is not installed. See **MCP Integration** below |
 | **Convo** checkbox | Enable Conversational mode — MyAgent enforces a chatbot loop by automatically invoking `user_prompt` whenever the model ends a turn without calling it. Designed for smaller open-weights models (Qwen3, Llama, gpt-oss) that don't reliably follow "always call user_prompt" meta-rules. See **Conversational Mode** below |
 | **Skills** button | Open the Skills Manager to configure skills; the button label shows a count summary (e.g., `Skills (2+3)` = 2 enabled + 3 on-demand) |
-| **Safety** button | Open the Safety dialog to selectively bypass individual confirmation patterns (shell commands AND Gmail destructive ops); the button label shows a count when patterns are bypassed (e.g., `Safety (3 bypassed)`) |
+| **Safety** button | Open the Safety dialog to selectively bypass individual confirmation patterns (shell commands AND Gmail destructive ops AND Proton destructive ops); the button label shows a count when patterns are bypassed (e.g., `Safety (3 bypassed)`) |
 | **Image list** | Scrollable listbox showing attached image filenames (purple text, multi-select) |
 
 **Draft/commit editing model** — The editor works on a temporary copy of all data (text, images, Desktop/Browser/Meta/MCP/Convo toggles). Loading an instruction or making edits only affects the editor's working copy. Changes are only committed when you explicitly press SAVE or Apply. Closing the editor with [X] discards all uncommitted changes.
@@ -640,7 +640,7 @@ Agent Instructions are pre-configured task descriptions that serve as the first 
 
 **Skill modes persist with instructions** — Each saved instruction snapshots the current skill modes (disabled/enabled/on-demand for every skill). Loading an instruction restores these modes immediately, updating both `skills.json` and the Skills button label. Skills that didn't exist when the instruction was saved default to disabled.
 
-**Safety patterns persist with instructions** — Each saved instruction stores its set of disabled confirmation patterns (shell command regex bypasses plus per-tool Gmail bypasses). Loading an instruction restores these bypass settings, and the Safety button label updates to show how many patterns are bypassed. This effectively makes each instruction a self-contained task profile — text, images, tool categories, provider, model configuration, skills environment, and Safety overrides — so different tasks can target different providers, models, settings, and skill sets.
+**Safety patterns persist with instructions** — Each saved instruction stores its set of disabled confirmation patterns (shell command regex bypasses plus per-tool Gmail bypasses plus per-tool Proton bypasses). Loading an instruction restores these bypass settings, and the Safety button label updates to show how many patterns are bypassed. This effectively makes each instruction a self-contained task profile — text, images, tool categories, provider, model configuration, skills environment, and Safety overrides — so different tasks can target different providers, models, settings, and skill sets.
 
 When a named instruction is applied, the window title updates to show it (e.g., `My Agent — Daily News Brief`).
 
@@ -737,7 +737,7 @@ Use `llama3.2-vision-tools:11b` for iteration/testing, and the 32B variants when
 
 #### Tool Use
 
-MyAgent has roughly forty-eight built-in tools (including the Gemini-only `find_element` and the sixteen Gmail tools) plus the dynamic `get_skill` tool, organised into six categories (core, desktop, browser, MCP, Google/Gmail, meta):
+MyAgent has roughly sixty-four built-in tools (including the Gemini-only `find_element`, the sixteen Gmail tools, and the sixteen Proton Mail tools) plus the dynamic `get_skill` tool, organised into seven categories (core, desktop, browser, MCP, Google/Gmail, Proton Mail, meta):
 
 **Core Tools (always available):** `run_powershell`/`run_shell`, `csv_search`, `user_prompt`, plus `web_search` and `fetch_webpage` (Gemini only — see below).
 
@@ -759,6 +759,8 @@ Server-side code execution outputs (plots, charts) are displayed inline in the c
 **MCP Tools (enabled via MCP checkbox):** Dynamically loaded from any MCP servers configured in `mcp_servers.json`. Tool names are namespaced as `<server>__<tool>` (double underscore) — so a `filesystem` server contributes `filesystem__read_file`, `filesystem__list_directory`, etc. The set is empty when no servers are configured. See **MCP Integration** below for setup.
 
 **Google (Gmail) Tools (enabled via Google checkbox):** Native multi-account Gmail integration via the official `google-api-python-client` library — no MCP server, no subprocess. Sixteen tools: `gmail_search`, `gmail_read` (always returns attachments[] metadata; `format` param for text/html/both body), `gmail_get_attachment` (downloads attachment bytes to a local path; refuses overwrite by default), `gmail_send`, `gmail_reply` (proper Gmail threading via In-Reply-To/References + threadId), `gmail_create_draft`, `gmail_list_drafts`, `gmail_send_draft`, `gmail_trash`, `gmail_untrash`, `gmail_list_labels`, `gmail_create_label`, `gmail_delete_label`, `gmail_modify_labels`, `gmail_mark_read`, `gmail_list_threads`. `gmail_send`, `gmail_reply`, and `gmail_create_draft` all accept an optional `attachments: [filepath, ...]` parameter (combined raw size capped at ~20 MB to stay under Gmail's 25 MB post-base64 ceiling; MIME types auto-detected from file extensions) and an optional `body_html` parameter (multipart/alternative with plain `body` as the fallback for non-HTML clients). Each tool takes an `account` parameter whose enum is patched at runtime from `~/.config/myagent-google/accounts.json`, so the model only sees actually-configured accounts. Destructive operations (`gmail_send`, `gmail_send_draft`, `gmail_trash`) pop a modal Tk confirmation dialog showing recipient/subject/IDs before proceeding. Disabled if `google-api-python-client` / `google-auth-oauthlib` aren't installed. See **Google Integration** below for setup.
+
+**Proton Mail Tools (enabled via Proton checkbox):** Native multi-account Proton Mail integration via Proton Bridge over stdlib IMAP + SMTP — no MCP server, no reverse-engineered REST client. Sixteen tools mirroring the Gmail surface 1:1: `proton_search`, `proton_read` (text/html/both body + attachments[] metadata), `proton_get_attachment`, `proton_send`, `proton_reply` (proper In-Reply-To/References headers), `proton_create_draft`, `proton_list_drafts`, `proton_send_draft`, `proton_trash`, `proton_untrash`, `proton_list_labels`, `proton_create_label`, `proton_delete_label`, `proton_modify_labels`, `proton_mark_read`, `proton_list_threads`. Per-folder IMAP UIDs — every per-message tool takes a (`folder`, `uid`) pair; bulk ops take `folder` once + `uids: [int]`. `proton_send`, `proton_reply`, and `proton_create_draft` accept optional `body_html` and `attachments: [filepath, ...]` (same 20 MB cap as Gmail). Each tool takes an `account` parameter whose enum is patched at runtime from `~/.config/myagent-protonmail/accounts.json`. Destructive operations (`proton_send`, `proton_reply`, `proton_send_draft`, `proton_trash`, `proton_delete_label`) pop the same modal Tk confirmation dialog as Gmail's, with per-tool bypass via the Safety dialog. The `proton_modify_labels` tool transparently handles Bridge's label-removal eventual-consistency quirk via internal auto-retry (response includes `label_removal_retries: N` for observability). Requires Proton Bridge installed and running locally (paid Mail plan). See **Proton Mail Integration** below for setup.
 
 **Meta Tools (enabled via Meta checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — tools for the agent to manage its own instruction library, shared skills, and launch other agents. `manage_instructions` lets the agent list, read, create, update, or delete saved instructions — including the currently-running instruction (changes are saved to disk and take effect the next time the instruction is loaded, without affecting the live session). Read/create/update actions include `skill_modes` (a map of skill names to disabled/enabled/on_demand modes), and update uses merge semantics so omitted skills keep their current mode. `manage_skills` lets the agent manage skills with mode control (disabled/enabled/on-demand). `run_instruction` launches a saved instruction as a separate MyAgent process (fire-and-forget via `subprocess.Popen`); defaults to headless mode, with an optional `headless=false` parameter to show the GUI window — the launched process runs independently and the PID is returned. None of these tools are parallel-safe since they modify shared state or spawn processes.
 
@@ -969,6 +971,104 @@ The agent never confuses which account owns which token — that's enforced by t
 
 **Reusing existing shinzo-labs Gmail MCP credentials (optional):** If you previously ran `@shinzolabs/gmail-mcp`, your existing `~/.gmail-mcp/credentials.json` (and `~/.gmail-mcp-*/credentials.json` for additional accounts) contain refresh tokens bound to the same OAuth scopes MyAgent requests. The MyAgent token format is slightly different but the underlying refresh token is interchangeable — re-running OAuth (step 5) is the cleanest path. If you'd rather avoid the consent dance, ask Claude Code to write a migration helper that translates shinzo format to MyAgent format; it's a ~20-line conversion.
 
+#### Proton Mail Integration (Native Bridge Tools)
+
+Native multi-account Proton Mail integration via **Proton Bridge** (Proton's official desktop app that decrypts mail locally and exposes a localhost IMAP + SMTP server), with **sixteen tools** mirroring the Gmail surface 1:1. Implemented in `myagent/protonmail_mixin.py` — no MCP server, no reverse-engineered REST client, no subprocess. Transport is stdlib `imaplib` + `smtplib` + `email`; tools flow through MyAgent's `_get_tools()` and `_execute_tool()` paths exactly like Gmail's.
+
+**Why Bridge instead of a REST API:** Proton doesn't publish a public REST API — their E2E encryption model means decryption only happens client-side. Bridge is the officially supported integration path, used by every third-party mail client (Thunderbird, Outlook, Apple Mail). Reverse-engineered alternatives (e.g. `protonmail-api-client`) talk to Proton's internal web client API and break whenever Proton updates it; Bridge is stable across Proton API changes and authenticates via per-install app-passwords so MyAgent never touches your real Proton login or mailbox password.
+
+**Tool inventory:**
+
+| Tool | Purpose | Confirm? |
+|---|---|---|
+| `proton_search` | Search messages within a folder by IMAP SEARCH syntax | |
+| `proton_read` | Fetch a message with body (text/html/both) + attachments[] metadata | |
+| `proton_get_attachment` | Download an attachment to a local file path | |
+| `proton_send` | Send a new email (text + optional HTML + optional attachments) | ✅ |
+| `proton_reply` | Reply with proper In-Reply-To / References headers | ✅ |
+| `proton_create_draft` | Create a draft (text + optional HTML + optional attachments) | |
+| `proton_list_drafts` | List drafts | |
+| `proton_send_draft` | Send an existing draft | ✅ |
+| `proton_trash` | Move to Trash (recoverable from Proton's UI) | ✅ |
+| `proton_untrash` | Restore from Trash to INBOX | |
+| `proton_list_labels` | List folders (system + user labels under `Labels/`, user folders under `Folders/`) | |
+| `proton_create_label` | Create a new folder/label (under `Labels/`, `Folders/`, or top-level) | |
+| `proton_delete_label` | Delete a folder/label (removes it AND any messages stored only in it) | ✅ |
+| `proton_modify_labels` | Apply or remove a label (additive for `Labels/` destinations, exclusive MOVE for system folders) | |
+| `proton_mark_read` | Toggle the `\Seen` flag | |
+| `proton_list_threads` | List conversation threads matching a query (IMAP THREAD REFERENCES) | |
+
+**Per-folder UIDs (vs Gmail's global message IDs):** IMAP UIDs are per-folder, so every per-message tool takes a (`folder`, `uid`) pair and bulk ops take `folder` once + `uids: [int]`. Moving a message between folders gives it a fresh per-folder UID — UIDs are monotonically assigned and never reused, even after deletion (RFC 3501). A round-trip INBOX → Trash → INBOX produces three distinct UIDs for the same logical message.
+
+**Content support:**
+
+- **Plain text + HTML emails** — `proton_send`, `proton_reply`, and `proton_create_draft` accept an optional `body_html` parameter. When provided, the message ships as `multipart/alternative` with the plain `body` as the fallback for clients that don't render HTML
+- **Outbound attachments** — same three send-style tools accept `attachments: [filepath, ...]`. Combined raw size capped at 20 MB (under SMTP's ~25 MB post-base64 ceiling). MIME types auto-detected via `mimetypes.guess_type`
+- **Inbound attachments** — `proton_read` always includes an `attachments[]` array with `filename`, `mime_type`, `size`, `attachment_id` (format `"part:N"` — synthesised from the part's index in the message walk since IMAP has no native attachment-ID concept), `part_index`, `inline` flag. Pass `attachment_id` to `proton_get_attachment(save_to=...)` to download the bytes
+- **Body format selection** — `proton_read` accepts `format`: `"text"` (default, plain text or stripped HTML fallback), `"html"` (raw HTML only), or `"both"`. Each body is truncated at 50,000 chars with `body_truncated` / `body_html_truncated` flags
+
+**Three empirical Bridge quirks discovered + mitigated (worth knowing):**
+
+1. **SUBJECT search is reliable for single-word substrings, FRAGILE for multi-word substrings against Unicode-containing subjects.** Bridge's tokeniser breaks down on subjects with curly quotes, em-dashes, or accented letters — even when the substring you're searching for is pure ASCII. For example, against a subject `"I also long to be fictional"` (with U+201C/U+201D quotes), `SUBJECT "fictional"` matches but `SUBJECT "be fictional"` returns nothing. The `proton_search` tool description tells the model to use single-word substrings (or AND multiple SUBJECT predicates) for robust matching. A `_uid_search` helper transparently switches to IMAP `CHARSET UTF-8` byte-literal encoding for non-ASCII queries — though Bridge's index may still fail to match Unicode against subject text, so ASCII substrings remain the safer bet
+2. **`Labels/X` destinations are ADDITIVE, not exclusive.** Bridge's IMAP MOVE has asymmetric semantics: moving to `Labels/Foo` applies the Foo label but the message STAYS in the source folder (Proton's label model treats labels as additive tags, not containers). Moving from `Labels/Foo` to INBOX REMOVES the Foo label and the message stays where it was. System folder destinations (INBOX, Sent, Trash, Archive, Spam, All Mail) and `Folders/<name>` destinations behave as true exclusive MOVE. The `proton_modify_labels` tool description spells out both branches so the agent knows what to expect
+3. **Label removal sometimes leaves a transient new UID in the source** due to eventual-consistency between Bridge's local cache and Proton's server. `do_proton_modify_labels` auto-retries up to 2 times when the source folder is `Labels/X`: snapshots source UIDs before the MOVE, detects any unexpected new UIDs that appear afterward, and re-MOVEs them. The response includes `label_removal_retries: N` (0 = clean first try, >0 = quirk fired and was absorbed transparently). Discovered empirically during TEST3 development; the auto-retry means callers never see the quirk
+
+**Architecture:**
+
+- **Per-account Bridge credentials, no OAuth** — `accounts.json` lists one entry per account with `email`, `username`, `app_password` (Bridge-generated), IMAP/SMTP host+port (per-account on Bridge), and optional `ca_cert_path`. IMAP connections are cached per-account; SMTP is opened fresh per send
+- **Multi-account by parameter, not by process** — every tool takes an `account` string parameter; the `account` enum on each tool schema is patched at runtime in `_get_tools()` from `accounts.json`. Adding a new account is `accounts.json` edit + MyAgent restart
+- **Verified TLS optional** — Bridge's "Export TLS certificates" UI action dumps a `cert.pem` you can point `ca_cert_path` at for `ssl.CERT_REQUIRED` + `check_hostname=True`. Without it, the SSL context falls back to `CERT_NONE` — fine for localhost-only traffic where a MITM would already need code execution on the user's machine. Bridge's cert is bound to `127.0.0.1`, so keep `imap_host`/`smtp_host` as that IP (not `"localhost"`) or hostname verification fails
+- **Five destructive tools gated by `_confirm_proton_action`** — `proton_send`, `proton_reply`, `proton_send_draft`, `proton_trash`, `proton_delete_label` pop the same Tk `messagebox.askyesno` dialog as Gmail's, with per-tool bypass via the Safety dialog. Denial returns `"user denied: ..."` so the agent loop continues without retrying
+- **Per-tool confirmation bypass via Safety dialog** — the Safety dialog now has a "Proton Mail destructive tools" section listing all five confirmation-requiring tools as checkboxes. Same `disabled_confirm_patterns` set as shell regex and Gmail tool bypasses, persisted per-instruction
+- **`_HAS_PROTONMAIL` availability flag** is always True on CPython (transport is stdlib), kept for parity with `_HAS_GOOGLE` / `_HAS_MCP`. Bridge presence/availability is detected at first-call time as a connection error, not a startup check — Bridge can restart while MyAgent is running and re-connects work transparently
+- **Four colliding helpers renamed `_proton_*`** to avoid MRO shadowing by `GmailMixin`'s identically-named statics (`_format_proton_summary`, `_extract_proton_bodies`, `_extract_proton_attachments`, `_attach_proton_files`). Foundational footgun in mixin-based architectures: shared method-name flat namespace requires defensive prefixing
+
+**Setup:**
+
+1. **Install Proton Bridge** from [proton.me/mail/bridge](https://proton.me/mail/bridge) (requires Mail Plus or higher subscription). Sign into each Proton account you want to use — Bridge generates a unique IMAP/SMTP port pair + app-password per account
+2. **(Optional) Export TLS certificates** for verified TLS via Bridge's Settings → Advanced → "Export TLS certificates". This writes `cert.pem` + `key.pem` to a folder of your choice. You only need `cert.pem`; `key.pem` is Bridge's private key and should never be shared
+3. **Create the MyAgent Proton config directory:**
+   ```bash
+   mkdir -p ~/.config/myagent-protonmail
+   ```
+4. **List your accounts in `~/.config/myagent-protonmail/accounts.json`:**
+   ```json
+   {
+     "accounts": {
+       "personal": {
+         "email": "you@proton.me",
+         "username": "you@proton.me",
+         "app_password": "<16-char Bridge token>",
+         "imap_host": "127.0.0.1",
+         "imap_port": 1143,
+         "smtp_host": "127.0.0.1",
+         "smtp_port": 1025,
+         "ca_cert_path": "/path/to/exported/cert.pem"
+       }
+     }
+   }
+   ```
+   `chmod 600` the file once filled in (it now holds a working credential). The account key (e.g., `personal`) is what the agent uses as the `account` parameter. Add as many accounts as Bridge has signed in
+5. **No first-use OAuth dance** — unlike Gmail, Proton needs nothing extra at first use. As soon as Bridge is running and `accounts.json` is in place, the tools work
+
+**Multi-account workflow:**
+
+Same model as Gmail — the `account` parameter is on every tool. An instruction like _"Find unread mail in `personal`, summarise it, then save the summary as a draft in `work`"_ would:
+1. `proton_search(account="personal", folder="INBOX", q="UNSEEN", max_results=10)`
+2. `proton_read(account="personal", folder="INBOX", uid=...)` for each
+3. `proton_create_draft(account="work", to="you@proton.me", subject="Inbox summary", body="...")`
+
+**Per-instruction toggle:** The Proton checkbox is per-instruction, persisted in `agent_instructions.json` alongside Desktop/Browser/Meta/MCP/Google/Convo. Each saved instruction can independently enable or disable Proton tools.
+
+**What the tools deliberately CAN'T do** (safety boundaries):
+
+- **Permanently delete emails** — only `proton_trash` is exposed; permanent purge requires emptying Trash via Proton's web UI. Same boundary as Gmail
+- **Settings management** — no tools for filters, vacation responder, signatures, or auto-forwarding (configure once in Proton's web UI)
+- **Calendar / Drive / VPN** — out of scope; Proton's other products aren't IMAP-exposed
+- **Cross-account in a single IMAP session** — each account uses its own Bridge IMAP/SMTP connection, but the `account` parameter on every tool makes multi-account workflows natural
+
+**Test instructions:** Four ready-to-run smoke tests live in `agent_instructions.json` — `Proton TEST1` (read-only inventory: list_labels + search + read), `Proton TEST2` (drafts: create + list + read-back), `Proton TEST3` (state mutations: mark_read + modify_labels round-trips with full restoration), `Proton TEST4` (destructive: trash + untrash round-trip with confirmation dialog). Each test reports PASS/FAIL per step and verifies the mailbox ends in its starting state.
+
 #### Conversational Mode
 
 Smaller open-weights models (Qwen3:32B, Llama 3.x, gpt-oss) don't reliably follow "ALWAYS call `user_prompt` after every response" meta-rules — they often treat task completion as their own permission to end the turn, regardless of what the instruction says. The pre-existing `user_prompt` nudge in `stream_worker` only kicks in once the model has *already* called `user_prompt` 2+ times to "establish" chatbot mode, which means it never helps when the model never starts.
@@ -1156,7 +1256,7 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 ### Architecture
 
-MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 16 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
+MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 17 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
 
 #### Module Breakdown
 
@@ -1176,21 +1276,22 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 | **`myagent/ollama_mixin.py`** | 470 | `_stream_ollama_call()` (native `/api/chat` streaming with `think` flag, tool-capability gating, Qwen3 `<message>` wrapper stripping), `_messages_to_ollama()`, `_tools_to_ollama()`, `_fetch_ollama_models()`, `_get_ollama_model_caps()` (caches per-model `/api/show` result for capabilities + `context_length`), `_is_ollama_thinking_model()`, `_is_ollama_vision_model()` |
 | **`myagent/mcp_mixin.py`** | 570 | MCP (Model Context Protocol) client — `_connect_mcp_servers()`, `_disconnect_mcp_servers()`, `_refresh_mcp_tools()`, `do_mcp_call()`. Runs a dedicated asyncio loop in a background thread (MCP SDK is async-only), holds all server connections inside one `AsyncExitStack`, augments subprocess PATH for macOS GUI launches, substitutes `${RANDOM_PORT}` placeholders for multi-instance support |
 | **`myagent/gmail_mixin.py`** | 906 | Native multi-account Gmail integration — 16 tools (search/read/send/reply/draft/trash/label/attachment), per-account OAuth via `InstalledAppFlow`, token cache at `~/.config/myagent-google/`, `_confirm_gmail_action()` modal Tk confirmation dialog, account enum patched at runtime in `_get_tools()`. `_HAS_GOOGLE` feature-flag gating |
+| **`myagent/protonmail_mixin.py`** | 1206 | Native multi-account Proton Mail integration via Proton Bridge over stdlib IMAP+SMTP — 16 tools mirroring the Gmail surface 1:1. Per-account credentials in `~/.config/myagent-protonmail/accounts.json`, optional `ca_cert_path` for verified TLS (Bridge cert export), `_confirm_proton_action()` modal Tk confirmation dialog, account enum patched at runtime in `_get_tools()`. `_uid_search` helper switches to `CHARSET UTF-8` for non-ASCII queries; `do_proton_modify_labels` auto-retries Bridge's label-removal eventual-consistency quirk and surfaces `label_removal_retries: N` in the response. Four helpers (`_format_proton_summary`/`_extract_proton_bodies`/`_extract_proton_attachments`/`_attach_proton_files`) explicitly prefixed to avoid MRO shadowing by `GmailMixin`'s identically-named statics. `_HAS_PROTONMAIL` feature-flag gating |
 | **`myagent/desktop_mixin.py`** | 730 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
 | **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
 | **`myagent/safety_mixin.py`** | 466 | `_start_agent()`, `_stop_agent()`, Safety dialog, command safety checks, `_request_confirmation()`, `do_user_prompt()`, `run_powershell()`, `search_web()`, `fetch_url()` |
 | **`myagent/chat_mixin.py`** | 332 | Chat save/serialize, image attachment/compression, LaTeX→Unicode post-processing |
 | **`myagent/event_loop_mixin.py`** | 252 | `check_queue()` (main event loop with cost display handler), `_on_close()`, `_finish_close()` |
 
-**Total: ~10,100 lines across 20 files** (the original single-file was ~6,200 lines).
+**Total: ~12,500 lines across 21 files** (the original single-file was ~6,200 lines).
 
 #### How the Mixin Pattern Works
 
 ```python
-# MyAgent.py — the App class inherits from all 16 mixins
+# MyAgent.py — the App class inherits from all 17 mixins (Proton added in latest)
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
-          OllamaMixin, MCPMixin, GmailMixin,
+          OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin,
           DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
           EventLoopMixin):
     def __init__(self, root, launch_instruction=None, headless=False):

@@ -55,6 +55,14 @@ try:
 except Exception:
     _HAS_GOOGLE = False
 
+# Proton Mail integration via Proton Bridge (IMAP + SMTP over localhost).
+# Transport is stdlib (imaplib + smtplib), so this flag is always True on
+# CPython. Kept for parity with _HAS_GOOGLE / _HAS_MCP — if a future refactor
+# swaps in an external Proton library, the flag flips to gate the checkbox.
+# Bridge must be installed and running for the proton_* tools to succeed;
+# that's detected at first-call time as a connection error, not a startup check.
+_HAS_PROTONMAIL = True
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -1343,6 +1351,399 @@ GOOGLE_ACCOUNTS_FILE = os.path.join(GOOGLE_CONFIG_DIR, "accounts.json")
 GMAIL_CONFIRM_TOOLS = [
     "gmail_send", "gmail_reply", "gmail_send_draft",
     "gmail_trash", "gmail_delete_label",
+]
+
+# ── Proton Mail native tools (via Proton Bridge) ─────────────────────────────
+# Native MyAgent tools that wrap IMAP/SMTP against a locally-running Proton
+# Bridge instance (see myagent/protonmail_mixin.py for the architecture).
+# The `account` parameter on every tool is patched in at runtime by
+# _get_tools() from ~/.config/myagent-protonmail/accounts.json so the model
+# only ever sees actually-configured accounts. Conditionally included in
+# _get_tools() only when self.proton_enabled.get() is True AND _HAS_PROTONMAIL
+# is True. IMAP UIDs are per-folder, so every per-message tool takes a
+# (folder, uid) pair — see the protonmail_mixin docstring for the rationale.
+PROTON_TOOLS = [
+    {
+        "name": "proton_search",
+        "description": (
+            "Search Proton Mail messages within a folder using IMAP SEARCH "
+            "syntax. Examples: 'UNSEEN', 'FROM \"alice@proton.me\"', "
+            "'SUBJECT \"invoice\" SINCE 1-Jan-2026', 'BODY \"keyword\" LARGER 100000'. "
+            "Combine predicates with spaces (implicit AND). Defaults to folder "
+            "'INBOX'; pass folder='All Mail' to search across all folders. Returns "
+            "uid, folder, subject, from, to, date, message_id_header for each "
+            "match. Use proton_read with the (folder, uid) pair to get the full body. "
+            "\n\nBRIDGE-SPECIFIC SEARCH NOTES — important to avoid wasted retries:"
+            "\n- Results are sorted NEWEST-FIRST and TRUNCATED to max_results. If "
+            "you're hunting a specific older UID under a broad predicate like "
+            "'SEEN' or 'FROM \"x\"', bump max_results to 100+ or add a SUBJECT "
+            "substring to narrow."
+            "\n- SUBJECT searches are reliable for SINGLE-WORD substrings (e.g. "
+            "SUBJECT \"invoice\") but FRAGILE for multi-word substrings against "
+            "subjects containing non-ASCII characters (curly quotes, em-dashes, "
+            "accented letters). For best results: use one word, or AND multiple "
+            "SUBJECT predicates ('SUBJECT \"foo\" SUBJECT \"bar\"' rather than "
+            "'SUBJECT \"foo bar\"')."
+            "\n- The tool transparently switches to CHARSET UTF-8 encoding when "
+            "the query string contains non-ASCII characters, so you can pass them, "
+            "but Bridge's index may still not match them against subject text — "
+            "ASCII substrings are the safer bet."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Proton account to search"},
+                "q": {"type": "string", "description": "IMAP SEARCH query (default 'ALL')"},
+                "folder": {"type": "string", "description": "Folder to search (default 'INBOX'; try 'All Mail' for everywhere)"},
+                "max_results": {"type": "integer", "description": "Maximum results (default 25, max 500)"},
+            },
+            "required": ["account", "q"],
+        },
+    },
+    {
+        "name": "proton_read",
+        "description": (
+            "Fetch the full content of a single Proton message by (folder, uid), "
+            "including headers, body, and an attachments array. Use the format "
+            "parameter to control body representation: 'text' (default, plain-text "
+            "body or stripped HTML fallback), 'html' (raw HTML only — empty if "
+            "message is text-only), or 'both' (returns body AND body_html as "
+            "separate fields). Bodies are truncated at 50,000 chars with "
+            "body_truncated / body_html_truncated flags. Each attachment entry "
+            "has filename, mime_type, size, attachment_id ('part:N'), part_index, "
+            "inline — pass attachment_id to proton_get_attachment to download bytes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Proton account"},
+                "folder": {"type": "string", "description": "Folder containing the message (default 'INBOX')"},
+                "uid": {"type": "string", "description": "IMAP UID (from proton_search results)"},
+                "format": {
+                    "type": "string", "enum": ["text", "html", "both"],
+                    "description": "Body representation to return (default 'text')",
+                },
+            },
+            "required": ["account", "uid"],
+        },
+    },
+    {
+        "name": "proton_get_attachment",
+        "description": (
+            "Download a single attachment from a Proton message to a local file "
+            "path. First call proton_read on the message to get the attachments[] "
+            "array; pick the entry you want and pass its attachment_id (format "
+            "'part:N') along with folder + uid. Non-destructive — creates a "
+            "local file, doesn't modify the mailbox. Refuses to overwrite an "
+            "existing file unless overwrite=true."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "folder": {"type": "string", "description": "Folder containing the message"},
+                "uid": {"type": "string"},
+                "attachment_id": {"type": "string", "description": "From proton_read's attachments[]"},
+                "save_to": {"type": "string", "description": "Local file path (absolute path recommended)"},
+                "overwrite": {"type": "boolean", "description": "If true, overwrite existing file (default false)"},
+            },
+            "required": ["account", "uid", "attachment_id", "save_to"],
+        },
+    },
+    {
+        "name": "proton_send",
+        "description": (
+            "Send a new Proton Mail email via SMTP through Bridge. ALWAYS prompts "
+            "the user with a modal confirmation dialog showing recipient/subject "
+            "before sending. The user can deny — if so the tool returns 'user "
+            "denied'. After sending, the message is APPEND'd to the 'Sent' folder "
+            "so it shows up in Proton's UI. Supports optional file attachments "
+            "(combined raw size up to ~20 MB)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Proton account to send from"},
+                "to": {"type": "string", "description": "Recipient email address (comma-separated for multiple)"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain-text email body (always required, used as HTML fallback)"},
+                "body_html": {"type": "string", "description": "Optional HTML body — sends as multipart/alternative"},
+                "cc": {"type": "string", "description": "Optional CC recipients (comma-separated)"},
+                "bcc": {"type": "string", "description": "Optional BCC recipients (comma-separated)"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional list of absolute file paths to attach",
+                },
+            },
+            "required": ["account", "to", "subject", "body"],
+        },
+    },
+    {
+        "name": "proton_reply",
+        "description": (
+            "Reply to an existing Proton message with proper threading headers "
+            "(In-Reply-To and References derived from the original). Defaults "
+            "the To: to the original sender; pass an explicit 'to' to override. "
+            "Prepends 'Re: ' to the subject only if not already present. "
+            "Requires confirmation; supports attachments."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "folder": {"type": "string", "description": "Folder of the message being replied to (default 'INBOX')"},
+                "uid": {"type": "string", "description": "UID of the message being replied to"},
+                "body": {"type": "string", "description": "Plain-text reply body"},
+                "body_html": {"type": "string", "description": "Optional HTML reply body"},
+                "to": {"type": "string", "description": "Optional override of reply target (default: original sender)"},
+                "cc": {"type": "string"},
+                "bcc": {"type": "string"},
+                "attachments": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["account", "uid", "body"],
+        },
+    },
+    {
+        "name": "proton_create_draft",
+        "description": (
+            "Create a Proton draft (APPEND to the Drafts folder). Does NOT send. "
+            "No confirmation dialog — drafts are non-destructive. Useful for "
+            "letting the user inspect a proposed email in Proton's UI before "
+            "authorising proton_send_draft. Supports attachments."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "to": {"type": "string"},
+                "subject": {"type": "string"},
+                "body": {"type": "string"},
+                "body_html": {"type": "string"},
+                "cc": {"type": "string"},
+                "bcc": {"type": "string"},
+                "attachments": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["account", "to", "subject", "body"],
+        },
+    },
+    {
+        "name": "proton_list_drafts",
+        "description": "List recent drafts in an account with uid, subject, to, snippet (alias for proton_search with folder='Drafts').",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "max_results": {"type": "integer", "description": "Maximum drafts (default 25, max 500)"},
+            },
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "proton_send_draft",
+        "description": (
+            "Send an existing draft by UID. Pulls the draft from the Drafts "
+            "folder, SMTP-sends it, APPENDs to Sent, then deletes from Drafts. "
+            "Prompts the user with a modal confirmation showing recipient + "
+            "subject before sending."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "uid": {"type": "string", "description": "UID of the draft in the Drafts folder"},
+            },
+            "required": ["account", "uid"],
+        },
+    },
+    {
+        "name": "proton_trash",
+        "description": (
+            "Move one or more messages to Trash (IMAP MOVE; soft delete — "
+            "recoverable from Proton's UI until Trash is emptied). Prompts the "
+            "user with a modal confirmation showing the count and folder before "
+            "trashing. Operates within a single source folder per call — to "
+            "trash messages from multiple folders, call once per folder."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "folder": {"type": "string", "description": "Source folder of the messages (default 'INBOX')"},
+                "uids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "UIDs (within folder) to trash",
+                },
+            },
+            "required": ["account", "uids"],
+        },
+    },
+    {
+        "name": "proton_untrash",
+        "description": (
+            "Restore messages from Trash to a target folder (default 'INBOX'). "
+            "IMAP MOVE from Trash → to_folder."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "uids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "UIDs in Trash to restore",
+                },
+                "to_folder": {"type": "string", "description": "Destination folder (default 'INBOX')"},
+            },
+            "required": ["account", "uids"],
+        },
+    },
+    {
+        "name": "proton_list_labels",
+        "description": (
+            "List all IMAP folders Bridge exposes for this account. Returns "
+            "names and flags. Proton system folders include INBOX, Sent, Drafts, "
+            "Trash, Archive, Spam, All Mail, Starred. User-created folders appear "
+            "as 'Folders/<name>' and user-created labels as 'Labels/<name>'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"account": {"type": "string"}},
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "proton_create_label",
+        "description": (
+            "Create a new IMAP folder. Defaults to creating under 'Labels/' "
+            "(Proton labels); pass parent='Folders' to create a Proton folder "
+            "instead, or parent='' for a top-level name."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "name": {"type": "string", "description": "Label/folder name (without the parent prefix)"},
+                "parent": {
+                    "type": "string", "enum": ["Labels", "Folders", ""],
+                    "description": "Parent folder ('Labels' default; 'Folders' for a Proton folder; '' for top-level)",
+                },
+            },
+            "required": ["account", "name"],
+        },
+    },
+    {
+        "name": "proton_delete_label",
+        "description": (
+            "Delete a Proton folder/label by full IMAP path (e.g. 'Labels/Work'). "
+            "DESTRUCTIVE — removes the folder AND any messages stored only in it. "
+            "Requires user confirmation via the standard dialog. System folders "
+            "(INBOX, Sent, Trash, etc.) cannot be deleted; Bridge will reject."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "name": {"type": "string", "description": "Full folder path (from proton_list_labels)"},
+            },
+            "required": ["account", "name"],
+        },
+    },
+    {
+        "name": "proton_modify_labels",
+        "description": (
+            "Apply or move messages between Proton folders/labels. Bridge has "
+            "ASYMMETRIC semantics depending on the destination — important to "
+            "understand:\n"
+            "\n"
+            "• If 'add_to' starts with 'Labels/' (e.g. 'Labels/Work'): the "
+            "operation is ADDITIVE. The label is added to the message but the "
+            "message REMAINS in the source folder. Proton labels are tags, not "
+            "containers — a message can have many labels and still live in INBOX. "
+            "To remove a label, call this tool with 'folder' = the label "
+            "(Labels/X) and 'add_to' = INBOX (or any folder); Bridge translates "
+            "that as 'remove the X label'.\n"
+            "\n"
+            "• If 'add_to' is a system folder (INBOX, Sent, Drafts, Trash, "
+            "Archive, Spam, All Mail) or 'Folders/<name>': the operation is a "
+            "TRUE MOVE. The message is removed from the source folder and "
+            "appears only in the destination. Proton folders are mutually "
+            "exclusive — a message lives in exactly one folder at a time.\n"
+            "\n"
+            "After any move/label operation, the message gets a NEW per-folder "
+            "UID in the destination — IMAP UIDs aren't preserved across moves. "
+            "Use proton_search with a SUBJECT substring to find the new UID. "
+            "To verify a label was added but the message stayed in INBOX, "
+            "search INBOX after the call — the message should still be there.\n"
+            "\n"
+            "LABEL-REMOVAL AUTO-RETRY: When the source folder starts with "
+            "'Labels/' (i.e. you're removing a label), Bridge sometimes leaves "
+            "a transient new UID in the source after the initial MOVE due to "
+            "eventual-consistency between its local cache and Proton's server. "
+            "The tool transparently detects this and retries up to 2 times, "
+            "MOVEing any unexpected new UIDs that appear after the primary "
+            "operation. The response includes 'label_removal_retries': N so "
+            "you can see whether retries fired (N=0 means clean first try; "
+            "N>0 means Bridge's quirk triggered and was handled). You should "
+            "NOT need to manually retry — that's done for you. If a single "
+            "verifying search after the call still shows the message in "
+            "Labels/X, treat it as a true failure (>2 retries needed is rare "
+            "and likely indicates a Bridge state issue)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "folder": {"type": "string", "description": "Source folder (default 'INBOX')"},
+                "uids": {"type": "array", "items": {"type": "string"}},
+                "add_to": {"type": "string", "description": "Destination folder (full path)"},
+            },
+            "required": ["account", "uids", "add_to"],
+        },
+    },
+    {
+        "name": "proton_mark_read",
+        "description": "Mark one or more messages as read (read=true sets \\Seen) or unread (read=false removes \\Seen).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "folder": {"type": "string", "description": "Folder containing the messages (default 'INBOX')"},
+                "uids": {"type": "array", "items": {"type": "string"}},
+                "read": {"type": "boolean", "description": "true → mark read; false → mark unread (default true)"},
+            },
+            "required": ["account", "uids"],
+        },
+    },
+    {
+        "name": "proton_list_threads",
+        "description": (
+            "List conversation threads matching an IMAP SEARCH query within a "
+            "folder. Uses Bridge's IMAP THREAD REFERENCES if available, else "
+            "falls back to singleton threads (one per matching message). "
+            "Returns thread groups with the root subject, sender, and the UIDs "
+            "in the thread (root first)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "q": {"type": "string", "description": "IMAP SEARCH query (default 'ALL')"},
+                "folder": {"type": "string", "description": "Folder to search (default 'INBOX')"},
+                "max_results": {"type": "integer", "description": "Maximum threads (default 25, max 200)"},
+            },
+            "required": ["account", "q"],
+        },
+    },
+]
+
+# Config paths for the Proton Mail integration. See myagent/protonmail_mixin.py.
+PROTON_CONFIG_DIR = os.path.expanduser("~/.config/myagent-protonmail")
+PROTON_ACCOUNTS_FILE = os.path.join(PROTON_CONFIG_DIR, "accounts.json")
+
+# Proton tools whose destructive nature warrants a modal confirmation dialog
+# by default. Same Safety-dialog bypass semantics as GMAIL_CONFIRM_TOOLS.
+PROTON_CONFIRM_TOOLS = [
+    "proton_send", "proton_reply", "proton_send_draft",
+    "proton_trash", "proton_delete_label",
 ]
 
 # ── Anthropic API pricing (USD per million tokens) ────────────────────────────

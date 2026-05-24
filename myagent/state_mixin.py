@@ -302,6 +302,7 @@ class StateMixin:
                 "meta": self.meta_enabled.get(),
                 "mcp": self.mcp_enabled.get(),
                 "google": self.google_enabled.get(),
+                "proton": self.proton_enabled.get(),
                 "conversational": self.conversational_enabled.get(),
                 "provider": self.provider,
                 "model": self.model,
@@ -452,6 +453,7 @@ class StateMixin:
         self.meta_enabled.set(entry.get("meta", False))
         self.mcp_enabled.set(entry.get("mcp", False))
         self.google_enabled.set(entry.get("google", False))
+        self.proton_enabled.set(entry.get("proton", False))
         self.conversational_enabled.set(entry.get("conversational", False))
         model_restored = "model" in entry
         if model_restored:

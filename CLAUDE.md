@@ -92,5 +92,5 @@ There are no tests, linter, or build steps — these are testbed apps.
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
 - SelfBot uses single-file architecture: all changes go in `SelfBot.py`
-- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 14 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 17 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
 - Bank extractor changes go in `Account_Activity_WBC.py`

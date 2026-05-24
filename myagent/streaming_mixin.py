@@ -10,7 +10,8 @@ import tkinter as tk
 
 from myagent.constants import (
     IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
-    GOOGLE_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
+    GOOGLE_TOOLS, PROTON_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
+    _HAS_PROTONMAIL,
     _BASE_DIR, CHATS_DIR,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
@@ -340,6 +341,19 @@ class StreamingMixin:
                 if "account" in props:
                     props["account"]["enum"] = account_names
             tools.extend(google_tools)
+        # Proton Mail native tools — same runtime account-enum patching as Gmail.
+        # Empty enum when no accounts.json present is fine; the tool call will
+        # then return a clear "Unknown Proton account" error to the agent
+        # rather than silently dropping the tool from the surface.
+        if (_HAS_PROTONMAIL and getattr(self, "proton_enabled", None)
+                and self.proton_enabled.get()):
+            account_names = self._get_proton_account_names()
+            proton_tools = copy.deepcopy(PROTON_TOOLS)
+            for t in proton_tools:
+                props = t.get("input_schema", {}).get("properties", {})
+                if "account" in props:
+                    props["account"]["enum"] = account_names
+            tools.extend(proton_tools)
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
             tools.append({
@@ -384,6 +398,15 @@ class StreamingMixin:
             if method is None:
                 return f"Unknown Gmail tool: {block.name}"
             self.queue.put({"type": "tool_info", "content": f"Gmail: {block.name}\n"})
+            return method(block.input or {})
+        # Proton Mail native tools — same namespaced dispatch pattern.
+        if _HAS_PROTONMAIL and block.name.startswith("proton_"):
+            if not getattr(self, "proton_enabled", None) or not self.proton_enabled.get():
+                return f"Proton Mail is disabled. Enable the Proton checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Proton tool: {block.name}"
+            self.queue.put({"type": "tool_info", "content": f"Proton: {block.name}\n"})
             return method(block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")

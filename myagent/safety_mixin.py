@@ -3,7 +3,8 @@ from tkinter import messagebox
 
 from myagent.constants import (
     IS_WINDOWS, _SUBPROCESS_NOWND, COMMAND_BLOCKED, COMMAND_CONFIRM,
-    GMAIL_CONFIRM_TOOLS, MONO_FONT, DEFAULT_INSTRUCTION, _HAS_GOOGLE,
+    GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, MONO_FONT, DEFAULT_INSTRUCTION,
+    _HAS_GOOGLE, _HAS_PROTONMAIL,
 )
 from myagent.helpers import extract_text_from_html
 
@@ -157,6 +158,20 @@ class SafetyMixin:
         if _HAS_GOOGLE:
             text_widget.insert("end", "\n── Gmail destructive tools ──\n")
             for tool_name in GMAIL_CONFIRM_TOOLS:
+                var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
+                cb = tk.Checkbutton(
+                    text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
+                    anchor="w", bg="white", activebackground="white",
+                    command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
+                )
+                text_widget.window_create("end", window=cb, stretch=True)
+                text_widget.insert("end", "\n")
+
+        # Section 3: Proton Mail destructive tools — same checkbox pattern,
+        # checked in _confirm_proton_action.
+        if _HAS_PROTONMAIL:
+            text_widget.insert("end", "\n── Proton Mail destructive tools ──\n")
+            for tool_name in PROTON_CONFIRM_TOOLS:
                 var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
                 cb = tk.Checkbutton(
                     text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
