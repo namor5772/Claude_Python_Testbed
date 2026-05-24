@@ -1068,7 +1068,7 @@ Same model as Gmail — the `account` parameter is on every tool. An instruction
 - **Calendar / Drive / VPN** — out of scope; Proton's other products aren't IMAP-exposed
 - **Cross-account in a single IMAP session** — each account uses its own Bridge IMAP/SMTP connection, but the `account` parameter on every tool makes multi-account workflows natural
 
-**Test instructions:** Four ready-to-run smoke tests live in `agent_instructions.json` — `Proton TEST1` (read-only inventory: list_labels + search + read), `Proton TEST2` (drafts: create + list + read-back), `Proton TEST3` (state mutations: mark_read + modify_labels round-trips with full restoration), `Proton TEST4` (destructive: trash + untrash round-trip with confirmation dialog). Each test reports PASS/FAIL per step and verifies the mailbox ends in its starting state.
+**Test instructions:** Five ready-to-run smoke tests live in `agent_instructions.json` — `Proton TEST1` (read-only inventory: list_labels + search + read), `Proton TEST2` (drafts: create + list + read-back), `Proton TEST3` (state mutations: mark_read + modify_labels round-trips with full restoration), `Proton TEST4` (destructive: trash + untrash round-trip with confirmation dialog), `Proton TEST5` (end-to-end attachment extraction: chains proton_search → proton_read → proton_get_attachment → read_document, then reasons about the OCR-extracted PDF text — combines the Proton and Document integrations in one workflow). Each test reports PASS/FAIL per step and verifies the mailbox ends in its starting state.
 
 #### Conversational Mode
 
