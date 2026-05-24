@@ -356,7 +356,7 @@ class InstructionsMixin:
         if not _HAS_GOOGLE:
             _google_cb.config(state=tk.DISABLED)
         _proton_cb = tk.Checkbutton(
-            checks_frame, text="Proton", variable=self._editor_proton,
+            checks_frame, text="IMAP", variable=self._editor_proton,
             font=("Arial", 9),
         )
         _proton_cb.pack(side=tk.LEFT, padx=(5, 0))

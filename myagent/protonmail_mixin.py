@@ -127,6 +127,12 @@ class ProtonMailMixin:
         # tool calls; lazily reconnected if a call hits a stale socket.
         self._proton_imap_conns = {}
         self._proton_accounts_cache = None  # lazy
+        # Per-account folder-role resolution cache. Populated lazily on first
+        # call to _proton_folder(). Keyed by account name → dict mapping
+        # role (sent/drafts/trash/archive/spam/all_mail) → actual folder
+        # path on that server. Different IMAP servers nest these differently
+        # (Bridge: top-level "Sent"; dovecot: "INBOX.Sent").
+        self._proton_folder_cache = {}
 
     # ── Account discovery ───────────────────────────────────────────────────
 
@@ -158,22 +164,61 @@ class ProtonMailMixin:
 
     @staticmethod
     def _build_ssl_context(account_cfg):
-        """Build an ssl.SSLContext for Bridge. If ca_cert_path is configured,
-        use it for verification; otherwise fall back to unverified TLS.
+        """Build an ssl.SSLContext for an IMAP/SMTP account.
 
-        Bridge issues a self-signed cert per install; verifying requires
-        the user to point us at Bridge's cert PEM. Unverified is acceptable
-        for localhost-only Bridge traffic since a MITM attacker would
-        already need code execution on the user's machine.
+        Priority order:
+
+        1. ``ca_cert_path`` set + file exists → pin to that cert. Use case:
+           Proton Bridge with its self-signed cert exported. Strongest
+           verification — the cert chain is checked against exactly the cert
+           the user exported from Bridge's UI.
+
+        2. ``verify_tls: false`` explicitly set → CERT_NONE escape hatch.
+           Use case: dev environments, self-signed servers without an
+           exported cert, opt-in unverified TLS.
+
+        3. Loopback host (``127.0.0.1`` / ``localhost`` / ``::1``) →
+           CERT_NONE default. Use case: Proton Bridge without ca_cert_path —
+           the historical Bridge default. Acceptable because MITM-ing
+           localhost requires code execution on the user's machine.
+
+        4. Public host (anything not loopback) → ``ssl.create_default_context()``
+           with the system trust store + hostname verification. Use case:
+           any real IMAP/SMTP server on the public internet (WebCentral,
+           Fastmail, custom-domain hosting, etc.). Auto-validates against
+           Let's Encrypt, DigiCert, and every CA in the OS trust store.
+
+        This auto-detection means existing Bridge configs keep working
+        unchanged (loopback → CERT_NONE) while public-server connections
+        get proper TLS verification without per-account configuration.
         """
-        ca_cert = account_cfg.get("ca_cert_path") if account_cfg else None
+        if not account_cfg:
+            account_cfg = {}
+
+        # 1. Pinned cert beats everything else
+        ca_cert = account_cfg.get("ca_cert_path")
         if ca_cert and os.path.isfile(ca_cert):
-            ctx = ssl.create_default_context(cafile=ca_cert)
-        else:
+            return ssl.create_default_context(cafile=ca_cert)
+
+        # 2. Explicit opt-out for unverified TLS
+        if account_cfg.get("verify_tls") is False:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+            return ctx
+
+        # 3. Loopback detection (Bridge case) — preserve existing behaviour
+        LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+        imap_host = (account_cfg.get("imap_host") or "").strip().lower()
+        smtp_host = (account_cfg.get("smtp_host") or "").strip().lower()
+        if imap_host in LOOPBACK_HOSTS or smtp_host in LOOPBACK_HOSTS:
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            return ctx
+
+        # 4. Public host → system trust store with hostname verification
+        return ssl.create_default_context()
 
     def _proton_imap(self, account):
         """Return an authenticated IMAP connection for the account.
@@ -286,6 +331,119 @@ class ProtonMailMixin:
             except Exception:
                 pass
         self._proton_imap_conns.clear()
+
+    # ── Special-use folder discovery ────────────────────────────────────────
+
+    # Default folder names per role — match Proton Bridge convention. Used
+    # as fallbacks when neither accounts.json override nor IMAP SPECIAL-USE
+    # discovery yields a value. Overridden per-role at runtime via:
+    #   1. accounts.json[account]["folders"][role] — explicit override
+    #   2. IMAP LIST response flags (\Sent, \Drafts, \Trash, \Junk, \Archive,
+    #      \All) — RFC 6154 auto-discovery, cached per-account on first use
+    #   3. These constants — fallback for servers that publish neither
+    _FOLDER_ROLE_DEFAULTS = {
+        "inbox": PROTON_INBOX,
+        "sent": PROTON_SENT,
+        "drafts": PROTON_DRAFTS,
+        "trash": PROTON_TRASH,
+        "archive": PROTON_ARCHIVE,
+        "spam": PROTON_SPAM,
+        "all_mail": PROTON_ALL_MAIL,
+    }
+
+    # IMAP SPECIAL-USE flag (RFC 6154) → role mapping. \Junk and \Spam both
+    # map to "spam" because dovecot uses \Junk, some other servers use \Spam.
+    _SPECIAL_USE_FLAG_TO_ROLE = {
+        "\\Sent": "sent",
+        "\\Drafts": "drafts",
+        "\\Trash": "trash",
+        "\\Archive": "archive",
+        "\\Junk": "spam",
+        "\\Spam": "spam",
+        "\\All": "all_mail",
+        "\\Inbox": "inbox",
+    }
+
+    def _proton_discover_folders(self, account):
+        """Run IMAP LIST against the account and parse RFC 6154 SPECIAL-USE
+        flags to discover where the server keeps each special-purpose folder
+        (Sent, Drafts, Trash, etc.).
+
+        Returns a dict mapping role names to actual folder paths. Falls back
+        to default constants for any role the server didn't tag. Failures
+        (network, parse errors) silently return defaults — discovery is
+        best-effort, callers must always get a usable folder name.
+
+        Discovered example for a dovecot server (WebCentral): {
+            "sent": "INBOX.Sent", "drafts": "INBOX.Drafts",
+            "trash": "INBOX.Trash", "spam": "INBOX.Junk", ...
+        }
+
+        Discovered example for Proton Bridge: {
+            "sent": "Sent", "drafts": "Drafts", "trash": "Trash", ...
+        }
+        """
+        discovered = dict(self._FOLDER_ROLE_DEFAULTS)
+        try:
+            conn = self._proton_imap(account)
+            typ, data = conn.list()
+            if typ != "OK" or not data:
+                return discovered
+            for raw in data:
+                if not raw:
+                    continue
+                line = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+                # IMAP LIST response: (\flag1 \flag2 ...) "/" "FolderName"
+                m = re.match(r'^\(([^)]*)\)\s+("[^"]*"|\S+)\s+(.*)$', line)
+                if not m:
+                    continue
+                flags_str, _delim, name = m.groups()
+                name = name.strip()
+                if name.startswith('"') and name.endswith('"'):
+                    name = name[1:-1]
+                for flag in flags_str.split():
+                    role = self._SPECIAL_USE_FLAG_TO_ROLE.get(flag)
+                    if role:
+                        discovered[role] = name
+        except Exception:
+            # Best-effort: discovery failure is non-fatal, defaults stand
+            pass
+        return discovered
+
+    def _proton_folder(self, account, role):
+        """Resolve the actual folder name for a special-use role on an account.
+
+        Priority order:
+
+        1. **Explicit override** in ``accounts.json`` —
+           ``accounts[account]["folders"][role]``. Useful when auto-discovery
+           gets it wrong or for servers that don't advertise SPECIAL-USE.
+
+        2. **Auto-detected via IMAP SPECIAL-USE** — cached per-account on
+           first call. RFC 6154 flag → role mapping handles \\Sent, \\Drafts,
+           \\Trash, \\Archive, \\Junk/\\Spam, \\All.
+
+        3. **Default constants** — match Proton Bridge convention
+           (top-level "Sent", "Drafts", "Trash", etc.).
+
+        Role names: 'inbox', 'sent', 'drafts', 'trash', 'archive', 'spam',
+        'all_mail'. Unknown roles return PROTON_INBOX as a safe fallback.
+        """
+        role = (role or "").lower()
+
+        # 1. Explicit override
+        accounts = self._load_proton_accounts()
+        override = accounts.get(account, {}).get("folders", {}).get(role)
+        if override:
+            return override
+
+        # 2. Cached auto-discovery (one IMAP LIST per account, ever)
+        if account not in self._proton_folder_cache:
+            self._proton_folder_cache[account] = self._proton_discover_folders(account)
+
+        return self._proton_folder_cache[account].get(
+            role, self._FOLDER_ROLE_DEFAULTS.get(role, PROTON_INBOX)
+        )
 
     # ── Safety: modal confirmation for destructive ops ──────────────────────
 
@@ -712,15 +870,22 @@ class ProtonMailMixin:
             except Exception:
                 pass
 
-    def _imap_append_to_drafts(self, account, msg, folder=PROTON_DRAFTS):
+    def _imap_append_to_drafts(self, account, msg, folder=None):
         """APPEND a raw EmailMessage to a folder (used by create_draft and
-        send_to-Sent flows). Returns the new UID if Bridge reports it via
-        APPENDUID, else empty string."""
+        send-to-Sent flows). The ``folder`` parameter defaults to the
+        account's resolved drafts folder (per ``_proton_folder``) but
+        callers typically pass an explicit role-resolved folder name. The
+        ``\\Draft`` IMAP flag is set automatically when the destination
+        IS the account's drafts folder. Returns the new UID if the server
+        reports APPENDUID, else empty string."""
+        if folder is None:
+            folder = self._proton_folder(account, "drafts")
         conn = self._proton_imap(account)
         raw = msg.as_bytes()
+        is_drafts = (folder == self._proton_folder(account, "drafts"))
         typ, data = conn.append(
             self._quote_mailbox(folder),
-            r"(\Draft)" if folder == PROTON_DRAFTS else None,
+            r"(\Draft)" if is_drafts else None,
             imaplib.Time2Internaldate(0),
             raw,
         )
@@ -760,7 +925,7 @@ class ProtonMailMixin:
             # Bridge can be configured to do this automatically; the APPEND
             # is harmless if it does.
             try:
-                self._imap_append_to_drafts(account, msg, folder=PROTON_SENT)
+                self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
             except Exception:
                 pass
             return json.dumps({
@@ -822,7 +987,7 @@ class ProtonMailMixin:
                 msg["References"] = new_refs
             self._smtp_send(account, msg, from_address)
             try:
-                self._imap_append_to_drafts(account, msg, folder=PROTON_SENT)
+                self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
             except Exception:
                 pass
             return json.dumps({
@@ -843,11 +1008,12 @@ class ProtonMailMixin:
         from_address = cfg.get("email") or cfg.get("username") or account
         try:
             msg, att_info = self._build_outgoing_message(params, from_address)
-            new_uid = self._imap_append_to_drafts(account, msg, folder=PROTON_DRAFTS)
+            drafts_folder = self._proton_folder(account, "drafts")
+            new_uid = self._imap_append_to_drafts(account, msg, folder=drafts_folder)
             return json.dumps({
                 "ok": True,
                 "draft_uid": new_uid,
-                "folder": PROTON_DRAFTS,
+                "folder": drafts_folder,
                 "to": params.get("to"),
                 "subject": params.get("subject", ""),
                 "attachments": att_info,
@@ -857,8 +1023,9 @@ class ProtonMailMixin:
             return f"error: {e}"
 
     def do_proton_list_drafts(self, params):
+        account = params.get("account")
         params = dict(params)
-        params["folder"] = PROTON_DRAFTS
+        params["folder"] = self._proton_folder(account, "drafts") if account else PROTON_DRAFTS
         params.setdefault("q", "ALL")
         return self.do_proton_search(params)
 
@@ -867,12 +1034,13 @@ class ProtonMailMixin:
         uid = params.get("uid")
         if not account or uid is None:
             return "error: 'account' and 'uid' are required"
+        drafts_folder = self._proton_folder(account, "drafts")
         try:
             conn = self._proton_imap(account)
-            self._select_folder(conn, PROTON_DRAFTS, readonly=False)
+            self._select_folder(conn, drafts_folder, readonly=False)
             msg = self._fetch_full(conn, uid)
             if msg is None:
-                return f"error: no draft UID {uid} in {PROTON_DRAFTS}"
+                return f"error: no draft UID {uid} in {drafts_folder}"
         except Exception as e:
             self._proton_drop_imap(account)
             return f"error: {e}"
@@ -892,13 +1060,13 @@ class ProtonMailMixin:
         try:
             self._smtp_send(account, msg, from_address)
             try:
-                self._imap_append_to_drafts(account, msg, folder=PROTON_SENT)
+                self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
             except Exception:
                 pass
             # Remove draft from Drafts folder
             try:
                 conn = self._proton_imap(account)
-                self._select_folder(conn, PROTON_DRAFTS, readonly=False)
+                self._select_folder(conn, drafts_folder, readonly=False)
                 conn.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
                 conn.expunge()
             except Exception:
@@ -925,17 +1093,18 @@ class ProtonMailMixin:
             conn = self._proton_imap(account)
             self._select_folder(conn, folder, readonly=False)
             uid_set = ",".join(uids)
+            trash_folder = self._proton_folder(account, "trash")
             # Prefer MOVE (RFC 6851) — Bridge supports it. Falls back to
             # COPY+STORE-Deleted+EXPUNGE on servers that don't.
             try:
-                typ, data = conn.uid("move", uid_set, self._quote_mailbox(PROTON_TRASH))
+                typ, data = conn.uid("move", uid_set, self._quote_mailbox(trash_folder))
                 if typ != "OK":
                     raise imaplib.IMAP4.error(str(data))
             except imaplib.IMAP4.error:
-                conn.uid("copy", uid_set, self._quote_mailbox(PROTON_TRASH))
+                conn.uid("copy", uid_set, self._quote_mailbox(trash_folder))
                 conn.uid("store", uid_set, "+FLAGS", r"(\Deleted)")
                 conn.expunge()
-            return json.dumps({"ok": True, "trashed": len(uids), "from_folder": folder})
+            return json.dumps({"ok": True, "trashed": len(uids), "from_folder": folder, "to_folder": trash_folder})
         except Exception as e:
             self._proton_drop_imap(account)
             return f"error: {e}"
@@ -949,7 +1118,7 @@ class ProtonMailMixin:
         uids = [str(u) for u in uids]
         try:
             conn = self._proton_imap(account)
-            self._select_folder(conn, PROTON_TRASH, readonly=False)
+            self._select_folder(conn, self._proton_folder(account, "trash"), readonly=False)
             uid_set = ",".join(uids)
             try:
                 typ, data = conn.uid("move", uid_set, self._quote_mailbox(target_folder))

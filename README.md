@@ -1020,7 +1020,7 @@ Native multi-account Proton Mail integration via **Proton Bridge** (Proton's off
 - **Multi-account by parameter, not by process** — every tool takes an `account` string parameter; the `account` enum on each tool schema is patched at runtime in `_get_tools()` from `accounts.json`. Adding a new account is `accounts.json` edit + MyAgent restart
 - **Verified TLS optional** — Bridge's "Export TLS certificates" UI action dumps a `cert.pem` you can point `ca_cert_path` at for `ssl.CERT_REQUIRED` + `check_hostname=True`. Without it, the SSL context falls back to `CERT_NONE` — fine for localhost-only traffic where a MITM would already need code execution on the user's machine. Bridge's cert is bound to `127.0.0.1`, so keep `imap_host`/`smtp_host` as that IP (not `"localhost"`) or hostname verification fails
 - **Five destructive tools gated by `_confirm_proton_action`** — `proton_send`, `proton_reply`, `proton_send_draft`, `proton_trash`, `proton_delete_label` pop the same Tk `messagebox.askyesno` dialog as Gmail's, with per-tool bypass via the Safety dialog. Denial returns `"user denied: ..."` so the agent loop continues without retrying
-- **Per-tool confirmation bypass via Safety dialog** — the Safety dialog now has a "Proton Mail destructive tools" section listing all five confirmation-requiring tools as checkboxes. Same `disabled_confirm_patterns` set as shell regex and Gmail tool bypasses, persisted per-instruction
+- **Per-tool confirmation bypass via Safety dialog** — the Safety dialog has an "IMAP mail destructive tools" section listing all five confirmation-requiring tools as checkboxes (the bypass applies regardless of which IMAP account routes the call — Proton Bridge, WebCentral, etc.). Same `disabled_confirm_patterns` set as shell regex and Gmail tool bypasses, persisted per-instruction
 - **`_HAS_PROTONMAIL` availability flag** is always True on CPython (transport is stdlib), kept for parity with `_HAS_GOOGLE` / `_HAS_MCP`. Bridge presence/availability is detected at first-call time as a connection error, not a startup check — Bridge can restart while MyAgent is running and re-connects work transparently
 - **Four colliding helpers renamed `_proton_*`** to avoid MRO shadowing by `GmailMixin`'s identically-named statics (`_format_proton_summary`, `_extract_proton_bodies`, `_extract_proton_attachments`, `_attach_proton_files`). Foundational footgun in mixin-based architectures: shared method-name flat namespace requires defensive prefixing
 
@@ -1059,7 +1059,7 @@ Same model as Gmail — the `account` parameter is on every tool. An instruction
 2. `proton_read(account="personal", folder="INBOX", uid=...)` for each
 3. `proton_create_draft(account="work", to="you@proton.me", subject="Inbox summary", body="...")`
 
-**Per-instruction toggle:** The Proton checkbox is per-instruction, persisted in `agent_instructions.json` alongside Desktop/Browser/Meta/MCP/Google/Convo. Each saved instruction can independently enable or disable Proton tools.
+**Per-instruction toggle:** The IMAP checkbox (formerly labelled "Proton" — relabelled because the same mixin and tools now serve any IMAP/SMTP server, not just Proton Bridge) is per-instruction, persisted in `agent_instructions.json` as `proton: true/false` for backward compatibility, alongside Desktop/Browser/Meta/MCP/Google/Convo. Each saved instruction can independently enable or disable all IMAP-routed mail tools (Proton Bridge + WebCentral + any other configured IMAP account).
 
 **What the tools deliberately CAN'T do** (safety boundaries):
 

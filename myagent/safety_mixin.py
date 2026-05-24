@@ -167,10 +167,13 @@ class SafetyMixin:
                 text_widget.window_create("end", window=cb, stretch=True)
                 text_widget.insert("end", "\n")
 
-        # Section 3: Proton Mail destructive tools — same checkbox pattern,
-        # checked in _confirm_proton_action.
+        # Section 3: IMAP mail destructive tools (Proton Bridge, WebCentral,
+        # any IMAP/SMTP account) — same checkbox pattern, checked in
+        # _confirm_proton_action. The tools are still named proton_* for
+        # backward compatibility with existing instructions, but they route
+        # through whichever account the agent picks from accounts.json.
         if _HAS_PROTONMAIL:
-            text_widget.insert("end", "\n── Proton Mail destructive tools ──\n")
+            text_widget.insert("end", "\n── IMAP mail destructive tools ──\n")
             for tool_name in PROTON_CONFIRM_TOOLS:
                 var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
                 cb = tk.Checkbutton(

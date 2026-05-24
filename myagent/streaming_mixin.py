@@ -402,7 +402,7 @@ class StreamingMixin:
         # Proton Mail native tools — same namespaced dispatch pattern.
         if _HAS_PROTONMAIL and block.name.startswith("proton_"):
             if not getattr(self, "proton_enabled", None) or not self.proton_enabled.get():
-                return f"Proton Mail is disabled. Enable the Proton checkbox to use '{block.name}'."
+                return f"IMAP mail tools are disabled. Enable the IMAP checkbox to use '{block.name}'."
             method = getattr(self, f"do_{block.name}", None)
             if method is None:
                 return f"Unknown Proton tool: {block.name}"
