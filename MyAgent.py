@@ -55,6 +55,7 @@ from myagent.ollama_mixin import OllamaMixin
 from myagent.mcp_mixin import MCPMixin
 from myagent.gmail_mixin import GmailMixin
 from myagent.protonmail_mixin import ProtonMailMixin
+from myagent.document_mixin import DocumentMixin
 from myagent.desktop_mixin import DesktopMixin
 from myagent.browser_mixin import BrowserMixin
 from myagent.safety_mixin import SafetyMixin
@@ -70,8 +71,8 @@ if _HAS_OLLAMA:
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
           OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin,
-          DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
-          EventLoopMixin):
+          DocumentMixin, DesktopMixin, BrowserMixin, SafetyMixin,
+          ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False):
         self.root = root

@@ -157,6 +157,59 @@ TOOLS = [
         },
     },
     {
+        "name": "read_document",
+        "description": (
+            "Extract text content from a locally-saved file. Provider-agnostic — "
+            "operates on any local path regardless of where the file came from. "
+            "Natively handles:\n"
+            "• PDF (.pdf) — via pypdf; returns text per page, page_count, "
+            "metadata (title/author/dates) when present. Pass optional 'pages' "
+            "param (e.g. '1-5' or '3' or '1,3,5-7', 1-indexed) for partial reads.\n"
+            "• DOCX (.docx) — via python-docx; captures paragraphs AND table "
+            "cells in document order, with tables rendered as '|'-separated rows. "
+            "Returns paragraph_count, table_count, and core metadata.\n"
+            "• HTML (.html/.htm/.xhtml) — uses the same HTMLTextExtractor as the "
+            "mail tools (strips script/style content, adds newlines at block "
+            "tags, decodes entities).\n"
+            "• Plain text formats (.txt/.md/.log/.json/.yaml/.csv/.tsv/.xml/"
+            ".py/.js/.sh/etc.) — read directly with UTF-8.\n"
+            "• Unknown extensions — tries UTF-8 first (catches mislabelled text "
+            "files), falls back to a hex preview of the first 256 bytes.\n"
+            "\n"
+            "Common pairing: download an email attachment with "
+            "proton_get_attachment / gmail_get_attachment (writes to save_to), "
+            "then call read_document on that path. Output is JSON with text "
+            "(truncated at max_chars, default 50000), text_truncated flag, "
+            "format, size_bytes, mime_type, plus format-specific extras.\n"
+            "\n"
+            "For formats NOT handled natively (XLSX, ZIP archives, audio/video, "
+            "RTF, EPUB, scanned-image PDFs needing OCR, etc.), fall back to "
+            "run_command with the appropriate CLI tool: 'unzip -l <file>' for "
+            "ZIPs, 'pandoc <file> -t plain' for RTF/EPUB/ODT, 'ffprobe <file>' "
+            "for audio/video, 'file <file>' to sniff unknown binaries. "
+            "Encrypted PDFs are detected and reported clearly rather than "
+            "silently returning empty text."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Absolute path to the local file (e.g. '/tmp/invoice.pdf')",
+                },
+                "max_chars": {
+                    "type": "integer",
+                    "description": "Maximum characters to return in 'text' (default 50000). Reduce for previews; raise carefully — large bodies eat context window.",
+                },
+                "pages": {
+                    "type": "string",
+                    "description": "PDF only: page range to extract (1-indexed). Examples: '1-5', '3', '1,3,5-7'. Omit to read all pages.",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
         "name": "user_prompt",
         "description": (
             "Pause execution and display a message to the user, then wait for their "
@@ -988,7 +1041,7 @@ OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss")
 OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
                           "llava", "llama3.2-vision", "bakllava",
                           "moondream", "minicpm-v", "granite3.2-vision")
-PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill"}
+PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document"}
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
 # MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the

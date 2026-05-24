@@ -10,3 +10,5 @@ httpx
 pyautogui
 pygetwindow
 Pillow
+pypdf
+python-docx

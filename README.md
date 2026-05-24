@@ -7,7 +7,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting **Anthropic, OpenAI, Gemini, and Ollama (local inference)** providers (see details below)
-- **myagent/** — Package containing MyAgent's 17 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
+- **myagent/** — Package containing MyAgent's 18 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
@@ -98,6 +98,7 @@ The chatbot has twenty-nine tools (including 2 server-side and a dynamic `get_sk
 **Core Tools (always available):**
 - **run_command** — Executes a shell command on the local machine and returns the output (stdout + stderr). On Windows this runs PowerShell; on macOS it runs bash. Commands have a 30-second timeout and output is truncated at 20,000 characters. On Windows, uses `CREATE_NO_WINDOW` to suppress console window flashes. The tool description instructs Claude to use `Start-Process` (Windows) or `open -a` (macOS) when launching GUI applications to avoid blocking the tool loop
 - **csv_search** — Searches a delimited text file (CSV, TSV, TXT, or any delimited format) for records matching a value. The file must have a header row. Supports searching a specific column or all columns, with three match modes: `contains` (default), `exact`, and `starts_with` — all case-insensitive. The delimiter is auto-detected from file content using `csv.Sniffer` (sampling the first 8KB), or can be explicitly specified (`,`, `\t`, `|`, `;`). Results are returned as labelled key-value rows, capped at 50 matches by default (configurable via `max_results`). Output is truncated at 20,000 characters
+- **read_document** *(MyAgent only)* — Extracts text from local files: PDF (via `pypdf`, with page-range support and metadata), DOCX (via `python-docx`, paragraphs + tables + core metadata), HTML (using the same `HTMLTextExtractor` as the mail tools), and plain-text formats (`.txt`/`.md`/`.json`/`.yaml`/`.csv`/`.log` + source code). Provider-agnostic — pairs naturally with `gmail_get_attachment` / `proton_get_attachment` / `fetch_webpage` / any path-producing tool. Returns JSON with `text` (truncated at 50,000 chars), `format`, `size_bytes`, `mime_type`, plus format-specific extras (`page_count`/`pages_extracted`/`metadata` for PDF; `paragraph_count`/`table_count`/`metadata` for DOCX). Encrypted PDFs detected and reported clearly. For formats not natively supported (XLSX/ZIP/RTF/audio/video), the tool description directs the agent to `run_command` with the right CLI tool
 
 **Server-Side Tools (always available, Anthropic-native):**
 - **web_search** (`web_search_20250305`) — Anthropic's native server-side web search. Replaces the previous local DuckDuckGo-based search. The API handles query execution, result extraction, and citation generation entirely server-side. No local schema sent — minimal token cost
@@ -556,7 +557,7 @@ The application is a single-file tkinter app structured around the `App` class:
 
 A fire-and-forget autonomous task runner built with tkinter that supports **Anthropic** (Claude), **OpenAI** (GPT-4.1, GPT-5, o4-mini, etc.), **Gemini**, and **Ollama** (local inference) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
-**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 17 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
+**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 18 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
 
 **External tool integration** — In addition to its ~64 built-in tools (core, desktop, browser, meta, Gmail, Proton), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like filesystem, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
 
@@ -737,9 +738,9 @@ Use `llama3.2-vision-tools:11b` for iteration/testing, and the 32B variants when
 
 #### Tool Use
 
-MyAgent has roughly sixty-four built-in tools (including the Gemini-only `find_element`, the sixteen Gmail tools, and the sixteen Proton Mail tools) plus the dynamic `get_skill` tool, organised into seven categories (core, desktop, browser, MCP, Google/Gmail, Proton Mail, meta):
+MyAgent has roughly sixty-five built-in tools (including the Gemini-only `find_element`, the sixteen Gmail tools, the sixteen Proton Mail tools, and the local `read_document` tool) plus the dynamic `get_skill` tool, organised into seven categories (core, desktop, browser, MCP, Google/Gmail, Proton Mail, meta):
 
-**Core Tools (always available):** `run_powershell`/`run_shell`, `csv_search`, `user_prompt`, plus `web_search` and `fetch_webpage` (Gemini only — see below).
+**Core Tools (always available):** `run_powershell`/`run_shell`, `csv_search`, `read_document` (PDF/DOCX/HTML/text), `user_prompt`, plus `web_search` and `fetch_webpage` (Gemini only — see below).
 
 **Server-side tools (OpenAI and Anthropic):** When using **OpenAI** or **Anthropic**, the custom `web_search` and `fetch_webpage` tools are replaced by native server-side equivalents:
 
@@ -1097,7 +1098,7 @@ The Convo checkbox is per-instruction, persisted in `agent_instructions.json` al
 
 When Claude requests multiple tools in a single turn, MyAgent automatically classifies each tool as **parallel-safe** or **sequential** and executes them accordingly:
 
-**Parallel-safe tools** (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`) run concurrently via `ThreadPoolExecutor` (MyAgent keeps local `web_search`/`fetch_webpage` for Gemini). SelfBot's parallel-safe set is `csv_search` and `get_skill` (since web tools are server-side). A status message ("Running N tools in parallel...") appears in the Activity output when multiple parallel tools fire.
+**Parallel-safe tools** (`web_search`, `fetch_webpage`, `csv_search`, `read_document`, `get_skill`) run concurrently via `ThreadPoolExecutor` (MyAgent keeps local `web_search`/`fetch_webpage` for Gemini). SelfBot's parallel-safe set is `csv_search` and `get_skill` (since web tools are server-side). A status message ("Running N tools in parallel...") appears in the Activity output when multiple parallel tools fire.
 
 **Sequential tools** (all desktop, browser, `run_command`, and `user_prompt` tools) run one at a time in their original order, since they interact with shared state (screen, browser session, filesystem, user attention).
 
@@ -1256,7 +1257,7 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 ### Architecture
 
-MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 17 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
+MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 18 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
 
 #### Module Breakdown
 
@@ -1277,23 +1278,24 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 | **`myagent/mcp_mixin.py`** | 570 | MCP (Model Context Protocol) client — `_connect_mcp_servers()`, `_disconnect_mcp_servers()`, `_refresh_mcp_tools()`, `do_mcp_call()`. Runs a dedicated asyncio loop in a background thread (MCP SDK is async-only), holds all server connections inside one `AsyncExitStack`, augments subprocess PATH for macOS GUI launches, substitutes `${RANDOM_PORT}` placeholders for multi-instance support |
 | **`myagent/gmail_mixin.py`** | 906 | Native multi-account Gmail integration — 16 tools (search/read/send/reply/draft/trash/label/attachment), per-account OAuth via `InstalledAppFlow`, token cache at `~/.config/myagent-google/`, `_confirm_gmail_action()` modal Tk confirmation dialog, account enum patched at runtime in `_get_tools()`. `_HAS_GOOGLE` feature-flag gating |
 | **`myagent/protonmail_mixin.py`** | 1206 | Native multi-account Proton Mail integration via Proton Bridge over stdlib IMAP+SMTP — 16 tools mirroring the Gmail surface 1:1. Per-account credentials in `~/.config/myagent-protonmail/accounts.json`, optional `ca_cert_path` for verified TLS (Bridge cert export), `_confirm_proton_action()` modal Tk confirmation dialog, account enum patched at runtime in `_get_tools()`. `_uid_search` helper switches to `CHARSET UTF-8` for non-ASCII queries; `do_proton_modify_labels` auto-retries Bridge's label-removal eventual-consistency quirk and surfaces `label_removal_retries: N` in the response. Four helpers (`_format_proton_summary`/`_extract_proton_bodies`/`_extract_proton_attachments`/`_attach_proton_files`) explicitly prefixed to avoid MRO shadowing by `GmailMixin`'s identically-named statics. `_HAS_PROTONMAIL` feature-flag gating |
+| **`myagent/document_mixin.py`** | 280 | Local document reader — single `read_document(path, max_chars?, pages?)` tool that extracts text from PDF (via `pypdf`), DOCX (via `python-docx`), HTML (via `extract_text_from_html`), and most plain-text formats (`.txt`/`.md`/`.json`/`.yaml`/`.csv`/`.log`/source code). Provider-agnostic: pairs with `gmail_get_attachment` / `proton_get_attachment` / `fetch_webpage` / any other path-producing tool. PDF metadata extraction (title/author/dates/producer), DOCX metadata + paragraph/table counts, encrypted-PDF detection with empty-password fallback, per-page error isolation. `_HAS_PYPDF` / `_HAS_DOCX` feature-flag gating |
 | **`myagent/desktop_mixin.py`** | 730 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
 | **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
 | **`myagent/safety_mixin.py`** | 466 | `_start_agent()`, `_stop_agent()`, Safety dialog, command safety checks, `_request_confirmation()`, `do_user_prompt()`, `run_powershell()`, `search_web()`, `fetch_url()` |
 | **`myagent/chat_mixin.py`** | 332 | Chat save/serialize, image attachment/compression, LaTeX→Unicode post-processing |
 | **`myagent/event_loop_mixin.py`** | 252 | `check_queue()` (main event loop with cost display handler), `_on_close()`, `_finish_close()` |
 
-**Total: ~12,500 lines across 21 files** (the original single-file was ~6,200 lines).
+**Total: ~12,780 lines across 22 files** (the original single-file was ~6,200 lines).
 
 #### How the Mixin Pattern Works
 
 ```python
-# MyAgent.py — the App class inherits from all 17 mixins (Proton added in latest)
+# MyAgent.py — the App class inherits from all 18 mixins (Proton added in latest)
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
           OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin,
-          DesktopMixin, BrowserMixin, SafetyMixin, ChatMixin,
-          EventLoopMixin):
+          DocumentMixin, DesktopMixin, BrowserMixin, SafetyMixin,
+          ChatMixin, EventLoopMixin):
     def __init__(self, root, launch_instruction=None, headless=False):
         # ... initializes all shared state (self.queue, self.messages, etc.)
 ```
@@ -1314,7 +1316,7 @@ Adding a new tool to MyAgent requires changes in up to 4 files:
 - **Threading** — API calls run in a background daemon thread (`stream_worker` in `streaming_mixin.py`) to keep the UI responsive. A `queue.Queue` passes events (text deltas, thinking deltas, call counters, tool info, errors, completion) back to the main thread, polled every 50ms via `check_queue()` in `event_loop_mixin.py`. An `_ensure_newline()` helper in `chat_mixin.py` guarantees each new output block starts on a fresh line
 - **Multi-Provider Support** — The internal message format stays Anthropic-style; translation to/from other formats happens at the API boundary. OpenAI translation via `_messages_to_responses()` / `_tools_to_responses()` in `streaming_mixin.py`; Gemini translation via `_messages_to_gemini()` / `_tools_to_gemini()` in `gemini_mixin.py`. The `_ToolBlock` wrapper (in `helpers.py`) normalises OpenAI/Gemini dict-based tool responses to match Anthropic's `.name`/`.id`/`.input` interface, so `_execute_tool()` works identically for all providers
 - **Agentic Loop** — `stream_worker()` in `streaming_mixin.py` runs a `while True:` loop that dispatches to `_stream_anthropic_call()`, `_stream_responses_call()`, or `_stream_gemini_call()` (each in their own mixin), processes the response, executes any requested tools via `_execute_tool()`, appends results, and loops again. Exits on `end_turn` or when `stop_requested` is set via the STOP button
-- **Parallel Tool Execution** — When Claude requests multiple tools in one turn, `stream_worker()` partitions them into parallel-safe (`csv_search`, `get_skill`, plus `web_search`/`fetch_webpage` for Gemini) and sequential (everything else). Parallel-safe tools run concurrently via `ThreadPoolExecutor`; sequential tools run one at a time. Results are placed into a pre-allocated list indexed by original position, preserving API-expected ordering
+- **Parallel Tool Execution** — When Claude requests multiple tools in one turn, `stream_worker()` partitions them into parallel-safe (`csv_search`, `read_document`, `get_skill`, plus `web_search`/`fetch_webpage` for Gemini) and sequential (everything else). Parallel-safe tools run concurrently via `ThreadPoolExecutor`; sequential tools run one at a time. Results are placed into a pre-allocated list indexed by original position, preserving API-expected ordering
 - **Persistence** — JSON-based storage: `agent_instructions.json` for the instruction library (with embedded images, all six tool toggles — Desktop/Browser/Meta/MCP/Google/Convo — provider, model parameters, skill modes, and Safety overrides), `.json` + `.txt` files in `saved_chats/` for completed runs, `agent_state.json` / `agent_state_N.json` for per-instance preferences (including the `diag_enabled` toggle) and dialog geometries, `skills.json` (shared with SelfBot) for the skills library, and `mcp_servers.json` for per-user MCP server configuration (gitignored)
 - **Per-display coordinate state** — `_display_states[N]` and `_display_images[N]` track each display's most-recent capture (full or region) for `mouse_click` and `find_element` lookups; `_display_full_states[N]` and `_display_full_images[N]` track each display's most-recent FULL display capture for region screenshot conversions. The two-dict design prevents chained region screenshots from drifting through stacked offsets while still letting clicks reference whatever the model most recently saw of each display
 - **Command Safety** — Two-tier regex-based guardrail system (patterns in `constants.py`, checks in `safety_mixin.py`), plus a Safety dialog for selectively bypassing individual confirm patterns (shell-command regexes plus per-Gmail-tool bypasses). Confirmation dialogs are dispatched to the main tkinter thread via `root.after()` while the worker thread waits on a `threading.Event`

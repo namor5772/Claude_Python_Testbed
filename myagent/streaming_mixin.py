@@ -432,6 +432,11 @@ class StreamingMixin:
                 max_results=inp.get("max_results", 50),
                 delimiter=inp.get("delimiter"),
             )
+        elif block.name == "read_document":
+            inp = block.input or {}
+            fp = inp.get("path", "")
+            self.queue.put({"type": "tool_info", "content": f"Reading document: {os.path.basename(fp)}\n"})
+            return self.do_read_document(inp)
         elif block.name == "user_prompt":
             prompt_msg = block.input.get("message", "")
             self.queue.put({"type": "tool_info", "content": "Requesting user input...\n"})
