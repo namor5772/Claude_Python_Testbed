@@ -1040,15 +1040,19 @@ GOOGLE_TOOLS = [
         "name": "gmail_read",
         "description": (
             "Fetch the full content of a single message by ID, including headers, "
-            "body, AND an attachments array (always included — small payload). "
-            "Use the format parameter to control body representation: "
-            "'text' (default, plain-text body or stripped HTML fallback), "
-            "'html' (raw HTML only — empty if message is text-only), or "
-            "'both' (returns body AND body_html as separate fields). Bodies are "
-            "truncated at 50,000 chars with body_truncated / body_html_truncated "
-            "flags. Each attachment entry has filename, mime_type, size, "
-            "attachment_id, part_id, inline — use attachment_id with "
-            "gmail_get_attachment to download the bytes."
+            "body, snippet, labelIds, AND an attachments array (always included — "
+            "small payload). Use the format parameter to control body "
+            "representation: 'text' (default, plain-text body if present, "
+            "otherwise a structural HTML-to-text conversion that drops "
+            "<script>/<style> CONTENT, adds newlines at block-level tags like "
+            "<p>/<br>/<div>/<h1-6>/<li>/<tr>, and decodes HTML entities like "
+            "&amp;/&nbsp; — much cleaner than naive tag stripping on marketing "
+            "emails), 'html' (raw HTML only — empty if message is text-only), "
+            "or 'both' (returns body AND body_html as separate fields). Bodies "
+            "are truncated at 50,000 chars with body_truncated / "
+            "body_html_truncated flags. Each attachment entry has filename, "
+            "mime_type, size, attachment_id, part_id, inline — use attachment_id "
+            "with gmail_get_attachment to download the bytes."
         ),
         "input_schema": {
             "type": "object",
@@ -1404,14 +1408,21 @@ PROTON_TOOLS = [
         "name": "proton_read",
         "description": (
             "Fetch the full content of a single Proton message by (folder, uid), "
-            "including headers, body, and an attachments array. Use the format "
-            "parameter to control body representation: 'text' (default, plain-text "
-            "body or stripped HTML fallback), 'html' (raw HTML only — empty if "
+            "including headers, body, snippet, and an attachments array. Use the "
+            "format parameter to control body representation: 'text' (default, "
+            "plain-text body if present, otherwise a structural HTML-to-text "
+            "conversion that drops <script>/<style> CONTENT, adds newlines at "
+            "block-level tags like <p>/<br>/<div>/<h1-6>/<li>/<tr>, and decodes "
+            "HTML entities like &amp;/&nbsp; — much cleaner than naive tag "
+            "stripping on marketing emails), 'html' (raw HTML only — empty if "
             "message is text-only), or 'both' (returns body AND body_html as "
             "separate fields). Bodies are truncated at 50,000 chars with "
-            "body_truncated / body_html_truncated flags. Each attachment entry "
-            "has filename, mime_type, size, attachment_id ('part:N'), part_index, "
-            "inline — pass attachment_id to proton_get_attachment to download bytes."
+            "body_truncated / body_html_truncated flags. Always returns a "
+            "'snippet' field — the first 200 chars of the cleaned text body with "
+            "whitespace collapsed — for quick previews without rendering full body. "
+            "Each attachment entry has filename, mime_type, size, attachment_id "
+            "('part:N'), part_index, inline — pass attachment_id to "
+            "proton_get_attachment to download bytes."
         ),
         "input_schema": {
             "type": "object",

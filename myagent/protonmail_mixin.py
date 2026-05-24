@@ -81,6 +81,8 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 from tkinter import messagebox
 
+from myagent.helpers import extract_text_from_html
+
 # Bridge accepts up to 25 MB per message (same hard ceiling as most SMTP
 # servers). Cap raw attachment bytes at 20 MB combined to leave headroom
 # for headers + base64 overhead before SMTP refuses.
@@ -576,7 +578,21 @@ class ProtonMailMixin:
                 return f"error: no message with UID {uid} in folder {folder!r}"
             text_body, html_body = self._extract_proton_bodies(msg)
             attachments = self._extract_proton_attachments(msg)
+            # Choose the canonical "text" body: prefer text/plain when present,
+            # otherwise convert HTML structurally via HTMLTextExtractor (which
+            # drops <script>/<style> CONTENT — not just tags — adds newlines
+            # at block-level elements, and decodes HTML entities). The naive
+            # re.sub regex used previously would leave CSS, JS, and entities
+            # like &amp;/&nbsp; in the output, swamping marketing emails with
+            # boilerplate the model had to ignore.
+            if text_body:
+                clean_text = text_body
+            elif html_body:
+                clean_text = extract_text_from_html(html_body)
+            else:
+                clean_text = ""
             result = {
+                "account": account,
                 "uid": str(uid),
                 "folder": folder,
                 "subject": self._decode_header(msg.get("Subject", "")),
@@ -587,12 +603,15 @@ class ProtonMailMixin:
                 "message_id_header": msg.get("Message-ID", ""),
                 "in_reply_to": msg.get("In-Reply-To", ""),
                 "references": msg.get("References", ""),
+                # Snippet = first 200 chars of cleaned text body, whitespace
+                # collapsed. Parallels Gmail API's server-side snippet so
+                # callers have a quick preview without rendering full body.
+                "snippet": re.sub(r"\s+", " ", clean_text).strip()[:200],
                 "attachments": attachments,
             }
             if fmt in ("text", "both"):
-                body = text_body or (re.sub(r"<[^>]+>", "", html_body) if html_body else "")
-                result["body"] = body[:MAX_BODY_CHARS]
-                result["body_truncated"] = len(body) > MAX_BODY_CHARS
+                result["body"] = clean_text[:MAX_BODY_CHARS]
+                result["body_truncated"] = len(clean_text) > MAX_BODY_CHARS
             if fmt in ("html", "both"):
                 result["body_html"] = (html_body or "")[:MAX_BODY_CHARS]
                 result["body_html_truncated"] = len(html_body or "") > MAX_BODY_CHARS

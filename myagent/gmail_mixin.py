@@ -38,6 +38,8 @@ import tkinter as tk
 from email.message import EmailMessage
 from tkinter import messagebox
 
+from myagent.helpers import extract_text_from_html
+
 # Gmail API ceiling is 25 MB per message TOTAL (body + headers + attachments,
 # all after base64 encoding which adds ~33% overhead). Capping raw attachment
 # bytes at 20 MB combined leaves a safety margin for the base64 + headers and
@@ -282,7 +284,9 @@ class GmailMixin:
     @staticmethod
     def _extract_body(payload):
         """Backwards-compatible "give me the best text body you can find"
-        helper. Prefers text/plain; falls back to a tag-stripped text/html.
+        helper. Prefers text/plain; falls back to a structural HTML-to-text
+        conversion via ``extract_text_from_html`` (drops <script>/<style>
+        content, adds newlines at block-level elements, decodes entities).
         Used by code paths that just want a plain string. New code should
         prefer ``_extract_bodies`` so the caller can decide how to handle
         the html-only case."""
@@ -290,7 +294,7 @@ class GmailMixin:
         if text:
             return text
         if html:
-            return re.sub(r"<[^>]+>", "", html)
+            return extract_text_from_html(html)
         return ""
 
     @staticmethod
@@ -413,8 +417,11 @@ class GmailMixin:
                 "attachments": attachments,
             }
             if fmt in ("text", "both"):
-                # If only HTML is present, strip tags as the text fallback
-                body = text_body or (re.sub(r"<[^>]+>", "", html_body) if html_body else "")
+                # If only HTML is present, fall back to a structural HTML→text
+                # conversion (HTMLTextExtractor: drops <script>/<style> CONTENT,
+                # adds newlines at block-level tags, decodes entities). Much
+                # cleaner than naive regex tag-stripping for marketing emails.
+                body = text_body or (extract_text_from_html(html_body) if html_body else "")
                 result["body"] = body[:50000]
                 result["body_truncated"] = len(body) > 50000
             if fmt in ("html", "both"):
