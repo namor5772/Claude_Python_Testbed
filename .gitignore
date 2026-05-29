@@ -47,3 +47,11 @@ FROM.txt
 MyAgent_preview.png
 hello_world_gui.py
 *.txtLaptop
+
+# Stray scratch from misdirected shell redirects (e.g. Windows-style `>nul`
+# evaluated in bash creates a literal file named `nul`)
+nul
+# Empty TextEdit / RTF scratch
+Untitled.*
+# Generic backup files (e.g. agent_instructions.json.bak)
+*.bak
