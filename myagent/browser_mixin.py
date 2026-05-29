@@ -38,6 +38,8 @@ class BrowserMixin:
                 ]
             else:
                 edge_paths = [
+                    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+                    os.path.expanduser("~/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
                     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
                     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
                 ]
@@ -48,12 +50,21 @@ class BrowserMixin:
                     break
             if not edge_exe:
                 raise RuntimeError(
-                    "No supported browser found. Install Microsoft Edge or Google Chrome."
+                    "No supported browser found. Install Brave Browser, Google Chrome, or Microsoft Edge."
                 )
-            import tempfile
-            debug_profile = os.path.join(tempfile.gettempdir(), "myagent_browser_debug")
+            if IS_WINDOWS:
+                import tempfile
+                debug_profile = os.path.join(tempfile.gettempdir(), "myagent_browser_debug")
+            else:
+                debug_profile = os.path.expanduser("~/Library/Application Support/MyAgent/browser_profile")
+            os.makedirs(debug_profile, exist_ok=True)
             self._edge_process = subprocess.Popen(
-                [edge_exe, "--remote-debugging-port=9222", "--no-first-run",
+                [edge_exe,
+                 "--remote-debugging-port=9222",
+                 "--no-first-run",
+                 "--no-default-browser-check",
+                 "--disable-features=Translate",
+                 "--disable-popup-blocking",
                  f"--user-data-dir={debug_profile}"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
