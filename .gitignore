@@ -10,6 +10,9 @@ Account_Activity_WBC.txt
 Account_Activity_WBC_backup.csv
 Account_Activity_WBC_backup.txt
 
+# Generated MyAgent tools-inventory report (regenerated on demand)
+MyAgent_Tools_Report.txt
+
 # IDE settings
 .vscode/
 
