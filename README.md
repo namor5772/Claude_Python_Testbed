@@ -599,6 +599,38 @@ When launched with `-l`, the app restores window geometry and display settings n
 
 **Headless mode** — Adding `--headless` hides the main window (`root.withdraw()`). Dialogs (`user_prompt`, PS confirmation) still appear as standalone floating windows when needed. The process auto-closes after the agent loop completes. Designed for orchestrator patterns where a parent MyAgent spawns child instances via `run_instruction` (preferred) or `run_powershell`.
 
+### Scheduling Background Runs (Task Scheduler / launchd)
+
+The **Schedule Agent Win** and **Schedule Agent MacOS** skills (see the Skills list above) wrap the OS scheduler to run any saved instruction unattended: on Windows via Task Scheduler (`pythonw.exe`), on macOS via a `launchd` LaunchAgent at `~/Library/LaunchAgents/com.myagent.<slug>.plist` that fires `python MyAgent.py -l "<Instruction>" --headless` on a `StartCalendarInterval`. (A working example is the daily unread-email-summary job, which searches several mail accounts headless and emails the digest.)
+
+Those skills *create* the jobs; to *inspect, verify, and manage* them from the terminal on macOS:
+
+```bash
+# Every loaded launchd job (PID, last exit code, label)
+launchctl list | grep myagent
+
+# One job's runtime detail — ProgramArguments + log paths, but NOT the schedule
+launchctl list com.myagent.<slug>
+
+# The schedule lives in the plist, not launchctl — pretty-print it (binary plists too)
+plutil -p ~/Library/LaunchAgents/com.myagent.<slug>.plist
+
+# Find ALL time-scheduled jobs on the machine and what each one runs
+for d in ~/Library/LaunchAgents /Library/LaunchAgents /Library/LaunchDaemons; do
+  for f in "$d"/*.plist; do [ -e "$f" ] || continue
+    plutil -p "$f" 2>/dev/null | grep -qE '"StartCalendarInterval"|"StartInterval"' \
+      && { echo "── $f"; plutil -p "$f" | grep -E '"(Label|Hour|Minute|Weekday|Day)"|[0-9]+ => "'; }
+  done
+done
+```
+
+**Operational gotchas** (learned debugging a real job):
+- **`launchctl` ≠ the schedule.** `launchctl list <label>` shows *what* a job runs and its exit status; the *when* (`StartCalendarInterval`) lives only in the plist — read it with `plutil -p`.
+- **Missed runs fire on wake, not catch-up.** With `RunAtLoad=false`, if the Mac is asleep/off at the scheduled time launchd runs the job **once** at the next wake (a 07:00 job firing at 11:17 after the lid opens is expected) — it does not replay missed occurrences.
+- **Don't log to `/tmp`.** macOS purges `/tmp` of files untouched for ~3 days, erasing early-crash diagnostics. Point `StandardOutPath`/`StandardErrorPath` at `~/Library/Logs/myagent/`, and use **absolute** paths — launchd does **not** expand `~` in plist strings (a literal `~` folder gets created instead).
+- **Headless runs need confirm-bypass.** A scheduled instruction that calls a destructive tool (`proton_send`, `gmail_send`, `rm`, …) will hang forever on its Tk confirmation dialog with no GUI to click. Add those patterns to the instruction's **Safety** bypass list (stored per-instruction in `agent_instructions.json` as `disabled_confirm_patterns`) so unattended runs proceed.
+- **Three layers prove a run worked:** `LastExitStatus` from `launchctl list <label>` (the process exited), the timestamped `saved_chats/<Instruction>_<ts>.txt` transcript (the agent did the work), and the real side effect (e.g. the email actually arrived). Exit 0 alone is **not** proof of delivery — the side effect can still fail silently.
+
 ### Features
 
 #### Agent Instructions
