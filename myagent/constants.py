@@ -1003,7 +1003,7 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-opus-20240229": 4096,
     "claude-3-sonnet-20240229": 4096,
 }
-ADAPTIVE_THINKING_MODELS = {"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
+ADAPTIVE_THINKING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
 MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
@@ -1825,6 +1825,7 @@ PROTON_CONFIRM_TOOLS = [
 ANTHROPIC_PRICING = {
     # (input, output, 5min_cache_write, cache_read) per million tokens
     # Claude 4.5+ family (new lower pricing)
+    "claude-opus-4-8":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-7":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-6":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-5":     (5.00, 25.00, 6.25, 0.50),

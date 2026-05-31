@@ -142,6 +142,9 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # code_interpreter; older models did. The first call learns, subsequent
         # calls in the same session skip the unsupported tool upfront.
         self._openai_unsupported_tools = {}  # model_id → set of unsupported "type" strings
+        # Anthropic models (Opus 4.7+) that removed temperature/top_p/top_k and 400
+        # if sent. Same learn-once-skip-after pattern as the OpenAI cache above.
+        self._anthropic_no_temperature = set()  # model_ids that rejected temperature
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False

@@ -246,7 +246,7 @@ class UIMixin:
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
                 # Populate values: Max only for Opus 4.6 / 4.7
-                if self.model in ("claude-opus-4-7", "claude-opus-4-6"):
+                if self.model in ("claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"):
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
                 else:
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
@@ -352,6 +352,23 @@ class UIMixin:
             if mid.startswith(prefix):
                 return "manual"
         return None
+
+    def _anthropic_rejects_temperature(self, model_id=None):
+        """True for Anthropic models that removed sampling params (temperature/
+        top_p/top_k) — Opus 4.7 and later return HTTP 400 if temperature is sent.
+        Parses claude-opus-<major>-<minor> >= (4, 7) so future Opus releases are
+        covered without a hardcoded list; the reactive cache in _stream_anthropic_call
+        backstops anything this misses."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        if mid.startswith("claude-opus-"):
+            parts = mid[len("claude-opus-"):].split("-")
+            try:
+                return (int(parts[0]), int(parts[1])) >= (4, 7)
+            except (ValueError, IndexError):
+                return False
+        return False
 
     def _is_gemini_thinking_model(self, model_id=None):
         mid = model_id or self.model
@@ -509,7 +526,9 @@ class UIMixin:
         if self._has_model_widgets():
             show_temp = False
             if mode in ("off", "none"):
-                if self.provider != "OpenAI" or not self._is_gpt5_family():
+                if self.provider == "Anthropic" and self._anthropic_rejects_temperature():
+                    show_temp = False  # Opus 4.7+ removed temperature (400 if sent)
+                elif self.provider != "OpenAI" or not self._is_gpt5_family():
                     show_temp = True  # non-gpt5 models
                 elif mode == "none" and self._gpt5_supports_temp_at_none():
                     show_temp = True  # gpt-5.4+ with effort=none

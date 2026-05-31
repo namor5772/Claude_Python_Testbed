@@ -35,7 +35,11 @@ class AnthropicMixin:
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
             api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-            api_kwargs["temperature"] = self.temperature
+            # Opus 4.7+ removed temperature/top_p/top_k — sending temperature returns a
+            # 400. Skip it for those models (parsed by version) and for any model that
+            # rejected it earlier this session (reactive cache below).
+            if not self._anthropic_rejects_temperature() and self.model not in self._anthropic_no_temperature:
+                api_kwargs["temperature"] = self.temperature
 
         for attempt in range(max_retries):
             try:
@@ -122,6 +126,22 @@ class AnthropicMixin:
                     full_text = ""
                 else:
                     raise
+            except anthropic.BadRequestError as e:
+                # Opus 4.7+ reject temperature/top_p/top_k with HTTP 400. Strip
+                # temperature, cache the model so later calls skip it upfront, and
+                # retry. Mirrors the OpenAI temperature-rejection fallback. (Caught
+                # before APIStatusError since BadRequestError is a subclass of it.)
+                msg = (getattr(e, "message", "") or str(e)).lower()
+                if "temperature" in msg and "temperature" in api_kwargs:
+                    del api_kwargs["temperature"]
+                    self._anthropic_no_temperature.add(self.model)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": "Model does not support temperature — retrying without it...\n",
+                    })
+                    full_text = ""
+                    continue
+                raise
             except anthropic.APIStatusError as e:
                 if e.status_code == 529 and attempt < max_retries - 1:
                     wait = min(2 ** attempt * 10, 90)
