@@ -63,6 +63,16 @@ except Exception:
 # that's detected at first-call time as a connection error, not a startup check.
 _HAS_PROTONMAIL = True
 
+# Outlook / Microsoft 365 mail via the Microsoft Graph API (OAuth through MSAL).
+# Optional — absence hides the Outlook checkbox and disables the outlook_* tools.
+# Install via:  pip install msal requests
+# (requests is usually already present; msal is the only new dependency.)
+_HAS_OUTLOOK = True
+try:
+    import msal  # noqa: F401
+except Exception:
+    _HAS_OUTLOOK = False
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -277,6 +287,10 @@ META_TOOLS = [
                 "google": {
                     "type": "boolean",
                     "description": "Enable native Google (Gmail) tools — gmail_search, gmail_send, gmail_trash, etc. Requires ~/.config/myagent-google/ setup. Default false on create.",
+                },
+                "outlook": {
+                    "type": "boolean",
+                    "description": "Enable native Outlook / Microsoft 365 tools — outlook_search, outlook_send, outlook_trash, etc. (via Microsoft Graph). Requires ~/.config/myagent-msmail/ setup. Default false on create.",
                 },
                 "conversational": {
                     "type": "boolean",
@@ -1408,6 +1422,355 @@ GOOGLE_ACCOUNTS_FILE = os.path.join(GOOGLE_CONFIG_DIR, "accounts.json")
 GMAIL_CONFIRM_TOOLS = [
     "gmail_send", "gmail_reply", "gmail_send_draft",
     "gmail_trash", "gmail_delete_label",
+]
+
+# ── Outlook / Microsoft 365 native tools (via Microsoft Graph) ───────────────
+# Native MyAgent tools that wrap the Microsoft Graph mail API directly via MSAL
+# OAuth (not MCP — see myagent/outlook_mixin.py for the rationale). The `account`
+# parameter on every tool is a placeholder enum here; `_get_tools()` patches in
+# the real enum at runtime from `~/.config/myagent-msmail/accounts.json`.
+# Conditionally included in _get_tools() only when self.outlook_enabled.get() is
+# True AND _HAS_OUTLOOK is True. Gmail "labels" map to Outlook "categories";
+# trash maps to the Deleted Items folder.
+OUTLOOK_TOOLS = [
+    {
+        "name": "outlook_search",
+        "description": (
+            "Search Outlook messages. With a query, uses Microsoft Graph "
+            "$search (KQL-style free text, e.g. 'from:alice@example.com', "
+            "'subject:invoice', 'hasAttachments:true', or just keywords) and "
+            "returns matches by relevance. With no query, returns the most "
+            "recent messages (newest first). Each result has id, conversationId, "
+            "subject, from, to, date, snippet, hasAttachments, isRead. Use "
+            "outlook_read on a specific id to get the full body."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Outlook account to search"},
+                "q": {"type": "string", "description": "Graph $search query (optional; omit for most-recent)"},
+                "max_results": {"type": "integer", "description": "Maximum results (default 25, max 250)"},
+            },
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "outlook_read",
+        "description": (
+            "Fetch the full content of a single message by ID, including "
+            "headers, body, snippet, categories, isRead, AND an attachments "
+            "array (metadata only — always included). The format parameter "
+            "controls the body representation: 'text' (default — plain text, "
+            "or a structural HTML-to-text conversion if the message is HTML), "
+            "'html' (raw HTML only — empty if message is text), or 'both' "
+            "(body AND body_html as separate fields). Bodies truncate at "
+            "50,000 chars with body_truncated / body_html_truncated flags. "
+            "Each attachment entry has filename, mime_type, size, "
+            "attachment_id, inline — use attachment_id with "
+            "outlook_get_attachment to download the bytes."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Outlook account"},
+                "message_id": {"type": "string", "description": "Message ID (from outlook_search results)"},
+                "format": {
+                    "type": "string", "enum": ["text", "html", "both"],
+                    "description": "Body representation to return (default 'text')",
+                },
+            },
+            "required": ["account", "message_id"],
+        },
+    },
+    {
+        "name": "outlook_get_attachment",
+        "description": (
+            "Download a single file attachment from an Outlook message and save "
+            "it to a local file path. First call outlook_read to get the "
+            "attachments[] array, then pass an entry's attachment_id with "
+            "message_id. Non-destructive. Refuses to overwrite an existing file "
+            "unless overwrite=true. Only file attachments are supported (item "
+            "and reference attachments error out)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_id": {"type": "string", "description": "Message ID containing the attachment"},
+                "attachment_id": {"type": "string", "description": "Attachment ID from outlook_read's attachments[] field"},
+                "save_to": {"type": "string", "description": "Local file path to save to (absolute recommended; parent dirs auto-created)"},
+                "overwrite": {"type": "boolean", "description": "If true, overwrite an existing file at save_to (default false)"},
+            },
+            "required": ["account", "message_id", "attachment_id", "save_to"],
+        },
+    },
+    {
+        "name": "outlook_send",
+        "description": (
+            "Send a new email. ALWAYS prompts the user with a modal confirmation "
+            "showing recipient/subject/body preview before sending. The user can "
+            "deny — if so the tool returns 'user denied'. Supports optional file "
+            "attachments (combined raw size up to ~3 MB; Graph's single-request "
+            "limit is ~4 MB after base64). Unlike Gmail, Outlook has a single "
+            "body — if body_html is given it is sent as the HTML body and the "
+            "plain-text body is ignored."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Outlook account to send from"},
+                "to": {"type": "string", "description": "Recipient email address(es), comma or semicolon separated"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain-text email body (used when body_html is not provided)"},
+                "body_html": {"type": "string", "description": "Optional HTML body. When provided, it is sent as the message body instead of the plain text."},
+                "cc": {"type": "string", "description": "Optional CC recipients (comma/semicolon separated)"},
+                "bcc": {"type": "string", "description": "Optional BCC recipients"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional list of absolute file paths to attach. MIME type auto-detected.",
+                },
+            },
+            "required": ["account", "to", "subject", "body"],
+        },
+    },
+    {
+        "name": "outlook_reply",
+        "description": (
+            "Reply to an existing message with PROPER OUTLOOK THREADING. Use "
+            "this (not outlook_send) when replying to a message you've fetched "
+            "via outlook_search/outlook_read — it uses Graph createReply so the "
+            "reply nests in the same conversation. Defaults the To: to the "
+            "original sender; pass an explicit 'to' to override. Sends only the "
+            "new body (no quoted original), mirroring gmail_reply. Requires "
+            "confirmation; supports attachments. On denial the draft is deleted."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string", "description": "Which Outlook account to reply from"},
+                "message_id": {"type": "string", "description": "ID of the message being replied to"},
+                "body": {"type": "string", "description": "Plain-text reply body (used when body_html is not provided)"},
+                "body_html": {"type": "string", "description": "Optional HTML reply body (sent instead of plain text when provided)"},
+                "to": {"type": "string", "description": "Optional override of reply target (default: original sender)"},
+                "cc": {"type": "string", "description": "Optional CC"},
+                "bcc": {"type": "string", "description": "Optional BCC"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional file paths to attach",
+                },
+            },
+            "required": ["account", "message_id", "body"],
+        },
+    },
+    {
+        "name": "outlook_create_draft",
+        "description": (
+            "Create a draft (does NOT send). No confirmation dialog — drafts are "
+            "non-destructive. Useful for letting the user inspect a proposed "
+            "email in Outlook before authorising send_draft. Supports "
+            "attachments (same ~3 MB combined limit as outlook_send)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "to": {"type": "string", "description": "Recipient email address(es)"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain-text body (used when body_html is not provided)"},
+                "body_html": {"type": "string", "description": "Optional HTML body (sent instead of plain text when provided)"},
+                "cc": {"type": "string", "description": "Optional CC"},
+                "bcc": {"type": "string", "description": "Optional BCC"},
+                "attachments": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Optional file paths to attach",
+                },
+            },
+            "required": ["account", "to", "subject", "body"],
+        },
+    },
+    {
+        "name": "outlook_list_drafts",
+        "description": "List recent drafts in an account with draft_id, to, subject, snippet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "max_results": {"type": "integer", "description": "Maximum drafts (default 25, max 100)"},
+            },
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "outlook_send_draft",
+        "description": (
+            "Send an existing draft by its message ID (what outlook_create_draft "
+            "and outlook_list_drafts return as draft_id). Prompts the user with a "
+            "modal confirmation showing recipient and subject before sending."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "draft_id": {"type": "string", "description": "Draft message ID from outlook_list_drafts / outlook_create_draft"},
+            },
+            "required": ["account", "draft_id"],
+        },
+    },
+    {
+        "name": "outlook_trash",
+        "description": (
+            "Move one or more messages to Deleted Items (soft delete; "
+            "recoverable from Outlook's UI). Prompts the user with a modal "
+            "confirmation showing the count and IDs. Pass message_ids as a list. "
+            "Each move yields a new message id in Deleted Items, returned in "
+            "moved_ids (pass those to outlook_untrash to restore)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Message IDs to move to Deleted Items",
+                },
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "outlook_untrash",
+        "description": (
+            "Restore one or more messages from Deleted Items back to the Inbox. "
+            "Pass the IDs as they exist in Deleted Items (e.g. moved_ids from "
+            "outlook_trash)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "Message IDs (in Deleted Items) to restore to the Inbox",
+                },
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "outlook_list_labels",
+        "description": (
+            "List Outlook categories (the closest analogue to Gmail labels). "
+            "Returns id, name (displayName), and color preset for each. Use the "
+            "NAME with outlook_modify_labels to tag messages."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"account": {"type": "string"}},
+            "required": ["account"],
+        },
+    },
+    {
+        "name": "outlook_create_label",
+        "description": (
+            "Create a new Outlook category (≈ a Gmail label). Non-destructive — "
+            "no confirmation. color is a preset string preset0..preset24 (or "
+            "'none'), default preset0. Errors if a category with this name "
+            "already exists."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "name": {"type": "string", "description": "Category display name"},
+                "color": {
+                    "type": "string",
+                    "description": "Color preset: preset0..preset24, or 'none' (default preset0)",
+                },
+            },
+            "required": ["account", "name"],
+        },
+    },
+    {
+        "name": "outlook_delete_label",
+        "description": (
+            "Delete an Outlook category by ID. DESTRUCTIVE — requires "
+            "confirmation. Removes the category from the master list; messages "
+            "already carrying the NAME keep it until cleared via "
+            "outlook_modify_labels. Get label_id from outlook_list_labels."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "label_id": {"type": "string", "description": "Category ID from outlook_list_labels"},
+            },
+            "required": ["account", "label_id"],
+        },
+    },
+    {
+        "name": "outlook_modify_labels",
+        "description": (
+            "Add and/or remove categories on one or more messages. IMPORTANT: "
+            "Outlook stores categories on a message by display NAME (not id), so "
+            "add_labels / remove_labels are category NAMES (the 'name' field from "
+            "outlook_list_labels), NOT ids. Reads each message's current "
+            "categories and applies the diff."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {"type": "array", "items": {"type": "string"}},
+                "add_labels": {"type": "array", "items": {"type": "string"}, "description": "Category NAMES to add"},
+                "remove_labels": {"type": "array", "items": {"type": "string"}, "description": "Category NAMES to remove"},
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "outlook_mark_read",
+        "description": "Mark one or more messages as read (read=true) or unread (read=false).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "message_ids": {"type": "array", "items": {"type": "string"}},
+                "read": {"type": "boolean", "description": "true to mark read, false to mark unread"},
+            },
+            "required": ["account", "message_ids"],
+        },
+    },
+    {
+        "name": "outlook_list_threads",
+        "description": (
+            "List conversations (Outlook's thread equivalent) matching a query. "
+            "Messages are grouped by conversationId; the newest message in each "
+            "conversation represents it. Returns conversation_id, subject, date, "
+            "from, snippet. Omit q for the most recent conversations."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "account": {"type": "string"},
+                "q": {"type": "string", "description": "Graph $search query (optional)"},
+                "max_results": {"type": "integer", "description": "Maximum threads (default 25, max 250)"},
+            },
+            "required": ["account"],
+        },
+    },
+]
+
+# Config paths for the Outlook integration. See myagent/outlook_mixin.py for the
+# MSAL OAuth flow and Azure app-registration prerequisites.
+OUTLOOK_CONFIG_DIR = os.path.expanduser("~/.config/myagent-msmail")
+OUTLOOK_ACCOUNTS_FILE = os.path.join(OUTLOOK_CONFIG_DIR, "accounts.json")
+
+# Outlook tools whose destructive nature warrants a modal confirmation by
+# default. Exposed as checkboxes in the PS/Shell Safety dialog (per-instruction
+# bypass), sharing the same `_disabled_confirm_patterns` set as Gmail/shell.
+OUTLOOK_CONFIRM_TOOLS = [
+    "outlook_send", "outlook_reply", "outlook_send_draft",
+    "outlook_trash", "outlook_delete_label",
 ]
 
 # ── Proton Mail native tools (via Proton Bridge) ─────────────────────────────

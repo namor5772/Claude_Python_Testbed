@@ -6,8 +6,8 @@ from myagent.constants import (
     PROVIDERS, FALLBACK_MODELS, OPENAI_FALLBACK_MODELS, GEMINI_FALLBACK_MODELS,
     OLLAMA_FALLBACK_MODELS, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
     ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
-    _HAS_GOOGLE, _HAS_PROTONMAIL, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL,
-    OLLAMA_DEFAULT_MODEL,
+    _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
+    GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
 
 
@@ -62,8 +62,9 @@ class InstructionsMixin:
                 meta = "meta" if entry.get("meta") else ""
                 mcp = "mcp" if entry.get("mcp") else ""
                 google = "google" if entry.get("google") else ""
+                outlook = "outlook" if entry.get("outlook") else ""
                 convo = "convo" if entry.get("conversational") else ""
-                flags = " ".join(f for f in [desktop, browser, meta, mcp, google, convo] if f)
+                flags = " ".join(f for f in [desktop, browser, meta, mcp, google, outlook, convo] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
                 lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
             return "\n".join(lines)
@@ -83,6 +84,7 @@ class InstructionsMixin:
                 "meta": entry.get("meta", False),
                 "mcp": entry.get("mcp", False),
                 "google": entry.get("google", False),
+                "outlook": entry.get("outlook", False),
                 "conversational": entry.get("conversational", False),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
@@ -111,6 +113,7 @@ class InstructionsMixin:
                 "meta": params.get("meta", False),
                 "mcp": params.get("mcp", False),
                 "google": params.get("google", False),
+                "outlook": params.get("outlook", False),
                 "conversational": params.get("conversational", False),
                 "provider": self.provider,
                 "model": self.model,
@@ -132,7 +135,7 @@ class InstructionsMixin:
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
             updatable = ("text", "desktop", "browser", "meta", "mcp", "google",
-                         "conversational", "skill_modes", "provider", "model",
+                         "outlook", "conversational", "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity")
             if all(params.get(k) is None for k in updatable):
@@ -144,7 +147,7 @@ class InstructionsMixin:
                 )
             entry = instructions[name]
             for key in ("text", "desktop", "browser", "meta", "mcp", "google",
-                        "conversational", "provider", "model", "temperature",
+                        "outlook", "conversational", "provider", "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity"):
                 val = params.get(key)
@@ -325,6 +328,7 @@ class InstructionsMixin:
         self._editor_mcp = tk.BooleanVar(value=self.mcp_enabled.get() if _HAS_MCP else False)
         self._editor_google = tk.BooleanVar(value=self.google_enabled.get() if _HAS_GOOGLE else False)
         self._editor_proton = tk.BooleanVar(value=self.proton_enabled.get() if _HAS_PROTONMAIL else False)
+        self._editor_outlook = tk.BooleanVar(value=self.outlook_enabled.get() if _HAS_OUTLOOK else False)
         self._editor_conversational = tk.BooleanVar(value=self.conversational_enabled.get())
         _desktop_cb = tk.Checkbutton(
             checks_frame, text="Desktop", variable=self._editor_desktop,
@@ -362,6 +366,13 @@ class InstructionsMixin:
         _proton_cb.pack(side=tk.LEFT, padx=(5, 0))
         if not _HAS_PROTONMAIL:
             _proton_cb.config(state=tk.DISABLED)
+        _outlook_cb = tk.Checkbutton(
+            checks_frame, text="Outlook", variable=self._editor_outlook,
+            font=("Arial", 9),
+        )
+        _outlook_cb.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_OUTLOOK:
+            _outlook_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
             checks_frame, text="Convo", variable=self._editor_conversational,
             font=("Arial", 9),
@@ -495,6 +506,7 @@ class InstructionsMixin:
         self.mcp_enabled.set(self._editor_mcp.get())
         self.google_enabled.set(self._editor_google.get())
         self.proton_enabled.set(self._editor_proton.get())
+        self.outlook_enabled.set(self._editor_outlook.get())
         self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = name
@@ -512,6 +524,7 @@ class InstructionsMixin:
             "mcp": self.mcp_enabled.get(),
             "google": self.google_enabled.get(),
             "proton": self.proton_enabled.get(),
+            "outlook": self.outlook_enabled.get(),
             "conversational": self.conversational_enabled.get(),
             "provider": self.provider,
             "model": self.model,
@@ -610,6 +623,7 @@ class InstructionsMixin:
             self._editor_mcp.set(entry.get("mcp", False))
             self._editor_google.set(entry.get("google", False))
             self._editor_proton.set(entry.get("proton", False))
+            self._editor_outlook.set(entry.get("outlook", False))
             self._editor_conversational.set(entry.get("conversational", False))
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
@@ -630,6 +644,7 @@ class InstructionsMixin:
         self.mcp_enabled.set(self._editor_mcp.get())
         self.google_enabled.set(self._editor_google.get())
         self.proton_enabled.set(self._editor_proton.get())
+        self.outlook_enabled.set(self._editor_outlook.get())
         self.conversational_enabled.set(self._editor_conversational.get())
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()

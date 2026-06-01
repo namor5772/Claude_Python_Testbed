@@ -10,8 +10,8 @@ import tkinter as tk
 
 from myagent.constants import (
     IS_WINDOWS, TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
-    GOOGLE_TOOLS, PROTON_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
-    _HAS_PROTONMAIL,
+    GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
+    _HAS_PROTONMAIL, _HAS_OUTLOOK,
     _BASE_DIR, CHATS_DIR,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
@@ -354,6 +354,18 @@ class StreamingMixin:
                 if "account" in props:
                     props["account"]["enum"] = account_names
             tools.extend(proton_tools)
+        # Outlook / Microsoft 365 native tools (Microsoft Graph) — same runtime
+        # account-enum patching as Gmail/Proton. Empty enum when no accounts.json
+        # is present yields a clear "Unknown Outlook account" error at call time.
+        if (_HAS_OUTLOOK and getattr(self, "outlook_enabled", None)
+                and self.outlook_enabled.get()):
+            account_names = self._get_outlook_account_names()
+            outlook_tools = copy.deepcopy(OUTLOOK_TOOLS)
+            for t in outlook_tools:
+                props = t.get("input_schema", {}).get("properties", {})
+                if "account" in props:
+                    props["account"]["enum"] = account_names
+            tools.extend(outlook_tools)
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
             tools.append({
@@ -407,6 +419,15 @@ class StreamingMixin:
             if method is None:
                 return f"Unknown Proton tool: {block.name}"
             self.queue.put({"type": "tool_info", "content": f"Proton: {block.name}\n"})
+            return method(block.input or {})
+        # Outlook / Microsoft 365 native tools — same namespaced dispatch pattern.
+        if _HAS_OUTLOOK and block.name.startswith("outlook_"):
+            if not getattr(self, "outlook_enabled", None) or not self.outlook_enabled.get():
+                return f"Outlook is disabled. Enable the Outlook checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Outlook tool: {block.name}"
+            self.queue.put({"type": "tool_info", "content": f"Outlook: {block.name}\n"})
             return method(block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")

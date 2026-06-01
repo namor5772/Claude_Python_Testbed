@@ -7,7 +7,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 
 - **SelfBot.py** — Claude chatbot GUI application (see details below)
 - **MyAgent.py** — Entry point (~170 lines) for the modular autonomous AI agent GUI application supporting **Anthropic, OpenAI, Gemini, and Ollama (local inference)** providers (see details below)
-- **myagent/** — Package containing MyAgent's 18 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
+- **myagent/** — Package containing MyAgent's 19 mixin modules, constants, and helpers (see Architecture section below for full breakdown)
 - **Account_Activity_WBC.py** — Browser automation utility for extracting Westpac bank transaction data (see details below)
 - **CSVEditor.py** — Lightweight CSV editor GUI application (see details below)
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
@@ -560,7 +560,7 @@ The application is a single-file tkinter app structured around the `App` class:
 
 A fire-and-forget autonomous task runner built with tkinter that supports **Anthropic** (Claude), **OpenAI** (GPT-4.1, GPT-5, o4-mini, etc.), **Gemini**, and **Ollama** (local inference) APIs. Unlike SelfBot (which is a conversational chatbot), MyAgent is designed for hands-off task execution: you configure an **Instruction** (a task description, optionally with images), select a **Provider** and **Model**, press **START**, and the AI autonomously loops — calling tools, interpreting results, calling more tools — until the task is complete. The user is a passive observer. The window title is **"My Agent"** (with provider/model info in the title bar).
 
-**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 18 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
+**Modular architecture** — MyAgent uses a mixin-based modular design. The entry point `MyAgent.py` (~170 lines) contains only the `App` class shell and `__init__`, while all functionality is split across 19 mixin classes in the `myagent/` package. See the [Architecture](#architecture-1) section below for the full module breakdown.
 
 **External tool integration** — In addition to its ~64 built-in tools (core, desktop, browser, meta, Gmail, Proton), MyAgent supports the **Model Context Protocol (MCP)** — connect to external MCP servers like filesystem, GitHub, Slack, or any of the ~100 community servers via a single `mcp_servers.json` config file. MCP tools flow through the same agent loop as native tools and work across all four providers. See the **MCP Integration** section under Features for full details.
 
@@ -1106,6 +1106,80 @@ Same model as Gmail — the `account` parameter is on every tool. An instruction
 
 **Test instructions:** Per-mailbox smoke tests live in `agent_instructions.json` (not enumerated here since they reference personal account names + credentials, and rotate as the integration evolves). Useful test shapes to author when validating a new IMAP account: a **read path** test (`proton_list_labels` + `proton_search` INBOX + `proton_read` of a recent message + `proton_list_drafts` to confirm folder auto-discovery resolves to the server's actual drafts folder), a **draft write path** test (`proton_create_draft` + `proton_list_drafts` to verify count delta and folder routing + `proton_read` body round-trip), and where credentials permit, a **cross-account send/receive cycle** (`proton_send` from A to B + poll B's INBOX with `SUBJECT "<unique-marker>"` syntax + `proton_read` to verify body/body_html/from/subject round-trip + `proton_trash` to clean up). Each test should report PASS/FAIL per step and either restore mailbox state or auto-clean its artifacts.
 
+#### Outlook / Microsoft 365 Integration (Native Microsoft Graph Tools)
+
+Native multi-account Outlook integration via the **Microsoft Graph API**, authenticated with **MSAL** (Microsoft's OAuth library), with **sixteen tools** mirroring the Gmail surface 1:1. Implemented in `myagent/outlook_mixin.py` — no MCP server, no IMAP. Tools flow through MyAgent's `_get_tools()` and `_execute_tool()` paths exactly like Gmail's and Proton's.
+
+**Why Graph + OAuth, not IMAP/SMTP:** Microsoft disabled Basic Auth (username + app-password) for personal `outlook.com` IMAP/POP/SMTP in late 2024 — even IMAP now requires OAuth2/XOAUTH2. The modern, supported path is the Microsoft Graph REST API with MSAL OAuth, which maps almost 1:1 onto the Gmail mixin (OAuth dance, per-account token cache, REST calls) rather than the Proton/Bridge IMAP path.
+
+**Tool inventory:**
+
+| Tool | Purpose | Confirm? |
+|---|---|---|
+| `outlook_search` | Search messages (Graph `$search`; omit query for most-recent) | |
+| `outlook_read` | Fetch a message with body (text/html/both) + attachments[] metadata | |
+| `outlook_get_attachment` | Download a file attachment to a local path | |
+| `outlook_send` | Send a new email (text or HTML + optional attachments) | ✅ |
+| `outlook_reply` | Reply with proper conversation threading (Graph `createReply`) | ✅ |
+| `outlook_create_draft` | Create a draft (text or HTML + optional attachments) | |
+| `outlook_list_drafts` | List drafts | |
+| `outlook_send_draft` | Send an existing draft by message ID | ✅ |
+| `outlook_trash` | Move to Deleted Items (recoverable from Outlook's UI) | ✅ |
+| `outlook_untrash` | Restore from Deleted Items to the Inbox | |
+| `outlook_list_labels` | List categories (Outlook's label analogue) | |
+| `outlook_create_label` | Create a category (color preset0..preset24) | |
+| `outlook_delete_label` | Delete a category from the master list | ✅ |
+| `outlook_modify_labels` | Add/remove categories on messages (by **name**, not id) | |
+| `outlook_mark_read` | Toggle `isRead` | |
+| `outlook_list_threads` | List conversations (grouped by `conversationId`) | |
+
+**How Outlook differs from Gmail (mapping notes):**
+
+- **Labels → categories.** Microsoft Graph has no Gmail-style labels. The closest analogue is *categories* (colored tags managed via `/me/outlook/masterCategories`). Crucially, `outlook_modify_labels` operates on category **display names**, not IDs, because Graph stores categories on a message as a `categories: [name, ...]` array. The tool description spells this out so the model passes names from `outlook_list_labels`, not the ids.
+- **Trash → Deleted Items folder.** `outlook_trash` issues a Graph `move` to the well-known `deleteditems` folder rather than toggling a label. Each move yields a *new* message id in the destination (returned as `moved_ids`), so a round-trip Inbox → Deleted Items → Inbox produces three distinct ids for the same logical message (same conceptual gotcha as Proton's per-folder UIDs).
+- **Single body, not multipart.** Graph messages have one body (`contentType: html|text`), not Gmail's `multipart/alternative`. When `body_html` is supplied it is sent as the body and the plain `body` is ignored; Graph renders a text fallback itself.
+- **Drafts are messages.** A draft IS a message in Graph, so `outlook_send_draft` takes the draft's message id (what `outlook_create_draft`/`outlook_list_drafts` return as `draft_id`).
+
+**Content support:** identical to Gmail/Proton — `format` selection (`text`/`html`/`both`) with 50,000-char truncation flags on `outlook_read`, an always-included `attachments[]` metadata array, and optional outbound `attachments: [filepath, ...]`. **Attachment cap is ~3 MB combined** (lower than Gmail's 20 MB) because Graph's single-request JSON body limit is ~4 MB and base64 inflates raw bytes by ~33%; larger attachments need a Graph upload session, which this tool does not yet implement (the error message says so).
+
+**Architecture:**
+
+- **OAuth via MSAL `PublicClientApplication`** — one app per account, cached in `self._outlook_apps`. First call per account opens the system browser for consent (`acquire_token_interactive` with `prompt="select_account"`); afterwards the refresh token in the per-account cache (`{account}_token.json`, chmod 600) is used silently (`acquire_token_silent`). A 401 forces one token re-acquire + retry.
+- **Scopes are `Mail.ReadWrite` + `Mail.Send`** — covers read/send/draft/move/categories/mark-read but NOT permanent delete beyond Deleted Items, mirroring Gmail's deliberate "soft-delete only" boundary.
+- **Multi-account by parameter** — every tool takes an `account` string; the `account` enum on each schema is patched at runtime in `_get_tools()` from `accounts.json`. Adding an account is an `accounts.json` edit + restart.
+- **Five destructive tools gated by `_confirm_outlook_action`** — `outlook_send`, `outlook_reply`, `outlook_send_draft`, `outlook_trash`, `outlook_delete_label` pop the same Tk `askyesno` dialog as Gmail/Proton, with per-tool bypass via the Safety dialog's "Outlook destructive tools" section (same `disabled_confirm_patterns` set, persisted per-instruction). `outlook_reply` deletes its server-side draft on denial so nothing is left behind.
+- **`_HAS_OUTLOOK` availability flag** mirrors `_HAS_GOOGLE`/`_HAS_PROTONMAIL`: missing `msal` → the Outlook checkbox is disabled and every method is a no-op.
+- **All helpers prefixed `_outlook_`** — `OutlookMixin` sits after `GmailMixin`/`ProtonMailMixin` in the App's MRO, so every non-shared helper is prefixed to avoid the flat-namespace mixin shadowing documented for Proton.
+
+**Setup:**
+
+1. **Register an Azure app** (free) to get a client ID — the Microsoft equivalent of Gmail's `oauth_client.json`:
+   - Go to [Azure Portal → App registrations → New registration](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).
+   - Supported account types: **"Personal Microsoft accounts only"** (for `outlook.com`/`hotmail`/`live`) or "...and organizational" if you also use a work/school account.
+   - Under **Authentication → Add a platform → Mobile and desktop applications**, add the redirect URI `http://localhost`, and set **"Allow public client flows" = Yes**.
+   - Under **API permissions → Add → Microsoft Graph → Delegated**, add `Mail.ReadWrite` and `Mail.Send` (and `offline_access`). No admin consent needed for personal accounts.
+   - Copy the **Application (client) ID** from the app's Overview page.
+2. **Install the dependency:** `pip install msal` (requests is usually already present).
+3. **Create the config directory and drop in your client ID:**
+   ```bash
+   mkdir -p ~/.config/myagent-msmail
+   ```
+   `~/.config/myagent-msmail/msal_app.json`:
+   ```json
+   { "client_id": "<your-application-client-id>", "authority": "https://login.microsoftonline.com/consumers" }
+   ```
+   (Use `/consumers` for personal-only, or `/common` to accept both personal and work/school accounts. You can also set `OUTLOOK_CLIENT_ID` as an env var instead of the file.)
+4. **List your accounts** in `~/.config/myagent-msmail/accounts.json`:
+   ```json
+   { "accounts": { "outlook": { "email": "grobliro@outlook.com" } } }
+   ```
+   The account key (e.g. `outlook`) is what the agent passes as the `account` parameter.
+5. **First use** opens a browser to sign in and consent; the token cache is then reused silently across runs.
+
+**Per-instruction toggle:** The **Outlook** checkbox sits alongside Desktop/Browser/Meta/MCP/Google/IMAP/Convo in the instruction editor, persisted in `agent_instructions.json` as `outlook: true/false` and in `agent_state.json`.
+
+**What the tools deliberately CAN'T do** (safety boundaries): permanently delete (only soft-delete to Deleted Items, via the `Mail.ReadWrite` scope), manage settings/rules/signatures, or touch Calendar/OneDrive/Teams (out of scope; the OAuth/token plumbing is reusable for those later, same as Gmail's design).
+
 #### Conversational Mode
 
 Smaller open-weights models (Qwen3:32B, Llama 3.x, gpt-oss) don't reliably follow "ALWAYS call `user_prompt` after every response" meta-rules — they often treat task completion as their own permission to end the turn, regardless of what the instruction says. The pre-existing `user_prompt` nudge in `stream_worker` only kicks in once the model has *already* called `user_prompt` 2+ times to "establish" chatbot mode, which means it never helps when the model never starts.
@@ -1293,7 +1367,7 @@ Or double-click `LaunchMyAgent.bat` on Windows, or the `My Agent.app` desktop sh
 
 ### Architecture
 
-MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 18 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
+MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent.py` (~170 lines) inherits from 19 mixin classes in the `myagent/` package, each grouping related methods by concern. Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. The `__init__` method and entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports are needed; cross-mixin method calls resolve through Python's MRO (Method Resolution Order).
 
 #### Module Breakdown
 
@@ -1314,6 +1388,7 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 | **`myagent/mcp_mixin.py`** | 570 | MCP (Model Context Protocol) client — `_connect_mcp_servers()`, `_disconnect_mcp_servers()`, `_refresh_mcp_tools()`, `do_mcp_call()`. Runs a dedicated asyncio loop in a background thread (MCP SDK is async-only), holds all server connections inside one `AsyncExitStack`, augments subprocess PATH for macOS GUI launches, substitutes `${RANDOM_PORT}` placeholders for multi-instance support |
 | **`myagent/gmail_mixin.py`** | 906 | Native multi-account Gmail integration — 16 tools (search/read/send/reply/draft/trash/label/attachment), per-account OAuth via `InstalledAppFlow`, token cache at `~/.config/myagent-google/`, `_confirm_gmail_action()` modal Tk confirmation dialog, account enum patched at runtime in `_get_tools()`. `_HAS_GOOGLE` feature-flag gating |
 | **`myagent/protonmail_mixin.py`** | 1206 | Native multi-account Proton Mail integration via Proton Bridge over stdlib IMAP+SMTP — 16 tools mirroring the Gmail surface 1:1. Per-account credentials in `~/.config/myagent-protonmail/accounts.json`, optional `ca_cert_path` for verified TLS (Bridge cert export), `_confirm_proton_action()` modal Tk confirmation dialog, account enum patched at runtime in `_get_tools()`. `_uid_search` helper switches to `CHARSET UTF-8` for non-ASCII queries; `do_proton_modify_labels` auto-retries Bridge's label-removal eventual-consistency quirk and surfaces `label_removal_retries: N` in the response. Four helpers (`_format_proton_summary`/`_extract_proton_bodies`/`_extract_proton_attachments`/`_attach_proton_files`) explicitly prefixed to avoid MRO shadowing by `GmailMixin`'s identically-named statics. `_HAS_PROTONMAIL` feature-flag gating |
+| **`myagent/outlook_mixin.py`** | 760 | Native multi-account Outlook / Microsoft 365 integration via the Microsoft Graph API — 16 tools mirroring the Gmail surface 1:1. OAuth through MSAL (`PublicClientApplication`, interactive browser flow + silent refresh), per-account token cache at `~/.config/myagent-msmail/{account}_token.json`, Azure client ID in `msal_app.json`, account enum patched at runtime in `_get_tools()`. Gmail "labels" map to Outlook "categories" (by display name), trash maps to the Deleted Items folder. `_confirm_outlook_action()` modal Tk confirmation; all helpers prefixed `_outlook_` to avoid MRO shadowing. `_HAS_OUTLOOK` feature-flag gating |
 | **`myagent/document_mixin.py`** | 280 | Local document reader — single `read_document(path, max_chars?, pages?)` tool that extracts text from PDF (via `pypdf`), DOCX (via `python-docx`), HTML (via `extract_text_from_html`), and most plain-text formats (`.txt`/`.md`/`.json`/`.yaml`/`.csv`/`.log`/source code). Provider-agnostic: pairs with `gmail_get_attachment` / `proton_get_attachment` / `fetch_webpage` / any other path-producing tool. PDF metadata extraction (title/author/dates/producer), DOCX metadata + paragraph/table counts, encrypted-PDF detection with empty-password fallback, per-page error isolation. `_HAS_PYPDF` / `_HAS_DOCX` feature-flag gating |
 | **`myagent/desktop_mixin.py`** | 730 | All `do_*` desktop methods (screenshot, mouse, keyboard, clipboard, OCR, window management), `KNOWN_APPS` |
 | **`myagent/browser_mixin.py`** | 272 | `_ensure_browser()`, `_cleanup_browser()`, all `do_browser_*` methods (Playwright CDP) |
@@ -1326,7 +1401,7 @@ MyAgent uses a **mixin-based modular architecture**. The `App` class in `MyAgent
 #### How the Mixin Pattern Works
 
 ```python
-# MyAgent.py — the App class inherits from all 18 mixins (Proton added in latest)
+# MyAgent.py — the App class inherits from all 19 mixins (Outlook added in latest)
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
           OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin,

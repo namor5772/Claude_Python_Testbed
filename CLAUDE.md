@@ -52,6 +52,12 @@ There are no tests, linter, or build steps — these are testbed apps.
   - `anthropic_mixin.py` — _stream_anthropic_call
   - `openai_mixin.py` — OpenAI helpers, _stream_responses, _stream_responses_call
   - `gemini_mixin.py` — Gemini helpers, _tools_to_gemini, _messages_to_gemini, _stream_gemini_call
+  - `ollama_mixin.py` — Ollama local-inference provider, per-model capability auto-detection
+  - `mcp_mixin.py` — Model Context Protocol client (async stdio servers from `mcp_servers.json`)
+  - `gmail_mixin.py` — Native multi-account Gmail tools (Google API client, per-account OAuth)
+  - `protonmail_mixin.py` — Native multi-account IMAP/SMTP mail tools (Proton Bridge + any IMAP account)
+  - `outlook_mixin.py` — Native multi-account Outlook / Microsoft 365 tools (Microsoft Graph + MSAL OAuth)
+  - `document_mixin.py` — Local document text extraction (`read_document`: PDF/DOCX/HTML/text)
   - `desktop_mixin.py` — Desktop automation tools (pyautogui): screenshot, mouse, keyboard, clipboard, OCR
   - `browser_mixin.py` — Browser automation tools (Playwright): open, navigate, click, fill, screenshot
   - `safety_mixin.py` — Command safety, confirmation dialog, user_prompt, run_powershell, agent control
@@ -92,5 +98,5 @@ There are no tests, linter, or build steps — these are testbed apps.
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
 - SelfBot uses single-file architecture: all changes go in `SelfBot.py`
-- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 18 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 19 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
 - Bank extractor changes go in `Account_Activity_WBC.py`

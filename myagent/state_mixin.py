@@ -303,6 +303,7 @@ class StateMixin:
                 "mcp": self.mcp_enabled.get(),
                 "google": self.google_enabled.get(),
                 "proton": self.proton_enabled.get(),
+                "outlook": self.outlook_enabled.get(),
                 "conversational": self.conversational_enabled.get(),
                 "provider": self.provider,
                 "model": self.model,
@@ -454,6 +455,7 @@ class StateMixin:
         self.mcp_enabled.set(entry.get("mcp", False))
         self.google_enabled.set(entry.get("google", False))
         self.proton_enabled.set(entry.get("proton", False))
+        self.outlook_enabled.set(entry.get("outlook", False))
         self.conversational_enabled.set(entry.get("conversational", False))
         model_restored = "model" in entry
         if model_restored:

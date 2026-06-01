@@ -3,8 +3,9 @@ from tkinter import messagebox
 
 from myagent.constants import (
     IS_WINDOWS, _SUBPROCESS_NOWND, COMMAND_BLOCKED, COMMAND_CONFIRM,
-    GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, MONO_FONT, DEFAULT_INSTRUCTION,
-    _HAS_GOOGLE, _HAS_PROTONMAIL,
+    GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
+    MONO_FONT, DEFAULT_INSTRUCTION,
+    _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
 )
 from myagent.helpers import extract_text_from_html
 
@@ -186,6 +187,21 @@ class SafetyMixin:
                 display_label = tool_name.replace("proton_", "IMAP_", 1)
                 cb = tk.Checkbutton(
                     text_widget, text=display_label, variable=var, font=(MONO_FONT, 9),
+                    anchor="w", bg="white", activebackground="white",
+                    command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
+                )
+                text_widget.window_create("end", window=cb, stretch=True)
+                text_widget.insert("end", "\n")
+
+        # Section 4: Outlook / Microsoft 365 destructive tools (Microsoft Graph)
+        # — same checkbox + per-instruction bypass pattern, checked in
+        # _confirm_outlook_action. Only shown when msal is installed.
+        if _HAS_OUTLOOK:
+            text_widget.insert("end", "\n── Outlook destructive tools ──\n")
+            for tool_name in OUTLOOK_CONFIRM_TOOLS:
+                var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
+                cb = tk.Checkbutton(
+                    text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
                     anchor="w", bg="white", activebackground="white",
                     command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
                 )
