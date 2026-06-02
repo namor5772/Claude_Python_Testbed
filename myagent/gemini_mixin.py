@@ -87,14 +87,29 @@ class GeminiMixin:
            so the constraint survives the round trip); non-string enums are
            removed entirely to preserve the original type, because converting
            e.g. integer params to string confuses Gemini's coordinate reasoning
-           in desktop tools.
+           in desktop tools. Blank ("" / whitespace-only) values are dropped —
+           Gemini rejects them with "enum[i]: cannot be empty" — and an enum
+           left empty afterwards is removed so the param degrades to a plain
+           string instead of an impossible zero-choice constraint.
         """
         if isinstance(schema, dict):
             for k in self._GEMINI_SCHEMA_DROPS:
                 schema.pop(k, None)
             if "enum" in schema and isinstance(schema["enum"], list):
                 if schema.get("type") == "string":
-                    schema["enum"] = [str(v) for v in schema["enum"]]
+                    # Gemini's Schema validator rejects blank enum values
+                    # ("enum[i]: cannot be empty") AND empty enum lists.
+                    # Stringify, then drop blank/whitespace-only entries; if
+                    # nothing survives, remove the enum constraint entirely so
+                    # the param degrades to a plain string. Two cases covered:
+                    # proton_create_label's `parent` carries a legit "" (the
+                    # top-level option, which Anthropic/OpenAI accept), and an
+                    # unconfigured account enum patches in at runtime as [].
+                    cleaned = [str(v) for v in schema["enum"] if str(v).strip()]
+                    if cleaned:
+                        schema["enum"] = cleaned
+                    else:
+                        schema.pop("enum")
                 else:
                     schema.pop("enum")
             for v in schema.values():
