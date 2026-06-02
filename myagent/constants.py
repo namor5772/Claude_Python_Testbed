@@ -2265,6 +2265,14 @@ OPENAI_PRICING = {
 # Each entry: (input_price, output_price)
 # Note: Gemini has a free tier (under rate limits) — these are paid-tier prices.
 GEMINI_PRICING = {
+    # Floating "-latest" aliases that models.list() returns. The version sits
+    # AFTER the tier word (gemini-pro-latest, not gemini-3.1-pro), so none of the
+    # version-pinned prefixes below match them — without explicit entries they
+    # get no cost line. Priced at the tier each alias currently resolves to;
+    # revisit when a new Gemini generation changes the underlying pricing.
+    "gemini-pro-latest":        (2.00, 12.00),  # -> Gemini 3.x Pro tier
+    "gemini-flash-latest":      (0.50, 3.00),   # -> Gemini 3 Flash tier
+    "gemini-flash-lite-latest": (0.25, 1.50),   # -> Gemini 3.1 Flash-Lite tier
     # Gemini 3.1 family  (input, output per million tokens)
     "gemini-3.1-flash-lite": (0.25, 1.50),
     "gemini-3.1-pro":      (2.00, 12.00),

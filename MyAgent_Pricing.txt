@@ -152,6 +152,18 @@
   Gemini has a free tier (under rate limits). Prices below are paid tier.
   Thinking tokens are included in output token count.
 
+  Floating "-latest" Aliases
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix               Input    Output   Resolves to
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-pro-latest          $2.00    $12.00   Gemini 3.x Pro tier
+  gemini-flash-latest        $0.50    $3.00    Gemini 3 Flash tier
+  gemini-flash-lite-latest   $0.25    $1.50    Gemini 3.1 Flash-Lite tier
+
+  (These aliases float to whatever Google currently serves; the version sits
+   after the tier word, so the version-pinned prefixes below don't match them.
+   Revisit when a new Gemini generation changes the underlying pricing.)
+
   Gemini 3.1 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
@@ -202,5 +214,5 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: April 12, 2026
+  Last updated: June 3, 2026
 ================================================================================
