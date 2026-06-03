@@ -245,8 +245,10 @@ class UIMixin:
                 self._thinking_mode_label.config(text="Thinking")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                # Populate values: Max only for Opus 4.6 / 4.7
-                if self.model in ("claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"):
+                # Populate values: "Max" effort is an Opus-only feature (Opus 4.6+).
+                # Version-parsed (see _anthropic_supports_max_effort) so future Opus
+                # releases keep "Max" without editing a hardcoded model list.
+                if self._anthropic_supports_max_effort():
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
                 else:
                     self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
@@ -346,7 +348,10 @@ class UIMixin:
             # boolean-only; all effort levels map to think=True until upstream
             # exposes a per-request budget.
             return "manual" if any(mid.startswith(p) for p in OLLAMA_THINKING_PREFIXES) else None
-        if mid in ADAPTIVE_THINKING_MODELS:
+        # Exact-match set catches the undated aliases; the version-parsed helper
+        # backstops dated snapshots (claude-sonnet-4-6-20260101) and future
+        # Opus/Sonnet 4.6+ minors the set doesn't list yet.
+        if mid in ADAPTIVE_THINKING_MODELS or self._is_anthropic_adaptive_model(mid):
             return "adaptive"
         for prefix in MANUAL_THINKING_PREFIXES:
             if mid.startswith(prefix):
@@ -368,6 +373,46 @@ class UIMixin:
                 return (int(parts[0]), int(parts[1])) >= (4, 7)
             except (ValueError, IndexError):
                 return False
+        return False
+
+    def _anthropic_supports_max_effort(self, model_id=None):
+        """True for Anthropic models that expose the 'max' thinking effort — Opus
+        4.6 and later. Parses claude-opus-<major>-<minor> >= (4, 6) so future Opus
+        releases keep "Max" without editing a hardcoded list (mirrors
+        _anthropic_rejects_temperature). 'max' is Opus-only: adaptive Sonnet (4.6+)
+        deliberately caps at High, and the API 400s on effort='max' for non-Opus."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        if mid.startswith("claude-opus-"):
+            parts = mid[len("claude-opus-"):].split("-")
+            try:
+                return (int(parts[0]), int(parts[1])) >= (4, 6)
+            except (ValueError, IndexError):
+                return False
+        return False
+
+    def _is_anthropic_adaptive_model(self, model_id=None):
+        """True for Anthropic models that use ADAPTIVE thinking (the {type:adaptive}
+        + output_config effort API) rather than a manual token budget — Opus 4.6+
+        and Sonnet 4.6+. Parses claude-(opus|sonnet)-<major>-<minor> >= (4, 6) so
+        DATED snapshots (e.g. claude-sonnet-4-6-20260101) and future minors are
+        detected without editing the exact-match ADAPTIVE_THINKING_MODELS set —
+        the API returns some Claude IDs dated and some undated (verified live), so
+        exact-match alone silently drops the thinking UI for a dated adaptive
+        model. Mirrors the version parsing in _anthropic_supports_max_effort /
+        _anthropic_rejects_temperature. Models < 4.6 (Opus/Sonnet 4.5) fall
+        through to the MANUAL prefix check, exactly as before."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        for family in ("claude-opus-", "claude-sonnet-"):
+            if mid.startswith(family):
+                parts = mid[len(family):].split("-")
+                try:
+                    return (int(parts[0]), int(parts[1])) >= (4, 6)
+                except (ValueError, IndexError):
+                    return False
         return False
 
     def _is_gemini_thinking_model(self, model_id=None):

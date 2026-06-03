@@ -298,7 +298,7 @@ META_TOOLS = [
                 },
                 "provider": {
                     "type": "string",
-                    "enum": ["Anthropic", "OpenAI", "Gemini"],
+                    "enum": ["Anthropic", "OpenAI", "Gemini", "Ollama"],
                     "description": "API provider (optional for update; create inherits current)",
                 },
                 "model": {
@@ -324,8 +324,13 @@ META_TOOLS = [
                 },
                 "thinking_mode": {
                     "type": "string",
-                    "enum": ["off", "adaptive_low", "adaptive_medium", "adaptive_high", "adaptive_max"],
-                    "description": "Anthropic adaptive thinking mode (optional for update; create inherits current)",
+                    "enum": ["off", "none", "adaptive", "low", "medium", "high", "max", "xhigh"],
+                    "description": (
+                        "Thinking/reasoning mode (optional for update; create inherits current). "
+                        "Anthropic adaptive: off/adaptive/low/medium/high/max ('max' Opus-only). "
+                        "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh. Lower-cased to "
+                        "match the stored value."
+                    ),
                 },
                 "skill_modes": {
                     "type": "object",
@@ -1018,7 +1023,12 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-sonnet-20240229": 4096,
 }
 ADAPTIVE_THINKING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
-MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
+# Budget-based ("manual") extended thinking. Claude 3.5 Sonnet is intentionally
+# excluded: extended thinking arrived with Claude 3.7 / Claude 4, so sending a
+# thinking block to a 3.5 model returns HTTP 400. (Opus 4 / 4.1 / Sonnet 4 also
+# support extended thinking but are currently omitted — add their prefixes here
+# to expose the manual thinking UI for them.)
+MANUAL_THINKING_PREFIXES = ("claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
 ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
@@ -1031,7 +1041,16 @@ OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
                              "o1", "o3", "o4")
 GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
-GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",)
+# Models that support thinking via ThinkingConfig (except any with "lite" in the
+# name — Flash-Lite has no thinking; the "lite" check in _is_gemini_thinking_model
+# drops those). The version-pinned prefixes cover dated/preview IDs like
+# gemini-3-pro-preview and gemini-3.5-flash. The floating "-latest" aliases that
+# models.list() returns (gemini-pro-latest → 3.x Pro, gemini-flash-latest → 3
+# Flash) carry the version AFTER the tier word, so no version-pinned prefix
+# matches them — list them explicitly so their thinking UI isn't hidden.
+# (gemini-flash-lite-latest is excluded by the "lite" check, as intended.)
+GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",
+                            "gemini-pro-latest", "gemini-flash-latest")
 # Ollama (local inference) — no API key needed; availability probed at startup.
 OLLAMA_FALLBACK_MODELS = ["qwen3:32b-q4_K_M"]
 OLLAMA_DEFAULT_MODEL = OLLAMA_FALLBACK_MODELS[0]

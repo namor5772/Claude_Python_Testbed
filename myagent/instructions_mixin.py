@@ -571,6 +571,7 @@ class InstructionsMixin:
         self._editor_mcp.set(False)
         self._editor_google.set(False)
         self._editor_proton.set(False)
+        self._editor_outlook.set(False)
         self._editor_conversational.set(False)
         self._disabled_confirm_patterns = set()
         self._update_ps_safety_button()

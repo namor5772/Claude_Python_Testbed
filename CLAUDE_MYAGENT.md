@@ -11,7 +11,7 @@
 **Temperature/thinking UI visibility** — Model parameter controls are dynamically shown/hidden (not just disabled) based on the selected model's capabilities. `_forget_all_model_widgets()` resets all widgets at the start of `_on_model_selected()` to guarantee correct pack order when switching model types. Rules:
 - Models without thinking support hide the thinking checkbox + strength combo, showing only temperature (or just verbosity for `gpt-5.x-chat-*` Instant models, which reject temperature).
 - OpenAI reasoning models hide temperature entirely.
-- Anthropic adaptive models replace checkbox+strength with a **Thinking mode combobox** (Off/Adaptive/Low/Medium/High/Max — Max only on Opus 4.6) and hide temperature when thinking is active.
+- Anthropic adaptive models replace checkbox+strength with a **Thinking mode combobox** (Off/Adaptive/Low/Medium/High/Max — Max only on Opus 4.6+) and hide temperature when thinking is active.
 - Gemini shows temperature alongside thinking controls (the API accepts both).
 - GPT-5.1+ use a **Reasoning combobox** (None/Low/Medium/High; Xhigh for gpt-5.2+/codex-max, but mini/nano cap at High). GPT-5.4+ show temperature when reasoning is "None"; older gpt-5 keep it hidden. GPT-5.0 base adds "minimal".
 - All gpt-5 (incl. `-chat`) show a **Verbosity combobox** (Low/Medium/High → `text.verbosity`).
