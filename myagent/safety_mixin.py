@@ -4,7 +4,7 @@ from tkinter import messagebox
 from myagent.constants import (
     IS_WINDOWS, _SUBPROCESS_NOWND, COMMAND_BLOCKED, COMMAND_CONFIRM,
     GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-    MONO_FONT, DEFAULT_INSTRUCTION,
+    MONO_FONT,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
 )
 from myagent.helpers import extract_text_from_html

@@ -1,6 +1,6 @@
 import os, re, json, time, subprocess, ctypes, tkinter as tk
 from tkinter import messagebox
-from myagent.constants import IS_WINDOWS, _BASE_DIR, AGENT_LOCK_PREFIX, AGENT_STATE_FILE, DEFAULT_GEOMETRY, DEFAULT_INSTRUCTION, INSTRUCTIONS_FILE
+from myagent.constants import IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY
 
 
 class StateMixin:
@@ -313,7 +313,10 @@ class StateMixin:
                 "thinking_budget": self.thinking_budget,
                 "thinking_mode": self.thinking_mode,
                 "text_verbosity": self.text_verbosity,
-                "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
+                # NOTE: skill modes are intentionally NOT snapshotted here. skills.json
+                # is the sticky source of truth for skill modes (loaded by _load_skills);
+                # duplicating them in this snapshot caused launch to overwrite the user's
+                # global modes via _restore_skill_modes. See SkillsMixin._restore_skill_modes.
                 "disabled_confirm_patterns": sorted(getattr(self, "_disabled_confirm_patterns", [])),
             },
         }

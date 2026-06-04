@@ -1,7 +1,7 @@
 import os, sys, json, subprocess, tkinter as tk
 from tkinter import messagebox
 
-from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, DEFAULT_SYSTEM_PROMPT, DEFAULT_GEOMETRY, _SUBPROCESS_NOWND, MONO_FONT)
+from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT)
 
 
 class SkillsMixin:
@@ -142,7 +142,12 @@ class SkillsMixin:
             mode = saved.get(sname, "disabled")  # new skills default to disabled
             if mode in ("disabled", "enabled", "on_demand"):
                 self.skills[sname]["mode"] = mode
-        self._save_skills()
+        # Session-only: applying an instruction's saved skill modes updates the
+        # live session (self.skills drives _build_system_prompt) but is NOT
+        # persisted to skills.json. skills.json is the sticky global store, changed
+        # only by explicit Skills Manager / manage_skills edits — otherwise loading
+        # an instruction (or restoring the last applied state on launch) would
+        # silently overwrite the user's global skill modes.
         self._update_skills_button()
         # Refresh Skills Manager listbox if open
         if (self.skills_editor_window and self.skills_editor_window.winfo_exists()

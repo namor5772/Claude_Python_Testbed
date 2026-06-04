@@ -1,7 +1,5 @@
 import os, io, time, queue, tkinter as tk
 
-from myagent.constants import MONO_FONT, CHATS_DIR
-
 try:
     from PIL import Image, ImageTk
 except ImportError:

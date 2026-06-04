@@ -2,7 +2,7 @@ import time
 
 import anthropic
 
-from myagent.constants import MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS, ADAPTIVE_THINKING_MODELS
+from myagent.constants import MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS
 
 
 class AnthropicMixin:

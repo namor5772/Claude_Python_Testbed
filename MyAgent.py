@@ -3,7 +3,6 @@ IS_WINDOWS = sys.platform == "win32"
 
 import ctypes
 if IS_WINDOWS:
-    import ctypes.wintypes
     # DPI awareness for desktop automation. Must run before any window creation.
     # Prefer PER_MONITOR_AWARE_V2 (DPI_AWARENESS_CONTEXT = -4) over v1:
     # v1 PROCESS_PER_MONITOR_DPI_AWARE is broken for multi-monitor setups with
@@ -33,7 +32,6 @@ from google import genai
 import httpx
 import queue
 import os
-import time
 import urllib.request
 
 from myagent.constants import (

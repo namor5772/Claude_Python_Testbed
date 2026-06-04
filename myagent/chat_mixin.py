@@ -1,7 +1,7 @@
-import os, re, json, io, base64, copy, tkinter as tk
+import os, re, json, io, base64, tkinter as tk
 from tkinter import filedialog, messagebox
 
-from myagent.constants import CHATS_DIR, _BASE_DIR
+from myagent.constants import CHATS_DIR
 
 try:
     from PIL import Image

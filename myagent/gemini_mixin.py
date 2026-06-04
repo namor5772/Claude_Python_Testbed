@@ -6,13 +6,7 @@ import time
 
 from google.genai import types as genai_types
 
-from myagent.constants import (
-    IS_WINDOWS,
-    GEMINI_FALLBACK_MODELS,
-    GEMINI_DEFAULT_MODEL,
-    GEMINI_THINKING_PREFIXES,
-    DESKTOP_TOOLS,
-)
+from myagent.constants import GEMINI_FALLBACK_MODELS
 
 
 class GeminiMixin:
