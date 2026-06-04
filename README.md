@@ -624,6 +624,8 @@ for d in ~/Library/LaunchAgents /Library/LaunchAgents /Library/LaunchDaemons; do
 done
 ```
 
+**Manage schedules conversationally — a "Schedule Manager" instruction.** Instead of hand-editing plists, save a dedicated instruction that enables the OS-appropriate skill (`Schedule Agent MacOS` or `Schedule Agent Win`) *in its own `skill_modes`*, turns every tool toggle off, and runs **conversationally** — leaving it just `run_command` + `user_prompt`. On launch it lists the installed `com.myagent.*` jobs read-only and asks what to do; you reply in plain English ("delete the 7am summary job", "move it to 08:30") and it generates, lints with `plutil -lint`, loads/unloads, and re-verifies — popping MyAgent's confirmation dialog for each `launchctl`/`rm` (keep the instruction's `disabled_confirm_patterns` **empty** so every destructive step asks first). Enabling the skill per-instruction leaves the global `skills.json` mode and every other instruction untouched. Run it in the **GUI only**, never `--headless`: it is conversational, so `user_prompt` would block forever with no window to answer it.
+
 **Operational gotchas** (learned debugging a real job):
 - **`launchctl` ≠ the schedule.** `launchctl list <label>` shows *what* a job runs and its exit status; the *when* (`StartCalendarInterval`) lives only in the plist — read it with `plutil -p`.
 - **Missed runs fire on wake, not catch-up.** With `RunAtLoad=false`, if the Mac is asleep/off at the scheduled time launchd runs the job **once** at the next wake (a 07:00 job firing at 11:17 after the lid opens is expected) — it does not replay missed occurrences.
