@@ -141,6 +141,23 @@ class AnthropicMixin:
                     })
                     full_text = ""
                     continue
+                # Input exceeds the model's context window ("prompt is too long:
+                # N tokens > M maximum"). Resending the same history can't fix it,
+                # so end the turn gracefully with an actionable message instead of
+                # letting the raw 400 crash the agentic loop. 200K-window models
+                # (Haiku 4.5, Sonnet 4.5) can't run very long tasks; a 1M-context
+                # model (Sonnet 4.6, Opus 4.6/4.7/4.8) is the only real fix.
+                if "prompt is too long" in msg or ("too long" in msg and "maximum" in msg):
+                    detail = getattr(e, "message", "") or str(e)
+                    self.queue.put({"type": "error", "content":
+                        f"⚠ Context window exceeded on {self.model}:\n  {detail}\n"
+                        "  The conversation is now larger than this model can hold, so resending "
+                        "it cannot succeed. 200K-window models (Haiku 4.5, Sonnet 4.5) cannot run "
+                        "very long tasks — switch this instruction to a 1M-context model "
+                        "(claude-sonnet-4-6 or claude-opus-4-8/4.7/4.6), or split the task into "
+                        "smaller parts.\n"})
+                    return ("end_turn", [{"type": "text", "text": full_text}],
+                            full_text, had_thinking, label_emitted, None)
                 raise
             except anthropic.APIStatusError as e:
                 if e.status_code == 529 and attempt < max_retries - 1:
