@@ -233,7 +233,7 @@ class SkillsMixin:
 
         tk.Label(top, text="Skill Name", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
-        name_entry.pack(side=tk.LEFT, padx=(0, 5))
+        name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
         def save_skill():
             name = name_entry.get().strip()
@@ -269,16 +269,19 @@ class SkillsMixin:
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
 
-        tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.LEFT, padx=(5, 2))
-        tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.LEFT, padx=(2, 2))
-        tk.Button(top, text="NEW", command=new_skill, width=5).pack(side=tk.LEFT, padx=(2, 0))
+        # Packed side=RIGHT in reverse order so the visual left-to-right order
+        # stays SAVE, DELETE, NEW while the buttons hug the right edge. The
+        # name_entry above (fill=X, expand) absorbs all the space in between.
+        tk.Button(top, text="NEW", command=new_skill, width=5).pack(side=tk.RIGHT, padx=2)
+        tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.RIGHT, padx=2)
+        tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.RIGHT, padx=2)
 
         left = tk.Frame(win)
         left.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
         left.grid_rowconfigure(0, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
-        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=20)
+        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
         skill_listbox.grid(row=0, column=0, sticky="nsew")
         list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
         list_scrollbar.grid(row=0, column=1, sticky="ns")
@@ -361,5 +364,5 @@ class SkillsMixin:
         if saved_geo:
             win.geometry(self._sanitize_geometry(saved_geo, min_w=400, min_h=300))
         else:
-            win.geometry("750x500")
+            win.geometry("900x500")
         win.deiconify()
