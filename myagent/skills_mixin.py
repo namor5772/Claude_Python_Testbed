@@ -278,17 +278,18 @@ class SkillsMixin:
 
         left = tk.Frame(win)
         left.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
-        left.grid_rowconfigure(0, weight=1)
+        left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
-        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
-        skill_listbox.grid(row=0, column=0, sticky="nsew")
-        list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
-        list_scrollbar.grid(row=0, column=1, sticky="ns")
-        skill_listbox.config(yscrollcommand=list_scrollbar.set)
-
+        # Cycle Mode sits ABOVE the list, sized to its label and left-aligned
         toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
-        toggle_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        toggle_btn.grid(row=0, column=0, sticky="w", pady=(0, 5))
+
+        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
+        skill_listbox.grid(row=1, column=0, sticky="nsew")
+        list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
+        list_scrollbar.grid(row=1, column=1, sticky="ns")
+        skill_listbox.config(yscrollcommand=list_scrollbar.set)
 
         def refresh_list():
             skill_listbox.delete(0, tk.END)
@@ -338,7 +339,13 @@ class SkillsMixin:
                 skill_listbox.see(idx)
                 self._update_skills_button()
 
+        def _cycle_on_space(event):
+            # Space bar mirrors the Cycle Mode button on the selected skill.
+            toggle_skill()
+            return "break"  # suppress Tk's default <space> select-active binding
+
         skill_listbox.bind("<<ListboxSelect>>", on_select)
+        skill_listbox.bind("<space>", _cycle_on_space)
         toggle_btn.config(command=toggle_skill)
 
         right = tk.Frame(win)
