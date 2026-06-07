@@ -1,5 +1,4 @@
 import tkinter as tk
-from tkinter import ttk
 
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,

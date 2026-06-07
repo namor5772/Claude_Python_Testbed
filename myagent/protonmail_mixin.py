@@ -67,7 +67,6 @@ Architecture notes:
   startup-time check (Bridge can be restarted while MyAgent is running).
 """
 
-import base64
 import email
 import imaplib
 import json
@@ -76,7 +75,6 @@ import os
 import re
 import smtplib
 import ssl
-import tkinter as tk
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 from tkinter import messagebox

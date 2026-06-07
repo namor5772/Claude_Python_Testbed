@@ -1,4 +1,4 @@
-import os, re, subprocess, threading, time, tkinter as tk
+import re, subprocess, threading, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (

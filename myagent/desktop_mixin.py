@@ -662,7 +662,6 @@ class DesktopMixin:
                 import objc, Quartz
                 Vision = objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
                                          module_globals={})
-                from Quartz import CGImageDestinationCreateWithData, CGImageDestinationAddImage
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 ns_data = Quartz.NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))

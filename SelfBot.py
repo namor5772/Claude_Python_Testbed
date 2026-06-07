@@ -1349,10 +1349,8 @@ class App:
     def _load_last_state(self):
         """Restore the last-used system prompt and window geometry on startup."""
         # Instance 2: bootstrap from instance 1's state if own file doesn't exist
-        bootstrap_swap = False
         if self._is_second_instance and not os.path.exists(self._state_file):
             load_file = APP_STATE_FILE
-            bootstrap_swap = True
         else:
             load_file = self._state_file
         if not os.path.exists(load_file):
@@ -2892,7 +2890,6 @@ class App:
                 import objc, Quartz
                 Vision = objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
                                          module_globals={})
-                from Quartz import CGImageDestinationCreateWithData, CGImageDestinationAddImage
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 ns_data = Quartz.NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))
@@ -4013,7 +4010,7 @@ class App:
                                         if fid:
                                             self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
                         break  # success — exit retry loop
-                    except anthropic.RateLimitError as e:
+                    except anthropic.RateLimitError:
                         if attempt < max_retries - 1:
                             wait = min(2 ** attempt * 5, 60)  # 5s, 10s, 20s, 40s, 60s, 60s… (capped)
                             self.queue.put({

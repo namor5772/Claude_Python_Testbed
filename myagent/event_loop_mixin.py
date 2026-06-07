@@ -171,8 +171,6 @@ class EventLoopMixin:
                     out = msg["output_tokens"]
                     cw = msg["cache_write_tokens"]
                     cr = msg["cache_read_tokens"]
-                    t_inp = msg["total_input_tokens"]
-                    t_out = msg["total_output_tokens"]
                     # Format: this call tokens + cost, then running total
                     parts = [f"in:{inp:,}  out:{out:,}"]
                     if cw:

@@ -34,7 +34,6 @@ import json
 import mimetypes
 import os
 import re
-import tkinter as tk
 from email.message import EmailMessage
 from tkinter import messagebox
 
@@ -52,7 +51,6 @@ try:
     from google.auth.transport.requests import Request
     from google_auth_oauthlib.flow import InstalledAppFlow
     from googleapiclient.discovery import build
-    from googleapiclient.errors import HttpError
 except Exception:
     _HAS_GOOGLE = False
 

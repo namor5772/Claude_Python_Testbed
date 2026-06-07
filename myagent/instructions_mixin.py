@@ -1,5 +1,5 @@
-import os, json, base64, tkinter as tk
-from tkinter import messagebox, filedialog, ttk
+import os, json, tkinter as tk
+from tkinter import messagebox, ttk
 
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,

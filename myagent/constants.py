@@ -15,7 +15,7 @@ try:
         except Exception:
             sys.modules["mouseinfo"] = type(sys)("mouseinfo")
     import pyautogui
-    from PIL import Image, ImageGrab
+    from PIL import Image, ImageGrab  # noqa: F401 (capability probe — a missing Pillow must set _HAS_DESKTOP = False)
     # Desktop automation safety settings
     pyautogui.FAILSAFE = True   # move mouse to (0,0) to abort
     pyautogui.PAUSE = 0.1       # small delay between actions

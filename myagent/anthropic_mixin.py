@@ -115,7 +115,7 @@ class AnthropicMixin:
                                 if fid:
                                     self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
                 break  # success
-            except anthropic.RateLimitError as e:
+            except anthropic.RateLimitError:
                 if attempt < max_retries - 1:
                     wait = min(2 ** attempt * 5, 60)
                     self.queue.put({
