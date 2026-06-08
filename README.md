@@ -13,6 +13,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **[WHATIS_AI.md](WHATIS_AI.md)** — An essay exploring why AI tool use works so well, told through the story of a man trapped in a cell with only a terminal — a metaphor for how LLMs parse API messages and use tools to interact with the outside world
 - **requirements.txt** — Python dependencies for pip install
 - **MyAgent_Pricing.txt** — Reference document listing all API model pricing used by MyAgent's cost tracking feature (Anthropic, OpenAI, Gemini — Ollama inference is free and emits no cost line)
+- **APICostLog.txt** — Append-only log of per-run API costs, written to the repo root after every MyAgent run (one `{timestamp};{provider};{model};{cost}` line per run, GUI and headless alike). **Gitignored** — per-machine runtime output (see the **API Cost Tracking** section under MyAgent)
 - **Qwen25VL-tools.Modelfile**, **Llama32Vision-tools.Modelfile**, **Gemma3-tools.Modelfile** — Custom Ollama Modelfiles that graft Qwen3's tool-calling template onto three vision models, unlocking structured `tool_calls` that Ollama's default Modelfiles don't expose. See the **Ollama (Local Inference)** section for build instructions and the rationale
 - **CLAUDE.md** — Top-level project instructions and conventions for Claude Code sessions. Imports the three per-app sub-files below via `@CLAUDE_SELFBOT.md` / `@CLAUDE_MYAGENT.md` / `@CLAUDE_ACCOUNT.md` so they load automatically without bloating the root file
 - **CLAUDE_SELFBOT.md** — Architecture notes for SelfBot.py (threading model, dual geometry, skills, DPI handling, auto-save)
@@ -1286,6 +1287,19 @@ MyAgent tracks and displays **real-time API costs** for all three cloud provider
 - Cost data is **not** stored in the `.json` chat file (it's display-only), but it **is** captured in the `.txt` export since that file is a verbatim copy of the output window
 - If the API stream is interrupted (STOP button or incomplete stream), no cost line appears for that call
 - Cost precision adapts: 4 decimal places when total is under $0.01, 2 decimal places above
+
+**Persistent cost log (`APICostLog.txt`)** — Beyond the live display, MyAgent appends the **final cumulative cost of each run** to `APICostLog.txt` in the project root. The write happens once, when the agentic loop ends (`_log_api_cost` in `streaming_mixin.py`), so it fires in **both GUI and headless (`--headless`) runs** — making it the durable cost record for unattended/scheduled jobs that have no output window to read. One line per run:
+
+```
+2026-06-08 11:14:12;Anthropic;claude-sonnet-4-6;0.5880
+2026-06-08 11:22:35;Anthropic;claude-sonnet-4-6;0.6219
+```
+
+- **Format** — `{timestamp};{provider};{model};{cost}`, semicolon-delimited. The `;` separator (rather than `,`) keeps the fields unambiguous even if a model name itself contains a comma. The cost is a plain 4-decimal number (no `$`), so the file imports cleanly into a spreadsheet for summing.
+- **Location** — the repo root, via the same `_BASE_DIR` anchor used for `agent_instructions.json` / `skills.json` (derived from the package's `__file__`, **not** the working directory). The path resolves correctly on any platform and regardless of where the app is launched from — including scheduled launchd / Task Scheduler jobs that run with an arbitrary cwd.
+- **Only logs when relevant** — runs that recorded no priced cost write nothing: Ollama (free), a model with no matching pricing prefix, or a STOP before the first API result. This mirrors the live display's skip behaviour.
+- **Gitignored** — the log is per-machine, append-only runtime output, so it is excluded from git; otherwise it would dirty the working tree on every run and conflict when syncing the branch across machines.
+- **Best-effort** — a write failure emits a one-line warning but never interrupts the run; observability must never break the thing it observes.
 
 #### LaTeX to Unicode Conversion
 

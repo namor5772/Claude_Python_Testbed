@@ -4,6 +4,7 @@ import re
 import concurrent.futures
 import os
 import tkinter as tk
+from datetime import datetime
 
 from myagent.constants import (
     TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
@@ -11,6 +12,7 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
+    APICOST_LOG_FILE,
 )
 from myagent.helpers import _ToolBlock
 
@@ -717,6 +719,33 @@ class StreamingMixin:
                     "cache_write": per_token[2], "cache_read": per_token[3]}
         return {"input": per_token[0], "output": per_token[1]}
 
+    def _log_api_cost(self, total_cost):
+        """Append the run's final cumulative cost to APICostLog.txt in the repo root.
+
+        Called once when stream_worker's agentic loop ends (GUI and headless).
+        total_cost is the last cost displayed in the output window. Runs where
+        no priced usage was recorded (total_cost == 0 — e.g. Ollama, an
+        unmatched model prefix, or a STOP before the first API result) are
+        skipped, matching the "only if relevant" display behaviour. The log
+        lives in the project root (APICOST_LOG_FILE, derived from _BASE_DIR like
+        agent_instructions.json/skills.json), so it works unchanged on any
+        platform and from any working directory. Best-effort: any I/O failure is
+        reported but never interrupts the run."""
+        if not total_cost or total_cost <= 0:
+            return
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # ';' delimiter (not ',') so a comma inside a model name can't be
+            # misread as a field separator.
+            line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f}\n"
+            with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line)
+            self.queue.put({"type": "tool_info",
+                            "content": f"Logged API cost to {APICOST_LOG_FILE}: {line}"})
+        except Exception as e:
+            self.queue.put({"type": "warning",
+                            "content": f"⚠ Could not write APICostLog.txt: {e}\n"})
+
     def stream_worker(self, messages):
         try:
             # Sync temperature from spinbox
@@ -932,6 +961,7 @@ class StreamingMixin:
 
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
+            self._log_api_cost(total_cost)
             self.queue.put({"type": "complete"})
             if self._headless:
                 self.root.after(500, self._on_close)

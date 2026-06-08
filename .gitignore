@@ -28,6 +28,9 @@ agent_lock_*.lock
 # Error logs
 launch_err.txt
 
+# API cost log (per-run, per-machine — appended by MyAgent after each run)
+APICostLog.txt
+
 # Claude Code config
 .claude/*
 !.claude/skills/

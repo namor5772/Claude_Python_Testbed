@@ -2320,6 +2320,7 @@ CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
 AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
 SKILLS_FILE = os.path.join(_BASE_DIR, "skills.json")
+APICOST_LOG_FILE = os.path.join(_BASE_DIR, "APICostLog.txt")  # per-run cost log (repo root, gitignored)
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are an autonomous AI agent with access to a rich set of tools. "
