@@ -31,6 +31,9 @@ launch_err.txt
 # API cost log (per-run, per-machine — appended by MyAgent after each run)
 APICostLog.txt
 
+# Saved email output from summary runs (per-machine runtime output)
+*.eml
+
 # Claude Code config
 .claude/*
 !.claude/skills/
