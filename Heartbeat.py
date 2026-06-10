@@ -122,6 +122,27 @@ WATCHDOG_SECONDS = 900
 
 def running_instances(name):
     """[(pid, age_seconds)] for live headless runs of this instruction."""
+    if platform.system() == "Windows":
+        # No pgrep/ps on Windows — query process command lines via CIM.
+        # PowerShell single-quoted strings escape ' by doubling it.
+        pattern = re.escape(f"MyAgent.py -l {name} --headless").replace("'", "''")
+        script = (
+            "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
+            f"Where-Object {{ $_.CommandLine -match '{pattern}' }} | "
+            "ForEach-Object { \"$($_.ProcessId) "
+            "$([int]((Get-Date) - $_.CreationDate).TotalSeconds)\" }"
+        )
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True, text=True,
+        )
+        out = []
+        for line in result.stdout.split("\n"):
+            parts = line.split()
+            if len(parts) == 2 and all(p.isdigit() for p in parts):
+                out.append((int(parts[0]), int(parts[1])))
+        return out
+
     result = subprocess.run(
         ["pgrep", "-f", f"MyAgent.py -l {re.escape(name)} --headless"],
         capture_output=True, text=True,
@@ -146,8 +167,12 @@ def running_instances(name):
 def launch_instruction(name):
     if platform.system() == "Windows":
         python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
+        # start_new_session is POSIX-only; CREATE_NO_WINDOW detaches the child
+        # from any console (same convention as _SUBPROCESS_NOWND in MyAgent).
+        detach = {"creationflags": subprocess.CREATE_NO_WINDOW}
     else:
         python = BASE_DIR / ".venv" / "bin" / "python"
+        detach = {"start_new_session": True}
     if not python.exists():
         python = Path(sys.executable)
     proc = subprocess.Popen(
@@ -155,7 +180,7 @@ def launch_instruction(name):
         cwd=str(BASE_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        start_new_session=True,
+        **detach,
     )
     return proc.pid
 

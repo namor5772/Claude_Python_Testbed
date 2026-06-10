@@ -646,6 +646,19 @@ It reuses MyAgent's stored Gmail token (`~/.config/myagent-google/<account>_toke
 
 The rationale: this replaced an equivalent AI-run `Heartbeat_Instruction` (still in `agent_instructions.json` as the reference version) that cost ~10¢ per poll — ~$14/day at 10-minute ticks — to make decisions that require no judgment at all. The deterministic trigger is free; the spawned agent is where the intelligence (and the spend) belongs.
 
+The script is cross-platform (process discovery uses `pgrep`/`ps` on macOS and a PowerShell CIM query on Windows; the log falls back to `heartbeat.log` in the repo root on Windows, gitignored). Two per-machine setup steps don't travel through git:
+
+1. **Scheduler** — macOS uses the launchd plist described above. On Windows, register a Task Scheduler job (PowerShell, adjust the repo path):
+
+   ```powershell
+   $repo = "C:\path\to\Claude_Python_Testbed"
+   Register-ScheduledTask -TaskName "MyAgent_Heartbeat" `
+     -Action (New-ScheduledTaskAction -Execute "$repo\.venv\Scripts\pythonw.exe" -Argument "Heartbeat.py" -WorkingDirectory $repo) `
+     -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue))
+   ```
+
+2. **API keys for spawned agents** — the children inherit the scheduler's environment, NOT your shell profile. On macOS the keys are embedded in the plist's `EnvironmentVariables` (chmod 600). On Windows, Task Scheduler tasks inherit *user environment variables* (`setx`-style), so keys set that way work with no extra step — but keys exported only in a shell rc are invisible, and spawned agents will warn `⚠ Instruction wants provider X but it is unavailable` and fall back to Ollama.
+
 ### Features
 
 #### Agent Instructions
