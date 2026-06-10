@@ -23,6 +23,7 @@ import base64
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -112,6 +113,36 @@ def rewrite_instruction(name, prompt_core):
     os.replace(tmp, INSTRUCTIONS_FILE)
 
 
+# A previous spawn younger than this blocks a new one (skip + retry next tick);
+# older means it is hung — kill it and proceed, so a stuck run can never block
+# new triggers forever. Matches the AI heartbeat's always-spawn semantics with
+# at most this much delay, while still preventing instance pile-up.
+WATCHDOG_SECONDS = 900
+
+
+def running_instances(name):
+    """[(pid, age_seconds)] for live headless runs of this instruction."""
+    result = subprocess.run(
+        ["pgrep", "-f", f"MyAgent.py -l {re.escape(name)} --headless"],
+        capture_output=True, text=True,
+    )
+    out = []
+    for pid in result.stdout.split():
+        etime = subprocess.run(
+            ["ps", "-o", "etime=", "-p", pid], capture_output=True, text=True
+        ).stdout.strip()
+        if not etime:
+            continue  # exited between pgrep and ps
+        # etime formats: [[dd-]hh:]mm:ss
+        days, _, clock = etime.rpartition("-")
+        parts = [int(p) for p in clock.split(":")]
+        secs = 0
+        for p in parts:
+            secs = secs * 60 + p
+        out.append((int(pid), secs + int(days or 0) * 86400))
+    return out
+
+
 def launch_instruction(name):
     if platform.system() == "Windows":
         python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
@@ -177,12 +208,30 @@ def main():
         log(f"POISON msg {msg['id']}: empty first line — marked read, no launch")
         mark_read()
         return
+
+    # Rewrite FIRST, unconditionally — mirroring the AI Heartbeat_Instruction's
+    # order (modify text field, then run_instruction). The command must land in
+    # agent_instructions.json immediately even if the spawn below is deferred.
+    # Idempotent, so a deferred email re-rewriting on the next tick is harmless.
     try:
         rewrite_instruction(name, prompt_core)
+        log(f"rewrote {name!r}: {len(prompt_core)} chars below marker "
+            f"(msg {msg['id']})")
     except LookupError as e:
         log(f"POISON msg {msg['id']}: {e} — marked read, no launch")
         mark_read()
         return
+
+    # Watchdog: a recent run defers the new spawn (email stays unread so the
+    # next tick retries the launch). A run older than WATCHDOG_SECONDS is
+    # presumed hung — kill it and fall through to the new spawn.
+    for pid, age in running_instances(name):
+        if age < WATCHDOG_SECONDS:
+            log(f"spawn deferred for msg {msg['id']}: {name!r} still running "
+                f"(PID {pid}, {age}s old)")
+            return
+        os.kill(pid, 15)
+        log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
 
     pid = launch_instruction(name)
     mark_read()

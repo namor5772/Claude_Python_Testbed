@@ -747,6 +747,9 @@ class StreamingMixin:
                             "content": f"⚠ Could not write APICostLog.txt: {e}\n"})
 
     def stream_worker(self, messages):
+        # Initialized before the try so the except path can log whatever cost
+        # accumulated before the failure.
+        total_cost = 0.0
         try:
             # Sync temperature from spinbox
             try:
@@ -772,8 +775,7 @@ class StreamingMixin:
             call_num = 0
             user_prompt_count = 0
             user_prompt_nudges = 0
-            # Cost tracking (Anthropic only)
-            total_cost = 0.0
+            # Cost tracking (total_cost itself is hoisted above the try)
             total_input_tokens = 0
             total_output_tokens = 0
             total_cache_write_tokens = 0
@@ -968,3 +970,9 @@ class StreamingMixin:
 
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
+            # Mirror the success path: persist whatever cost accrued before the
+            # failure, and never leave a headless run as a zombie process — an
+            # unattended error should exit (the auto-saved transcript records it).
+            self._log_api_cost(total_cost)
+            if self._headless:
+                self.root.after(500, self._on_close)

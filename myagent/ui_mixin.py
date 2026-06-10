@@ -439,6 +439,13 @@ class UIMixin:
                 display_names = [self._get_display_name(mid) for mid in self._model_id_list]
                 if has_widgets:
                     self._model_combo["values"] = display_names
+            else:
+                # Silent provider drift is dangerous for unattended -l runs (the
+                # instruction's model is quietly ignored) — say why it happened.
+                self.queue.put({"type": "warning", "content": (
+                    f"⚠ Instruction wants provider {saved_provider} but it is "
+                    f"unavailable (API key not set in this environment?) — "
+                    f"staying on {self.provider}\n")})
         # Restore model (fall back to first available if saved model doesn't match provider)
         model_key = "last_model" if state_file else "model"
         model = entry.get(model_key, "")
@@ -446,6 +453,10 @@ class UIMixin:
             self.model = model
             self._model_var.set(self._get_display_name(model))
         elif self.available_models:
+            if model and not state_file:
+                self.queue.put({"type": "warning", "content": (
+                    f"⚠ Saved model {model} not available for {self.provider} — "
+                    f"falling back to {self.available_models[0]}\n")})
             self.model = self.available_models[0]
             self._model_var.set(self._get_display_name(self.model))
         # Restore temperature

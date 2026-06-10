@@ -121,7 +121,13 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             api_key=gemini_key,
             http_options={"timeout": 120_000},  # 120s read timeout to prevent hung streams
         ) if self._has_gemini else None
-        self.ollama_client = ollama.Client(host=self._ollama_base_url) if self._has_ollama else None
+        # 300s read timeout (max silent gap between stream chunks): tolerates a
+        # cold model load, but a request stuck in Ollama's queue behind a wedged
+        # instance raises instead of blocking forever (default is no timeout).
+        self.ollama_client = ollama.Client(
+            host=self._ollama_base_url,
+            timeout=httpx.Timeout(300.0, connect=10.0),
+        ) if self._has_ollama else None
         if self._has_anthropic:
             self.provider = "Anthropic"
         elif self._has_openai:
