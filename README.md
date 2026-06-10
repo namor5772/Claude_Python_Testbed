@@ -14,6 +14,7 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **requirements.txt** — Python dependencies for pip install
 - **MyAgent_Pricing.txt** — Reference document listing all API model pricing used by MyAgent's cost tracking feature (Anthropic, OpenAI, Gemini — Ollama inference is free and emits no cost line)
 - **APICostLog.txt** — Append-only log of per-run API costs, written to the repo root after every MyAgent run (one `{timestamp};{provider};{model};{cost}` line per run, GUI and headless alike). **Gitignored** — per-machine runtime output (see the **API Cost Tracking** section under MyAgent)
+- **Heartbeat.py** — Zero-token email-triggered agent dispatcher: a plain Python script (no LLM involved) that launchd runs every 10 minutes. An unread email with Subject "AGENT PROMPT" in the configured Gmail account rewrites a named instruction's prompt (below its `*****` marker) and spawns it headless via `MyAgent.py -l`. Replaces an equivalent AI-run polling instruction that cost ~$14/day in API tokens. See **Scheduling Background Runs** under MyAgent
 - **Qwen25VL-tools.Modelfile**, **Llama32Vision-tools.Modelfile**, **Gemma3-tools.Modelfile** — Custom Ollama Modelfiles that graft Qwen3's tool-calling template onto three vision models, unlocking structured `tool_calls` that Ollama's default Modelfiles don't expose. See the **Ollama (Local Inference)** section for build instructions and the rationale
 - **CLAUDE.md** — Top-level project instructions and conventions for Claude Code sessions. Imports the three per-app sub-files below via `@CLAUDE_SELFBOT.md` / `@CLAUDE_MYAGENT.md` / `@CLAUDE_ACCOUNT.md` so they load automatically without bloating the root file
 - **CLAUDE_SELFBOT.md** — Architecture notes for SelfBot.py (threading model, dual geometry, skills, DPI handling, auto-save)
@@ -633,6 +634,17 @@ done
 - **Don't log to `/tmp`.** macOS purges `/tmp` of files untouched for ~3 days, erasing early-crash diagnostics. Point `StandardOutPath`/`StandardErrorPath` at `~/Library/Logs/myagent/`, and use **absolute** paths — launchd does **not** expand `~` in plist strings (a literal `~` folder gets created instead).
 - **Headless runs need confirm-bypass.** A scheduled instruction that calls a destructive tool (`proton_send`, `gmail_send`, `rm`, …) will hang forever on its Tk confirmation dialog with no GUI to click. Add those patterns to the instruction's **Safety** bypass list (stored per-instruction in `agent_instructions.json` as `disabled_confirm_patterns`) so unattended runs proceed.
 - **Three layers prove a run worked:** `LastExitStatus` from `launchctl list <label>` (the process exited), the timestamped `saved_chats/<Instruction>_<ts>.txt` transcript (the agent did the work), and the real side effect (e.g. the email actually arrived). Exit 0 alone is **not** proof of delivery — the side effect can still fail silently.
+
+**Email-triggered dispatch at zero token cost — `Heartbeat.py`.** Calendar scheduling covers *when*; `Heartbeat.py` covers *on demand, from anywhere*: email yourself a trigger and the machine launches the agent. It is a plain Python script — no LLM, no MyAgent window — that launchd runs every 10 minutes (`com.roman.myagent-heartbeat`, `StartInterval` 600, `RunAtLoad`). Each pass:
+
+1. Checks the configured Gmail account (constants at the top of the script) for an **unread** Inbox email with the **exact** Subject `AGENT PROMPT` (Gmail's `subject:` search is word-based, so the header is re-verified literally).
+2. Parses the body: line 1 = the name of a saved instruction; lines 3 onward = the new prompt core.
+3. Rewrites that instruction's `text` in `agent_instructions.json`, replacing everything below its `*****` marker line (atomic temp-file-and-replace, same `json.dump` formatting as MyAgent, so diffs stay clean).
+4. Spawns `python MyAgent.py -l "<name>" --headless` detached, then marks the email read.
+
+It reuses MyAgent's stored Gmail token (`~/.config/myagent-google/<account>_token.json`, silent refresh) and **never** opens the interactive OAuth flow — if auth fails it logs and leaves the email unread so a later pass (or a manual MyAgent run) recovers. Malformed trigger emails (unknown instruction name, missing `*****` marker, empty first line) are treated as poison: marked read and logged rather than retrying every 10 minutes forever. One matching email is processed per pass (oldest first), so queued triggers drain at a controlled rate. Every pass appends one line to `~/Library/Logs/myagent/heartbeat.log` (`checked — nothing found`, `launched ... (PID ...)`, `POISON ...`, or `ERROR ...`), making the log a liveness record — a gap in timestamps means the machine was asleep or the job unloaded.
+
+The rationale: this replaced an equivalent AI-run `Heartbeat_Instruction` (still in `agent_instructions.json` as the reference version) that cost ~10¢ per poll — ~$14/day at 10-minute ticks — to make decisions that require no judgment at all. The deterministic trigger is free; the spawned agent is where the intelligence (and the spend) belongs.
 
 ### Features
 
