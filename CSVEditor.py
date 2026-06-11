@@ -8,6 +8,36 @@ from tkinter import filedialog, messagebox, ttk
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csv_editor_state.json")
 
+CSV_DELIMITERS = ",;\t|"
+
+
+def detect_csv_dialect(path):
+    """Detect (delimiter, quote_all) for a CSV file.
+
+    csv.Sniffer picks the delimiter from the candidate set; when it can't
+    (single-column files, unusual content) fall back to whichever candidate
+    occurs most in the header line, defaulting to a comma.
+
+    quote_all is a header-line heuristic: if every header field is wrapped
+    in double quotes, the file uses the quote-everything style (e.g.
+    SpecifyingList.csv / APICostLog-style ;-files) and saves preserve it.
+    A quoted header field that itself contains the delimiter defeats the
+    naive split and the file just saves as QUOTE_MINIMAL — still valid CSV.
+    """
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        sample = f.read(64 * 1024)
+    header = sample.splitlines()[0] if sample.splitlines() else ""
+    try:
+        delimiter = csv.Sniffer().sniff(sample, delimiters=CSV_DELIMITERS).delimiter
+    except csv.Error:
+        counts = {d: header.count(d) for d in CSV_DELIMITERS}
+        delimiter = max(counts, key=counts.get) if any(counts.values()) else ","
+    fields = [p.strip() for p in header.split(delimiter)]
+    quote_all = bool(header) and all(
+        len(p) >= 2 and p.startswith('"') and p.endswith('"') for p in fields
+    )
+    return delimiter, quote_all
+
 
 class App:
     def __init__(self):
@@ -19,6 +49,8 @@ class App:
         self.filepath = None
         self.headers = []
         self.rows = []  # list of lists
+        self.delimiter = ","   # detected per-file on open, preserved on save
+        self.quote_all = False  # detected per-file: quote every field on save
         self.modified = False
         self._visible_indices = []  # maps tree position -> index in self.rows
         # 3 independent filters: each is (col_index_or_None, value_or_None)
@@ -141,8 +173,9 @@ class App:
 
     def _load_csv(self, path):
         try:
+            delimiter, quote_all = detect_csv_dialect(path)
             with open(path, newline="", encoding="utf-8-sig") as f:
-                reader = csv.reader(f)
+                reader = csv.reader(f, delimiter=delimiter)
                 lines = list(reader)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to read file:\n{e}")
@@ -153,6 +186,8 @@ class App:
             return
 
         self.filepath = path
+        self.delimiter = delimiter
+        self.quote_all = quote_all
         self.headers = lines[0]
         self.rows = lines[1:]
         self.modified = False
@@ -195,7 +230,9 @@ class App:
     def _write_csv(self, path):
         try:
             with open(path, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
+                writer = csv.writer(
+                    f, delimiter=self.delimiter,
+                    quoting=csv.QUOTE_ALL if self.quote_all else csv.QUOTE_MINIMAL)
                 writer.writerow(self.headers)
                 writer.writerows(self.rows)
             self.modified = False
@@ -241,7 +278,12 @@ class App:
     def _update_status(self):
         name = os.path.basename(self.filepath) if self.filepath else "No file"
         mod = " *" if self.modified else ""
-        self._status_var.set(f"{name}{mod}  |  {len(self.rows)} rows, {len(self.headers)} columns")
+        dialect = ""
+        if self.filepath and self.delimiter != ",":
+            shown = {"\t": "tab"}.get(self.delimiter, f"'{self.delimiter}'")
+            dialect = f"  |  {shown} delimited"
+        self._status_var.set(
+            f"{name}{mod}  |  {len(self.rows)} rows, {len(self.headers)} columns{dialect}")
         title = f"CSV Editor — {name}{mod}" if self.filepath else "CSV Editor"
         self.root.title(title)
 
