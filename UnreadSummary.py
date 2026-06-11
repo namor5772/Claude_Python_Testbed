@@ -7,13 +7,15 @@ sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv) are
 listed like any other email except for a "SPECIFYING LIST EMAIL" marker
-line at the top of the entry and the names of their downloaded PDF
-attachments at the bottom. Their PDFs are saved to ~/Downloads
-(idempotently) and they are marked read — but stay in place: the original
-move-to-Trash is off by default behind the TRASH_MATCHES flag (each
-per-match action has its own flag; see the constants below). The list is
-sent from grobliro@outlook.com to namor5772@gmail.com, mirroring the
-AI-run instruction's daily email.
+line at the top of the entry and, at the bottom, the names of their
+downloaded PDF attachments plus a "Determine:" line echoing the rule's
+Determine column verbatim (a reference note — nothing is extracted from
+the email body). Their PDFs are saved to ~/Downloads (idempotently) and
+they are marked read — but stay in place: the original move-to-Trash is
+off by default behind the TRASH_MATCHES flag (each per-match action has
+its own flag; see the constants below). The list is sent from
+grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
+instruction's daily email.
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text — so a daily run costs $0.00 in API tokens (the AI run cost
@@ -129,10 +131,12 @@ def log(msg):
 #              because senders vary the tail across the billing cycle
 #              ("... is now available" / "... is due soon."). A trailing
 #              "..." is stripped. Matching is case-insensitive throughout.
-#   Determine  the user's own note of what matters about this bill type.
-#              NOT read by the script — matching and the emailed list ignore
-#              it entirely (per-field extraction was removed; see git
-#              history before 2026-06-11 if it's ever wanted back).
+#   Determine  the user's note of what matters about this bill type, e.g.
+#              "Account number, Amount due, Due Date". Echoed VERBATIM as a
+#              "Determine:" line under the matched entry in the emailed
+#              list — never used for matching, and never extracted from the
+#              email body (the per-field extraction engine was removed; see
+#              git history before 2026-06-11 if it's ever wanted back).
 
 SPECIFYING_CSV = BASE_DIR / "SpecifyingList.csv"
 
@@ -160,6 +164,7 @@ def load_specifying():
                     "name": f"{frm} / {subj}" if subj else frm,
                     "from_has": frm.lower(),
                     "subject_pre": _norm_subject(subj),
+                    "determine": (row.get("Determine") or "").strip(),
                 }
                 if to:
                     spec["to_has"] = to.lower()
@@ -683,17 +688,20 @@ def outlook_send(account, account_email, subject, body):
 
 # ── Output assembly ──────────────────────────────────────────────────────────
 
-def _field(label, value):
-    """One wrapped 'Label: value' entry line with a hanging indent."""
-    prefix = f"   {label:<9}"
+def _field(label, value, width=9):
+    """One wrapped 'Label: value' entry line with a hanging indent. ``width``
+    widens the label column for labels that outgrow the default
+    ("Determine:" is 10 chars)."""
+    prefix = f"   {label:<{width}}"
     return textwrap.fill(value or "", width=WRAP, initial_indent=prefix,
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
 
 def format_entry(n, entry):
     """A SPECIFYING match renders like any other email; the only additions
-    are the marker line at the top and the names of any downloaded PDF
-    attachments at the bottom."""
+    are the marker line at the top and, at the bottom, the names of any
+    downloaded PDF attachments plus a Determine: line echoing the rule's
+    Determine column verbatim from SpecifyingList.csv."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
     lines = []
@@ -712,6 +720,9 @@ def format_entry(n, entry):
     pdfs = entry.get("pdfs") or []
     if pdfs:
         lines.append(_field("PDFs:", "; ".join(pdfs)))
+    if entry.get("spec"):
+        lines.append(_field("Determine:",
+                            entry["spec"].get("determine") or "(none)", width=11))
     return "\n".join(lines)
 
 
