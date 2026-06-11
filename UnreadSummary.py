@@ -7,9 +7,10 @@ sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv) are
 listed like any other email except for a "SPECIFYING LIST EMAIL" marker
-line at the top of the entry and the names of their downloaded PDF
-attachments at the bottom. Their Determine fields are extracted to the run
-LOG (not the email), their PDFs are saved to ~/Downloads (idempotently),
+line at the top of the entry and, at the bottom, the names of their
+downloaded PDF attachments and a Determine: line echoing the rule's field
+labels. The Determine VALUES are extracted to the run LOG (not the email),
+their PDFs are saved to ~/Downloads (idempotently),
 and they are marked read — but stay in place: the original move-to-Trash
 is off by default behind the TRASH_MATCHES flag (each per-match action has
 its own flag; see the constants below). The list is sent from
@@ -144,7 +145,8 @@ def log(msg):
 # arbitrary prose. Labels absent from LABEL_FINDERS get a generic finder
 # whose kind is inferred from the label wording. A field with no finder hit
 # reports "(not found)". Extracted values are written to the LOG, not the
-# emailed list (the list only flags the entry as a SPECIFYING LIST EMAIL).
+# emailed list (the list flags the entry as a SPECIFYING LIST EMAIL and
+# echoes the Determine labels under it).
 
 SPECIFYING_CSV = BASE_DIR / "SpecifyingList.csv"
 
@@ -207,6 +209,7 @@ def load_specifying():
                     "name": f"{frm} / {subj}" if subj else frm,
                     "from_has": frm.lower(),
                     "subject_pre": _norm_subject(subj),
+                    "determine": det,  # raw CSV column, echoed in the list
                     "fields": [
                         (label, LABEL_FINDERS.get(label.lower(), _generic_finder(label)))
                         for label in (p.strip() for p in det.split(","))
@@ -823,17 +826,20 @@ def outlook_send(account, account_email, subject, body):
 
 # ── Output assembly ──────────────────────────────────────────────────────────
 
-def _field(label, value):
-    """One wrapped 'Label: value' entry line with a hanging indent."""
-    prefix = f"   {label:<9}"
+def _field(label, value, width=9):
+    """One wrapped 'Label: value' entry line with a hanging indent. ``width``
+    widens the label column for labels that outgrow the default
+    ("Determine:" is 10 chars)."""
+    prefix = f"   {label:<{width}}"
     return textwrap.fill(value or "", width=WRAP, initial_indent=prefix,
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
 
 def format_entry(n, entry):
     """A SPECIFYING match renders like any other email; the only additions
-    are the marker line at the top and the names of any downloaded PDF
-    attachments at the bottom (Determine values go to the log instead)."""
+    are the marker line at the top and, at the bottom, the names of any
+    downloaded PDF attachments plus a Determine: line echoing the rule's
+    field labels from SpecifyingList.csv (extracted VALUES go to the log)."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
     lines = []
@@ -852,6 +858,9 @@ def format_entry(n, entry):
     pdfs = entry.get("pdfs") or []
     if pdfs:
         lines.append(_field("PDFs:", "; ".join(pdfs)))
+    if entry.get("spec"):
+        lines.append(_field("Determine:",
+                            entry["spec"].get("determine") or "(none)", width=11))
     return "\n".join(lines)
 
 
