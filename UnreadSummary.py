@@ -6,9 +6,12 @@ Inbox and Spam/Junk folders and builds the COMPREHENSIVE LIST: one running
 sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts) additionally get their Determine
-fields extracted, any PDF attachments saved to ~/Downloads, and are then
-marked read and moved to Trash. The list is sent from grobliro@outlook.com
-to namor5772@gmail.com, mirroring the AI-run instruction's daily email.
+fields extracted and noted inline, and their PDF attachments saved to
+~/Downloads (idempotently). By default that is all: matched emails are left
+unread, in place. The original mark-read + move-to-Trash processing is
+available behind the MARK_MATCHES_READ / TRASH_MATCHES flags. The list is
+sent from grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
+instruction's daily email.
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text and the Determine fields are extracted with label-proximity
@@ -18,10 +21,12 @@ Safety properties, by construction rather than by prompt:
   * The listing phase uses only read-only primitives (IMAP EXAMINE +
     BODY.PEEK, Gmail messages.get, Graph GET) — it CANNOT mark, move, or
     delete anything.
-  * Mark-read / move-to-Trash / attachment download run only for emails
-    matching a SPECIFYING entry. No matches -> no mutations anywhere.
-  * Trash is recoverable from each provider's UI; nothing is permanently
-    deleted (same boundary as MyAgent's mail mixins).
+  * Per-match actions are individually flag-gated: SAVE_MATCH_PDFS (default
+    True — writes only to ~/Downloads), MARK_MATCHES_READ and TRASH_MATCHES
+    (default False). With the defaults, no mailbox state changes at all.
+  * Even with all flags enabled, actions run only for emails matching a
+    SPECIFYING entry, and Trash is recoverable from each provider's UI —
+    nothing is permanently deleted (same boundary as MyAgent's mail mixins).
 
 Reuses MyAgent's stored credentials and never starts an interactive flow:
   Gmail   ~/.config/myagent-google/{account}_token.json   (silent refresh)
@@ -83,6 +88,15 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 SEND_FROM_OUTLOOK_ACCOUNT = "outlook"  # account key in msmail accounts.json
 SEND_TO = "namor5772@gmail.com"
 SUBJECT_PREFIX = "Summary of Unread Emails"
+
+# What to do with a SPECIFYING match beyond noting its Determine fields in
+# the COMPREHENSIVE LIST. Each action is independent; the defaults download
+# the bill PDFs but leave the email itself untouched (unread, in place).
+# Setting all three True restores the full Email_AllUnreadSummary_Mac3
+# behaviour (save PDFs, mark read, move to Trash).
+SAVE_MATCH_PDFS = True     # save pdf attachments to ~/Downloads (idempotent)
+MARK_MATCHES_READ = False  # mark the matched email as read
+TRASH_MATCHES = False      # move the matched email to Trash/Bin
 
 DOWNLOAD_DIR = Path.home() / "Downloads"
 SUMMARY_MAX_WORDS = 45  # "under 50 word summary"
@@ -381,13 +395,22 @@ def forwarded_to(entry, account_email):
 
 
 def save_pdf(filename, data):
-    """Write attachment bytes to ~/Downloads, deduplicating the name."""
+    """Write attachment bytes to ~/Downloads. Idempotent: a matched email is
+    left unread by default, so every later run sees it again — if a file
+    with the same (cleaned) name and identical bytes is already there, reuse
+    it instead of stacking up "name (1).pdf", "name (2).pdf" day after day.
+    A same-named file with DIFFERENT content still gets a fresh suffix."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r'[\\/:*?"<>|]', "_", filename or "attachment.pdf").strip() or "attachment.pdf"
     target = DOWNLOAD_DIR / safe
     stem, suffix = target.stem, target.suffix
     i = 1
     while target.exists():
+        try:
+            if target.stat().st_size == len(data) and target.read_bytes() == data:
+                return f"{target.name} (already in Downloads)"
+        except OSError:
+            pass
         target = DOWNLOAD_DIR / f"{stem} ({i}){suffix}"
         i += 1
     target.write_bytes(data)
@@ -473,21 +496,27 @@ def gmail_collect(account, account_email):
 
 
 def gmail_act(entry):
-    """Action phase for a SPECIFYING match: save PDFs, mark read, trash."""
+    """Action phase for a SPECIFYING match, honouring the action flags.
+    Attachment download is itself read-only (messages.attachments.get)."""
     service = entry["_service"]
     pdfs, actions = [], []
-    for part in _gmail_walk(entry["_payload"]):
-        fname = part.get("filename", "")
-        att_id = part.get("body", {}).get("attachmentId")
-        if att_id and _is_pdf(fname, part.get("mimeType")):
-            att = service.users().messages().attachments().get(
-                userId="me", messageId=entry["id"], id=att_id).execute()
-            pdfs.append(save_pdf(fname, base64.urlsafe_b64decode(att["data"])))
-    service.users().messages().modify(
-        userId="me", id=entry["id"], body={"removeLabelIds": ["UNREAD"]}).execute()
-    actions.append("marked read")
-    service.users().messages().trash(userId="me", id=entry["id"]).execute()
-    actions.append("moved to Trash")
+    if SAVE_MATCH_PDFS:
+        for part in _gmail_walk(entry["_payload"]):
+            fname = part.get("filename", "")
+            att_id = part.get("body", {}).get("attachmentId")
+            if att_id and _is_pdf(fname, part.get("mimeType")):
+                att = service.users().messages().attachments().get(
+                    userId="me", messageId=entry["id"], id=att_id).execute()
+                pdfs.append(save_pdf(fname, base64.urlsafe_b64decode(att["data"])))
+    if MARK_MATCHES_READ:
+        service.users().messages().modify(
+            userId="me", id=entry["id"], body={"removeLabelIds": ["UNREAD"]}).execute()
+        actions.append("marked read")
+    if TRASH_MATCHES:
+        service.users().messages().trash(userId="me", id=entry["id"]).execute()
+        actions.append("moved to Trash")
+    if not actions:
+        actions.append("left unread in place")
     return pdfs, actions
 
 
@@ -613,25 +642,34 @@ def imap_collect(account, cfg, conn):
 def imap_act(entry):
     conn, uid = entry["_conn"], entry["id"]
     pdfs, actions = [], []
-    for part in entry["_msg"].walk():
-        fname = decode_header(part.get_filename() or "")
-        if fname and _is_pdf(fname, part.get_content_type()):
-            payload = part.get_payload(decode=True) or b""
-            if payload:
-                pdfs.append(save_pdf(fname, payload))
-    conn.select(_quote_mailbox(entry["folder"]))  # read-write select
-    typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Seen)")
-    actions.append("marked read" if typ == "OK" else "mark-read FAILED")
-    trash = _quote_mailbox(entry["_trash"])
-    if "MOVE" in conn.capabilities:
-        typ, data = conn.uid("move", uid, trash)
-    else:
-        typ, data = conn.uid("copy", uid, trash)
-        if typ == "OK":
-            conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
-            conn.expunge()
-    actions.append(f"moved to {entry['_trash']}" if typ == "OK"
-                   else f"move to {entry['_trash']} FAILED")
+    if SAVE_MATCH_PDFS:
+        # The PDFs come out of the message already fetched with BODY.PEEK
+        # during collection — saving them costs no IMAP traffic and cannot
+        # touch the \Seen flag.
+        for part in entry["_msg"].walk():
+            fname = decode_header(part.get_filename() or "")
+            if fname and _is_pdf(fname, part.get_content_type()):
+                payload = part.get_payload(decode=True) or b""
+                if payload:
+                    pdfs.append(save_pdf(fname, payload))
+    if MARK_MATCHES_READ or TRASH_MATCHES:
+        conn.select(_quote_mailbox(entry["folder"]))  # read-write select
+    if MARK_MATCHES_READ:
+        typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Seen)")
+        actions.append("marked read" if typ == "OK" else "mark-read FAILED")
+    if TRASH_MATCHES:
+        trash = _quote_mailbox(entry["_trash"])
+        if "MOVE" in conn.capabilities:
+            typ, data = conn.uid("move", uid, trash)
+        else:
+            typ, data = conn.uid("copy", uid, trash)
+            if typ == "OK":
+                conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
+                conn.expunge()
+        actions.append(f"moved to {entry['_trash']}" if typ == "OK"
+                       else f"move to {entry['_trash']} FAILED")
+    if not actions:
+        actions.append("left unread in place")
     return pdfs, actions
 
 
@@ -734,18 +772,22 @@ def outlook_collect(account, account_email):
 def outlook_act(entry):
     account, account_email = entry["account"], entry["account_email"]
     pdfs, actions = [], []
-    if entry["_has_atts"]:
+    if SAVE_MATCH_PDFS and entry["_has_atts"]:
         resp = graph(account, account_email, "GET",
                      f"/me/messages/{entry['id']}/attachments")
         for a in resp.get("value", []):
             if a.get("contentBytes") and _is_pdf(a.get("name"), a.get("contentType")):
                 pdfs.append(save_pdf(a.get("name"), base64.b64decode(a["contentBytes"])))
-    graph(account, account_email, "PATCH", f"/me/messages/{entry['id']}",
-          json_body={"isRead": True})
-    actions.append("marked read")
-    graph(account, account_email, "POST", f"/me/messages/{entry['id']}/move",
-          json_body={"destinationId": "deleteditems"})
-    actions.append("moved to Deleted Items")
+    if MARK_MATCHES_READ:
+        graph(account, account_email, "PATCH", f"/me/messages/{entry['id']}",
+              json_body={"isRead": True})
+        actions.append("marked read")
+    if TRASH_MATCHES:
+        graph(account, account_email, "POST", f"/me/messages/{entry['id']}/move",
+              json_body={"destinationId": "deleteditems"})
+        actions.append("moved to Deleted Items")
+    if not actions:
+        actions.append("left unread in place")
     return pdfs, actions
 
 
@@ -762,9 +804,11 @@ def outlook_send(account, account_email, subject, body):
 
 # ── Output assembly ──────────────────────────────────────────────────────────
 
-def _field(label, value):
-    """One wrapped 'Label: value' entry line with a hanging indent."""
-    prefix = f"   {label:<9}"
+def _field(label, value, width=9):
+    """One wrapped 'Label: value' entry line with a hanging indent. ``width``
+    sets the label column (the SPECIFYING block auto-sizes it because
+    Determine labels like "Total Amount payable:" outgrow the default)."""
+    prefix = f"   {label:<{width}}"
     return textwrap.fill(value or "", width=WRAP, initial_indent=prefix,
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
@@ -784,12 +828,16 @@ def format_entry(n, entry):
     if spec:
         lines.append("")
         lines.append(f"   *** SPECIFYING LIST type {spec['n']}: {spec['name']}")
-        for label, value in entry.get("spec_fields", []):
-            lines.append(_field(label + ":", value))
-        pdfs = entry.get("pdfs", [])
-        lines.append(_field("PDFs:", "; ".join(pdfs) if pdfs
-                            else "(no pdf attachments)"))
-        lines.append(_field("Actions:", "; ".join(entry.get("actions", [])) or "(none)"))
+        spec_fields = entry.get("spec_fields", [])
+        width = max([len(l) + 2 for l, _ in spec_fields] + [9])
+        for label, value in spec_fields:
+            lines.append(_field(label + ":", value, width))
+        if "pdfs" in entry:
+            pdfs = entry["pdfs"]
+            lines.append(_field("PDFs:", "; ".join(pdfs) if pdfs
+                                else "(no pdf attachments)", width))
+        if "actions" in entry:
+            lines.append(_field("Actions:", "; ".join(entry["actions"]) or "(none)", width))
     return "\n".join(lines)
 
 
@@ -890,18 +938,20 @@ def main():
                 entry["spec_fields"] = extract_fields(spec, entry["subject"], entry["lines"])
                 matched.append(entry)
 
-    # Action phase — the only code path that mutates mailboxes, and it only
-    # ever sees SPECIFYING matches. Skipped wholesale on --dry-run.
-    for entry in matched:
-        if args.dry_run:
-            entry["actions"] = ["dry run — no action taken"]
-            continue
-        try:
-            act = {"Gmail": gmail_act, "IMAP": imap_act, "Outlook": outlook_act}[entry["provider"]]
-            entry["pdfs"], entry["actions"] = act(entry)
-        except Exception as e:
-            entry["actions"] = [f"ACTION FAILED: {type(e).__name__}: {e}"]
-            log(f"action failed for {entry['account']} {entry['subject']!r}: {e}")
+    # Action phase — only ever sees SPECIFYING matches, and each action is
+    # individually flag-gated. With the default flags the only effect is
+    # PDF downloads; mailboxes are never mutated. Skipped on --dry-run.
+    if SAVE_MATCH_PDFS or MARK_MATCHES_READ or TRASH_MATCHES:
+        for entry in matched:
+            if args.dry_run:
+                entry["actions"] = ["dry run — no action taken"]
+                continue
+            try:
+                act = {"Gmail": gmail_act, "IMAP": imap_act, "Outlook": outlook_act}[entry["provider"]]
+                entry["pdfs"], entry["actions"] = act(entry)
+            except Exception as e:
+                entry["actions"] = [f"ACTION FAILED: {type(e).__name__}: {e}"]
+                log(f"action failed for {entry['account']} {entry['subject']!r}: {e}")
 
     for conn in imap_conns.values():
         try:
