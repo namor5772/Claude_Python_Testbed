@@ -82,8 +82,7 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 SEND_FROM_OUTLOOK_ACCOUNT = "outlook"  # account key in msmail accounts.json
 SEND_TO = "namor5772@gmail.com"
-SUBJECT_PREFIX = "AI generated Summary of Unread Emails"  # kept verbatim so
-# existing mailbox filters/threads keep matching, even though no AI runs here.
+SUBJECT_PREFIX = "Summary of Unread Emails"
 
 DOWNLOAD_DIR = Path.home() / "Downloads"
 SUMMARY_MAX_WORDS = 45  # "under 50 word summary"
