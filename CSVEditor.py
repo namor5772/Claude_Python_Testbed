@@ -91,23 +91,29 @@ class App:
         filter_container = tk.Frame(self.root)
         filter_container.pack(side=tk.TOP, fill=tk.X, padx=4, pady=(0, 4))
 
-        for i in range(3):
-            row_frame = tk.Frame(filter_container)
-            row_frame.pack(side=tk.TOP, fill=tk.X, pady=1)
+        # One grid for all three rows (rather than per-row pack) so the
+        # Filter and Value comboboxes line up vertically — the "Filter N:"
+        # labels render at slightly different pixel widths in the
+        # proportional UI font, which staggered pack-based rows.
+        grid_frame = tk.Frame(filter_container)
+        grid_frame.pack(side=tk.TOP, fill=tk.X)
 
-            tk.Label(row_frame, text=f"Filter {i+1}:").pack(side=tk.LEFT, padx=2)
+        for i in range(3):
+            tk.Label(grid_frame, text=f"Filter {i+1}:").grid(
+                row=i, column=0, sticky=tk.W, padx=2, pady=1)
             col_var = tk.StringVar()
-            col_combo = ttk.Combobox(row_frame, textvariable=col_var,
+            col_combo = ttk.Combobox(grid_frame, textvariable=col_var,
                                       state="readonly", width=20)
-            col_combo.pack(side=tk.LEFT, padx=2)
+            col_combo.grid(row=i, column=1, sticky=tk.W, padx=2, pady=1)
             col_combo.bind("<<ComboboxSelected>>",
                            lambda e, idx=i: self._on_filter_col_changed(idx))
 
-            tk.Label(row_frame, text="Value:").pack(side=tk.LEFT, padx=2)
+            tk.Label(grid_frame, text="Value:").grid(
+                row=i, column=2, sticky=tk.W, padx=2, pady=1)
             val_var = tk.StringVar()
-            val_combo = ttk.Combobox(row_frame, textvariable=val_var,
+            val_combo = ttk.Combobox(grid_frame, textvariable=val_var,
                                       state="readonly", width=30)
-            val_combo.pack(side=tk.LEFT, padx=2)
+            val_combo.grid(row=i, column=3, sticky=tk.W, padx=2, pady=1)
             val_combo.bind("<<ComboboxSelected>>",
                            lambda e, idx=i: self._on_filter_val_changed(idx))
 
