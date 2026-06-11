@@ -7,19 +7,17 @@ sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv) are
 listed like any other email except for a "SPECIFYING LIST EMAIL" marker
-line at the top of the entry and, at the bottom, the names of their
-downloaded PDF attachments and a Determine: line echoing the rule's field
-labels. The Determine VALUES are extracted to the run LOG (not the email),
-their PDFs are saved to ~/Downloads (idempotently),
-and they are marked read — but stay in place: the original move-to-Trash
-is off by default behind the TRASH_MATCHES flag (each per-match action has
-its own flag; see the constants below). The list is sent from
-grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
-instruction's daily email.
+line at the top of the entry and the names of their downloaded PDF
+attachments at the bottom. Their PDFs are saved to ~/Downloads
+(idempotently) and they are marked read — but stay in place: the original
+move-to-Trash is off by default behind the TRASH_MATCHES flag (each
+per-match action has its own flag; see the constants below). The list is
+sent from grobliro@outlook.com to namor5772@gmail.com, mirroring the
+AI-run instruction's daily email.
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
-body text and the Determine fields are extracted with label-proximity
-regexes, so a daily run costs $0.00 in API tokens (the AI run cost ~$0.57).
+body text — so a daily run costs $0.00 in API tokens (the AI run cost
+~$0.57).
 
 Safety properties, by construction rather than by prompt:
   * The listing phase uses only read-only primitives (IMAP EXAMINE +
@@ -94,8 +92,8 @@ SEND_FROM_OUTLOOK_ACCOUNT = "outlook"  # account key in msmail accounts.json
 SEND_TO = "namor5772@gmail.com"
 SUBJECT_PREFIX = "Summary of Unread Emails"
 
-# What to do with a SPECIFYING match beyond noting its Determine fields in
-# the COMPREHENSIVE LIST. Each action is independent; the defaults download
+# What to do with a SPECIFYING match beyond flagging it in the
+# COMPREHENSIVE LIST. Each action is independent; the defaults download
 # the bill PDFs and mark the email read, but leave it in place. Setting
 # TRASH_MATCHES True as well restores the full Email_AllUnreadSummary_Mac3
 # behaviour (save PDFs, mark read, move to Trash).
@@ -131,64 +129,18 @@ def log(msg):
 #              because senders vary the tail across the billing cycle
 #              ("... is now available" / "... is due soon."). A trailing
 #              "..." is stripped. Matching is case-insensitive throughout.
-#   Determine  one comma-joined string of field labels to extract, e.g.
-#              "Account number, Amount due, Due Date"
-# Each Determine label maps (case-insensitively) through LABEL_FINDERS to a
-# finder chain tried in order until one yields a value:
-#   ("labeled", kind, [label synonyms])  label on the same line or the value
-#                                        on one of the next 3 lines
-#   ("subject", kind, [label synonyms])  value in the subject after the label
-#   ("youve_paid",)                      PayPal "You've paid $X AUD to ..."
-#   ("paid_with",)                       PayPal "Paid <merchant> with" block
-#   ("stripe_date",)                     Stripe "... $38.60 Paid May 8, 2026"
-# kinds: money / date / code — typed value regexes so a label can't match
-# arbitrary prose. Labels absent from LABEL_FINDERS get a generic finder
-# whose kind is inferred from the label wording. A field with no finder hit
-# reports "(not found)". Extracted values are written to the LOG, not the
-# emailed list (the list flags the entry as a SPECIFYING LIST EMAIL and
-# echoes the Determine labels under it).
+#   Determine  the user's own note of what matters about this bill type.
+#              NOT read by the script — matching and the emailed list ignore
+#              it entirely (per-field extraction was removed; see git
+#              history before 2026-06-11 if it's ever wanted back).
 
 SPECIFYING_CSV = BASE_DIR / "SpecifyingList.csv"
 
-LABEL_FINDERS = {
-    "account number": [("labeled", "code", ["account number", "account no"])],
-    "amount due": [("labeled", "money", ["amount due", "total amount due", "total due", "amount payable"])],
-    "due date": [("labeled", "date", ["due date", "due by", "due on", "payment due", "direct debit date"])],
-    "payment amount": [("youve_paid",), ("labeled", "money", ["total", "subtotal"])],
-    "transaction date": [("labeled", "date", ["transaction date"])],
-    "total amount paid": [("labeled", "money", ["amount paid", "total"])],
-    "payment date": [("stripe_date",), ("labeled", "date", ["date paid"])],
-    "invoice code": [("subject", "code", ["invoice"]), ("labeled", "code", ["invoice"])],
-    "amount paid": [("youve_paid",), ("labeled", "money", ["amount paid", "total paid", "amount due", "total", "subtotal"])],
-    "invoice number": [("subject", "code", ["invoice"]), ("labeled", "code", ["invoice number", "invoice no", "invoice #", "invoice"])],
-    "total amount payable": [("labeled", "money", ["total amount payable", "amount payable", "total payable", "total due", "total"])],
-    "order id": [("labeled", "code", ["order id"])],
-    "total paid": [("youve_paid",), ("labeled", "money", ["total", "subtotal"])],
-    "total new charges": [("labeled", "money", ["total new charges", "new charges", "total charges", "total due", "amount due"])],
-    "amount payable": [("labeled", "money", ["amount payable", "amount due", "instalment amount", "total"])],
-    "instalment due date": [("labeled", "date", ["due date", "instalment due", "due"])],
-    "account used": [("paid_with",)],
-}
-
-
-def _generic_finder(label):
-    """Finder chain for a Determine label with no LABEL_FINDERS entry: search
-    for the label itself, with the value kind inferred from its wording."""
-    low = label.lower()
-    if any(w in low for w in ("date", "due", "when")):
-        kind = "date"
-    elif any(w in low for w in ("amount", "total", "charge", "paid", "payable",
-                                "price", "cost", "fee")):
-        kind = "money"
-    else:
-        kind = "code"
-    return [("labeled", kind, [low])]
-
 
 def load_specifying():
-    """Parse SpecifyingList.csv into spec dicts. A missing or empty file
-    degrades to a plain summary run (logged, not fatal); malformed rows are
-    skipped with a log line. utf-8-sig tolerates an Excel-written BOM."""
+    """Parse SpecifyingList.csv into match-rule dicts. A missing or empty
+    file degrades to a plain summary run (logged, not fatal); malformed rows
+    are skipped with a log line. utf-8-sig tolerates an Excel-written BOM."""
     specs = []
     if not SPECIFYING_CSV.exists():
         log(f"WARNING: {SPECIFYING_CSV.name} not found — no SPECIFYING matching this run")
@@ -199,7 +151,6 @@ def load_specifying():
                 frm = (row.get("From") or "").strip()
                 subj = (row.get("Subject") or "").strip()
                 to = (row.get("To") or "").strip()
-                det = (row.get("Determine") or "").strip()
                 if not frm:
                     # A blank From would substring-match every email.
                     log(f"WARNING: {SPECIFYING_CSV.name} row {i}: empty From — skipped")
@@ -209,12 +160,6 @@ def load_specifying():
                     "name": f"{frm} / {subj}" if subj else frm,
                     "from_has": frm.lower(),
                     "subject_pre": _norm_subject(subj),
-                    "determine": det,  # raw CSV column, echoed in the list
-                    "fields": [
-                        (label, LABEL_FINDERS.get(label.lower(), _generic_finder(label)))
-                        for label in (p.strip() for p in det.split(","))
-                        if label
-                    ],
                 }
                 if to:
                     spec["to_has"] = to.lower()
@@ -243,18 +188,6 @@ _BOILERPLATE = re.compile(
     r"^(view (this |in |it )?(email |message )?(in|on)?\s*(your )?(browser|web)|"
     r"view online|web version|having trouble|no images\?|unsubscribe|"
     r"add us to your address book|email not displaying)", re.I)
-
-VALUE_RES = {
-    "money": re.compile(r"\$\s?\d[\d,]*(?:\.\d{2})?(?:\s?[A-Z]{3})?"),
-    "date": re.compile(
-        r"(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+\d{4}"   # 27 June 2026
-        r"|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}"     # June 27, 2026
-        r"|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})"),                     # 27/06/2026
-    # Codes must contain a digit — bare words ("period", "summary") that
-    # happen to follow an "invoice"/"account" label are not identifiers.
-    "code": re.compile(r"#?(?=[A-Za-z0-9/\-#]*\d)[A-Za-z0-9][A-Za-z0-9/\-#]{3,}"),
-}
-
 
 def clean_text(text):
     """Normalise extracted body text: strip invisible padding chars, NBSPs,
@@ -287,82 +220,6 @@ def summarize(lines, subject):
     out = " ".join(words[:SUMMARY_MAX_WORDS])
     if len(words) > SUMMARY_MAX_WORDS:
         out += " ..."
-    return out
-
-
-# ── Determine-field extraction ───────────────────────────────────────────────
-
-def _find_labeled(lines, kind, labels):
-    """Label on the same line ("Amount paid $38.60") or label-only line with
-    the value on one of the next 3 non-empty lines (PayPal's table layout)."""
-    vre = VALUE_RES[kind]
-    for label in labels:
-        for i, line in enumerate(lines):
-            low = line.lower()
-            pos = low.find(label)
-            if pos < 0:
-                continue
-            m = vre.search(line[pos + len(label):])
-            if m:
-                return m.group(0).strip()
-            if len(low.strip()) <= len(label) + 3:  # label-only line
-                for nxt in lines[i + 1:i + 4]:
-                    m = vre.search(nxt)
-                    if m:
-                        return m.group(0).strip()
-    return None
-
-
-def _find_paid_with(lines):
-    """PayPal "Paid <merchant> with" block: the following lines name the
-    funding source ("WBC" / "Savings ••0966") until an amount/Transaction
-    line. Joined with spaces."""
-    for i, line in enumerate(lines):
-        if re.match(r"^paid .* with$", line.strip(), re.I):
-            parts = []
-            for nxt in lines[i + 1:i + 5]:
-                if VALUE_RES["money"].fullmatch(nxt.strip()) or nxt.lower().startswith("transaction"):
-                    break
-                parts.append(nxt.strip())
-            if parts:
-                return " ".join(parts)
-    return None
-
-
-def extract_fields(spec, subject, lines):
-    """Run each Determine field's finder chain. Always returns every field,
-    with "(not found)" for misses — honest degradation beats silent absence
-    when a sender redesigns their template."""
-    joined = " ".join(lines)
-    out = []
-    for label, finders in spec["fields"]:
-        value = None
-        for finder in finders:
-            method = finder[0]
-            if method == "labeled":
-                value = _find_labeled(lines, finder[1], finder[2])
-            elif method == "subject":
-                _, kind, labels = finder
-                low = (subject or "").lower()
-                for lab in labels:
-                    pos = low.rfind(lab)
-                    if pos >= 0:
-                        m = VALUE_RES[kind].search(subject[pos + len(lab):])
-                        if m:
-                            value = m.group(0).strip()
-                            break
-            elif method == "youve_paid":
-                m = re.search(r"you'?ve paid\s+(\$\s?[\d,]+(?:\.\d{2})?(?:\s?[A-Z]{3})?)",
-                              joined, re.I)
-                value = m.group(1) if m else None
-            elif method == "paid_with":
-                value = _find_paid_with(lines)
-            elif method == "stripe_date":
-                m = re.search(r"\b[Pp]aid\s+([A-Z][a-z]+ \d{1,2}, \d{4})", joined)
-                value = m.group(1) if m else None
-            if value:
-                break
-        out.append((label, value or "(not found)"))
     return out
 
 
@@ -826,20 +683,17 @@ def outlook_send(account, account_email, subject, body):
 
 # ── Output assembly ──────────────────────────────────────────────────────────
 
-def _field(label, value, width=9):
-    """One wrapped 'Label: value' entry line with a hanging indent. ``width``
-    widens the label column for labels that outgrow the default
-    ("Determine:" is 10 chars)."""
-    prefix = f"   {label:<{width}}"
+def _field(label, value):
+    """One wrapped 'Label: value' entry line with a hanging indent."""
+    prefix = f"   {label:<9}"
     return textwrap.fill(value or "", width=WRAP, initial_indent=prefix,
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
 
 def format_entry(n, entry):
     """A SPECIFYING match renders like any other email; the only additions
-    are the marker line at the top and, at the bottom, the names of any
-    downloaded PDF attachments plus a Determine: line echoing the rule's
-    field labels from SpecifyingList.csv (extracted VALUES go to the log)."""
+    are the marker line at the top and the names of any downloaded PDF
+    attachments at the bottom."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
     lines = []
@@ -858,9 +712,6 @@ def format_entry(n, entry):
     pdfs = entry.get("pdfs") or []
     if pdfs:
         lines.append(_field("PDFs:", "; ".join(pdfs)))
-    if entry.get("spec"):
-        lines.append(_field("Determine:",
-                            entry["spec"].get("determine") or "(none)", width=11))
     return "\n".join(lines)
 
 
@@ -951,8 +802,7 @@ def main():
         except Exception as e:
             errors[account] = f"{type(e).__name__}: {e}"
 
-    # Match against SpecifyingList.csv. The Determine values are extracted
-    # here and written to the LOG — the emailed list only carries the
+    # Match against SpecifyingList.csv — the emailed list only carries the
     # "SPECIFYING LIST EMAIL" marker (and PDF names once downloaded).
     matched = []
     for entries in entries_by_account.values():
@@ -960,9 +810,7 @@ def main():
             spec = match_specifying(entry)
             if spec:
                 entry["spec"] = spec
-                fields = extract_fields(spec, entry["subject"], entry["lines"])
-                log(f"SPECIFYING match ({spec['name']}) in {entry['account']}: "
-                    + "; ".join(f"{label}={value}" for label, value in fields))
+                log(f"SPECIFYING match ({spec['name']}) in {entry['account']}")
                 matched.append(entry)
 
     # Action phase — only ever sees SPECIFYING matches, and each action is
