@@ -5,13 +5,16 @@ WebCentral via IMAP, Outlook via Microsoft Graph) for unread email in the
 Inbox and Spam/Junk folders and builds the COMPREHENSIVE LIST: one running
 sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
-SPECIFYING LIST (known bills/receipts) additionally get their Determine
-fields extracted and noted inline, their PDF attachments saved to
-~/Downloads (idempotently), and are marked read — but stay in place: the
-original move-to-Trash is off by default behind the TRASH_MATCHES flag
-(each per-match action has its own flag; see the constants below). The list
-is sent from grobliro@outlook.com to namor5772@gmail.com, mirroring the
-AI-run instruction's daily email.
+SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv) are
+listed like any other email except for a "SPECIFYING LIST EMAIL" marker
+line at the top of the entry and the names of their downloaded PDF
+attachments at the bottom. Their Determine fields are extracted to the run
+LOG (not the email), their PDFs are saved to ~/Downloads (idempotently),
+and they are marked read — but stay in place: the original move-to-Trash
+is off by default behind the TRASH_MATCHES flag (each per-match action has
+its own flag; see the constants below). The list is sent from
+grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
+instruction's daily email.
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text and the Determine fields are extracted with label-proximity
@@ -48,6 +51,7 @@ normal pass (even with per-account errors — they're visible in the email),
 
 import argparse
 import base64
+import csv
 import email
 import email.header
 import email.utils
@@ -116,15 +120,20 @@ def log(msg):
         f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
 
 
-# ── SPECIFYING LIST ──────────────────────────────────────────────────────────
-# One dict per type. Matching is case-insensitive on the decoded headers:
-#   from_has    substring of the From header (display name or address)
-#   subject     exact subject (after collapsing whitespace, stripping a
-#               leading Fwd:/Re: and any trailing "...")
-#   subject_pre subject prefix ("Subject STARTING with" / trailing "..." specs)
-#   to_has      substring that must appear in the To header (forwarded bills)
-# Determine fields are (display label, finder chain). Each finder is tried in
-# order until one yields a value:
+# ── SPECIFYING LIST (loaded from SpecifyingList.csv) ─────────────────────────
+# The rules live in SpecifyingList.csv in the repo root — one row per email
+# type, semicolon-delimited with every field double-quoted (same convention
+# as APICostLog.txt: the data itself is full of commas) — with columns:
+#   To         optional substring the To header must contain (forwarded bills)
+#   From       substring of the From header (display name or address)
+#   Subject    START of the subject — always a prefix match, never exact,
+#              because senders vary the tail across the billing cycle
+#              ("... is now available" / "... is due soon."). A trailing
+#              "..." is stripped. Matching is case-insensitive throughout.
+#   Determine  one comma-joined string of field labels to extract, e.g.
+#              "Account number, Amount due, Due Date"
+# Each Determine label maps (case-insensitively) through LABEL_FINDERS to a
+# finder chain tried in order until one yields a value:
 #   ("labeled", kind, [label synonyms])  label on the same line or the value
 #                                        on one of the next 3 lines
 #   ("subject", kind, [label synonyms])  value in the subject after the label
@@ -132,90 +141,96 @@ def log(msg):
 #   ("paid_with",)                       PayPal "Paid <merchant> with" block
 #   ("stripe_date",)                     Stripe "... $38.60 Paid May 8, 2026"
 # kinds: money / date / code — typed value regexes so a label can't match
-# arbitrary prose. A field with no finder hit reports "(not found)".
+# arbitrary prose. Labels absent from LABEL_FINDERS get a generic finder
+# whose kind is inferred from the label wording. A field with no finder hit
+# reports "(not found)". Extracted values are written to the LOG, not the
+# emailed list (the list only flags the entry as a SPECIFYING LIST EMAIL).
 
-SPECIFYING = [
-    {
-        "n": 1, "name": "Origin Energy / electricity bill",
-        "from_has": "origin energy", "subject": "your origin electricity bill",
-        "fields": [
-            ("Account number", [("labeled", "code", ["account number", "account no"])]),
-            ("Amount due", [("labeled", "money", ["amount due", "total amount due", "total due", "amount payable"])]),
-            ("Due Date", [("labeled", "date", ["due date", "due by", "due on", "direct debit date"])]),
-        ],
-    },
-    {
-        "n": 2, "name": "PayPal / Amaysim Mobile",
-        "from_has": "paypal", "subject_pre": "receipt for your payment to amaysim mobile pty l",
-        "fields": [
-            ("Payment amount", [("youve_paid",), ("labeled", "money", ["total", "subtotal"])]),
-            ("Transaction Date", [("labeled", "date", ["transaction date"])]),
-        ],
-    },
-    {
-        "n": 3, "name": "Anthropic, PBC / API receipt",
-        "from_has": "anthropic", "subject_pre": "your receipt from anthropic, pbc",
-        "to_has": "namor5772@gmail.com",
-        "fields": [
-            ("Total Amount paid", [("labeled", "money", ["amount paid", "total"])]),
-            ("Payment Date", [("stripe_date",), ("labeled", "date", ["date paid"])]),
-        ],
-    },
-    {
-        "n": 4, "name": "OdooBot / SKYONE invoice",
-        "from_has": "odoobot", "subject_pre": "skyone invoice",
-        "fields": [
-            ("Invoice code", [("subject", "code", ["invoice"]), ("labeled", "code", ["invoice"])]),
-            ("Amount paid", [("labeled", "money", ["amount paid", "total paid", "amount due", "total"])]),
-        ],
-    },
-    {
-        "n": 5, "name": "Klemzig / storage rental invoice",
-        "from_has": "klemzig", "subject_pre": "storage rental tax invoice",
-        "fields": [
-            ("Invoice Number", [("subject", "code", ["invoice"]), ("labeled", "code", ["invoice number", "invoice no", "invoice #", "invoice"])]),
-            ("Total Amount payable", [("labeled", "money", ["total amount payable", "amount payable", "total payable", "total due", "total"])]),
-            ("Due date", [("labeled", "date", ["due date", "due by", "payment due"])]),
-        ],
-    },
-    {
-        "n": 6, "name": "PayPal / Apple Services",
-        "from_has": "paypal", "subject": "receipt for your payment to apple services",
-        "fields": [
-            ("Order ID", [("labeled", "code", ["order id"])]),
-            ("Total paid", [("youve_paid",), ("labeled", "money", ["total", "subtotal"])]),
-            ("Transaction Date", [("labeled", "date", ["transaction date"])]),
-        ],
-    },
-    {
-        # Prefix, not exact: Telstra varies the tail across the bill cycle —
-        # "... is now available", "... is due soon." (reminder) — same stem.
-        "n": 7, "name": "Telstra Notify / JB Hi-Fi Mobile bill",
-        "from_has": "telstra", "subject_pre": "roman, your jb hi-fi mobile bill",
-        "fields": [
-            ("Invoice Number", [("labeled", "code", ["invoice number", "invoice no", "invoice"])]),
-            ("Total new charges", [("labeled", "money", ["total new charges", "new charges", "total charges", "total due", "amount due"])]),
-            ("Due Date", [("labeled", "date", ["due date", "due by", "direct debit date"])]),
-        ],
-    },
-    {
-        "n": 8, "name": "Ku-ring-gai Council / rates instalment",
-        "from_has": "ku-ring-gai", "subject": "ku-ring-gai council instalments",
-        "fields": [
-            ("Amount Payable", [("labeled", "money", ["amount payable", "amount due", "instalment amount", "total"])]),
-            ("Instalment Due date", [("labeled", "date", ["due date", "instalment due", "due"])]),
-        ],
-    },
-    {
-        "n": 9, "name": "PayPal / Netflix Australia",
-        "from_has": "paypal", "subject_pre": "receipt for your payment to netflix australia pt",
-        "to_has": "roman1@ri.com.au",
-        "fields": [
-            ("Amount Paid", [("youve_paid",), ("labeled", "money", ["total", "subtotal"])]),
-            ("Account Used", [("paid_with",)]),
-        ],
-    },
-]
+SPECIFYING_CSV = BASE_DIR / "SpecifyingList.csv"
+
+LABEL_FINDERS = {
+    "account number": [("labeled", "code", ["account number", "account no"])],
+    "amount due": [("labeled", "money", ["amount due", "total amount due", "total due", "amount payable"])],
+    "due date": [("labeled", "date", ["due date", "due by", "due on", "payment due", "direct debit date"])],
+    "payment amount": [("youve_paid",), ("labeled", "money", ["total", "subtotal"])],
+    "transaction date": [("labeled", "date", ["transaction date"])],
+    "total amount paid": [("labeled", "money", ["amount paid", "total"])],
+    "payment date": [("stripe_date",), ("labeled", "date", ["date paid"])],
+    "invoice code": [("subject", "code", ["invoice"]), ("labeled", "code", ["invoice"])],
+    "amount paid": [("youve_paid",), ("labeled", "money", ["amount paid", "total paid", "amount due", "total", "subtotal"])],
+    "invoice number": [("subject", "code", ["invoice"]), ("labeled", "code", ["invoice number", "invoice no", "invoice #", "invoice"])],
+    "total amount payable": [("labeled", "money", ["total amount payable", "amount payable", "total payable", "total due", "total"])],
+    "order id": [("labeled", "code", ["order id"])],
+    "total paid": [("youve_paid",), ("labeled", "money", ["total", "subtotal"])],
+    "total new charges": [("labeled", "money", ["total new charges", "new charges", "total charges", "total due", "amount due"])],
+    "amount payable": [("labeled", "money", ["amount payable", "amount due", "instalment amount", "total"])],
+    "instalment due date": [("labeled", "date", ["due date", "instalment due", "due"])],
+    "account used": [("paid_with",)],
+}
+
+
+def _generic_finder(label):
+    """Finder chain for a Determine label with no LABEL_FINDERS entry: search
+    for the label itself, with the value kind inferred from its wording."""
+    low = label.lower()
+    if any(w in low for w in ("date", "due", "when")):
+        kind = "date"
+    elif any(w in low for w in ("amount", "total", "charge", "paid", "payable",
+                                "price", "cost", "fee")):
+        kind = "money"
+    else:
+        kind = "code"
+    return [("labeled", kind, [low])]
+
+
+def load_specifying():
+    """Parse SpecifyingList.csv into spec dicts. A missing or empty file
+    degrades to a plain summary run (logged, not fatal); malformed rows are
+    skipped with a log line. utf-8-sig tolerates an Excel-written BOM."""
+    specs = []
+    if not SPECIFYING_CSV.exists():
+        log(f"WARNING: {SPECIFYING_CSV.name} not found — no SPECIFYING matching this run")
+        return specs
+    try:
+        with open(SPECIFYING_CSV, newline="", encoding="utf-8-sig") as f:
+            for i, row in enumerate(csv.DictReader(f, delimiter=";"), start=1):
+                frm = (row.get("From") or "").strip()
+                subj = (row.get("Subject") or "").strip()
+                to = (row.get("To") or "").strip()
+                det = (row.get("Determine") or "").strip()
+                if not frm:
+                    # A blank From would substring-match every email.
+                    log(f"WARNING: {SPECIFYING_CSV.name} row {i}: empty From — skipped")
+                    continue
+                spec = {
+                    "n": i,
+                    "name": f"{frm} / {subj}" if subj else frm,
+                    "from_has": frm.lower(),
+                    "subject_pre": _norm_subject(subj),
+                    "fields": [
+                        (label, LABEL_FINDERS.get(label.lower(), _generic_finder(label)))
+                        for label in (p.strip() for p in det.split(","))
+                        if label
+                    ],
+                }
+                if to:
+                    spec["to_has"] = to.lower()
+                specs.append(spec)
+    except Exception as e:
+        log(f"WARNING: could not parse {SPECIFYING_CSV.name}: {e} — "
+            f"no SPECIFYING matching this run")
+        return []
+    return specs
+
+
+_SPECS = None
+
+
+def get_specifying():
+    global _SPECS
+    if _SPECS is None:
+        _SPECS = load_specifying()
+    return _SPECS
 
 # ── Text utilities ───────────────────────────────────────────────────────────
 
@@ -357,18 +372,18 @@ def _norm_subject(subject):
 
 
 def match_specifying(entry):
-    """Return the SPECIFYING spec dict matching this entry, or None."""
+    """Return the first SpecifyingList.csv rule matching this entry, or None.
+    From/To are case-insensitive substring tests on the decoded headers; the
+    Subject column is always a PREFIX of the normalised subject."""
     frm = (entry["from"] or "").lower()
     subj = _norm_subject(entry["subject"])
     to = (entry["to"] or "").lower()
-    for spec in SPECIFYING:
+    for spec in get_specifying():
         if spec["from_has"] not in frm:
             continue
-        if "subject" in spec and subj != spec["subject"].rstrip(". ").lower():
+        if spec["subject_pre"] and not subj.startswith(spec["subject_pre"]):
             continue
-        if "subject_pre" in spec and not subj.startswith(spec["subject_pre"]):
-            continue
-        if "to_has" in spec and spec["to_has"] not in to:
+        if spec.get("to_has") and spec["to_has"] not in to:
             continue
         return spec
     return None
@@ -808,19 +823,25 @@ def outlook_send(account, account_email, subject, body):
 
 # ── Output assembly ──────────────────────────────────────────────────────────
 
-def _field(label, value, width=9):
-    """One wrapped 'Label: value' entry line with a hanging indent. ``width``
-    sets the label column (the SPECIFYING block auto-sizes it because
-    Determine labels like "Total Amount payable:" outgrow the default)."""
-    prefix = f"   {label:<{width}}"
+def _field(label, value):
+    """One wrapped 'Label: value' entry line with a hanging indent."""
+    prefix = f"   {label:<9}"
     return textwrap.fill(value or "", width=WRAP, initial_indent=prefix,
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
 
 def format_entry(n, entry):
+    """A SPECIFYING match renders like any other email; the only additions
+    are the marker line at the top and the names of any downloaded PDF
+    attachments at the bottom (Determine values go to the log instead)."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
-    lines = [f"{num}Account:  {entry['account_email']}{tag}"]
+    lines = []
+    if entry.get("spec"):
+        lines.append(f"{num}SPECIFYING LIST EMAIL")
+        lines.append(f"   Account:  {entry['account_email']}{tag}")
+    else:
+        lines.append(f"{num}Account:  {entry['account_email']}{tag}")
     lines.append(_field("From:", entry["from"]))
     fwd = forwarded_to(entry, entry["account_email"])
     if fwd:
@@ -828,20 +849,9 @@ def format_entry(n, entry):
     lines.append(_field("Subject:", entry["subject"]))
     lines.append(_field("Date:", entry["date"]))
     lines.append(_field("Summary:", summarize(entry["lines"], entry["subject"])))
-    spec = entry.get("spec")
-    if spec:
-        lines.append("")
-        lines.append(f"   *** SPECIFYING LIST type {spec['n']}: {spec['name']}")
-        spec_fields = entry.get("spec_fields", [])
-        width = max([len(l) + 2 for l, _ in spec_fields] + [9])
-        for label, value in spec_fields:
-            lines.append(_field(label + ":", value, width))
-        if "pdfs" in entry:
-            pdfs = entry["pdfs"]
-            lines.append(_field("PDFs:", "; ".join(pdfs) if pdfs
-                                else "(no pdf attachments)", width))
-        if "actions" in entry:
-            lines.append(_field("Actions:", "; ".join(entry["actions"]) or "(none)", width))
+    pdfs = entry.get("pdfs") or []
+    if pdfs:
+        lines.append(_field("PDFs:", "; ".join(pdfs)))
     return "\n".join(lines)
 
 
@@ -932,29 +942,31 @@ def main():
         except Exception as e:
             errors[account] = f"{type(e).__name__}: {e}"
 
-    # Match SPECIFYING types and extract Determine fields (pure functions).
+    # Match against SpecifyingList.csv. The Determine values are extracted
+    # here and written to the LOG — the emailed list only carries the
+    # "SPECIFYING LIST EMAIL" marker (and PDF names once downloaded).
     matched = []
     for entries in entries_by_account.values():
         for entry in entries:
             spec = match_specifying(entry)
             if spec:
                 entry["spec"] = spec
-                entry["spec_fields"] = extract_fields(spec, entry["subject"], entry["lines"])
+                fields = extract_fields(spec, entry["subject"], entry["lines"])
+                log(f"SPECIFYING match ({spec['name']}) in {entry['account']}: "
+                    + "; ".join(f"{label}={value}" for label, value in fields))
                 matched.append(entry)
 
     # Action phase — only ever sees SPECIFYING matches, and each action is
-    # individually flag-gated. With the default flags the only effect is
-    # PDF downloads; mailboxes are never mutated. Skipped on --dry-run.
-    if SAVE_MATCH_PDFS or MARK_MATCHES_READ or TRASH_MATCHES:
+    # individually flag-gated (download PDFs / mark read; trash is off).
+    # Outcomes are logged, not emailed. Skipped wholesale on --dry-run.
+    if not args.dry_run and (SAVE_MATCH_PDFS or MARK_MATCHES_READ or TRASH_MATCHES):
         for entry in matched:
-            if args.dry_run:
-                entry["actions"] = ["dry run — no action taken"]
-                continue
             try:
                 act = {"Gmail": gmail_act, "IMAP": imap_act, "Outlook": outlook_act}[entry["provider"]]
-                entry["pdfs"], entry["actions"] = act(entry)
+                entry["pdfs"], actions = act(entry)
+                log(f"acted on match in {entry['account']}: {'; '.join(actions)}"
+                    + (f"; pdfs: {', '.join(entry['pdfs'])}" if entry["pdfs"] else ""))
             except Exception as e:
-                entry["actions"] = [f"ACTION FAILED: {type(e).__name__}: {e}"]
                 log(f"action failed for {entry['account']} {entry['subject']!r}: {e}")
 
     for conn in imap_conns.values():
