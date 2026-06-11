@@ -91,7 +91,7 @@ class App:
         tk.Label(filter_frame, text="Priority:").pack(side=tk.LEFT)
         self._filter_pri_var = tk.StringVar(value="All")
         self._filter_pri_combo = ttk.Combobox(filter_frame, textvariable=self._filter_pri_var,
-                                               values=["All"] + PRIORITIES, state="readonly",
+                                               values=["All", *PRIORITIES], state="readonly",
                                                width=8)
         self._filter_pri_combo.pack(side=tk.LEFT, padx=2)
         self._filter_pri_combo.bind("<<ComboboxSelected>>", lambda e: self._on_filter_changed())
@@ -99,7 +99,7 @@ class App:
         tk.Label(filter_frame, text="Category:").pack(side=tk.LEFT, padx=(8, 0))
         self._filter_cat_var = tk.StringVar(value="All")
         self._filter_cat_combo = ttk.Combobox(filter_frame, textvariable=self._filter_cat_var,
-                                               values=["All"] + self.categories, state="readonly",
+                                               values=["All", *self.categories], state="readonly",
                                                width=10)
         self._filter_cat_combo.pack(side=tk.LEFT, padx=2)
         self._filter_cat_combo.bind("<<ComboboxSelected>>", lambda e: self._on_filter_changed())
@@ -159,10 +159,9 @@ class App:
             self._update_category_combos()
 
         due = self._entry_due.get().strip()
-        if due:
-            if not self._parse_date(due):
-                messagebox.showwarning("Invalid date", "Use DD/MM/YYYY format for due date.")
-                return
+        if due and not self._parse_date(due):
+            messagebox.showwarning("Invalid date", "Use DD/MM/YYYY format for due date.")
+            return
 
         todo = {
             "text": text,
@@ -192,18 +191,16 @@ class App:
         self._save_data()
 
     def _delete_todo(self):
-        idx = self._selected_real_index()
+        idx = self._selected_real_index(require=True)
         if idx is None:
-            messagebox.showinfo("No selection", "Select a task first.")
             return
         self.todos.pop(idx)
         self._refresh_tree()
         self._save_data()
 
     def _edit_todo(self):
-        idx = self._selected_real_index()
+        idx = self._selected_real_index(require=True)
         if idx is None:
-            messagebox.showinfo("No selection", "Select a task first.")
             return
         todo = self.todos[idx]
 
@@ -346,14 +343,18 @@ class App:
 
     # ── Selection helpers ─────────────────────────────────────────────
 
-    def _selected_real_index(self):
+    def _selected_real_index(self, require=False):
+        """Real index in self.todos for the selected tree item; with
+        require=True, pop a "select a task" info box when there is none."""
+        idx = None
         sel = self.tree.selection()
-        if not sel:
-            return None
-        tree_idx = self.tree.index(sel[0])
-        if tree_idx < len(self._visible_map):
-            return self._visible_map[tree_idx]
-        return None
+        if sel:
+            tree_idx = self.tree.index(sel[0])
+            if tree_idx < len(self._visible_map):
+                idx = self._visible_map[tree_idx]
+        if idx is None and require:
+            messagebox.showinfo("No selection", "Select a task first.")
+        return idx
 
     def _select_real_index(self, real_idx):
         if real_idx in self._visible_map:
@@ -373,7 +374,7 @@ class App:
 
     def _update_category_combos(self):
         self._entry_category["values"] = self.categories
-        self._filter_cat_combo["values"] = ["All"] + self.categories
+        self._filter_cat_combo["values"] = ["All", *self.categories]
 
     # ── Date parsing ──────────────────────────────────────────────────
 
@@ -390,7 +391,7 @@ class App:
 
     def _load_data(self):
         try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
+            with open(DATA_FILE, encoding="utf-8") as f:
                 data = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return
@@ -410,7 +411,7 @@ class App:
 
     def _load_state(self):
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(STATE_FILE, encoding="utf-8") as f:
                 state = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return

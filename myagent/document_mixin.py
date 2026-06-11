@@ -124,14 +124,14 @@ class DocumentMixin:
                 self._read_docx(path, result, max_chars)
             elif ext in HTML_EXTENSIONS:
                 result["format"] = "html"
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                with open(path, encoding="utf-8", errors="replace") as f:
                     html = f.read()
                 text = extract_text_from_html(html)
                 result["text"] = text[:max_chars]
                 result["text_truncated"] = len(text) > max_chars
             elif ext in TEXT_EXTENSIONS:
                 result["format"] = "text"
-                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                with open(path, encoding="utf-8", errors="replace") as f:
                     text = f.read()
                 result["text"] = text[:max_chars]
                 result["text_truncated"] = len(text) > max_chars
@@ -140,7 +140,7 @@ class DocumentMixin:
                 # files), fall back to a hex preview that lets the model at
                 # least identify the file's nature.
                 try:
-                    with open(path, "r", encoding="utf-8") as f:
+                    with open(path, encoding="utf-8") as f:
                         text = f.read()
                     result["format"] = "text (assumed from content)"
                     result["text"] = text[:max_chars]
@@ -307,9 +307,7 @@ class DocumentMixin:
                     end_n = int(end_s.strip()) - 1
                 except ValueError:
                     continue
-                for i in range(start_n, end_n + 1):
-                    if 0 <= i < total:
-                        result.append(i)
+                result.extend(i for i in range(start_n, end_n + 1) if 0 <= i < total)
             else:
                 try:
                     n = int(part) - 1

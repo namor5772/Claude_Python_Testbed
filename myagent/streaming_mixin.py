@@ -22,18 +22,22 @@ if _HAS_DESKTOP:
 
 class StreamingMixin:
 
+    def _tool_info(self, message):
+        """Post a tool_info activity line to the GUI queue (shared by all mixins)."""
+        self.queue.put({"type": "tool_info", "content": message})
+
     def _tools_to_responses(self, tools):
         """Convert Anthropic tool schemas to OpenAI Responses API format."""
-        result = []
-        for tool in tools:
-            result.append({
+        return [
+            {
                 "type": "function",
                 "name": tool["name"],
                 "description": tool.get("description", ""),
                 "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
                 "strict": False,
-            })
-        return result
+            }
+            for tool in tools
+        ]
 
     def _messages_to_responses(self, messages):
         """Convert internal Anthropic-format messages to Responses API input format.
@@ -119,7 +123,8 @@ class StreamingMixin:
                                 "role": "user",
                                 "content": [
                                     {"type": "input_text", "text": hint_text},
-                                ] + deferred_images,
+                                    *deferred_images,
+                                ],
                             })
                     else:
                         # User message with text + images
@@ -396,7 +401,7 @@ class StreamingMixin:
         # would have false positives like a future native tool with two
         # underscores in its name).
         if _HAS_MCP and block.name in getattr(self, "_mcp_tools_by_name", {}):
-            self.queue.put({"type": "tool_info", "content": f"MCP: {block.name}\n"})
+            self._tool_info(f"MCP: {block.name}\n")
             return self.do_mcp_call(block.name, block.input or {})
         # Gmail (Google) native tools — dispatch any block.name beginning with
         # `gmail_` to the matching do_<name> method on the GmailMixin. Cheaper
@@ -407,7 +412,7 @@ class StreamingMixin:
             method = getattr(self, f"do_{block.name}", None)
             if method is None:
                 return f"Unknown Gmail tool: {block.name}"
-            self.queue.put({"type": "tool_info", "content": f"Gmail: {block.name}\n"})
+            self._tool_info(f"Gmail: {block.name}\n")
             return method(block.input or {})
         # Proton Mail native tools — same namespaced dispatch pattern.
         if _HAS_PROTONMAIL and block.name.startswith("proton_"):
@@ -416,7 +421,7 @@ class StreamingMixin:
             method = getattr(self, f"do_{block.name}", None)
             if method is None:
                 return f"Unknown Proton tool: {block.name}"
-            self.queue.put({"type": "tool_info", "content": f"Proton: {block.name}\n"})
+            self._tool_info(f"Proton: {block.name}\n")
             return method(block.input or {})
         # Outlook / Microsoft 365 native tools — same namespaced dispatch pattern.
         if _HAS_OUTLOOK and block.name.startswith("outlook_"):
@@ -425,25 +430,25 @@ class StreamingMixin:
             method = getattr(self, f"do_{block.name}", None)
             if method is None:
                 return f"Unknown Outlook tool: {block.name}"
-            self.queue.put({"type": "tool_info", "content": f"Outlook: {block.name}\n"})
+            self._tool_info(f"Outlook: {block.name}\n")
             return method(block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")
-            self.queue.put({"type": "tool_info", "content": f"Searching: {query}\n"})
+            self._tool_info(f"Searching: {query}\n")
             return self.search_web(query)
-        elif block.name == "fetch_webpage":
+        if block.name == "fetch_webpage":
             url = block.input.get("url", "")
-            self.queue.put({"type": "tool_info", "content": f"Fetching: {url}\n"})
+            self._tool_info(f"Fetching: {url}\n")
             return self.fetch_url(url)
-        elif block.name == "run_command":
+        if block.name == "run_command":
             cmd = block.input.get("command", "")
-            self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
+            self._tool_info(f"Running: {cmd}\n")
             return self.run_powershell(cmd)
-        elif block.name == "csv_search":
+        if block.name == "csv_search":
             inp = block.input
             fp = inp.get("file_path", "")
             sv = inp.get("search_value", "")
-            self.queue.put({"type": "tool_info", "content": f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n"})
+            self._tool_info(f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n")
             return self.do_csv_search(
                 fp, sv,
                 column=inp.get("column"),
@@ -451,20 +456,20 @@ class StreamingMixin:
                 max_results=inp.get("max_results", 50),
                 delimiter=inp.get("delimiter"),
             )
-        elif block.name == "read_document":
+        if block.name == "read_document":
             inp = block.input or {}
             fp = inp.get("path", "")
-            self.queue.put({"type": "tool_info", "content": f"Reading document: {os.path.basename(fp)}\n"})
+            self._tool_info(f"Reading document: {os.path.basename(fp)}\n")
             return self.do_read_document(inp)
-        elif block.name == "user_prompt":
+        if block.name == "user_prompt":
             prompt_msg = block.input.get("message", "")
-            self.queue.put({"type": "tool_info", "content": "Requesting user input...\n"})
+            self._tool_info("Requesting user input...\n")
             response = self.do_user_prompt(prompt_msg)
             if not response.strip():
                 self.stop_requested = True
                 return "[User submitted empty response — stopping agent]"
             return response
-        elif block.name in ("screenshot", "mouse_click", "type_text",
+        if block.name in ("screenshot", "mouse_click", "type_text",
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
                              "wait_for_window", "read_screen_text",
@@ -478,12 +483,12 @@ class StreamingMixin:
             if block.name == "screenshot":
                 display = click_display  # alias for clarity in screenshot path
                 disp_label = f"display {display}" if display is not None else "all displays"
-                self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
+                self._tool_info(f"Taking screenshot ({disp_label})...\n")
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
                     region = (inp["x"], inp["y"], inp["width"], inp["height"])
                 return self.do_screenshot(region, display=display, grid=bool(inp.get("grid", False)))
-            elif block.name == "mouse_click":
+            if block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
                 if cx is None or cy is None:
                     coord = inp.get("coordinate")
@@ -491,79 +496,79 @@ class StreamingMixin:
                         cx, cy = coord[0], coord[1]
                     else:
                         return f"mouse_click error: missing x/y coordinates. Got: {inp}"
-                self.queue.put({"type": "tool_info", "content": f"Clicking at ({cx}, {cy})...\n"})
+                self._tool_info(f"Clicking at ({cx}, {cy})...\n")
                 return self.do_mouse_click(
                     cx, cy,
                     button=inp.get("button", "left"),
                     clicks=int(inp.get("clicks", 1)),
                     display=click_display,
                 )
-            elif block.name == "type_text":
+            if block.name == "type_text":
                 text = inp.get("text", "")
                 preview = text[:50] + "..." if len(text) > 50 else text
-                self.queue.put({"type": "tool_info", "content": f"Typing: {preview}\n"})
+                self._tool_info(f"Typing: {preview}\n")
                 return self.do_type_text(text, interval=inp.get("interval", 0.02))
-            elif block.name == "press_key":
+            if block.name == "press_key":
                 keys = inp.get("keys", "")
-                self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
+                self._tool_info(f"Pressing: {keys}\n")
                 return self.do_press_key(keys)
-            elif block.name == "mouse_scroll":
+            if block.name == "mouse_scroll":
                 clicks_val = int(inp.get("clicks", 0))
                 sx, sy = inp.get("x"), inp.get("y")
-                self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
+                self._tool_info(f"Scrolling {clicks_val} clicks...\n")
                 return self.do_mouse_scroll(clicks_val, x=sx, y=sy, display=click_display)
-            elif block.name == "open_application":
+            if block.name == "open_application":
                 app_name = inp.get("name", "")
                 app_args = inp.get("args")
-                self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n"})
+                self._tool_info(f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n")
                 return self.do_open_application(app_name, args=app_args)
-            elif block.name == "find_window":
+            if block.name == "find_window":
                 title = inp.get("title", "")
-                self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
+                self._tool_info(f"Finding windows: {title}\n")
                 return self.do_find_window(title, activate=inp.get("activate", False))
-            elif block.name == "clipboard_read":
-                self.queue.put({"type": "tool_info", "content": "Reading clipboard...\n"})
+            if block.name == "clipboard_read":
+                self._tool_info("Reading clipboard...\n")
                 return self.do_clipboard_read()
-            elif block.name == "clipboard_write":
+            if block.name == "clipboard_write":
                 text = inp.get("text", "")
                 preview = text[:50] + "..." if len(text) > 50 else text
-                self.queue.put({"type": "tool_info", "content": f"Writing to clipboard: {preview}\n"})
+                self._tool_info(f"Writing to clipboard: {preview}\n")
                 return self.do_clipboard_write(text)
-            elif block.name == "wait_for_window":
+            if block.name == "wait_for_window":
                 title = inp.get("title", "")
                 timeout = inp.get("timeout", 10)
-                self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
+                self._tool_info(f"Waiting for window: {title}\n")
                 return self.do_wait_for_window(title, timeout=timeout)
-            elif block.name == "read_screen_text":
+            if block.name == "read_screen_text":
                 rx, ry, rw, rh = inp.get("x"), inp.get("y"), inp.get("width"), inp.get("height")
                 if None in (rx, ry, rw, rh):
                     return f"read_screen_text error: missing region parameters. Got: {inp}"
-                self.queue.put({"type": "tool_info", "content": f"OCR region ({rx},{ry} {rw}x{rh})...\n"})
+                self._tool_info(f"OCR region ({rx},{ry} {rw}x{rh})...\n")
                 return self.do_read_screen_text(rx, ry, rw, rh, display=click_display)
-            elif block.name == "find_image_on_screen":
+            if block.name == "find_image_on_screen":
                 path = inp.get("image_path", "")
-                self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
+                self._tool_info(f"Finding image: {os.path.basename(path)}\n")
                 return self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
-            elif block.name == "mouse_drag":
+            if block.name == "mouse_drag":
                 sx, sy = inp.get("start_x"), inp.get("start_y")
                 ex, ey = inp.get("end_x"), inp.get("end_y")
                 if None in (sx, sy, ex, ey):
                     return f"mouse_drag error: missing coordinates. Got: {inp}"
-                self.queue.put({"type": "tool_info", "content": f"Dragging ({sx},{sy}) to ({ex},{ey})...\n"})
+                self._tool_info(f"Dragging ({sx},{sy}) to ({ex},{ey})...\n")
                 return self.do_mouse_drag(
                     sx, sy, ex, ey,
                     duration=inp.get("duration", 0.5),
                     button=inp.get("button", "left"),
                     display=click_display,
                 )
-            elif block.name == "find_element":
+            if block.name == "find_element":
                 if self.provider != "Gemini":
                     return "find_element is only available for the Gemini provider. Use a region screenshot or grid=true overlay instead."
                 description = inp.get("description", "")
                 if not description:
                     return "find_element error: missing 'description' parameter."
                 disp_str = f" (display {click_display})" if click_display is not None else ""
-                self.queue.put({"type": "tool_info", "content": f"Locating: {description}{disp_str}\n"})
+                self._tool_info(f"Locating: {description}{disp_str}\n")
                 return self.do_gemini_find_element(description, display=click_display)
         elif block.name in ("browser_open", "browser_navigate",
                               "browser_click", "browser_fill",
@@ -576,75 +581,75 @@ class StreamingMixin:
             inp = block.input
             if block.name == "browser_open":
                 url = inp.get("url", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: opening {url}\n"})
+                self._tool_info(f"Browser: opening {url}\n")
                 return self.do_browser_open(url)
-            elif block.name == "browser_navigate":
+            if block.name == "browser_navigate":
                 url = inp.get("url", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: navigating to {url}\n"})
+                self._tool_info(f"Browser: navigating to {url}\n")
                 return self.do_browser_navigate(url)
-            elif block.name == "browser_click":
+            if block.name == "browser_click":
                 sel = inp.get("selector", "")
                 txt = inp.get("text", "")
                 target = sel or f"text='{txt}'"
-                self.queue.put({"type": "tool_info", "content": f"Browser: clicking {target}\n"})
+                self._tool_info(f"Browser: clicking {target}\n")
                 return self.do_browser_click(selector=sel or None, text=txt or None)
-            elif block.name == "browser_fill":
+            if block.name == "browser_fill":
                 sel = inp.get("selector", "")
                 val = inp.get("value", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: filling {sel}\n"})
+                self._tool_info(f"Browser: filling {sel}\n")
                 return self.do_browser_fill(sel, val)
-            elif block.name == "browser_get_text":
+            if block.name == "browser_get_text":
                 sel = inp.get("selector", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: reading text{' from ' + sel if sel else ''}...\n"})
+                self._tool_info(f"Browser: reading text{' from ' + sel if sel else ''}...\n")
                 return self.do_browser_get_text(selector=sel or None)
-            elif block.name == "browser_run_js":
+            if block.name == "browser_run_js":
                 code = inp.get("code", "")
                 preview = code[:80] + "..." if len(code) > 80 else code
-                self.queue.put({"type": "tool_info", "content": f"Browser: running JS: {preview}\n"})
+                self._tool_info(f"Browser: running JS: {preview}\n")
                 return self.do_browser_run_js(code)
-            elif block.name == "browser_screenshot":
-                self.queue.put({"type": "tool_info", "content": "Browser: taking screenshot...\n"})
+            if block.name == "browser_screenshot":
+                self._tool_info("Browser: taking screenshot...\n")
                 return self.do_browser_screenshot()
-            elif block.name == "browser_close":
-                self.queue.put({"type": "tool_info", "content": "Browser: closing connection...\n"})
+            if block.name == "browser_close":
+                self._tool_info("Browser: closing connection...\n")
                 return self.do_browser_close()
-            elif block.name == "browser_wait_for":
+            if block.name == "browser_wait_for":
                 sel = inp.get("selector", "")
                 timeout = inp.get("timeout", 10000)
-                self.queue.put({"type": "tool_info", "content": f"Browser: waiting for {sel}...\n"})
+                self._tool_info(f"Browser: waiting for {sel}...\n")
                 return self.do_browser_wait_for(sel, timeout=timeout)
-            elif block.name == "browser_select":
+            if block.name == "browser_select":
                 sel = inp.get("selector", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: selecting in {sel}...\n"})
+                self._tool_info(f"Browser: selecting in {sel}...\n")
                 return self.do_browser_select(sel, value=inp.get("value"), label=inp.get("label"))
-            elif block.name == "browser_get_elements":
+            if block.name == "browser_get_elements":
                 sel = inp.get("selector", "")
                 limit = inp.get("limit", 10)
-                self.queue.put({"type": "tool_info", "content": f"Browser: getting elements {sel}...\n"})
+                self._tool_info(f"Browser: getting elements {sel}...\n")
                 return self.do_browser_get_elements(sel, limit=limit)
         elif block.name == "get_skill":
             skill_name = block.input.get("skill_name", "")
-            self.queue.put({"type": "tool_info", "content": f"Loading skill: {skill_name}\n"})
+            self._tool_info(f"Loading skill: {skill_name}\n")
             if skill_name in self.skills and self.skills[skill_name].get("mode") == "on_demand":
                 return self.skills[skill_name]["content"]
-            else:
-                return f"Skill not found or not on-demand: {skill_name}"
+            return f"Skill not found or not on-demand: {skill_name}"
         elif block.name == "manage_instructions":
             action = block.input.get("action", "")
-            self.queue.put({"type": "tool_info", "content": f"manage_instructions: {action}\n"})
+            self._tool_info(f"manage_instructions: {action}\n")
             return self.do_manage_instructions(block.input)
         elif block.name == "manage_skills":
             action = block.input.get("action", "")
-            self.queue.put({"type": "tool_info", "content": f"manage_skills: {action}\n"})
+            self._tool_info(f"manage_skills: {action}\n")
             return self.do_manage_skills(block.input)
         elif block.name == "run_instruction":
             name = block.input.get("name", "")
             headless = block.input.get("headless", True)
             mode = "headless" if headless else "GUI"
-            self.queue.put({"type": "tool_info", "content": f"run_instruction: {name} ({mode})\n"})
+            self._tool_info(f"run_instruction: {name} ({mode})\n")
             return self.do_run_instruction(block.input)
-        else:
-            return f"Unknown tool: {block.name}"
+        # Catch-all: an unknown tool name, or a family branch above (desktop/
+        # browser) that matched the group test but no specific handler.
+        return f"Unknown tool: {block.name}"
 
     def _weak_desktop_combo_warning(self):
         """Returns a warning string when the active provider/model has known
@@ -740,8 +745,7 @@ class StreamingMixin:
             line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f}\n"
             with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(line)
-            self.queue.put({"type": "tool_info",
-                            "content": f"Logged API cost to {APICOST_LOG_FILE}: {line}"})
+            self._tool_info(f"Logged API cost to {APICOST_LOG_FILE}: {line}")
         except Exception as e:
             self.queue.put({"type": "warning",
                             "content": f"⚠ Could not write APICostLog.txt: {e}\n"})
@@ -783,7 +787,7 @@ class StreamingMixin:
             while True:
                 # Check stop request between API calls
                 if self.stop_requested:
-                    self.queue.put({"type": "tool_info", "content": "Agent stopped by user.\n"})
+                    self._tool_info("Agent stopped by user.\n")
                     break
 
                 call_num += 1
@@ -797,16 +801,16 @@ class StreamingMixin:
 
                 # Dispatch to provider-specific streaming
                 if self.provider == "OpenAI":
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
+                    stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_responses_call(messages, max_retries, label_emitted)
                 elif self.provider == "Gemini":
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
+                    stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_gemini_call(messages, max_retries, label_emitted)
                 elif self.provider == "Ollama":
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
+                    stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_ollama_call(messages, max_retries, label_emitted)
                 else:
-                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
+                    stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
 
                 # Accumulate cost
@@ -843,7 +847,7 @@ class StreamingMixin:
                     self.queue.put({"type": "post_process_latex"})
 
                 if self.stop_requested:
-                    self.queue.put({"type": "tool_info", "content": "Agent stopped by user.\n"})
+                    self._tool_info("Agent stopped by user.\n")
                     break
 
                 if stop_reason == "tool_use":
@@ -881,7 +885,7 @@ class StreamingMixin:
                     # Execute parallel-safe tools concurrently
                     if parallel_items:
                         if len(parallel_items) > 1:
-                            self.queue.put({"type": "tool_info", "content": f"Running {len(parallel_items)} tools in parallel...\n"})
+                            self._tool_info(f"Running {len(parallel_items)} tools in parallel...\n")
                         with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_items)) as executor:
                             future_map = {}
                             for idx, block in parallel_items:
@@ -933,8 +937,7 @@ class StreamingMixin:
                         )
                         if (not next_msg
                                 or next_msg.strip().lower() in ("quit", "exit", "stop")):
-                            self.queue.put({"type": "tool_info",
-                                            "content": "Conversation ended.\n"})
+                            self._tool_info("Conversation ended.\n")
                             full_text = ""  # already appended above; don't double-add
                             break
                         # do_user_prompt already emits user_prompt_echo from
@@ -955,8 +958,7 @@ class StreamingMixin:
                             "content": "[System: You ended your turn without calling user_prompt. "
                                        "You must call user_prompt now to get the user's next message.]"
                         })
-                        self.queue.put({"type": "tool_info",
-                                        "content": "Model forgot user_prompt — nudging...\n"})
+                        self._tool_info("Model forgot user_prompt — nudging...\n")
                         label_emitted = False
                         continue
                     break

@@ -327,6 +327,4 @@ class ChatMixin:
         # Strip remaining \command patterns that we don't recognize (just remove backslash)
         text = re.sub(r'\\([a-zA-Z]+)', r'\1', text)
         # Clean up braces used for grouping
-        text = re.sub(r'\{([^}]*)\}', r'\1', text)
-
-        return text
+        return re.sub(r'\{([^}]*)\}', r'\1', text)

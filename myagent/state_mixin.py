@@ -73,7 +73,7 @@ class StateMixin:
             if os.path.exists(lock_path):
                 # Check if the owning process is still alive
                 try:
-                    with open(lock_path, "r") as f:
+                    with open(lock_path) as f:
                         pid = int(f.read().strip())
                     if self._is_pid_alive(pid):
                         continue  # process alive, slot taken
@@ -277,7 +277,7 @@ class StateMixin:
         existing = {}
         if os.path.exists(self._state_file):
             try:
-                with open(self._state_file, "r", encoding="utf-8") as f:
+                with open(self._state_file, encoding="utf-8") as f:
                     existing = json.load(f)
             except (json.JSONDecodeError, OSError):
                 pass
@@ -366,7 +366,7 @@ class StateMixin:
         if not os.path.exists(self._state_file):
             return
         try:
-            with open(self._state_file, "r", encoding="utf-8") as f:
+            with open(self._state_file, encoding="utf-8") as f:
                 state = json.load(f)
         except (json.JSONDecodeError, OSError):
             return
@@ -389,13 +389,12 @@ class StateMixin:
         config_key = self._get_monitor_config_key()
         all_geos = state.get("geometries", {})
         geo_entry = all_geos.get(config_key)
-        if not geo_entry:
+        if not geo_entry and "geometry" in state:
             # Backward compat: migrate old flat geometry fields
-            if "geometry" in state:
-                geo_entry = {k: state[k] for k in ("geometry", "editor_geometry",
-                             "prompt_dialog_geometry", "confirm_dialog_geometry",
-                             "ps_safety_dialog_geometry",
-                             "skills_dialog_geometry") if k in state}
+            geo_entry = {k: state[k] for k in ("geometry", "editor_geometry",
+                         "prompt_dialog_geometry", "confirm_dialog_geometry",
+                         "ps_safety_dialog_geometry",
+                         "skills_dialog_geometry") if k in state}
         if geo_entry:
             geo = geo_entry.get("geometry")
             if geo:

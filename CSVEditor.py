@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import tkinter as tk
+from datetime import datetime
 from tkinter import filedialog, messagebox, ttk
 
 # Per-user state (geometry, last file, filters, sort) lives OUTSIDE the
@@ -204,13 +205,9 @@ class App:
         self.headers = lines[0]
         self.rows = lines[1:]
         self.modified = False
-        self._filters = [(None, None), (None, None), (None, None)]
+        self._reset_filters()
         for i in range(3):
-            self._filter_col_vars[i].set("")
-            self._filter_val_vars[i].set("")
-            self._filter_val_combos[i]["values"] = []
             self._filter_col_combos[i]["values"] = self.headers
-        self._filter_status_var.set("")
         # Detect Date column
         self._date_sort_col = None
         for idx, h in enumerate(self.headers):
@@ -356,18 +353,21 @@ class App:
         tree_idx = self.tree.index(sel[0])
         return self._visible_indices[tree_idx] if tree_idx < len(self._visible_indices) else tree_idx
 
+    def _commit_row_edit(self, select_idx):
+        """Mark modified, rebuild the tree, and reselect the affected row."""
+        self.modified = True
+        self._refresh_tree()
+        self._select_row(select_idx)
+        self._update_status()
+
     def _insert_row_above(self):
         if not self.headers:
             return
         idx = self._selected_index()
         if idx is None:
             idx = 0  # insert at top if no selection
-        empty = [""] * len(self.headers)
-        self.rows.insert(idx, empty)
-        self.modified = True
-        self._refresh_tree()
-        self._select_row(idx)
-        self._update_status()
+        self.rows.insert(idx, [""] * len(self.headers))
+        self._commit_row_edit(idx)
 
     def _insert_row_below(self):
         if not self.headers:
@@ -375,31 +375,21 @@ class App:
         idx = self._selected_index()
         if idx is None:
             idx = len(self.rows) - 1  # insert at end if no selection
-        empty = [""] * len(self.headers)
-        self.rows.insert(idx + 1, empty)
-        self.modified = True
-        self._refresh_tree()
-        self._select_row(idx + 1)
-        self._update_status()
+        self.rows.insert(idx + 1, [""] * len(self.headers))
+        self._commit_row_edit(idx + 1)
 
     def _copy_row(self):
         idx = self._selected_index(require=True)
         if idx is None:
             return
-        copy = list(self.rows[idx])
-        self.rows.insert(idx + 1, copy)
-        self.modified = True
-        self._refresh_tree()
-        self._select_row(idx + 1)
-        self._update_status()
+        self.rows.insert(idx + 1, list(self.rows[idx]))
+        self._commit_row_edit(idx + 1)
 
     def _delete_row(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("No selection", "Select a row first.")
+        real_idx = self._selected_index(require=True)
+        if real_idx is None:
             return
-        tree_idx = self.tree.index(sel[0])
-        real_idx = self._visible_indices[tree_idx] if tree_idx < len(self._visible_indices) else tree_idx
+        tree_idx = self.tree.index(self.tree.selection()[0])
         self.rows.pop(real_idx)
         self.modified = True
         self._refresh_tree()
@@ -428,9 +418,9 @@ class App:
             return
         col_idx = self.headers.index(col_name)
         # Gather unique values in this column (respecting other filters)
-        values = sorted(set(
+        values = sorted({
             row[col_idx] if col_idx < len(row) else "" for row in self.rows
-        ))
+        })
         self._filter_val_combos[idx]["values"] = values
         self._filter_val_vars[idx].set("")
         self._filters[idx] = (None, None)
@@ -456,13 +446,17 @@ class App:
         else:
             self._filter_status_var.set("")
 
-    def _clear_filter(self):
+    def _reset_filters(self):
+        """Clear all three filters and their combobox selections."""
         self._filters = [(None, None), (None, None), (None, None)]
         for i in range(3):
             self._filter_col_vars[i].set("")
             self._filter_val_vars[i].set("")
             self._filter_val_combos[i]["values"] = []
         self._filter_status_var.set("")
+
+    def _clear_filter(self):
+        self._reset_filters()
         self._refresh_tree()
         self._update_status()
 
@@ -475,7 +469,6 @@ class App:
 
     def _sort_by_date(self, filtered):
         """Sort list of (real_idx, row) by the Date column, trying common date formats."""
-        from datetime import datetime
         col = self._date_sort_col
         formats = ["%d/%m/%Y", "%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y", "%d %b %Y", "%d %B %Y"]
 
@@ -495,7 +488,7 @@ class App:
     def _load_state(self):
         path = STATE_FILE if os.path.exists(STATE_FILE) else LEGACY_STATE_FILE
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 state = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return

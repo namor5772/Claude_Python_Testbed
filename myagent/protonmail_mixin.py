@@ -144,7 +144,7 @@ class ProtonMailMixin:
         if not os.path.exists(PROTON_ACCOUNTS_FILE):
             return {}
         try:
-            with open(PROTON_ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            with open(PROTON_ACCOUNTS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             accounts = data.get("accounts", {})
             return accounts if isinstance(accounts, dict) else {}
@@ -267,7 +267,7 @@ class ProtonMailMixin:
                 f"Proton IMAP login failed for '{account}': {e}. "
                 f"Check the app_password in {PROTON_ACCOUNTS_FILE} and confirm "
                 f"Proton Bridge is running."
-            )
+            ) from e
         self._proton_imap_conns[account] = conn
         return conn
 
@@ -318,12 +318,12 @@ class ProtonMailMixin:
             raise RuntimeError(
                 f"Proton SMTP login failed for '{account}': {e}. "
                 f"Check app_password and confirm Bridge is running."
-            )
+            ) from e
         return client
 
     def _proton_close_connections(self):
         """LOGOUT all open IMAP connections. Best-effort; called on app close."""
-        for account, conn in list(self._proton_imap_conns.items()):
+        for conn in list(self._proton_imap_conns.values()):
             try:
                 conn.logout()
             except Exception:
@@ -1169,10 +1169,7 @@ class ProtonMailMixin:
         parent = params.get("parent", "Labels")
         if not account or not name:
             return "error: 'account' and 'name' are required"
-        if parent:
-            full = f"{parent}/{name}"
-        else:
-            full = name
+        full = f"{parent}/{name}" if parent else name
         try:
             conn = self._proton_imap(account)
             typ, data = conn.create(self._quote_mailbox(full))

@@ -18,7 +18,7 @@ class InstructionsMixin:
         Migrates old string-only entries automatically."""
         if os.path.exists(INSTRUCTIONS_FILE):
             try:
-                with open(INSTRUCTIONS_FILE, "r", encoding="utf-8") as f:
+                with open(INSTRUCTIONS_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 # Migrate old format: {name: "text"} → {name: {text: "...", images: []}}
                 migrated = False
@@ -97,7 +97,7 @@ class InstructionsMixin:
             }
             return json.dumps(info, indent=2)
 
-        elif action == "create":
+        if action == "create":
             if name in instructions:
                 return f"Error: Instruction '{name}' already exists. Use 'update' to modify it."
             text = params.get("text", "")
@@ -129,7 +129,7 @@ class InstructionsMixin:
             self._save_instructions_to_disk(instructions)
             return f"Instruction '{name}' created successfully."
 
-        elif action == "update":
+        if action == "update":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
             updatable = ("text", "desktop", "browser", "meta", "mcp", "google",
@@ -161,7 +161,7 @@ class InstructionsMixin:
                 return f"Instruction '{name}' updated on disk. Changes will take effect next time it is loaded."
             return f"Instruction '{name}' updated successfully."
 
-        elif action == "delete":
+        if action == "delete":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found."
             del instructions[name]

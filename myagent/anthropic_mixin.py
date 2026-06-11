@@ -66,9 +66,9 @@ class AnthropicMixin:
                             elif hasattr(block, "type") and block.type == "server_tool_use":
                                 tool_name = getattr(block, "name", "")
                                 if tool_name == "web_search":
-                                    self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
+                                    self._tool_info("Searching the web...\n")
                                 elif tool_name == "code_execution":
-                                    self.queue.put({"type": "tool_info", "content": "Running code execution...\n"})
+                                    self._tool_info("Running code execution...\n")
                             elif hasattr(block, "type") and block.type in (
                                     "code_execution_tool_result", "bash_code_execution_tool_result",
                                     "web_search_tool_result"):
@@ -104,7 +104,7 @@ class AnthropicMixin:
                             if itype in ("code_execution_result", "bash_code_execution_result"):
                                 stdout = getattr(item, "stdout", "")
                                 if stdout:
-                                    self.queue.put({"type": "tool_info", "content": stdout + "\n"})
+                                    self._tool_info(stdout + "\n")
                                 for sub in getattr(item, "content", []) or []:
                                     sub_type = getattr(sub, "type", None) or ""
                                     fid = getattr(sub, "file_id", "")

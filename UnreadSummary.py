@@ -65,7 +65,7 @@ import socket
 import ssl
 import sys
 import textwrap
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import msal
@@ -198,8 +198,7 @@ def clean_text(text):
     """Normalise extracted body text: strip invisible padding chars, NBSPs,
     CRs, and URLs (which would otherwise dominate first-words summaries)."""
     text = (text or "").translate(_INVISIBLE).replace("\xa0", " ").replace("\r", "")
-    text = re.sub(r"https?://\S+|\[https?://[^\]]*\]|\(https?://[^)]*\)", " ", text)
-    return text
+    return re.sub(r"https?://\S+|\[https?://[^\]]*\]|\(https?://[^)]*\)", " ", text)
 
 
 def body_lines(text):
@@ -544,9 +543,9 @@ def imap_act(entry):
     if TRASH_MATCHES:
         trash = _quote_mailbox(entry["_trash"])
         if "MOVE" in conn.capabilities:
-            typ, data = conn.uid("move", uid, trash)
+            typ, _ = conn.uid("move", uid, trash)
         else:
-            typ, data = conn.uid("copy", uid, trash)
+            typ, _ = conn.uid("copy", uid, trash)
             if typ == "OK":
                 conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
                 conn.expunge()

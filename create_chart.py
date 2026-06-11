@@ -1,5 +1,4 @@
 import matplotlib.pyplot as plt
-import numpy as np
 
 # Data
 countries = ['India', 'China', 'United States', 'Indonesia', 'Pakistan']

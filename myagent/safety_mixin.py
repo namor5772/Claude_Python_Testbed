@@ -86,10 +86,8 @@ class SafetyMixin:
             results = DDGS().text(query, max_results=5)
             if not results:
                 return "No results found."
-            formatted = []
-            for r in results:
-                formatted.append(f"Title: {r['title']}\nURL: {r['href']}\nSnippet: {r['body']}\n")
-            return "\n".join(formatted)
+            return "\n".join(f"Title: {r['title']}\nURL: {r['href']}\nSnippet: {r['body']}\n"
+                             for r in results)
         except Exception as e:
             return f"Search error: {e}"
 
@@ -479,9 +477,8 @@ class SafetyMixin:
             return info
         if safety == "skipped":
             self.queue.put({"type": "warning", "content": f"\u26a0 Confirm bypassed (pattern: {info})\n"})
-        elif safety == "confirm":
-            if not self._request_confirmation(command, info):
-                return "Command was rejected by the user."
+        elif safety == "confirm" and not self._request_confirmation(command, info):
+            return "Command was rejected by the user."
         try:
             shell_cmd = (["powershell", "-NoProfile", "-Command", command]
                          if IS_WINDOWS else ["/bin/bash", "-c", command])

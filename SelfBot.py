@@ -842,7 +842,7 @@ class App:
             self._is_second_instance = False
             try:
                 if os.path.exists(LOCK_FILE):
-                    with open(LOCK_FILE, "r") as f:
+                    with open(LOCK_FILE) as f:
                         old_pid = int(f.read().strip())
                     try:
                         os.kill(old_pid, 0)
@@ -1356,7 +1356,7 @@ class App:
         if not os.path.exists(load_file):
             return
         try:
-            with open(load_file, "r", encoding="utf-8") as f:
+            with open(load_file, encoding="utf-8") as f:
                 state = json.load(f)
         except (json.JSONDecodeError, OSError):
             return
@@ -1406,7 +1406,7 @@ class App:
         # Instance 2: always read names from instance 1's state and swap them
         if self._is_second_instance:
             try:
-                with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+                with open(APP_STATE_FILE, encoding="utf-8") as f:
                     i1_state = json.load(f)
                 my_name = i1_state.get("my_friend", "")
                 my_friend = i1_state.get("my_name", "")
@@ -1479,7 +1479,7 @@ class App:
         if current_name and current_friend:
             return  # already populated
         try:
-            with open(APP_STATE_FILE, "r", encoding="utf-8") as f:
+            with open(APP_STATE_FILE, encoding="utf-8") as f:
                 i1_state = json.load(f)
             my_name = i1_state.get("my_friend", "")
             my_friend = i1_state.get("my_name", "")
@@ -1516,7 +1516,7 @@ class App:
         }
         # Load existing state to preserve the other mode's geometry
         try:
-            with open(self._state_file, "r", encoding="utf-8") as f:
+            with open(self._state_file, encoding="utf-8") as f:
                 existing = json.load(f)
         except (OSError, json.JSONDecodeError):
             existing = {}
@@ -1558,7 +1558,7 @@ class App:
 
     def _load_saved_prompts(self):
         if os.path.exists(PROMPTS_FILE):
-            with open(PROMPTS_FILE, "r", encoding="utf-8") as f:
+            with open(PROMPTS_FILE, encoding="utf-8") as f:
                 prompts = json.load(f)
         else:
             prompts = {}
@@ -1705,11 +1705,11 @@ class App:
     def _load_skills(self):
         if os.path.exists(SKILLS_FILE):
             try:
-                with open(SKILLS_FILE, "r", encoding="utf-8") as f:
+                with open(SKILLS_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 # Migrate old {enabled: bool} → {mode: "disabled"|"enabled"|"on_demand"}
                 migrated = False
-                for name, sdata in data.items():
+                for sdata in data.values():
                     if "mode" not in sdata:
                         sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
                         migrated = True
@@ -1839,7 +1839,7 @@ class App:
                 else:
                     prefix = "     "
                 skill_listbox.insert(tk.END, f"{prefix}{sname}")
-            for i, (sname, sdata) in enumerate(self.skills.items()):
+            for i, sdata in enumerate(self.skills.values()):
                 mode = sdata.get("mode", "disabled")
                 if mode == "enabled":
                     skill_listbox.itemconfig(i, fg="#2e7d32")
@@ -1925,7 +1925,7 @@ class App:
                 continue
             fpath = os.path.join(CHATS_DIR, fname)
             try:
-                with open(fpath, 'r', encoding='utf-8') as f:
+                with open(fpath, encoding='utf-8') as f:
                     data = json.load(f)
                 name = data.get('name', fname[:-5])
                 chats[name] = data
@@ -1939,7 +1939,7 @@ class App:
         if not os.path.exists(fpath):
             return None
         try:
-            with open(fpath, 'r', encoding='utf-8') as f:
+            with open(fpath, encoding='utf-8') as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError):
             return None
@@ -2241,7 +2241,7 @@ class App:
 
     def on_enter_key(self, event):
         if event.state & 0x1:  # Shift held — allow newline
-            return
+            return None
         if self._send_delay > 0:
             # Delay before processing to allow editing/cancellation
             self.input_field.config(state="disabled")
@@ -2400,6 +2400,13 @@ class App:
         event.wait()
         return result_holder[0]
 
+    @staticmethod
+    def _truncate_output(text, limit=20000, suffix="\n\n[Output truncated...]"):
+        """Cap tool output at `limit` chars, appending a truncation notice."""
+        if len(text) > limit:
+            return text[:limit] + suffix
+        return text
+
     def run_powershell(self, command):
         """Execute a command with safety checks (PowerShell on Windows, bash on macOS)."""
         # Tier 1 & 2 safety checks
@@ -2408,9 +2415,8 @@ class App:
         if safety == "blocked":
             return info
 
-        if safety == "confirm":
-            if not self._request_confirmation(command):
-                return "Command was rejected by the user."
+        if safety == "confirm" and not self._request_confirmation(command):
+            return "Command was rejected by the user."
 
         try:
             shell_cmd = (["powershell", "-NoProfile", "-Command", command]
@@ -2428,8 +2434,7 @@ class App:
                 output += f"\nSTDERR:\n{result.stderr}"
             if result.returncode != 0:
                 output += f"\n[Exit code: {result.returncode}]"
-            if len(output) > 20000:
-                output = output[:20000] + "\n\n[Output truncated...]"
+            output = self._truncate_output(output)
             return output.strip() if output.strip() else "[No output]"
         except subprocess.TimeoutExpired:
             return "Error: Command timed out after 30 seconds."
@@ -2444,7 +2449,7 @@ class App:
             if not os.path.isfile(file_path):
                 return f"Error: File not found: {file_path}"
 
-            with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+            with open(file_path, encoding="utf-8-sig", newline="") as f:
                 # Auto-detect delimiter if not specified
                 if delimiter is None:
                     sample = f.read(8192)
@@ -2473,14 +2478,11 @@ class App:
 
                     for cell in cells_to_check:
                         cell_lower = (cell or "").lower()
-                        if match_mode == "exact" and cell_lower == search_lower:
-                            matched = True
-                        elif match_mode == "starts_with" and cell_lower.startswith(search_lower):
-                            matched = True
-                        elif match_mode == "contains" and search_lower in cell_lower:
-                            matched = True
-                        else:
-                            matched = False
+                        matched = (
+                            (match_mode == "exact" and cell_lower == search_lower)
+                            or (match_mode == "starts_with" and cell_lower.startswith(search_lower))
+                            or (match_mode == "contains" and search_lower in cell_lower)
+                        )
 
                         if matched:
                             matches.append((row_num, row))
@@ -2497,15 +2499,11 @@ class App:
             lines = [f"Found {len(matches)} match(es). Columns: {', '.join(headers)}\n"]
             for row_num, row in matches:
                 lines.append(f"--- Row {row_num} ---")
-                for h in headers:
-                    lines.append(f"  {h}: {row.get(h, '')}")
+                lines.extend(f"  {h}: {row.get(h, '')}" for h in headers)
             if len(matches) >= max_results:
                 lines.append(f"\n[Results limited to {max_results}. Use max_results to increase.]")
 
-            output = "\n".join(lines)
-            if len(output) > 20000:
-                output = output[:20000] + "\n\n[Output truncated...]"
-            return output
+            return self._truncate_output("\n".join(lines))
 
         except UnicodeDecodeError:
             return "Error: File encoding not supported. Expected UTF-8 CSV."
@@ -2597,7 +2595,7 @@ class App:
             else:
                 img = pyautogui.screenshot(region=(screen_x, screen_y, screen_w, screen_h))
             self._screenshot_offset = (screen_x, screen_y)
-            phys_w_r, phys_h_r = img.size
+            phys_w_r, _ = img.size
             if not IS_WINDOWS and phys_w_r != screen_w and screen_w:
                 img = img.resize((screen_w, screen_h))
         elif not IS_WINDOWS:
@@ -2616,7 +2614,7 @@ class App:
             else:
                 img = pyautogui.screenshot()
                 self._screenshot_offset = (0, 0)
-        phys_w, phys_h = img.size
+        phys_w, _ = img.size
         if not region:
             rects = self._get_display_rects()
             if rects:
@@ -2761,10 +2759,7 @@ class App:
         """Open an application by known name or full path, with optional arguments."""
         try:
             key = name.lower().strip()
-            if key in self.KNOWN_APPS:
-                cmd = self.KNOWN_APPS[key]
-            else:
-                cmd = name
+            cmd = self.KNOWN_APPS.get(key, name)
             if args:
                 subprocess.Popen([cmd, args], **_SUBPROCESS_NOWND)
             else:
@@ -2780,23 +2775,22 @@ class App:
             matches = gw.getWindowsWithTitle(title)
             return [{"title": w.title, "left": w.left, "top": w.top,
                       "width": w.width, "height": w.height, "_win": w} for w in matches]
-        else:
-            import Quartz
-            wins = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-                Quartz.kCGNullWindowID)
-            results = []
-            for w in wins:
-                app = w.get("kCGWindowOwnerName", "")
-                name = w.get("kCGWindowName", "")
-                full_title = f"{app} — {name}" if name else app
-                if pattern in full_title.lower() or pattern in app.lower() or pattern in (name or "").lower():
-                    b = w.get("kCGWindowBounds", {})
-                    results.append({"title": full_title,
-                                    "left": int(b.get("X", 0)), "top": int(b.get("Y", 0)),
-                                    "width": int(b.get("Width", 0)), "height": int(b.get("Height", 0)),
-                                    "_app": app, "_pid": w.get("kCGWindowOwnerPID")})
-            return results
+        import Quartz
+        wins = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID)
+        results = []
+        for w in wins:
+            app = w.get("kCGWindowOwnerName", "")
+            name = w.get("kCGWindowName", "")
+            full_title = f"{app} — {name}" if name else app
+            if pattern in full_title.lower() or pattern in app.lower() or pattern in (name or "").lower():
+                b = w.get("kCGWindowBounds", {})
+                results.append({"title": full_title,
+                                "left": int(b.get("X", 0)), "top": int(b.get("Y", 0)),
+                                "width": int(b.get("Width", 0)), "height": int(b.get("Height", 0)),
+                                "_app": app, "_pid": w.get("kCGWindowOwnerPID")})
+        return results
 
     def do_find_window(self, title, activate=False):
         """Find windows matching title pattern, optionally activate the first match."""
@@ -2805,9 +2799,8 @@ class App:
             if not windows:
                 return f"No windows found matching '{title}'"
 
-            results = []
-            for w in windows:
-                results.append(f"  Title: {w['title']}\n  Position: ({w['left']}, {w['top']})\n  Size: {w['width']}x{w['height']}")
+            results = [f"  Title: {w['title']}\n  Position: ({w['left']}, {w['top']})\n  Size: {w['width']}x{w['height']}"
+                       for w in windows]
 
             if activate and windows:
                 try:
@@ -2888,8 +2881,10 @@ class App:
                 text = result.text.strip()
             else:
                 import objc, Quartz
-                Vision = objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
-                                         module_globals={})
+                # Load the Vision framework for its side effect: registering the
+                # VN* ObjC classes so Quartz.VNImageRequestHandler etc. resolve.
+                objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
+                                module_globals={})
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 ns_data = Quartz.NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))
@@ -3071,7 +3066,7 @@ class App:
         """Instance 2: poll for the inject file and load its contents into chat_display."""
         if os.path.exists(INJECT_FILE):
             try:
-                with open(INJECT_FILE, "r", encoding="utf-8") as f:
+                with open(INJECT_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 os.remove(INJECT_FILE)
                 label = data.get("label", "You")
@@ -3180,7 +3175,7 @@ class App:
             return
         if os.path.exists(AUTO_MSG_FILE):
             try:
-                with open(AUTO_MSG_FILE, "r", encoding="utf-8") as f:
+                with open(AUTO_MSG_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 from_pid = data.get("from_pid")
                 text = data.get("text", "").strip()
@@ -3327,6 +3322,9 @@ class App:
         self._cleanup_browser()
         self.root.destroy()
 
+    # Shared guard message for every browser tool that needs a live page.
+    _NO_BROWSER = "No browser connection. Use browser_open first."
+
     def do_browser_open(self, url):
         try:
             self._cleanup_browser()
@@ -3350,7 +3348,7 @@ class App:
     def do_browser_navigate(self, url):
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
             return f"Navigated to {url} — page title: {self._page.title()}"
         except Exception as e:
@@ -3359,22 +3357,21 @@ class App:
     def do_browser_click(self, selector=None, text=None):
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             if selector:
                 self._page.click(selector, timeout=10000)
                 return f"Clicked element: {selector}"
-            elif text:
+            if text:
                 self._page.get_by_text(text, exact=False).first.click(timeout=10000)
                 return f"Clicked element with text: {text}"
-            else:
-                return "Provide either a 'selector' or 'text' parameter."
+            return "Provide either a 'selector' or 'text' parameter."
         except Exception as e:
             return f"Browser click error: {e}"
 
     def do_browser_fill(self, selector, value):
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             self._page.fill(selector, value, timeout=10000)
             return f"Filled '{selector}' with {len(value)} characters"
         except Exception as e:
@@ -3383,13 +3380,12 @@ class App:
     def do_browser_get_text(self, selector=None):
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             if selector:
                 text = self._page.inner_text(selector, timeout=10000)
             else:
                 text = self._page.inner_text("body", timeout=10000)
-            if len(text) > 20000:
-                text = text[:20000] + "\n\n[Content truncated at 20k chars...]"
+            text = self._truncate_output(text, suffix="\n\n[Content truncated at 20k chars...]")
             return text if text.strip() else "[No visible text]"
         except Exception as e:
             return f"Browser get_text error: {e}"
@@ -3397,23 +3393,21 @@ class App:
     def do_browser_run_js(self, code):
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             # Wrap in a function if it uses 'return'
             if "return " in code:
                 result = self._page.evaluate(f"() => {{ {code} }}")
             else:
                 result = self._page.evaluate(code)
             text = json.dumps(result, indent=2, default=str) if result is not None else "[No return value]"
-            if len(text) > 20000:
-                text = text[:20000] + "\n\n[Output truncated...]"
-            return text
+            return self._truncate_output(text)
         except Exception as e:
             return f"Browser JS error: {e}"
 
     def do_browser_screenshot(self):
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             raw_bytes = self._page.screenshot(type="png")
             img = Image.open(io.BytesIO(raw_bytes))
             orig_w, orig_h = img.size
@@ -3446,7 +3440,7 @@ class App:
         """Wait for an element matching a CSS selector to appear."""
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             el = self._page.wait_for_selector(selector, timeout=timeout)
             if el is None:
                 return f"Element '{selector}' not found within {timeout}ms."
@@ -3461,15 +3455,14 @@ class App:
         """Select an option in a <select> dropdown."""
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             if value:
                 self._page.select_option(selector, value=value)
                 return f"Selected option with value='{value}' in '{selector}'"
-            elif label:
+            if label:
                 self._page.select_option(selector, label=label)
                 return f"Selected option with label='{label}' in '{selector}'"
-            else:
-                return "Provide either 'value' or 'label' to select an option."
+            return "Provide either 'value' or 'label' to select an option."
         except Exception as e:
             return f"browser_select error: {e}"
 
@@ -3477,7 +3470,7 @@ class App:
         """Get info about elements matching a CSS selector."""
         try:
             if self._page is None:
-                return "No browser connection. Use browser_open first."
+                return self._NO_BROWSER
             js = """
             (args) => {
                 const els = document.querySelectorAll(args.selector);
@@ -3727,12 +3720,12 @@ class App:
         inp = block.input
         if block.name == "run_command":
             cmd = inp.get("command", "")
-            self.queue.put({"type": "tool_info", "content": f"Running: {cmd}\n"})
+            self._tool_info(f"Running: {cmd}\n")
             return self.run_powershell(cmd)
-        elif block.name == "csv_search":
+        if block.name == "csv_search":
             fp = inp.get("file_path", "")
             sv = inp.get("search_value", "")
-            self.queue.put({"type": "tool_info", "content": f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n"})
+            self._tool_info(f"Searching CSV: {os.path.basename(fp)} for '{sv}'\n")
             return self.do_csv_search(
                 fp, sv,
                 column=inp.get("column"),
@@ -3740,7 +3733,7 @@ class App:
                 max_results=inp.get("max_results", 50),
                 delimiter=inp.get("delimiter"),
             )
-        elif block.name in ("screenshot", "mouse_click", "type_text",
+        if block.name in ("screenshot", "mouse_click", "type_text",
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
                              "wait_for_window", "read_screen_text",
@@ -3752,12 +3745,12 @@ class App:
                 if display is not None:
                     display = int(display)  # Gemini proto returns floats
                 disp_label = f"display {display}" if display is not None else "all displays"
-                self.queue.put({"type": "tool_info", "content": f"Taking screenshot ({disp_label})...\n"})
+                self._tool_info(f"Taking screenshot ({disp_label})...\n")
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
                     region = (inp["x"], inp["y"], inp["width"], inp["height"])
                 return self.do_screenshot(region, display=display)
-            elif block.name == "mouse_click":
+            if block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
                 if cx is None or cy is None:
                     coord = inp.get("coordinate")
@@ -3765,63 +3758,63 @@ class App:
                         cx, cy = coord[0], coord[1]
                     else:
                         return f"mouse_click error: missing x/y coordinates. Got: {inp}"
-                self.queue.put({"type": "tool_info", "content": f"Clicking at ({cx}, {cy})...\n"})
+                self._tool_info(f"Clicking at ({cx}, {cy})...\n")
                 return self.do_mouse_click(
                     cx, cy,
                     button=inp.get("button", "left"),
                     clicks=int(inp.get("clicks", 1)),
                 )
-            elif block.name == "type_text":
+            if block.name == "type_text":
                 text = inp.get("text", "")
                 preview = text[:50] + "..." if len(text) > 50 else text
-                self.queue.put({"type": "tool_info", "content": f"Typing: {preview}\n"})
+                self._tool_info(f"Typing: {preview}\n")
                 return self.do_type_text(text, interval=inp.get("interval", 0.02))
-            elif block.name == "press_key":
+            if block.name == "press_key":
                 keys = inp.get("keys", "")
-                self.queue.put({"type": "tool_info", "content": f"Pressing: {keys}\n"})
+                self._tool_info(f"Pressing: {keys}\n")
                 return self.do_press_key(keys)
-            elif block.name == "mouse_scroll":
+            if block.name == "mouse_scroll":
                 clicks_val = int(inp.get("clicks", 0))
-                self.queue.put({"type": "tool_info", "content": f"Scrolling {clicks_val} clicks...\n"})
+                self._tool_info(f"Scrolling {clicks_val} clicks...\n")
                 return self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
-            elif block.name == "open_application":
+            if block.name == "open_application":
                 app_name = inp.get("name", "")
                 app_args = inp.get("args")
-                self.queue.put({"type": "tool_info", "content": f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n"})
+                self._tool_info(f"Opening: {app_name}{f' {app_args}' if app_args else ''}\n")
                 return self.do_open_application(app_name, args=app_args)
-            elif block.name == "find_window":
+            if block.name == "find_window":
                 title = inp.get("title", "")
-                self.queue.put({"type": "tool_info", "content": f"Finding windows: {title}\n"})
+                self._tool_info(f"Finding windows: {title}\n")
                 return self.do_find_window(title, activate=inp.get("activate", False))
-            elif block.name == "clipboard_read":
-                self.queue.put({"type": "tool_info", "content": "Reading clipboard...\n"})
+            if block.name == "clipboard_read":
+                self._tool_info("Reading clipboard...\n")
                 return self.do_clipboard_read()
-            elif block.name == "clipboard_write":
+            if block.name == "clipboard_write":
                 text = inp.get("text", "")
                 preview = text[:50] + "..." if len(text) > 50 else text
-                self.queue.put({"type": "tool_info", "content": f"Writing to clipboard: {preview}\n"})
+                self._tool_info(f"Writing to clipboard: {preview}\n")
                 return self.do_clipboard_write(text)
-            elif block.name == "wait_for_window":
+            if block.name == "wait_for_window":
                 title = inp.get("title", "")
                 timeout = inp.get("timeout", 10)
-                self.queue.put({"type": "tool_info", "content": f"Waiting for window: {title}\n"})
+                self._tool_info(f"Waiting for window: {title}\n")
                 return self.do_wait_for_window(title, timeout=timeout)
-            elif block.name == "read_screen_text":
+            if block.name == "read_screen_text":
                 rx, ry, rw, rh = inp.get("x"), inp.get("y"), inp.get("width"), inp.get("height")
                 if None in (rx, ry, rw, rh):
                     return f"read_screen_text error: missing region parameters. Got: {inp}"
-                self.queue.put({"type": "tool_info", "content": f"OCR region ({rx},{ry} {rw}x{rh})...\n"})
+                self._tool_info(f"OCR region ({rx},{ry} {rw}x{rh})...\n")
                 return self.do_read_screen_text(rx, ry, rw, rh)
-            elif block.name == "find_image_on_screen":
+            if block.name == "find_image_on_screen":
                 path = inp.get("image_path", "")
-                self.queue.put({"type": "tool_info", "content": f"Finding image: {os.path.basename(path)}\n"})
+                self._tool_info(f"Finding image: {os.path.basename(path)}\n")
                 return self.do_find_image_on_screen(path, confidence=inp.get("confidence", 0.8))
-            elif block.name == "mouse_drag":
+            if block.name == "mouse_drag":
                 sx, sy = inp.get("start_x"), inp.get("start_y")
                 ex, ey = inp.get("end_x"), inp.get("end_y")
                 if None in (sx, sy, ex, ey):
                     return f"mouse_drag error: missing coordinates. Got: {inp}"
-                self.queue.put({"type": "tool_info", "content": f"Dragging ({sx},{sy}) to ({ex},{ey})...\n"})
+                self._tool_info(f"Dragging ({sx},{sy}) to ({ex},{ey})...\n")
                 return self.do_mouse_drag(
                     sx, sy, ex, ey,
                     duration=inp.get("duration", 0.5),
@@ -3837,61 +3830,61 @@ class App:
                 return "Browser tools are disabled. Enable the Browser checkbox to use this tool."
             if block.name == "browser_open":
                 url = inp.get("url", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: opening {url}\n"})
+                self._tool_info(f"Browser: opening {url}\n")
                 return self.do_browser_open(url)
-            elif block.name == "browser_navigate":
+            if block.name == "browser_navigate":
                 url = inp.get("url", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: navigating to {url}\n"})
+                self._tool_info(f"Browser: navigating to {url}\n")
                 return self.do_browser_navigate(url)
-            elif block.name == "browser_click":
+            if block.name == "browser_click":
                 sel = inp.get("selector", "")
                 txt = inp.get("text", "")
                 target = sel or f"text='{txt}'"
-                self.queue.put({"type": "tool_info", "content": f"Browser: clicking {target}\n"})
+                self._tool_info(f"Browser: clicking {target}\n")
                 return self.do_browser_click(selector=sel or None, text=txt or None)
-            elif block.name == "browser_fill":
+            if block.name == "browser_fill":
                 sel = inp.get("selector", "")
                 val = inp.get("value", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: filling {sel}\n"})
+                self._tool_info(f"Browser: filling {sel}\n")
                 return self.do_browser_fill(sel, val)
-            elif block.name == "browser_get_text":
+            if block.name == "browser_get_text":
                 sel = inp.get("selector", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: reading text{' from ' + sel if sel else ''}...\n"})
+                self._tool_info(f"Browser: reading text{' from ' + sel if sel else ''}...\n")
                 return self.do_browser_get_text(selector=sel or None)
-            elif block.name == "browser_run_js":
+            if block.name == "browser_run_js":
                 code = inp.get("code", "")
                 preview = code[:80] + "..." if len(code) > 80 else code
-                self.queue.put({"type": "tool_info", "content": f"Browser: running JS: {preview}\n"})
+                self._tool_info(f"Browser: running JS: {preview}\n")
                 return self.do_browser_run_js(code)
-            elif block.name == "browser_screenshot":
-                self.queue.put({"type": "tool_info", "content": "Browser: taking screenshot...\n"})
+            if block.name == "browser_screenshot":
+                self._tool_info("Browser: taking screenshot...\n")
                 return self.do_browser_screenshot()
-            elif block.name == "browser_close":
-                self.queue.put({"type": "tool_info", "content": "Browser: closing connection...\n"})
+            if block.name == "browser_close":
+                self._tool_info("Browser: closing connection...\n")
                 return self.do_browser_close()
-            elif block.name == "browser_wait_for":
+            if block.name == "browser_wait_for":
                 sel = inp.get("selector", "")
                 timeout = inp.get("timeout", 10000)
-                self.queue.put({"type": "tool_info", "content": f"Browser: waiting for {sel}...\n"})
+                self._tool_info(f"Browser: waiting for {sel}...\n")
                 return self.do_browser_wait_for(sel, timeout=timeout)
-            elif block.name == "browser_select":
+            if block.name == "browser_select":
                 sel = inp.get("selector", "")
-                self.queue.put({"type": "tool_info", "content": f"Browser: selecting in {sel}...\n"})
+                self._tool_info(f"Browser: selecting in {sel}...\n")
                 return self.do_browser_select(sel, value=inp.get("value"), label=inp.get("label"))
-            elif block.name == "browser_get_elements":
+            if block.name == "browser_get_elements":
                 sel = inp.get("selector", "")
                 limit = inp.get("limit", 10)
-                self.queue.put({"type": "tool_info", "content": f"Browser: getting elements {sel}...\n"})
+                self._tool_info(f"Browser: getting elements {sel}...\n")
                 return self.do_browser_get_elements(sel, limit=limit)
         elif block.name == "get_skill":
             skill_name = inp.get("skill_name", "")
-            self.queue.put({"type": "tool_info", "content": f"Loading skill: {skill_name}\n"})
+            self._tool_info(f"Loading skill: {skill_name}\n")
             if skill_name in self.skills and self.skills[skill_name].get("mode") == "on_demand":
                 return self.skills[skill_name]["content"]
-            else:
-                return f"Skill not found or not on-demand: {skill_name}"
-        else:
-            return f"Unknown tool: {block.name}"
+            return f"Skill not found or not on-demand: {skill_name}"
+        # Catch-all: an unknown tool name, or a family branch above (desktop/
+        # browser) that matched the group test but no specific handler.
+        return f"Unknown tool: {block.name}"
 
     def stream_worker(self, messages):
         try:
@@ -3968,9 +3961,9 @@ class App:
                                     elif hasattr(block, "type") and block.type == "server_tool_use":
                                         tool_name = getattr(block, "name", "")
                                         if tool_name == "web_search":
-                                            self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
+                                            self._tool_info("Searching the web...\n")
                                         elif tool_name == "code_execution":
-                                            self.queue.put({"type": "tool_info", "content": "Running code execution...\n"})
+                                            self._tool_info("Running code execution...\n")
                                     elif hasattr(block, "type") and block.type in (
                                             "code_execution_tool_result", "bash_code_execution_tool_result",
                                             "web_search_tool_result"):
@@ -3999,7 +3992,7 @@ class App:
                                     if itype in ("code_execution_result", "bash_code_execution_result"):
                                         stdout = getattr(item, "stdout", "")
                                         if stdout:
-                                            self.queue.put({"type": "tool_info", "content": stdout + "\n"})
+                                            self._tool_info(stdout + "\n")
                                         for sub in getattr(item, "content", []) or []:
                                             sub_type = getattr(sub, "type", None) or ""
                                             fid = getattr(sub, "file_id", "")
@@ -4065,7 +4058,7 @@ class App:
                     # Execute parallel-safe tools concurrently
                     if parallel_items:
                         if len(parallel_items) > 1:
-                            self.queue.put({"type": "tool_info", "content": f"Running {len(parallel_items)} tools in parallel...\n"})
+                            self._tool_info(f"Running {len(parallel_items)} tools in parallel...\n")
                         with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_items)) as executor:
                             future_map = {}
                             for idx, block in parallel_items:
@@ -4110,6 +4103,18 @@ class App:
             if last_char != "\n":
                 self.chat_display.insert(tk.END, "\n")
 
+    def _chat_insert(self, *segments, newline_first=True, see=True):
+        """Insert (text, tag) segments into the chat display in one
+        enable→insert→disable cycle, starting on a fresh line by default."""
+        self.chat_display.config(state="normal")
+        if newline_first:
+            self._ensure_newline()
+        for text, tag in segments:
+            self.chat_display.insert(tk.END, text, tag)
+        if see:
+            self.chat_display.see(tk.END)
+        self.chat_display.config(state="disabled")
+
     def check_queue(self):
         try:
             while True:
@@ -4120,65 +4125,38 @@ class App:
                     pass  # skip call counter only when activity, debug, and tool calls all disabled
                 elif msg["type"] == "call_counter":
                     tag = "call_counter" if self.debug_enabled.get() else "call_counter_subtle"
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(
-                        tk.END, f"  Call #{msg['content']}  ", tag
-                    )
-                    self.chat_display.insert(tk.END, "\n", "debug")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((f"  Call #{msg['content']}  ", tag), ("\n", "debug"))
                 elif msg["type"] == "debug":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, "--- PAYLOAD SENT TO API ---\n", "debug_label")
-                    self.chat_display.insert(tk.END, msg["content"] + "\n", "debug")
-                    self.chat_display.insert(tk.END, "--- END PAYLOAD ---\n\n", "debug_label")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert(
+                        ("--- PAYLOAD SENT TO API ---\n", "debug_label"),
+                        (msg["content"] + "\n", "debug"),
+                        ("--- END PAYLOAD ---\n\n", "debug_label"),
+                    )
                 elif msg["type"] == "tool_call_debug" and not self.tool_calls_enabled.get():
                     pass  # skip when tool calls display disabled
                 elif msg["type"] == "tool_call_debug":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, "--- TOOL CALL ---\n", "tool_debug_label")
-                    self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_debug")
-                    self.chat_display.insert(tk.END, "--- END TOOL CALL ---\n", "tool_debug_label")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert(
+                        ("--- TOOL CALL ---\n", "tool_debug_label"),
+                        (msg["content"] + "\n", "tool_debug"),
+                        ("--- END TOOL CALL ---\n", "tool_debug_label"),
+                    )
                 elif msg["type"] == "thinking_start":
                     self._current_thinking_text = ""
                     if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self._ensure_newline()
-                        self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                        self._chat_insert(("Thinking:\n", "thinking_label"))
                 elif msg["type"] == "thinking_delta":
                     self._current_thinking_text += msg["content"]
                     if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, msg["content"], "thinking")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                        self._chat_insert((msg["content"], "thinking"), newline_first=False)
                 elif msg["type"] == "thinking_end":
                     if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, "\n\n", "thinking")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                        self._chat_insert(("\n\n", "thinking"), newline_first=False)
                 elif msg["type"] == "label":
                     self._current_response_text = ""
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, f"{self._get_friend_label()}:\n", "assistant_label")
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((f"{self._get_friend_label()}:\n", "assistant_label"), see=False)
                 elif msg["type"] == "text_delta":
                     self._current_response_text += msg["content"]
-                    self.chat_display.config(state="normal")
-                    self.chat_display.insert(tk.END, msg["content"], "assistant")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((msg["content"], "assistant"), newline_first=False)
                 elif msg["type"] == "ci_image":
                     # Code execution image — decode/download, display inline, and save
                     try:
@@ -4230,11 +4208,7 @@ class App:
                 elif msg["type"] == "tool_info" and not self.show_activity.get():
                     pass  # skip tool activity when activity display disabled
                 elif msg["type"] == "tool_info":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, msg["content"], "tool_info")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((msg["content"], "tool_info"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()
@@ -4257,13 +4231,7 @@ class App:
                             self._pending_injection = True
                     self.input_field.focus_set()
                 elif msg["type"] == "error":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(
-                        tk.END, f"Error: {msg['content']}\n\n", "error"
-                    )
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((f"Error: {msg['content']}\n\n", "error"))
                     self.streaming = False
         except queue.Empty:
             pass

@@ -29,17 +29,17 @@ class OllamaMixin:
         Ollama's /api/chat accepts `tools` in the same shape as OpenAI Chat
         Completions: a list of {"type": "function", "function": {name, description, parameters}}.
         """
-        result = []
-        for tool in tools:
-            result.append({
+        return [
+            {
                 "type": "function",
                 "function": {
                     "name": tool["name"],
                     "description": tool.get("description", ""),
                     "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
                 },
-            })
-        return result
+            }
+            for tool in tools
+        ]
 
     def _messages_to_ollama(self, messages):
         """Translate Anthropic-style internal messages to Ollama chat messages.
@@ -190,8 +190,8 @@ class OllamaMixin:
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
         ollama_tools = self._tools_to_ollama(tools) if tools else None
-        ollama_messages = [{"role": "system", "content": system_prompt}] + \
-                          self._messages_to_ollama(messages)
+        ollama_messages = [{"role": "system", "content": system_prompt},
+                           *self._messages_to_ollama(messages)]
 
         # Per-model capability + context discovery. Ollama's default num_ctx
         # is just 4096 — far below what modern models support — so without
@@ -390,13 +390,12 @@ class OllamaMixin:
         content_blocks = []
         if full_text:
             content_blocks.append({"type": "text", "text": full_text})
-        for tc in tool_calls:
-            content_blocks.append({
-                "type": "tool_use",
-                "id": tc["id"],
-                "name": tc["name"],
-                "input": tc["input"],
-            })
+        content_blocks.extend({
+            "type": "tool_use",
+            "id": tc["id"],
+            "name": tc["name"],
+            "input": tc["input"],
+        } for tc in tool_calls)
         # Thinking text is display-only for Ollama — not preserved in message
         # history because Qwen3 regenerates reasoning on each call with no
         # signature round-trip needed.

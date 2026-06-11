@@ -87,7 +87,7 @@ class GmailMixin:
         if not os.path.exists(GOOGLE_ACCOUNTS_FILE):
             return {}
         try:
-            with open(GOOGLE_ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            with open(GOOGLE_ACCOUNTS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             accounts = data.get("accounts", {})
             return accounts if isinstance(accounts, dict) else {}
@@ -896,13 +896,11 @@ class GmailMixin:
             resp = service.users().threads().list(
                 userId="me", q=q, maxResults=max_results
             ).execute()
-            threads = []
-            for t in resp.get("threads", []):
-                threads.append({
-                    "thread_id": t["id"],
-                    "snippet": t.get("snippet", "")[:200],
-                    "history_id": t.get("historyId"),
-                })
+            threads = [{
+                "thread_id": t["id"],
+                "snippet": t.get("snippet", "")[:200],
+                "history_id": t.get("historyId"),
+            } for t in resp.get("threads", [])]
             return json.dumps({
                 "account": account, "query": q,
                 "count": len(threads), "threads": threads,

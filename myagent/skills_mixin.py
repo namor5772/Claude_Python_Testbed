@@ -9,10 +9,10 @@ class SkillsMixin:
     def _load_skills(self):
         if os.path.exists(SKILLS_FILE):
             try:
-                with open(SKILLS_FILE, "r", encoding="utf-8") as f:
+                with open(SKILLS_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 migrated = False
-                for name, sdata in data.items():
+                for sdata in data.values():
                     if "mode" not in sdata:
                         sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
                         migrated = True
@@ -52,7 +52,7 @@ class SkillsMixin:
             sd = self.skills[name]
             return json.dumps({"name": name, "content": sd.get("content", ""), "mode": sd.get("mode", "disabled")}, indent=2)
 
-        elif action == "create":
+        if action == "create":
             if name in self.skills:
                 return f"Error: Skill '{name}' already exists. Use 'update' to modify it."
             content = params.get("content", "")
@@ -66,7 +66,7 @@ class SkillsMixin:
             self._post_skill_ui_refresh()
             return f"Skill '{name}' created successfully."
 
-        elif action == "update":
+        if action == "update":
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found. Use 'create' to add it."
             content = params.get("content")
@@ -83,7 +83,7 @@ class SkillsMixin:
             self._post_skill_ui_refresh()
             return f"Skill '{name}' updated successfully."
 
-        elif action == "delete":
+        if action == "delete":
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found."
             del self.skills[name]
@@ -302,7 +302,7 @@ class SkillsMixin:
                 else:
                     prefix = "     "
                 skill_listbox.insert(tk.END, f"{prefix}{sname}")
-            for i, (sname, sdata) in enumerate(self.skills.items()):
+            for i, sdata in enumerate(self.skills.values()):
                 mode = sdata.get("mode", "disabled")
                 if mode == "enabled":
                     skill_listbox.itemconfig(i, fg="#2e7d32")

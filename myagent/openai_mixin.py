@@ -34,11 +34,12 @@ class OpenAIMixin:
                         self._oai_first_content.set()
                     break
                 # Check first-content timeout
-                if first_content_timeout and hasattr(self, '_oai_first_content') and not self._oai_first_content.is_set():
-                    if time.time() - self._oai_stream_start >= first_content_timeout:
-                        self._oai_first_content.set()
-                        timed_out = True
-                        break
+                if (first_content_timeout and hasattr(self, '_oai_first_content')
+                        and not self._oai_first_content.is_set()
+                        and time.time() - self._oai_stream_start >= first_content_timeout):
+                    self._oai_first_content.set()
+                    timed_out = True
+                    break
                 # Reasoning summary deltas (thinking)
                 if event.type == "response.reasoning_summary_text.delta":
                     if hasattr(self, '_oai_first_content'):
@@ -79,9 +80,9 @@ class OpenAIMixin:
                             "arguments": "",
                         }
                     elif item and getattr(item, "type", None) == "web_search_call":
-                        self.queue.put({"type": "tool_info", "content": "Searching the web...\n"})
+                        self._tool_info("Searching the web...\n")
                     elif item and getattr(item, "type", None) == "code_interpreter_call":
-                        self.queue.put({"type": "tool_info", "content": "Running code interpreter...\n"})
+                        self._tool_info("Running code interpreter...\n")
 
                 # Function call argument chunks
                 elif event.type == "response.function_call_arguments.delta":
@@ -117,7 +118,7 @@ class OpenAIMixin:
                             if rtype == "logs":
                                 logs = getattr(r, "logs", "") or (r.get("logs", "") if isinstance(r, dict) else "")
                                 if logs:
-                                    self.queue.put({"type": "tool_info", "content": logs + "\n"})
+                                    self._tool_info(logs + "\n")
                             elif rtype == "image":
                                 # Image URL can be directly on the result or nested under .image
                                 url = getattr(r, "url", "") or (r.get("url", "") if isinstance(r, dict) else "")

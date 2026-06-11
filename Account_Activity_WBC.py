@@ -1,5 +1,4 @@
 import ctypes
-import ctypes.wintypes
 
 # Fix DPI scaling — must run before any window creation.
 try:
@@ -18,11 +17,17 @@ import time
 import socket
 import re
 import csv
+import os
 
 DEFAULT_BUTTON_TEXT = "Display more"
 DEFAULT_CLICK_COUNT = 5
 DEFAULT_DELAY_SECONDS = 3
 CDP_PORT = 9222
+
+
+def _clean_amount(text):
+    """Strip currency formatting ($ signs, thousands commas, whitespace)."""
+    return text.replace("$", "").replace(",", "").strip()
 
 
 class App:
@@ -44,7 +49,7 @@ class App:
         self.root.mainloop()
 
     def _setup_ui(self):
-        pad = dict(padx=8, pady=4)
+        pad = {"padx": 8, "pady": 4}
 
         # --- Input fields ---
         frame = ttk.Frame(self.root)
@@ -136,7 +141,6 @@ class App:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(1)
             if s.connect_ex(("127.0.0.1", CDP_PORT)) != 0:
-                import os
                 edge_paths = [
                     os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
                     os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
@@ -252,12 +256,11 @@ class App:
                 try:
                     self._queue.put(("info", "Extracting transaction HTML..."))
                     html = self._extract_html(page)
-                    import os
                     out_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Account_Activity_WBC.txt")
                     with open(out_path, "w", encoding="utf-8") as f:
                         f.write(html)
                     self._queue.put(("success", f"Saved HTML to Account_Activity_WBC.txt ({len(html)} bytes)"))
-                    csv_path, row_count = self._convert_html_to_csv(html)
+                    _, row_count = self._convert_html_to_csv(html)
                     self._queue.put(("success", f"Saved CSV to Account_Activity_WBC.csv ({row_count} rows)"))
                 except Exception as e:
                     self._queue.put(("error", f"HTML extraction failed: {e}"))
@@ -274,7 +277,6 @@ class App:
 
     def _convert_html_to_csv(self, html):
         """Parse the tbody HTML and write Account_Activity_WBC.csv. Returns (csv_path, row_count)."""
-        import os
         rows = re.findall(r'<tr data-bind="css:.*?</tr>', html, re.DOTALL)
 
         csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Account_Activity_WBC.csv")
@@ -295,23 +297,19 @@ class App:
                 debit = ""
                 debit_m = re.search(r"IsDebit--><span[^>]*>(.*?)</span>", row)
                 if debit_m:
-                    val = debit_m.group(1).replace("$", "").replace(",", "").strip()
-                    if val:
-                        debit = val
+                    debit = _clean_amount(debit_m.group(1))
 
                 # Credit: inside <span data-bind="ifnot: IsDebit"> block
                 credit = ""
                 credit_m = re.search(r'ifnot: IsDebit"><span data-bind="html: Amount">(.*?)</span>', row)
                 if credit_m:
-                    val = credit_m.group(1).replace("$", "").replace(",", "").strip()
-                    if val:
-                        credit = val
+                    credit = _clean_amount(credit_m.group(1))
 
                 # Balance
                 balance = ""
                 bal_m = re.search(r'account-activity-runningbalance[^>]*>(.*?)</span>', row)
                 if bal_m:
-                    balance = bal_m.group(1).replace("$", "").replace(",", "").strip()
+                    balance = _clean_amount(bal_m.group(1))
 
                 writer.writerow([date, desc, debit, credit, balance])
 

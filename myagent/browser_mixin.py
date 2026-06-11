@@ -115,8 +115,7 @@ class BrowserMixin:
                 current_url = ""
             is_blank = (
                 current_url in ("", "about:blank")
-                or current_url.startswith("chrome://newtab")
-                or current_url.startswith("edge://newtab")
+                or current_url.startswith(("chrome://newtab", "edge://newtab"))
             )
             if not is_blank:
                 self._page = page.context.new_page()
@@ -141,11 +140,10 @@ class BrowserMixin:
             if selector:
                 self._page.click(selector, timeout=5000)
                 return f"Clicked element: {selector}"
-            elif text:
+            if text:
                 self._page.get_by_text(text, exact=False).first.click(timeout=5000)
                 return f"Clicked element with text: {text}"
-            else:
-                return "Provide either 'selector' or 'text' to click."
+            return "Provide either 'selector' or 'text' to click."
         except Exception as e:
             return f"Browser click error: {e}"
 
@@ -233,11 +231,10 @@ class BrowserMixin:
             if value:
                 self._page.select_option(selector, value=value, timeout=5000)
                 return f"Selected option with value '{value}' in {selector}"
-            elif label:
+            if label:
                 self._page.select_option(selector, label=label, timeout=5000)
                 return f"Selected option with label '{label}' in {selector}"
-            else:
-                return "Provide either 'value' or 'label' to select."
+            return "Provide either 'value' or 'label' to select."
         except Exception as e:
             return f"Browser select error: {e}"
 
@@ -270,12 +267,12 @@ class BrowserMixin:
             if not results:
                 return f"No elements found matching '{selector}'"
             lines = [f"Found {len(results)} element(s) matching '{selector}':"]
-            for r in results:
-                lines.append(
-                    f"  <{r['tag']}> text={r['text'][:80]!r}\n"
-                    f"      attrs: {r['attrs']}\n"
-                    f"      visible: {r['visible']}, rect: {r.get('rect', {})}"
-                )
+            lines.extend(
+                f"  <{r['tag']}> text={r['text'][:80]!r}\n"
+                f"      attrs: {r['attrs']}\n"
+                f"      visible: {r['visible']}, rect: {r.get('rect', {})}"
+                for r in results
+            )
             return "\n".join(lines)
         except Exception as e:
             return f"browser_get_elements error: {e}"

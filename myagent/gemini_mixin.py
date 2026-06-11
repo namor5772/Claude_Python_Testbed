@@ -230,7 +230,7 @@ class GeminiMixin:
                                 )
                             )
                             contents.append(genai_types.Content(
-                                role="user", parts=[hint] + image_parts,
+                                role="user", parts=[hint, *image_parts],
                             ))
                     else:
                         # User message with text + images
@@ -580,7 +580,7 @@ class GeminiMixin:
                                                 "bisheng", "text-")):
                     continue
                 # Skip deprecated models
-                if mid.startswith("gemini-2.0-") or mid.startswith("gemini-1."):
+                if mid.startswith(("gemini-2.0-", "gemini-1.")):
                     continue
                 model_ids.append(mid)
             model_ids.sort()

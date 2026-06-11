@@ -61,8 +61,8 @@ from myagent.helpers import extract_text_from_html
 
 _HAS_OUTLOOK = True
 try:
-    import msal  # noqa: F401
-    import requests  # noqa: F401
+    import msal
+    import requests
 except Exception:
     _HAS_OUTLOOK = False
 
@@ -112,7 +112,7 @@ class OutlookMixin:
         if not os.path.exists(OUTLOOK_ACCOUNTS_FILE):
             return {}
         try:
-            with open(OUTLOOK_ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            with open(OUTLOOK_ACCOUNTS_FILE, encoding="utf-8") as f:
                 data = json.load(f)
             accounts = data.get("accounts", {})
             return accounts if isinstance(accounts, dict) else {}
@@ -140,7 +140,7 @@ class OutlookMixin:
         authority = "https://login.microsoftonline.com/common"
         if os.path.exists(OUTLOOK_APP_FILE):
             try:
-                with open(OUTLOOK_APP_FILE, "r", encoding="utf-8") as f:
+                with open(OUTLOOK_APP_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 client_id = data.get("client_id")
                 authority = data.get("authority", authority)
@@ -172,7 +172,7 @@ class OutlookMixin:
         cache = msal.SerializableTokenCache()
         if os.path.exists(cache_path):
             try:
-                with open(cache_path, "r", encoding="utf-8") as f:
+                with open(cache_path, encoding="utf-8") as f:
                     cache.deserialize(f.read())
             except Exception:
                 pass
@@ -256,8 +256,8 @@ class OutlookMixin:
                     f"Graph {resp.status_code} {err.get('code', '')}: "
                     f"{err.get('message', '')}"
                 )
-            except ValueError:
-                raise RuntimeError(f"Graph {resp.status_code}: {resp.text[:300]}")
+            except ValueError as e:
+                raise RuntimeError(f"Graph {resp.status_code}: {resp.text[:300]}") from e
         if raw:
             return resp.content
         if resp.status_code == 204 or not resp.content:
@@ -447,14 +447,13 @@ class OutlookMixin:
                     account, "GET", f"/me/messages/{message_id}/attachments",
                     params={"$select": "id,name,contentType,size,isInline"},
                 )
-                for a in att.get("value", []):
-                    attachments.append({
-                        "filename": a.get("name", ""),
-                        "mime_type": a.get("contentType", "application/octet-stream"),
-                        "size": a.get("size", 0),
-                        "attachment_id": a.get("id", ""),
-                        "inline": a.get("isInline", False),
-                    })
+                attachments = [{
+                    "filename": a.get("name", ""),
+                    "mime_type": a.get("contentType", "application/octet-stream"),
+                    "size": a.get("size", 0),
+                    "attachment_id": a.get("id", ""),
+                    "inline": a.get("isInline", False),
+                } for a in att.get("value", [])]
 
             result = {
                 "account": account,
@@ -701,14 +700,12 @@ class OutlookMixin:
                     "$orderby": "lastModifiedDateTime desc",
                 },
             )
-            drafts = []
-            for m in resp.get("value", []):
-                drafts.append({
-                    "draft_id": m.get("id"),
-                    "to": self._outlook_recip_list(m.get("toRecipients")),
-                    "subject": m.get("subject", ""),
-                    "snippet": (m.get("bodyPreview", "") or "")[:200],
-                })
+            drafts = [{
+                "draft_id": m.get("id"),
+                "to": self._outlook_recip_list(m.get("toRecipients")),
+                "subject": m.get("subject", ""),
+                "snippet": (m.get("bodyPreview", "") or "")[:200],
+            } for m in resp.get("value", [])]
             return json.dumps({
                 "account": account, "count": len(drafts), "drafts": drafts,
             }, indent=2, ensure_ascii=False)

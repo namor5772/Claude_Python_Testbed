@@ -9,89 +9,68 @@ except ImportError:
 
 class EventLoopMixin:
 
+    def _chat_insert(self, *segments, newline_first=True, see=True):
+        """Insert (text, tag) segments into the chat display in one
+        enable→insert→disable cycle, starting on a fresh line by default."""
+        self.chat_display.config(state="normal")
+        if newline_first:
+            self._ensure_newline()
+        for text, tag in segments:
+            self.chat_display.insert(tk.END, text, tag)
+        if see:
+            self.chat_display.see(tk.END)
+        self.chat_display.config(state="disabled")
+
     def check_queue(self):
         try:
             while True:
                 msg = self.queue.get_nowait()
-                if msg["type"] == "debug" and not self.debug_enabled.get():
-                    pass
-                elif msg["type"] == "call_counter" and not self.show_activity.get() and not self.debug_enabled.get() and not self.tool_calls_enabled.get():
+                if (msg["type"] == "debug" and not self.debug_enabled.get()) or (
+                        msg["type"] == "call_counter" and not self.show_activity.get()
+                        and not self.debug_enabled.get() and not self.tool_calls_enabled.get()):
                     pass
                 elif msg["type"] == "call_counter":
                     tag = "call_counter" if self.debug_enabled.get() else "call_counter_subtle"
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, f"  Call #{msg['content']}  ", tag)
-                    self.chat_display.insert(tk.END, "\n", "debug")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((f"  Call #{msg['content']}  ", tag), ("\n", "debug"))
                 elif msg["type"] == "debug":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, "--- PAYLOAD SENT TO API ---\n", "debug_label")
-                    self.chat_display.insert(tk.END, msg["content"] + "\n", "debug")
-                    self.chat_display.insert(tk.END, "--- END PAYLOAD ---\n\n", "debug_label")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert(
+                        ("--- PAYLOAD SENT TO API ---\n", "debug_label"),
+                        (msg["content"] + "\n", "debug"),
+                        ("--- END PAYLOAD ---\n\n", "debug_label"),
+                    )
                 elif msg["type"] == "tool_call_debug" and not self.tool_calls_enabled.get():
                     pass
                 elif msg["type"] == "tool_call_debug":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, "--- TOOL CALL ---\n", "tool_debug_label")
-                    self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_debug")
-                    self.chat_display.insert(tk.END, "--- END TOOL CALL ---\n", "tool_debug_label")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert(
+                        ("--- TOOL CALL ---\n", "tool_debug_label"),
+                        (msg["content"] + "\n", "tool_debug"),
+                        ("--- END TOOL CALL ---\n", "tool_debug_label"),
+                    )
                 elif msg["type"] == "thinking_start":
                     self._current_thinking_text = ""
                     if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self._ensure_newline()
-                        self.chat_display.insert(tk.END, "Thinking:\n", "thinking_label")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                        self._chat_insert(("Thinking:\n", "thinking_label"))
                 elif msg["type"] == "thinking_delta":
                     self._current_thinking_text += msg["content"]
                     if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, msg["content"], "thinking")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                        self._chat_insert((msg["content"], "thinking"), newline_first=False)
                 elif msg["type"] == "thinking_end":
                     if self.show_thinking.get():
-                        self.chat_display.config(state="normal")
-                        self.chat_display.insert(tk.END, "\n\n", "thinking")
-                        self.chat_display.see(tk.END)
-                        self.chat_display.config(state="disabled")
+                        self._chat_insert(("\n\n", "thinking"), newline_first=False)
                 elif msg["type"] == "label":
                     self._current_response_text = ""
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, "Agent:\n", "assistant_label")
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert(("Agent:\n", "assistant_label"), see=False)
                 elif msg["type"] == "text_delta":
                     self._current_response_text += msg["content"]
-                    self.chat_display.config(state="normal")
-                    self.chat_display.insert(tk.END, msg["content"], "assistant")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((msg["content"], "assistant"), newline_first=False)
                 elif msg["type"] == "user_prompt_echo":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, "\nYou:\n", "user_label")
-                    self.chat_display.insert(tk.END, msg["content"] + "\n\n", "user")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert(("\nYou:\n", "user_label"),
+                                      (msg["content"] + "\n\n", "user"))
                 elif msg["type"] == "ci_code" and not self.show_activity.get():
                     pass
                 elif msg["type"] == "ci_code":
                     # Code interpreter code — display as a single readable block
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, msg["content"] + "\n", "tool_info")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((msg["content"] + "\n", "tool_info"))
                 elif msg["type"] == "ci_image":
                     # Code interpreter image — decode/download, display inline, and save
                     try:
@@ -151,17 +130,9 @@ class EventLoopMixin:
                 elif msg["type"] == "tool_info" and not self.show_activity.get():
                     pass
                 elif msg["type"] == "tool_info":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, msg["content"], "tool_info")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((msg["content"], "tool_info"))
                 elif msg["type"] == "warning":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, msg["content"], "warning")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((msg["content"], "warning"))
                 elif msg["type"] == "cost_update" and not self.show_activity.get():
                     pass
                 elif msg["type"] == "cost_update":
@@ -183,11 +154,7 @@ class EventLoopMixin:
                         cost_line = f"  ${call_cost:.4f} this call  |  ${total_cost:.4f} total  ({token_str})\n"
                     else:
                         cost_line = f"  ${call_cost:.4f} this call  |  ${total_cost:.2f} total  ({token_str})\n"
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(tk.END, cost_line, "cost_info")
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((cost_line, "cost_info"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()
@@ -207,13 +174,7 @@ class EventLoopMixin:
                     self._stop_button.config(state="disabled")
                     self.instruction_button.config(state="normal")
                 elif msg["type"] == "error":
-                    self.chat_display.config(state="normal")
-                    self._ensure_newline()
-                    self.chat_display.insert(
-                        tk.END, f"Error: {msg['content']}\n\n", "error"
-                    )
-                    self.chat_display.see(tk.END)
-                    self.chat_display.config(state="disabled")
+                    self._chat_insert((f"Error: {msg['content']}\n\n", "error"))
                     self.streaming = False
                     self._start_button.config(state="normal")
                     self._stop_button.config(state="disabled")

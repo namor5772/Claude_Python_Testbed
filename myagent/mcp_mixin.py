@@ -144,7 +144,7 @@ class MCPMixin:
         if not os.path.exists(MCP_SERVERS_PATH):
             return {}
         try:
-            with open(MCP_SERVERS_PATH, "r", encoding="utf-8") as f:
+            with open(MCP_SERVERS_PATH, encoding="utf-8") as f:
                 data = json.load(f)
             servers = data.get("servers", {})
             return servers if isinstance(servers, dict) else {}

@@ -14,7 +14,7 @@ OUTPUT_PDF = "/Users/roman/temp/binda_weather_2026-04-10_to_04-12.pdf"
 
 
 def read_txt(path: str) -> list[str]:
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, encoding="utf-8") as f:
         return [ln.rstrip("\n") for ln in f]
 
 

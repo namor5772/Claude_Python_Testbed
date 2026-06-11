@@ -25,7 +25,7 @@ class DesktopMixin:
         try:
             if not os.path.isfile(file_path):
                 return f"Error: File not found: {file_path}"
-            with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+            with open(file_path, encoding="utf-8-sig", newline="") as f:
                 if delimiter is None:
                     sample = f.read(8192)
                     f.seek(0)
@@ -48,14 +48,11 @@ class DesktopMixin:
                     cells_to_check = [row.get(column, "")] if column else row.values()
                     for cell in cells_to_check:
                         cell_lower = (cell or "").lower()
-                        if match_mode == "exact" and cell_lower == search_lower:
-                            matched = True
-                        elif match_mode == "starts_with" and cell_lower.startswith(search_lower):
-                            matched = True
-                        elif match_mode == "contains" and search_lower in cell_lower:
-                            matched = True
-                        else:
-                            matched = False
+                        matched = (
+                            (match_mode == "exact" and cell_lower == search_lower)
+                            or (match_mode == "starts_with" and cell_lower.startswith(search_lower))
+                            or (match_mode == "contains" and search_lower in cell_lower)
+                        )
                         if matched:
                             matches.append((row_num, row))
                             break
@@ -67,8 +64,7 @@ class DesktopMixin:
             lines = [f"Found {len(matches)} match(es). Columns: {', '.join(headers)}\n"]
             for row_num, row in matches:
                 lines.append(f"--- Row {row_num} ---")
-                for h in headers:
-                    lines.append(f"  {h}: {row.get(h, '')}")
+                lines.extend(f"  {h}: {row.get(h, '')}" for h in headers)
             if len(matches) >= max_results:
                 lines.append(f"\n[Results limited to {max_results}. Use max_results to increase.]")
             output = "\n".join(lines)
@@ -207,12 +203,12 @@ class DesktopMixin:
                 _diag_all_rects_str = ", ".join(
                     f"#{i}=({l},{t},{r-l}x{b-t})" for i, (l, t, r, b) in enumerate(_diag_rects)
                 ) if _diag_rects else "(none)"
-                self.queue.put({"type": "tool_info", "content": (
+                self._tool_info(
                     f"[DIAG capture] display_idx={display_idx} region={region} "
                     f"all_display_rects={_diag_all_rects_str}\n"
-                )})
+                )
             except Exception as _diag_e:
-                self.queue.put({"type": "tool_info", "content": f"[DIAG capture] error: {_diag_e}\n"})
+                self._tool_info(f"[DIAG capture] error: {_diag_e}\n")
         # Snapshot the active scale/offset BEFORE any state mutation so region→screen
         # conversion always uses the coordinate space the model was just looking at,
         # even when chaining region screenshots (region-inside-region).
@@ -235,7 +231,7 @@ class DesktopMixin:
             # Update offset to region origin so subsequent clicks use region-relative coords
             self._screenshot_offset = (screen_x, screen_y)
             # DPI alignment: on macOS Retina, pyautogui returns physical resolution
-            phys_w_r, phys_h_r = img.size
+            phys_w_r, _ = img.size
             if not IS_WINDOWS and phys_w_r != screen_w and screen_w:
                 img = img.resize((screen_w, screen_h))
         elif not IS_WINDOWS:
@@ -315,11 +311,11 @@ class DesktopMixin:
         # dims/scale/offset the coordinate math will use (Diag checkbox only).
         if self.diag_enabled.get():
             try:
-                self.queue.put({"type": "tool_info", "content": (
+                self._tool_info(
                     f"[DIAG capture] phys={phys_w}x{phys_h} logical={logical_w}x{logical_h} "
                     f"sent_to_model={img_w}x{img_h} scale={self._screenshot_scale:.4f} "
                     f"offset={self._screenshot_offset}\n"
-                )})
+                )
             except Exception:
                 pass
         # Cache raw pre-grid image bytes for find_element re-use (Gemini pointing tool)
@@ -432,10 +428,10 @@ class DesktopMixin:
             # Diagnostic: log the full click math before any bounds/rounding (Diag checkbox only)
             if self.diag_enabled.get():
                 try:
-                    self.queue.put({"type": "tool_info", "content": (
+                    self._tool_info(
                         f"[DIAG click] input=(x={x}, y={y}) display={display} "
                         f"state: dims={iw}x{ih} scale={scale:.4f} offset=({ox},{oy})\n"
-                    )})
+                    )
                 except Exception:
                     pass
             if not (iw and ih):
@@ -466,11 +462,11 @@ class DesktopMixin:
             # Diagnostic: log the computed screen coords just before pyautogui fires (Diag checkbox only)
             if self.diag_enabled.get():
                 try:
-                    self.queue.put({"type": "tool_info", "content": (
+                    self._tool_info(
                         f"[DIAG click] computed: image_clamped=({x},{y}) "
                         f"→ screen=({screen_x},{screen_y}) via {x}*{scale:.4f}+{ox}, "
                         f"{y}*{scale:.4f}+{oy}\n"
-                    )})
+                    )
                 except Exception:
                     pass
             pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
@@ -539,10 +535,7 @@ class DesktopMixin:
     def do_open_application(self, name, args=None):
         try:
             key = name.lower().strip()
-            if key in self.KNOWN_APPS:
-                cmd = self.KNOWN_APPS[key]
-            else:
-                cmd = name
+            cmd = self.KNOWN_APPS.get(key, name)
             if args:
                 subprocess.Popen([cmd, args], **_SUBPROCESS_NOWND)
             else:
@@ -558,32 +551,30 @@ class DesktopMixin:
             matches = gw.getWindowsWithTitle(title)
             return [{"title": w.title, "left": w.left, "top": w.top,
                       "width": w.width, "height": w.height, "_win": w} for w in matches]
-        else:
-            import Quartz
-            wins = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-                Quartz.kCGNullWindowID)
-            results = []
-            for w in wins:
-                app = w.get("kCGWindowOwnerName", "")
-                name = w.get("kCGWindowName", "")
-                full_title = f"{app} — {name}" if name else app
-                if pattern in full_title.lower() or pattern in app.lower() or pattern in (name or "").lower():
-                    b = w.get("kCGWindowBounds", {})
-                    results.append({"title": full_title,
-                                    "left": int(b.get("X", 0)), "top": int(b.get("Y", 0)),
-                                    "width": int(b.get("Width", 0)), "height": int(b.get("Height", 0)),
-                                    "_app": app, "_pid": w.get("kCGWindowOwnerPID")})
-            return results
+        import Quartz
+        wins = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID)
+        results = []
+        for w in wins:
+            app = w.get("kCGWindowOwnerName", "")
+            name = w.get("kCGWindowName", "")
+            full_title = f"{app} — {name}" if name else app
+            if pattern in full_title.lower() or pattern in app.lower() or pattern in (name or "").lower():
+                b = w.get("kCGWindowBounds", {})
+                results.append({"title": full_title,
+                                "left": int(b.get("X", 0)), "top": int(b.get("Y", 0)),
+                                "width": int(b.get("Width", 0)), "height": int(b.get("Height", 0)),
+                                "_app": app, "_pid": w.get("kCGWindowOwnerPID")})
+        return results
 
     def do_find_window(self, title, activate=False):
         try:
             windows = self._find_windows_by_title(title)
             if not windows:
                 return f"No windows found matching '{title}'"
-            results = []
-            for w in windows:
-                results.append(f"  Title: {w['title']}\n  Position: ({w['left']}, {w['top']})\n  Size: {w['width']}x{w['height']}")
+            results = [f"  Title: {w['title']}\n  Position: ({w['left']}, {w['top']})\n  Size: {w['width']}x{w['height']}"
+                       for w in windows]
             if activate and windows:
                 try:
                     win = windows[0]
@@ -660,8 +651,10 @@ class DesktopMixin:
                 text = result.text.strip()
             else:
                 import objc, Quartz
-                Vision = objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
-                                         module_globals={})
+                # Load the Vision framework for its side effect: registering the
+                # VN* ObjC classes so Quartz.VNImageRequestHandler etc. resolve.
+                objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
+                                module_globals={})
                 buf = io.BytesIO()
                 img.save(buf, format="PNG")
                 ns_data = Quartz.NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))

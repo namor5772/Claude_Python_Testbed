@@ -1,6 +1,4 @@
-﻿import tkinter as tk
-import ctypes
-import time
+﻿import ctypes
 
 # Find the window and move it
 user32 = ctypes.windll.user32
