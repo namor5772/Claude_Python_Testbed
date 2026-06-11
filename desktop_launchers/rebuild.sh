@@ -63,12 +63,23 @@ build CSVEditor_launcher.applescript icon_csv_master.png    CSVEditor
 
 # Desktop aliases (only for the real ~/Applications install, not test builds)
 if [ "$DEST" = "$HOME/Applications" ]; then
-  for name in UnreadSummary CSVEditor; do
+  while read -r name png; do
     rm -f "$HOME/Desktop/$name"
     osascript -e "tell application \"Finder\"" \
               -e "set a to make alias file at desktop to (POSIX file \"$DEST/$name.app\")" \
               -e "set name of a to \"$name\"" \
               -e "end tell" >/dev/null
+    # Paste the icon onto the alias itself — alias creation snapshots the
+    # target's icon, which can be stale/generic if IconServices hasn't
+    # re-indexed the target at its (new) path yet.
+    osascript -l JavaScript \
+      -e "ObjC.import('AppKit');" \
+      -e "const i = \$.NSImage.alloc.initWithContentsOfFile('$DIR/$png');" \
+      -e "\$.NSWorkspace.sharedWorkspace.setIconForFileOptions(i, '$HOME/Desktop/$name', 0);" \
+      >/dev/null
     echo "alias  $HOME/Desktop/$name"
-  done
+  done <<'PAIRS'
+UnreadSummary icon_unread_master.png
+CSVEditor icon_csv_master.png
+PAIRS
 fi
