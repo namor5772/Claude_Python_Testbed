@@ -1,8 +1,14 @@
 #!/bin/bash
-# Rebuild the two macOS Desktop launcher apps from the sources in this folder.
+# Rebuild the two macOS launcher apps from the sources in this folder.
 #
-#   ./rebuild.sh                       # builds both onto ~/Desktop
-#   LAUNCHER_DEST=/tmp/x ./rebuild.sh  # build somewhere else (testing)
+#   ./rebuild.sh                       # builds into ~/Applications + Desktop aliases
+#   LAUNCHER_DEST=/tmp/x ./rebuild.sh  # build somewhere else (testing; no aliases)
+#
+# The real apps live in ~/Applications, NOT ~/Desktop: an app residing in a
+# TCC-protected folder (Desktop/Documents/Downloads) triggers a "wants to
+# access your Desktop folder" consent every time it becomes a "new" app
+# (i.e. after every rebuild). The Desktop gets Finder ALIASES instead —
+# same double-click, same icon, no protected-folder prompt.
 #
 # The .applescript sources store the M4 Mac Mini's repo path; this script
 # rewrites it to wherever THIS clone lives before compiling, so the repo's
@@ -18,7 +24,8 @@
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
-DEST="${LAUNCHER_DEST:-$HOME/Desktop}"
+DEST="${LAUNCHER_DEST:-$HOME/Applications}"
+mkdir -p "$DEST"
 
 build() { # <source.applescript> <master.png> <AppName>
   local src="$1" png="$2" name="$3"
@@ -53,3 +60,15 @@ build() { # <source.applescript> <master.png> <AppName>
 
 build UnreadSummary.applescript      icon_unread_master.png UnreadSummary
 build CSVEditor_launcher.applescript icon_csv_master.png    CSVEditor
+
+# Desktop aliases (only for the real ~/Applications install, not test builds)
+if [ "$DEST" = "$HOME/Applications" ]; then
+  for name in UnreadSummary CSVEditor; do
+    rm -f "$HOME/Desktop/$name"
+    osascript -e "tell application \"Finder\"" \
+              -e "set a to make alias file at desktop to (POSIX file \"$DEST/$name.app\")" \
+              -e "set name of a to \"$name\"" \
+              -e "end tell" >/dev/null
+    echo "alias  $HOME/Desktop/$name"
+  done
+fi

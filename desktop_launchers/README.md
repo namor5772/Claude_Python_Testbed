@@ -1,11 +1,19 @@
 # Desktop Launchers (macOS)
 
-Sources for the two double-clickable Desktop apps; the compiled `.app`
+Sources for the two double-clickable launcher apps; the compiled `.app`
 bundles themselves are per-machine and are NOT in git — rebuild them with:
 
 ```bash
 ./desktop_launchers/rebuild.sh
 ```
+
+The real apps are built into `~/Applications` with Finder **aliases** on the
+Desktop. They must not live in `~/Desktop` itself: an app running from a
+TCC-protected folder (Desktop/Documents/Downloads) makes macOS pop a
+"wants to access your Desktop folder" consent — and again after every
+rebuild, since the new code hash makes it a "new" app. Aliases give the
+same double-click and icon with no prompt. (The scheduled 7am job is never
+affected either way — launchd runs the venv python directly.)
 
 | App | Source | Icon master | What it does |
 |---|---|---|---|
