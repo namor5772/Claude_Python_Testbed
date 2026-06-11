@@ -17,7 +17,7 @@ affected either way — launchd runs the venv python directly.)
 
 | App | Source | Icon master | What it does |
 |---|---|---|---|
-| `UnreadSummary.app` | `UnreadSummary.applescript` | `icon_unread_master.png` (anxious envelope, 99+ badge, sunrise) | Runs `UnreadSummary.py` with the venv python; success notification with the run's log line, error dialog with the log tail on failure |
+| `UnreadSummary.app` | `UnreadSummary.applescript` | `icon_unread_master.png` (anxious envelope, 99+ badge, sunrise) | Runs `UnreadSummary.py` with the venv python; success chime + self-dismissing dialog with the run's log line, error dialog with the log tail on failure. Deliberately TCC-free (notifications would re-ask consent after every rebuild) |
 | `CSVEditor.app` | `CSVEditor_launcher.applescript` | `icon_csv_master.png` (sunglasses semicolon, deposed comma, spreadsheet) | Launches `CSVEditor.py` detached; if it's already running, brings the window to front instead of starting a second instance |
 
 `rebuild.sh` patches the repo path into the AppleScript for whatever clone
