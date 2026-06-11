@@ -19,6 +19,8 @@ MyAgent_Tools_Report.txt
 # Runtime state files
 agent_state*.json
 app_state*.json
+# legacy CSVEditor state location — migrated to ~/.config/csveditor/ on first
+# run; kept ignored so stale copies on other machines stay invisible
 csv_editor_state.json
 
 # Lock files

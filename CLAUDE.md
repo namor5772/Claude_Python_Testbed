@@ -72,7 +72,7 @@ There are no tests, linter, or build steps — these are testbed apps.
 - `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)
 - `agent_state.json` — Persistent settings for MyAgent (created at runtime)
-- `csv_editor_state.json` — Persistent settings for CSVEditor (created at runtime)
+- CSVEditor state lives at `~/.config/csveditor/state.json` (outside the repo; a legacy `csv_editor_state.json` in the repo root is migrated there on first run)
 - `selfbot.lock` — Lock file for SelfBot instance detection (created/deleted at runtime)
 - `selfbot_auto_msg.json` — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
 - `Account_Activity_WBC.txt` — Raw transaction HTML extracted by Account_Activity_WBC.py (created at runtime, gitignored)

@@ -6,7 +6,14 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csv_editor_state.json")
+# Per-user state (geometry, last file, filters, sort) lives OUTSIDE the
+# repo — same convention as MyAgent's ~/.config/myagent-* dirs — so the
+# project directory accumulates no runtime droppings. The pre-2026-06-11
+# location was csv_editor_state.json in the repo root; _load_state migrates
+# an existing file there silently on first run.
+STATE_DIR = os.path.join(os.path.expanduser("~"), ".config", "csveditor")
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+LEGACY_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "csv_editor_state.json")
 
 CSV_DELIMITERS = ",;\t|"
 
@@ -486,11 +493,22 @@ class App:
     # ── State persistence ─────────────────────────────────────────────
 
     def _load_state(self):
+        path = STATE_FILE if os.path.exists(STATE_FILE) else LEGACY_STATE_FILE
         try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 state = json.load(f)
         except (FileNotFoundError, json.JSONDecodeError):
             return
+
+        if path == LEGACY_STATE_FILE:
+            # One-time migration out of the repo directory.
+            try:
+                os.makedirs(STATE_DIR, exist_ok=True)
+                with open(STATE_FILE, "w", encoding="utf-8") as f:
+                    json.dump(state, f, indent=2)
+                os.remove(LEGACY_STATE_FILE)
+            except Exception:
+                pass
 
         # Restore geometry
         geo = state.get("geometry")
@@ -543,6 +561,7 @@ class App:
             "date_sort_enabled": self._date_sort_enabled,
         }
         try:
+            os.makedirs(STATE_DIR, exist_ok=True)
             with open(STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
         except Exception:

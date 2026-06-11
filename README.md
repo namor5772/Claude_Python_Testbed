@@ -32,7 +32,6 @@ A repo containing various Python scripts written using Claude Code. The two main
 - **app_state_2.json** — Persistent settings for SelfBot instance 2 (created at runtime)
 - **agent_state.json** — Persistent app settings for MyAgent instance 1 (created at runtime)
 - **agent_state_N.json** — Persistent settings for MyAgent instance N (created at runtime when multiple instances run)
-- **csv_editor_state.json** — Persistent settings for CSVEditor (created at runtime)
 - **skills.json** — Saved skills with content and mode, shared by both apps (created at runtime)
 - **selfbot.lock** — Lock file for SelfBot cleanup tracking (created/deleted at runtime)
 - **selfbot_auto_msg.json** — Shared file for SelfBot cross-instance message injection (created/deleted at runtime)
@@ -1567,7 +1566,7 @@ A simple desktop CSV editor built with tkinter. Open, edit, filter, and save CSV
 - **Date sorting** — A "Sort by Date" toggle button sorts rows by a column named "Date", auto-detecting common date formats (dd/mm/yyyy, yyyy-mm-dd, mm/dd/yyyy, etc.). Disabled when no Date column exists
 - **Unsaved changes tracking** — The title bar and status bar show a `*` indicator when changes are unsaved. Closing or opening a new file prompts to save
 - **Styled display** — Light blue row background and light yellow column headings using the clam ttk theme
-- **State persistence** — Window geometry, last opened file path, all 3 filter states, and date sort toggle are saved to `csv_editor_state.json` and restored on next launch
+- **State persistence** — Window geometry, last opened file path, all 3 filter states, and date sort toggle are saved to `~/.config/csveditor/state.json` (outside the repo, like MyAgent's `~/.config/myagent-*` configs; a legacy repo-root `csv_editor_state.json` migrates there silently on first run) and restored on next launch
 
 ### UI
 
