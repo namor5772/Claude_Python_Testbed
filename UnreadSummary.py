@@ -6,12 +6,12 @@ Inbox and Spam/Junk folders and builds the COMPREHENSIVE LIST: one running
 sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts) additionally get their Determine
-fields extracted and noted inline, and their PDF attachments saved to
-~/Downloads (idempotently). By default that is all: matched emails are left
-unread, in place. The original mark-read + move-to-Trash processing is
-available behind the MARK_MATCHES_READ / TRASH_MATCHES flags. The list is
-sent from grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
-instruction's daily email.
+fields extracted and noted inline, their PDF attachments saved to
+~/Downloads (idempotently), and are marked read — but stay in place: the
+original move-to-Trash is off by default behind the TRASH_MATCHES flag
+(each per-match action has its own flag; see the constants below). The list
+is sent from grobliro@outlook.com to namor5772@gmail.com, mirroring the
+AI-run instruction's daily email.
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text and the Determine fields are extracted with label-proximity
@@ -21,9 +21,9 @@ Safety properties, by construction rather than by prompt:
   * The listing phase uses only read-only primitives (IMAP EXAMINE +
     BODY.PEEK, Gmail messages.get, Graph GET) — it CANNOT mark, move, or
     delete anything.
-  * Per-match actions are individually flag-gated: SAVE_MATCH_PDFS (default
-    True — writes only to ~/Downloads), MARK_MATCHES_READ and TRASH_MATCHES
-    (default False). With the defaults, no mailbox state changes at all.
+  * Per-match actions are individually flag-gated: SAVE_MATCH_PDFS and
+    MARK_MATCHES_READ (default True), TRASH_MATCHES (default False). The
+    only default mailbox mutation is clearing the unread flag on matches.
   * Even with all flags enabled, actions run only for emails matching a
     SPECIFYING entry, and Trash is recoverable from each provider's UI —
     nothing is permanently deleted (same boundary as MyAgent's mail mixins).
@@ -91,11 +91,11 @@ SUBJECT_PREFIX = "Summary of Unread Emails"
 
 # What to do with a SPECIFYING match beyond noting its Determine fields in
 # the COMPREHENSIVE LIST. Each action is independent; the defaults download
-# the bill PDFs but leave the email itself untouched (unread, in place).
-# Setting all three True restores the full Email_AllUnreadSummary_Mac3
+# the bill PDFs and mark the email read, but leave it in place. Setting
+# TRASH_MATCHES True as well restores the full Email_AllUnreadSummary_Mac3
 # behaviour (save PDFs, mark read, move to Trash).
 SAVE_MATCH_PDFS = True     # save pdf attachments to ~/Downloads (idempotent)
-MARK_MATCHES_READ = False  # mark the matched email as read
+MARK_MATCHES_READ = True   # mark the matched email as read
 TRASH_MATCHES = False      # move the matched email to Trash/Bin
 
 DOWNLOAD_DIR = Path.home() / "Downloads"
@@ -188,8 +188,10 @@ SPECIFYING = [
         ],
     },
     {
+        # Prefix, not exact: Telstra varies the tail across the bill cycle —
+        # "... is now available", "... is due soon." (reminder) — same stem.
         "n": 7, "name": "Telstra Notify / JB Hi-Fi Mobile bill",
-        "from_has": "telstra", "subject": "roman, your jb hi-fi mobile bill is now available",
+        "from_has": "telstra", "subject_pre": "roman, your jb hi-fi mobile bill",
         "fields": [
             ("Invoice Number", [("labeled", "code", ["invoice number", "invoice no", "invoice"])]),
             ("Total new charges", [("labeled", "money", ["total new charges", "new charges", "total charges", "total due", "amount due"])]),
@@ -230,7 +232,9 @@ VALUE_RES = {
         r"(?:\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]{3,9},?\s+\d{4}"   # 27 June 2026
         r"|[A-Za-z]{3,9}\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{4}"     # June 27, 2026
         r"|\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4})"),                     # 27/06/2026
-    "code": re.compile(r"[#]?[A-Za-z0-9][A-Za-z0-9/\-#]{3,}"),
+    # Codes must contain a digit — bare words ("period", "summary") that
+    # happen to follow an "invoice"/"account" label are not identifiers.
+    "code": re.compile(r"#?(?=[A-Za-z0-9/\-#]*\d)[A-Za-z0-9][A-Za-z0-9/\-#]{3,}"),
 }
 
 
