@@ -72,3 +72,6 @@ nul
 Untitled.*
 # Generic backup files (e.g. agent_instructions.json.bak)
 *.bak
+
+# Git Bash crash dumps
+*.stackdump
