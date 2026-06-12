@@ -63,6 +63,9 @@ class App:
         self._visible_indices = []  # maps tree position -> index in self.rows
         # 3 independent filters: each is (col_index_or_None, value_or_None)
         self._filters = [(None, None), (None, None), (None, None)]
+        # User-dragged column widths, keyed by header text so they survive
+        # tree rebuilds, file switches, and app restarts (persisted in state)
+        self._col_widths = {}
         self._date_sort_enabled = False
         self._date_sort_col = None  # column index of "Date" column
 
@@ -252,7 +255,17 @@ class App:
 
     # ── Tree display ──────────────────────────────────────────────────
 
+    def _capture_col_widths(self):
+        """Harvest the live column widths (including user drags) into
+        _col_widths. Reassigning tree["columns"] in _refresh_tree resets all
+        column config, so widths must be captured before every rebuild."""
+        for cid in self.tree["columns"] or ():
+            hdr = self.tree.heading(cid, "text")
+            if hdr:
+                self._col_widths[hdr] = int(self.tree.column(cid, "width"))
+
     def _refresh_tree(self):
+        self._capture_col_widths()
         self.tree.delete(*self.tree.get_children())
         self._visible_indices = []
 
@@ -261,7 +274,8 @@ class App:
 
         for cid, hdr in zip(col_ids, self.headers):
             self.tree.heading(cid, text=hdr, anchor=tk.W)
-            self.tree.column(cid, width=120, minwidth=60, anchor=tk.W)
+            self.tree.column(cid, width=self._col_widths.get(hdr, 120),
+                             minwidth=60, anchor=tk.W)
 
         # Build list of (real_idx, row) passing all active filters
         filtered = []
@@ -508,6 +522,12 @@ class App:
         if geo:
             self.root.geometry(geo)
 
+        # Restore saved column widths (must precede _load_csv, whose
+        # _refresh_tree applies them when building the columns)
+        saved_widths = state.get("col_widths")
+        if isinstance(saved_widths, dict):
+            self._col_widths = saved_widths
+
         # Restore last opened CSV
         path = state.get("filepath")
         if path and os.path.isfile(path):
@@ -544,6 +564,7 @@ class App:
                 self._update_filter_status()
 
     def _save_state(self):
+        self._capture_col_widths()
         state = {
             "geometry": self.root.geometry(),
             "filepath": self.filepath,
@@ -552,6 +573,7 @@ class App:
                 for i in range(3)
             ],
             "date_sort_enabled": self._date_sort_enabled,
+            "col_widths": self._col_widths,
         }
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
