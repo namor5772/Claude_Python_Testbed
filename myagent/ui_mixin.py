@@ -3,9 +3,8 @@ import tkinter as tk
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS,
-    MANUAL_THINKING_PREFIXES, EFFORT_LEVELS, ADAPTIVE_MODE_VALUES,
-    ADAPTIVE_MODE_VALUES_NO_MAX, BUDGET_PRESETS, GEMINI_THINKING_PREFIXES,
-    OLLAMA_THINKING_PREFIXES,
+    ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
+    BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
 
 
@@ -244,15 +243,17 @@ class UIMixin:
                 self._thinking_mode_label.config(text="Thinking")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                # Populate values: "Max" effort is an Opus-only feature (Opus 4.6+).
-                # Version-parsed (see _anthropic_supports_max_effort) so future Opus
-                # releases keep "Max" without editing a hardcoded model list.
-                if self._anthropic_supports_max_effort():
-                    self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
-                else:
-                    self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
-                    if self._thinking_mode_var.get() == "Max":
-                        self._thinking_mode_var.set("High")
+                # Per-model values: Fable/Mythos 5 drop "Off" (thinking is always
+                # on — an explicit disable is HTTP 400), Xhigh needs Opus 4.7+ /
+                # Fable 5, Max needs Opus 4.6+ / Fable 5. Version-parsed so future
+                # releases are covered without editing a hardcoded list.
+                values = self._anthropic_mode_values()
+                self._thinking_mode_combo["values"] = values
+                if self._thinking_mode_var.get() not in values:
+                    # "Off" on an always-on model coerces to Adaptive; an
+                    # unsupported Xhigh/Max coerces down to High.
+                    coerced = "Adaptive" if self._thinking_mode_var.get() == "Off" else "High"
+                    self._thinking_mode_var.set(coerced)
                 # Sync state from thinking_mode (may pack temp after combo)
                 self._on_thinking_mode_changed()
             elif support == "extended" and self.provider == "OpenAI":
@@ -357,15 +358,29 @@ class UIMixin:
                 return "manual"
         return None
 
-    def _anthropic_rejects_temperature(self, model_id=None):
-        """True for Anthropic models that removed sampling params (temperature/
-        top_p/top_k) — Opus 4.7 and later return HTTP 400 if temperature is sent.
-        Parses claude-opus-<major>-<minor> >= (4, 7) so future Opus releases are
-        covered without a hardcoded list; the reactive cache in _stream_anthropic_call
-        backstops anything this misses."""
+    def _is_anthropic_always_on_thinking(self, model_id=None):
+        """True for Claude 5 Mythos-class models (Fable 5 / Mythos 5) where
+        thinking is ALWAYS ON: the API rejects thinking={"type": "disabled"} and
+        budget_tokens with HTTP 400 (only omitting the param or {"type":
+        "adaptive"} is accepted), and sampling params are rejected
+        unconditionally. The UI drops the "Off" mode for these and the streaming
+        path always takes the thinking branch."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
+        return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
+
+    def _anthropic_rejects_temperature(self, model_id=None):
+        """True for Anthropic models that removed sampling params (temperature/
+        top_p/top_k) — Opus 4.7+ and the Claude 5 family (Fable/Mythos) return
+        HTTP 400 if temperature is sent. Parses claude-opus-<major>-<minor> >=
+        (4, 7) so future Opus releases are covered without a hardcoded list; the
+        reactive cache in _stream_anthropic_call backstops anything this misses."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        if self._is_anthropic_always_on_thinking(mid):
+            return True
         if mid.startswith("claude-opus-"):
             parts = mid[len("claude-opus-"):].split("-")
             try:
@@ -376,13 +391,16 @@ class UIMixin:
 
     def _anthropic_supports_max_effort(self, model_id=None):
         """True for Anthropic models that expose the 'max' thinking effort — Opus
-        4.6 and later. Parses claude-opus-<major>-<minor> >= (4, 6) so future Opus
-        releases keep "Max" without editing a hardcoded list (mirrors
-        _anthropic_rejects_temperature). 'max' is Opus-only: adaptive Sonnet (4.6+)
-        deliberately caps at High, and the API 400s on effort='max' for non-Opus."""
+        4.6 and later, plus the Claude 5 family (Fable/Mythos). Parses
+        claude-opus-<major>-<minor> >= (4, 6) so future Opus releases keep "Max"
+        without editing a hardcoded list (mirrors _anthropic_rejects_temperature).
+        Otherwise Opus-only: adaptive Sonnet (4.6+) deliberately caps at High,
+        and the API 400s on effort='max' for non-Opus."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
+        if self._is_anthropic_always_on_thinking(mid):
+            return True
         if mid.startswith("claude-opus-"):
             parts = mid[len("claude-opus-"):].split("-")
             try:
@@ -390,6 +408,35 @@ class UIMixin:
             except (ValueError, IndexError):
                 return False
         return False
+
+    def _anthropic_supports_xhigh_effort(self, model_id=None):
+        """True for Anthropic models that accept effort='xhigh' (between high and
+        max) — Opus 4.7 and later, plus the Claude 5 family (Fable/Mythos).
+        Same version-parsing pattern as the helpers above."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        if self._is_anthropic_always_on_thinking(mid):
+            return True
+        if mid.startswith("claude-opus-"):
+            parts = mid[len("claude-opus-"):].split("-")
+            try:
+                return (int(parts[0]), int(parts[1])) >= (4, 7)
+            except (ValueError, IndexError):
+                return False
+        return False
+
+    def _anthropic_mode_values(self, model_id=None):
+        """Thinking-mode combobox values for an Anthropic adaptive model.
+        Always-on models (Fable/Mythos 5) get no "Off" entry; Xhigh and Max
+        appear only where the API accepts them."""
+        values = [] if self._is_anthropic_always_on_thinking(model_id) else ["Off"]
+        values += ["Adaptive", "Low", "Medium", "High"]
+        if self._anthropic_supports_xhigh_effort(model_id):
+            values.append("Xhigh")
+        if self._anthropic_supports_max_effort(model_id):
+            values.append("Max")
+        return values
 
     def _is_anthropic_adaptive_model(self, model_id=None):
         """True for Anthropic models that use ADAPTIVE thinking (the {type:adaptive}
@@ -405,6 +452,9 @@ class UIMixin:
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
+        # Claude 5 Mythos-class (Fable/Mythos): adaptive-only, always-on thinking.
+        if self._is_anthropic_always_on_thinking(mid):
+            return True
         for family in ("claude-opus-", "claude-sonnet-"):
             if mid.startswith(family):
                 parts = mid[len(family):].split("-")
@@ -611,9 +661,13 @@ class UIMixin:
         mode = (self.thinking_mode or "").lower()
 
         if support == "adaptive" and self.provider == "Anthropic":
-            parts.append(f"mode={mode.capitalize() or 'Off'}")
-            if mode == "off":
-                parts.append(f"temp={self.temperature:g}")
+            if mode == "off" and self._is_anthropic_always_on_thinking():
+                # Always-on model (Fable/Mythos 5): a stale "off" is sent as adaptive
+                parts.append("mode=Adaptive")
+            else:
+                parts.append(f"mode={mode.capitalize() or 'Off'}")
+                if mode == "off" and not self._anthropic_rejects_temperature():
+                    parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "OpenAI":
             parts.append(f"reasoning={mode.capitalize() or 'None'}")
             if self._has_openai_verbosity():

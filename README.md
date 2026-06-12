@@ -149,7 +149,8 @@ The parameter widgets are **model-aware**: controls that a model rejects are *hi
 
 | Provider / family | Thinking control | Temperature |
 |---|---|---|
-| Anthropic adaptive (Opus/Sonnet ≥ 4.6, dated snapshots included) | Thinking mode combobox: Off / Adaptive / Low / Medium / High / Max (Max = Opus 4.6+) | Hidden while thinking is on; hidden entirely on Opus 4.7+ (API removed sampling params — a reactive 400-handler also strips + retries once) |
+| Anthropic Claude 5 (Fable 5 / Mythos 5) | Thinking mode combobox **without Off** — thinking is always on (explicit disable is a 400): Adaptive / Low / Medium / High / Xhigh / Max, sent with `display: "summarized"` so thinking text stays visible | Hidden entirely (API removed sampling params); $10/$50 per MTok tracked in the cost display; `refusal` stop reason surfaced as a ⚠ warning |
+| Anthropic adaptive (Opus/Sonnet ≥ 4.6, dated snapshots included) | Thinking mode combobox: Off / Adaptive / Low / Medium / High (+Xhigh on Opus 4.7+, +Max on Opus 4.6+) | Hidden while thinking is on; hidden entirely on Opus 4.7+ (API removed sampling params — a reactive 400-handler also strips + retries once) |
 | Anthropic manual (4.5 family) | Checkbox + token budget (1K–32K) | Shown when thinking off |
 | OpenAI GPT-5.1+ | Reasoning combobox: None/Low/Medium/High (+Xhigh on 5.2+/codex-max; mini/nano cap at High) | GPT-5.4+ show it when reasoning = None; older 5.x never |
 | OpenAI o1/o3/o4, GPT-5.0 | Effort combobox (5.0 adds "minimal") | Hidden |

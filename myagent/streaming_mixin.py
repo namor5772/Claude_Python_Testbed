@@ -261,18 +261,28 @@ class StreamingMixin:
                 "messages": display_msgs,
             }
             model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-            if self.thinking_enabled:
+            # Mirror _stream_anthropic_call: Fable/Mythos 5 always take the
+            # thinking branch (thinking can't be disabled on them).
+            always_on = (self.provider == "Anthropic"
+                         and self._is_anthropic_always_on_thinking())
+            if self.thinking_enabled or always_on:
                 support = self._model_supports_thinking()
                 payload["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
                 if support == "adaptive":
                     payload["thinking"] = {"type": "adaptive"}
+                    if self.provider == "Anthropic":
+                        payload["thinking"]["display"] = "summarized"
                     if self.thinking_mode not in ("off", "adaptive"):
                         payload["output_config"] = {"effort": self.thinking_mode}
                 elif support == "manual":
                     payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             else:
                 payload["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-                payload["temperature"] = self.temperature
+                # Opus 4.7+ / Fable 5 reject temperature — mirror the real call's skip
+                if (self.provider != "Anthropic"
+                        or (not self._anthropic_rejects_temperature()
+                            and self.model not in self._anthropic_no_temperature)):
+                    payload["temperature"] = self.temperature
         return json.dumps(payload, indent=2)
 
     def _get_tools(self):

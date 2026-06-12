@@ -13,10 +13,23 @@
   and cache reads). Cache writes cost 1.25x base input; cache reads cost
   0.1x base input.
 
+  Claude 5 Family (Mythos-class tier above Opus)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cache Write  Cache Read
+  ──────────────────────────────────────────────────────────────────────────
+  claude-fable-5         $10.00   $50.00   $12.50       $1.00
+  claude-mythos-5        $10.00   $50.00   $12.50       $1.00
+
+  (Fable 5 / Mythos 5: thinking is always on — MyAgent's Thinking combo has
+   no "Off" for them, temperature is never sent, and effort goes up to
+   Xhigh/Max. Safety classifiers may decline a request with
+   stop_reason="refusal"; MyAgent surfaces this as a ⚠ warning line.)
+
   Claude 4.5+ Family (Current Generation)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
+  claude-opus-4-8        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-7        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-6        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-5        $5.00    $25.00   $6.25        $0.50
@@ -214,5 +227,5 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: June 3, 2026
+  Last updated: June 12, 2026 (added Claude 5 family: Fable 5 / Mythos 5)
 ================================================================================

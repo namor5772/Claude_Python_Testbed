@@ -315,8 +315,8 @@ META_TOOLS = [
                 },
                 "thinking_effort": {
                     "type": "string",
-                    "enum": ["low", "medium", "high", "max"],
-                    "description": "Thinking effort level (optional for update; create inherits current). 'max' only valid for Anthropic Opus.",
+                    "enum": ["low", "medium", "high", "xhigh", "max"],
+                    "description": "Thinking effort level (optional for update; create inherits current). 'xhigh' needs Opus 4.7+/Fable 5 (or OpenAI gpt-5.2+); 'max' needs Anthropic Opus 4.6+/Fable 5.",
                 },
                 "thinking_budget": {
                     "type": "integer",
@@ -327,7 +327,9 @@ META_TOOLS = [
                     "enum": ["off", "none", "adaptive", "low", "medium", "high", "max", "xhigh"],
                     "description": (
                         "Thinking/reasoning mode (optional for update; create inherits current). "
-                        "Anthropic adaptive: off/adaptive/low/medium/high/max ('max' Opus-only). "
+                        "Anthropic adaptive: off/adaptive/low/medium/high/xhigh/max ('xhigh' Opus 4.7+/"
+                        "Fable 5; 'max' Opus 4.6+/Fable 5). Fable 5 / Mythos 5 have ALWAYS-ON thinking — "
+                        "'off' is invalid for them; use 'adaptive'. "
                         "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh. Lower-cased to "
                         "match the stored value."
                     ),
@@ -1010,6 +1012,8 @@ else:
 
 FALLBACK_MODELS = [
     "claude-sonnet-4-5-20250929",
+    "claude-fable-5",
+    "claude-opus-4-8",
     "claude-opus-4-6",
     "claude-haiku-4-5-20251001",
 ]
@@ -1022,7 +1026,14 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-opus-20240229": 4096,
     "claude-3-sonnet-20240229": 4096,
 }
-ADAPTIVE_THINKING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
+ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
+                            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
+# Claude 5 Mythos-class models (Fable 5 / Mythos 5): thinking is ALWAYS ON.
+# The API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400 —
+# only omitting the param or {"type": "adaptive"} is accepted, and sampling
+# params (temperature/top_p/top_k) are rejected unconditionally. The UI drops
+# the "Off" mode for these and the streaming path always takes the thinking branch.
+ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
 # Budget-based ("manual") extended thinking. Claude 3.5 Sonnet is intentionally
 # excluded: extended thinking arrived with Claude 3.7 / Claude 4, so sending a
 # thinking block to a 3.5 model returns HTTP 400. (Opus 4 / 4.1 / Sonnet 4 also
@@ -1030,8 +1041,9 @@ ADAPTIVE_THINKING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4
 # to expose the manual thinking UI for them.)
 MANUAL_THINKING_PREFIXES = ("claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
 EFFORT_LEVELS = ["low", "medium", "high", "max"]
-ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
-ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
+# Static superset used as the editor combobox placeholder; _anthropic_mode_values()
+# builds the real per-model list (drops "Off" for always-on models, gates Xhigh/Max).
+ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 OPENAI_FALLBACK_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
@@ -2206,6 +2218,9 @@ PROTON_CONFIRM_TOOLS = [
 # Prefixes are matched longest-first against model names.
 ANTHROPIC_PRICING = {
     # (input, output, 5min_cache_write, cache_read) per million tokens
+    # Claude 5 family (Mythos-class tier above Opus)
+    "claude-fable-5":      (10.00, 50.00, 12.50, 1.00),
+    "claude-mythos-5":     (10.00, 50.00, 12.50, 1.00),
     # Claude 4.5+ family (new lower pricing)
     "claude-opus-4-8":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-7":     (5.00, 25.00, 6.25, 0.50),

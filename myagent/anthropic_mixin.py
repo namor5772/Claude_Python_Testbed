@@ -24,20 +24,30 @@ class AnthropicMixin:
             "tools": tools,
         }
         model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-        if self.thinking_enabled:
+        # Fable/Mythos 5 thinking is always on (an explicit disable is HTTP 400),
+        # so a stale thinking_mode of "off" — possible via headless state restore,
+        # which skips the UI coercion — still takes the thinking branch and is
+        # sent as plain adaptive.
+        always_on = self._is_anthropic_always_on_thinking()
+        if self.thinking_enabled or always_on:
             support = self._model_supports_thinking()
             api_kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
             if support == "adaptive":
-                api_kwargs["thinking"] = {"type": "adaptive"}
+                # display="summarized" restores readable thinking text on Fable 5 /
+                # Opus 4.7+ (their default became "omitted" — empty thinking deltas,
+                # which would leave the Show Thinking pane blank). Accepted as a
+                # no-op on Opus/Sonnet 4.6, which already summarize by default.
+                api_kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
                 if self.thinking_mode not in ("off", "adaptive"):
                     api_kwargs["output_config"] = {"effort": self.thinking_mode}
             elif support == "manual":
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
             api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-            # Opus 4.7+ removed temperature/top_p/top_k — sending temperature returns a
-            # 400. Skip it for those models (parsed by version) and for any model that
-            # rejected it earlier this session (reactive cache below).
+            # Opus 4.7+ and Fable/Mythos 5 removed temperature/top_p/top_k — sending
+            # temperature returns a 400. Skip it for those models (parsed by version)
+            # and for any model that rejected it earlier this session (reactive cache
+            # below).
             if not self._anthropic_rejects_temperature() and self.model not in self._anthropic_no_temperature:
                 api_kwargs["temperature"] = self.temperature
 
@@ -170,6 +180,25 @@ class AnthropicMixin:
                     full_text = ""
                 else:
                     raise
+
+        # Fable 5 safety classifiers can decline a request with HTTP 200 and
+        # stop_reason="refusal" — pre-output refusals carry an EMPTY content
+        # array (nothing streamed, nothing billed), so without this notice the
+        # agent run would just end silently. The loop in stream_worker treats
+        # any non-tool_use stop_reason as end of turn, which is the right exit.
+        if final_message.stop_reason == "refusal":
+            details = getattr(final_message, "stop_details", None)
+            category = getattr(details, "category", None) if details else None
+            explanation = getattr(details, "explanation", None) if details else None
+            note = "⚠ The model declined this request (stop_reason=refusal"
+            if category:
+                note += f", category={category}"
+            note += ")"
+            if explanation:
+                note += f": {explanation}"
+            note += ("\n  Any partial output above is incomplete. Rephrase the task "
+                     "or switch this instruction to claude-opus-4-8.\n")
+            self.queue.put({"type": "warning", "content": note})
 
         # Extract usage for cost tracking
         usage = getattr(final_message, "usage", None)
