@@ -12,7 +12,7 @@ The main residents:
 | **CSVEditor.py** | Spreadsheet-style CSV editor with filtering, date sort, and dialect preservation |
 | **TodoList.py** | Todo manager with priorities, categories, due dates, and overdue highlighting |
 | **UnreadSummary.py** | Zero-token daily unread-email digest across Gmail / IMAP / Outlook accounts (production launchd job) |
-| **Heartbeat.py** | Zero-token email-triggered agent dispatcher — email yourself `AGENT PROMPT` and the machine launches MyAgent (production launchd job) |
+| **Heartbeat.py** | Zero-token email-triggered agent dispatcher — email yourself `AGENT PROMPT WIN` / `AGENT PROMPT MAC` and that machine launches MyAgent (production launchd + Task Scheduler jobs) |
 
 ---
 
@@ -311,10 +311,10 @@ Two production scripts that replaced AI-run agent instructions with deterministi
 
 The AI version's "building the list is STRICTLY READ-ONLY" prompt guard holds here **by construction**: listing uses only read-only primitives (IMAP `EXAMINE` + `BODY.PEEK`, Gmail `messages.get`, Graph `GET`), and every mutation sits behind a flag (`SAVE_MATCH_PDFS` / `MARK_MATCHES_READ` on, `TRASH_MATCHES` off by default). `python UnreadSummary.py --dry-run` prints the would-be email with zero mutations and no send. Auth is silent-only — a dead token becomes an `ERROR:` line in the digest, repaired by running MyAgent once interactively. Logs: one line per pass to `~/Library/Logs/myagent/unread_summary.log` (repo-root fallback on Windows).
 
-**Heartbeat.py** (~270 lines) — on-demand agent dispatch from anywhere you can send an email. launchd runs it on a short `StartInterval` (minutes); each pass checks one Gmail account for an **unread** message with the exact subject `AGENT PROMPT`:
+**Heartbeat.py** (~280 lines) — on-demand agent dispatch from anywhere you can send an email. launchd (Mac mini, short `StartInterval`) and Task Scheduler (Windows, `MyAgent_Heartbeat_5min` every 5 min) both run it against the **same** Gmail account; each pass checks for an **unread** message with that machine's exact subject — **`AGENT PROMPT WIN`** (Windows) or **`AGENT PROMPT MAC`** (macOS), derived from `platform.system()` so the same file serves both. The suffix routes each trigger to exactly one executor — no tick-timing race, no machine-specific instruction landing on the wrong box; a bare `AGENT PROMPT` is answered by nobody:
 
 - body line 1 → the name of a saved instruction; lines 3+ → the new prompt core
-- the instruction's text below its `*****` marker is rewritten (atomic temp-file replace, MyAgent-identical JSON formatting)
+- the instruction's text between its **two** `*****` marker lines is rewritten (header and footer preserved; atomic temp-file replace, MyAgent-identical JSON formatting); fewer than two markers poison-pills the trigger instead of mangling the instruction
 - `python MyAgent.py -l "<name>" --headless` is spawned detached, the email is marked read
 
 Replaced an AI polling instruction that cost ~$14/day to decide, every 10 minutes, that there was nothing to do. Malformed triggers are poison-pilled (marked read + logged) rather than retried forever; one trigger drains per pass; auth never goes interactive; each pass logs one line to `heartbeat.log`, making timestamp gaps a liveness record. Windows port included (Task Scheduler + CIM process discovery) — note that spawned agents inherit the **scheduler's** environment, not your shell rc: on macOS the API keys must be embedded in the plist's `EnvironmentVariables` (chmod 600), on Windows `setx`-style user env vars work.

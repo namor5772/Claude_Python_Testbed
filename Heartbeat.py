@@ -1,12 +1,17 @@
 """Heartbeat.py — zero-API-cost replacement for the Heartbeat_Instruction.
 
-Polls namor5772@gmail.com for an unread Inbox email with Subject "AGENT PROMPT".
+Polls namor5772@gmail.com for an unread Inbox email with the per-machine
+Subject "AGENT PROMPT WIN" (Windows) or "AGENT PROMPT MAC" (macOS) — both
+machines poll the same inbox, so the suffix routes each trigger to exactly one
+executor instead of racing for it. A bare "AGENT PROMPT" is answered by nobody.
 If found:
   line 1 of the body  -> {Instruction}  (name of a saved agent instruction)
   lines 3+ of the body -> {PromptCore}
-The named instruction's text is rewritten: everything below its "*****" marker
-line is replaced with {PromptCore}. The instruction is then launched headless
-(python MyAgent.py -l "{Instruction}" --headless) and the email is marked read.
+The named instruction's text is rewritten: it must contain TWO "*****" marker
+lines, and everything between them is replaced with {PromptCore} (the header
+above the first marker and the footer below the second are preserved). The
+instruction is then launched headless (python MyAgent.py -l "{Instruction}"
+--headless) and the email is marked read.
 
 No LLM is involved — every step is deterministic, so the 10-minute poll costs
 nothing but a Gmail API call. Designed to be run by launchd (StartInterval 600);
@@ -39,7 +44,10 @@ sys.path.insert(0, str(BASE_DIR))
 from myagent.helpers import extract_text_from_html  # noqa: E402
 
 ACCOUNT = "namor5772"
-SUBJECT = "AGENT PROMPT"
+# Per-machine trigger subject: the Windows box and the Mac mini poll the SAME
+# inbox, so each answers only its own suffix — deterministic routing, and no
+# tick-timing race where both process (or one steals) the other's trigger.
+SUBJECT = "AGENT PROMPT WIN" if platform.system() == "Windows" else "AGENT PROMPT MAC"
 MARKER = "*****"
 GOOGLE_CONFIG_DIR = Path.home() / ".config" / "myagent-google"
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
@@ -96,17 +104,26 @@ def extract_body(payload):
 
 
 def rewrite_instruction(name, prompt_core):
-    """Replace everything below the ***** marker line; atomic write."""
+    """Replace everything between the two ***** marker lines; atomic write.
+
+    The text keeps its header (above the first marker) and footer (below the
+    second marker); only the middle is swapped for prompt_core. Fewer than two
+    markers is a LookupError so the trigger email gets poison-pilled instead of
+    silently mangling the instruction."""
     instructions = json.loads(INSTRUCTIONS_FILE.read_text(encoding="utf-8"))
     if name not in instructions:
         raise LookupError(f"instruction {name!r} not found")
     lines = instructions[name]["text"].split("\n")
-    marker_idx = next(
-        (i for i, l in enumerate(lines) if l.strip().startswith(MARKER)), None
+    marker_idxs = [i for i, l in enumerate(lines) if l.strip().startswith(MARKER)]
+    if len(marker_idxs) < 2:
+        raise LookupError(
+            f"instruction {name!r} needs two {MARKER!r} marker lines "
+            f"(found {len(marker_idxs)})"
+        )
+    first, second = marker_idxs[0], marker_idxs[1]
+    instructions[name]["text"] = "\n".join(
+        lines[: first + 1] + [prompt_core] + lines[second:]
     )
-    if marker_idx is None:
-        raise LookupError(f"instruction {name!r} has no {MARKER!r} marker line")
-    instructions[name]["text"] = "\n".join(lines[: marker_idx + 1] + [prompt_core])
     fd, tmp = tempfile.mkstemp(dir=str(BASE_DIR), suffix=".json")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(instructions, f, indent=2, ensure_ascii=False)
@@ -135,6 +152,8 @@ def running_instances(name):
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", script],
             capture_output=True, text=True,
+            # No console flash when run by Task Scheduler under pythonw.exe
+            creationflags=subprocess.CREATE_NO_WINDOW,
         )
         out = []
         for line in result.stdout.split("\n"):
