@@ -27,7 +27,7 @@ The main residents:
 - [Account_Activity_WBC.py](#account_activity_wbcpy--bank-transaction-extractor)
 - [CSVEditor.py](#csveditorpy--lightweight-csv-editor)
 - [TodoList.py](#todolistpy--todo-manager)
-- [Desktop launchers (macOS)](#desktop-launchers-macos)
+- [Desktop launchers](#desktop-launchers)
 - [Claude Code integration](#claude-code-integration)
 - [Cross-platform notes](#cross-platform-notes)
 - [Repository map](#repository-map)
@@ -317,7 +317,7 @@ The AI version's "building the list is STRICTLY READ-ONLY" prompt guard holds he
 - the instruction's text between its **two** `*****` marker lines is rewritten (header and footer preserved; atomic temp-file replace, MyAgent-identical JSON formatting); fewer than two markers poison-pills the trigger instead of mangling the instruction
 - `python MyAgent.py -l "<name>" --headless` is spawned detached, the email is marked read
 
-Replaced an AI polling instruction that cost ~$14/day to decide, every 10 minutes, that there was nothing to do. Malformed triggers are poison-pilled (marked read + logged) rather than retried forever; one trigger drains per pass; auth never goes interactive; each pass logs one line to `heartbeat.log`, making timestamp gaps a liveness record. Windows port included (Task Scheduler + CIM process discovery) — note that spawned agents inherit the **scheduler's** environment, not your shell rc: on macOS the API keys must be embedded in the plist's `EnvironmentVariables` (chmod 600), on Windows `setx`-style user env vars work.
+Replaced an AI polling instruction that cost ~$14/day to decide, every 10 minutes, that there was nothing to do. Malformed triggers are poison-pilled (marked read + logged) rather than retried forever; one trigger drains per pass; auth never goes interactive; each pass logs one line to `heartbeat.log`, making timestamp gaps a liveness record. A **watchdog** guards each spawn: if the previous run is under 15 minutes old the trigger defers to the next tick; anything older is killed and replaced — which also reaps runs parked on a forgotten dialog. On that note, **save trigger-target instructions with Convo off** (plus the confirm-bypasses they need): headless hides only the main window, dialogs deliberately stay visible, so a Convo-mode instruction finishes its work and then sits on a `user_prompt` dialog until the watchdog clears it. Windows port included (Task Scheduler + CIM process discovery) — note that spawned agents inherit the **scheduler's** environment, not your shell rc: on macOS the API keys must be embedded in the plist's `EnvironmentVariables` (chmod 600), on Windows `setx`-style user env vars work.
 
 ---
 
@@ -379,15 +379,19 @@ A single-file tkinter todo app (~450 lines): tasks have **priority** (High/Mediu
 
 ---
 
-## Desktop launchers (macOS)
+## Desktop launchers
 
-`desktop_launchers/` holds the sources for two double-clickable apps — `UnreadSummary.app` (runs the digest on demand with a success chime + self-dismissing dialog showing the run's log line) and `CSVEditor.app` (launch-or-focus). Rebuild per machine with:
+**macOS** — `desktop_launchers/` holds the sources for two double-clickable apps: `UnreadSummary.app` (runs the digest on demand with a success chime + self-dismissing dialog showing the run's log line) and `CSVEditor.app` (launch-or-focus). Rebuild per machine with:
 
 ```bash
 ./desktop_launchers/rebuild.sh
 ```
 
-The script patches in the local repo path, renders each 1024-px icon master into an iconset with `sips`, compiles with `osacompile`, ad-hoc signs, and pastes the icon on via `NSWorkspace.setIconForFile` (which outranks macOS's stubborn IconServices cache). The built apps live in `~/Applications` with Finder **aliases** on the Desktop — an app *running from* a TCC-protected folder (Desktop/Documents/Downloads) triggers a consent prompt after every rebuild, aliases don't. Completion feedback is deliberately a **dialog + chime, not a notification**: Notification Center permission is per-code-hash, so every rebuild would re-ask, while `display dialog` needs no permission and isn't swallowed by Focus modes. Full details in [desktop_launchers/README.md](desktop_launchers/README.md).
+The script patches in the local repo path, renders each 1024-px icon master into an iconset with `sips`, compiles with `osacompile`, ad-hoc signs, and pastes the icon on via `NSWorkspace.setIconForFile` (which outranks macOS's stubborn IconServices cache). The built apps live in `~/Applications` with Finder **aliases** on the Desktop — an app *running from* a TCC-protected folder (Desktop/Documents/Downloads) triggers a consent prompt after every rebuild, aliases don't. Completion feedback is deliberately a **dialog + chime, not a notification**: Notification Center permission is per-code-hash, so every rebuild would re-ask, while `display dialog` needs no permission and isn't swallowed by Focus modes.
+
+**Windows** — `UnreadSummary_Win.ps1` is the AppleScript's twin: a desktop shortcut runs it via `powershell -WindowStyle Hidden`, the venv python executes the digest, and the feedback mirrors the Mac (chime + self-dismissing success dialog with the run's log line; blocking error dialog with the log tail on failure). The repo path is resolved from the script's own location, so any clone works unedited — only the `.lnk` shortcut is per-machine (icon: `icon_unread.ico`). A `-DryRun` switch passes `--dry-run` through for end-to-end plumbing tests.
+
+Full details in [desktop_launchers/README.md](desktop_launchers/README.md).
 
 ---
 
@@ -440,7 +444,7 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | `MyAgent.py`, `myagent/` | The agent entry point + 19-mixin package |
 | `Account_Activity_WBC.py`, `CSVEditor.py`, `TodoList.py` | The three small single-file apps |
 | `UnreadSummary.py`, `Heartbeat.py`, `SpecifyingList.csv` | Zero-token production jobs + the bill-matching rules |
-| `desktop_launchers/` | macOS launcher sources + `rebuild.sh` (built `.app`s are per-machine, not in git) |
+| `desktop_launchers/` | macOS launcher sources + `rebuild.sh`, plus the Windows `UnreadSummary_Win.ps1` twin (built `.app`s / `.lnk`s are per-machine, not in git) |
 | `requirements.txt` | Core dependencies |
 | `*.Modelfile` ×3 | Ollama vision+tools template grafts |
 | `MyAgent_Pricing.txt` | Reference for the cost-tracking pricing tables |
