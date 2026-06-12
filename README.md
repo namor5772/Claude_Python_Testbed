@@ -451,6 +451,7 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | `agent_instructions.json`, `skills.json`, `system_prompts.json` | Instruction / skill / prompt libraries (`agent_instructions.json` is tracked so instructions sync across machines) |
 | `mcp_servers.example.json` | Tracked template for the gitignored `mcp_servers.json` |
 | `make_weather_pdf.py` / `make_weather_pdf_print.py`, `plot*.py`, `create_chart.py`, `move_window.py`, `agent_demo.py` | One-off agent-written scripts kept as testbed artifacts |
+| `BirdFlying.html` | Self-contained browser animation: an Australian magpie (SMIL flap-and-glide wings, Web Audio synthesized warble — click the scene to enable sound) flying over a stylized black-clad homestead. No dependencies; open directly in any browser |
 | `app_state*.json`, `agent_state*.json`, `*.lock`, `saved_chats/`, `APICostLog.txt`, `Account_Activity_WBC.{txt,csv}` | Runtime state and output — created automatically, mostly gitignored |
 
 **Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor, TodoList and the bank extractor stay single-file; MyAgent changes go in the appropriate mixin. There are no tests, linters, or build steps. After editing a `.py` file, re-run it (closing any running instance first) — the apps are their own test suite.

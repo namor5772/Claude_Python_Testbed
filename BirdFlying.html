@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bird in Flight</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+
+  .scene {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    overflow: hidden;
+    background: linear-gradient(#9ed4f2 0%, #c7e7fa 55%, #e9f6df 100%);
+  }
+
+  /* ---------- sun ---------- */
+  .sun {
+    position: absolute; top: 42px; right: 70px;
+    width: 84px; height: 84px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #fff7d6, #ffd75e 60%, #ffc83d);
+    box-shadow: 0 0 70px 26px rgba(255, 214, 90, .55);
+  }
+
+  /* ---------- clouds ---------- */
+  .cloud {
+    position: absolute; top: var(--t);
+    width: 130px; height: 40px; border-radius: 999px;
+    background: #fff; opacity: var(--o, .9);
+    transform: scale(var(--s, 1));
+    animation: drift var(--d) linear infinite;
+    animation-delay: var(--dl, 0s);
+  }
+  .cloud::before, .cloud::after {
+    content: ''; position: absolute; background: #fff; border-radius: 50%;
+  }
+  .cloud::before { width: 58px; height: 58px; top: -28px; left: 20px; }
+  .cloud::after  { width: 40px; height: 40px; top: -18px; left: 66px; }
+  @keyframes drift { from { left: -280px; } to { left: 105%; } }
+
+  /* ---------- distant flock ---------- */
+  .flock {
+    position: absolute; top: 16%; opacity: .55;
+    animation: fly 38s linear infinite; animation-delay: -14s;
+  }
+  .mini {
+    transform-box: fill-box; transform-origin: 50% 100%;
+    animation: microflap .5s ease-in-out infinite alternate;
+  }
+  @keyframes microflap { from { transform: scaleY(1); } to { transform: scaleY(.3); } }
+
+  /* ---------- hills ---------- */
+  .hill { position: absolute; border-radius: 50%; }
+  .hill.back { width: 150%; height: 340px; bottom: -250px; left: -25%;  background: #b9e0a0; }
+  .hill.mid  { width: 130%; height: 320px; bottom: -262px; right: -30%; background: #a4d687; }
+  .ground    { position: absolute; bottom: 0; width: 100%; height: 22px; background: #8fcb74; }
+
+  /* ---------- the bird ---------- */
+  .bird-anchor { position: absolute; top: 30%; animation: fly 17s linear infinite; }
+  .bird-wander { animation: wander 8.5s ease-in-out infinite alternate; }
+  .bird-bob    { animation: bob .92s ease-in-out infinite; }
+
+  @keyframes fly    { from { left: -240px; } to { left: calc(100% + 80px); } }
+  @keyframes wander { from { transform: translateY(-22px); } to { transform: translateY(20px); } }
+  @keyframes bob {
+    0%, 100% { transform: translateY(2px)  rotate(2.5deg); }
+    50%      { transform: translateY(-7px) rotate(-2deg); }
+  }
+
+  .homestead { position: absolute; left: 4%; bottom: 26px; }
+
+  .sound-hint {
+    position: absolute; right: 14px; bottom: 34px;
+    padding: 5px 12px; border-radius: 999px;
+    background: rgba(255,255,255,.8); color: #33523c;
+    font: 13px/1.2 system-ui, sans-serif; cursor: pointer;
+    transition: opacity .8s; user-select: none;
+  }
+  .sound-hint.off { opacity: 0; pointer-events: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cloud, .flock, .mini, .bird-anchor, .bird-wander, .bird-bob { animation-play-state: paused !important; }
+  }
+</style>
+</head>
+<body>
+<div class="scene">
+  <div class="sun"></div>
+
+  <div class="cloud" style="--t:12%; --d:52s; --dl:-30s; --s:1.15; --o:.95"></div>
+  <div class="cloud" style="--t:32%; --d:70s; --dl:-12s; --s:.8;  --o:.8"></div>
+  <div class="cloud" style="--t:5%;  --d:62s; --dl:-48s; --s:.65; --o:.7"></div>
+  <div class="cloud" style="--t:46%; --d:84s; --dl:-60s; --s:.5;  --o:.55"></div>
+
+  <svg class="flock" viewBox="0 0 90 26" width="110" aria-hidden="true">
+    <g fill="none" stroke="#41607c" stroke-width="2.2" stroke-linecap="round">
+      <path class="mini" style="animation-delay:0s"    d="M4 14 Q 10 6 16 14 Q 22 6 28 14"/>
+      <path class="mini" style="animation-delay:-.18s" d="M36 8 Q 42 0 48 8 Q 54 0 60 8"/>
+      <path class="mini" style="animation-delay:-.32s" d="M58 18 Q 64 10 70 18 Q 76 10 82 18"/>
+    </g>
+  </svg>
+
+  <div class="hill back"></div>
+  <div class="hill mid"></div>
+  <div class="ground"></div>
+
+  <svg class="homestead" viewBox="0 0 480 190" width="340" role="img" aria-label="A black-clad modern homestead with a gum tree">
+    <ellipse cx="280" cy="183" rx="205" ry="6" fill="#69a254" opacity="0.55"/>
+    <!-- gum tree -->
+    <path d="M72 181 C 74 150 69 132 78 118" fill="none" stroke="#b3a288" stroke-width="7" stroke-linecap="round"/>
+    <path d="M78 118 C 70 100 60 92 52 84" fill="none" stroke="#ab9a80" stroke-width="4" stroke-linecap="round"/>
+    <path d="M78 118 C 86 100 92 90 98 80" fill="none" stroke="#ab9a80" stroke-width="4" stroke-linecap="round"/>
+    <path d="M78 118 C 80 96 80 78 74 64" fill="none" stroke="#ab9a80" stroke-width="3.5" stroke-linecap="round"/>
+    <ellipse cx="52" cy="72" rx="26" ry="16" fill="#6e8f69"/>
+    <ellipse cx="92" cy="54" rx="30" ry="18" fill="#7c9d72"/>
+    <ellipse cx="68" cy="40" rx="24" ry="14" fill="#698c64"/>
+    <ellipse cx="112" cy="74" rx="22" ry="13" fill="#5f8260"/>
+    <ellipse cx="38" cy="52" rx="18" ry="12" fill="#74966d"/>
+    <!-- low brick wall left of the house -->
+    <rect x="96" y="150" width="34" height="28" fill="#2c2d31"/>
+    <rect x="96" y="150" width="34" height="3" fill="#1d1e21"/>
+    <!-- walls: left pavilion + main pavilion with sloped parapet -->
+    <rect x="130" y="92" width="88" height="66" fill="#26272b"/>
+    <polygon points="218,84 470,76 470,158 218,158" fill="#26272b"/>
+    <!-- vertical batten cladding -->
+    <g stroke="#383a40" stroke-width="1">
+      <path d="M140 94 V156 M152 94 V156 M164 94 V156 M176 94 V156 M188 94 V156 M200 94 V156 M212 94 V156"/>
+      <path d="M228 90 V156 M240 90 V156 M252 90 V156 M264 90 V156 M276 90 V156 M288 90 V156 M300 90 V156 M312 90 V156 M324 90 V156 M336 90 V156 M348 90 V156 M360 90 V156 M372 90 V156 M384 90 V156 M396 90 V156 M408 90 V156 M420 90 V156 M432 90 V156 M444 90 V156 M456 90 V156 M466 90 V156"/>
+    </g>
+    <!-- parapet capping -->
+    <rect x="130" y="90" width="88" height="3.5" fill="#0d0e10"/>
+    <polygon points="218,82.5 470,74.5 470,78 218,86" fill="#0d0e10"/>
+    <!-- recessed entry between pavilions -->
+    <rect x="206" y="100" width="12" height="58" fill="#0e0f11"/>
+    <!-- brick plinth -->
+    <rect x="130" y="158" width="340" height="20" fill="#2c2d31"/>
+    <path d="M130 164.5 H470 M130 171 H470" stroke="#3e4046" stroke-width="0.8"/>
+    <!-- left pavilion window -->
+    <rect x="142" y="106" width="64" height="38" fill="#131417"/>
+    <rect x="145.5" y="109.5" width="57" height="31" fill="#7e93a3"/>
+    <polygon points="150,110 163,110 152,140 145.5,140" fill="#fff" opacity="0.12"/>
+    <!-- concrete terrace + steps -->
+    <rect x="226" y="150" width="150" height="7" fill="#cfd0ca"/>
+    <rect x="226" y="155.5" width="150" height="1.5" fill="#a9aaa4"/>
+    <rect x="230" y="157" width="30" height="5" fill="#d6d7d1"/>
+    <rect x="233" y="162" width="26" height="5" fill="#cdcec8"/>
+    <rect x="236" y="167" width="22" height="5" fill="#c4c5bf"/>
+    <rect x="350" y="157" width="30" height="5" fill="#d6d7d1"/>
+    <rect x="353" y="162" width="26" height="5" fill="#cdcec8"/>
+    <rect x="356" y="167" width="22" height="5" fill="#c4c5bf"/>
+    <!-- sliding doors -->
+    <rect x="238" y="94" width="120" height="57" fill="#131417"/>
+    <rect x="242" y="98" width="112" height="49" fill="#74899a"/>
+    <rect x="268" y="98" width="3" height="49" fill="#131417"/>
+    <rect x="296" y="98" width="3" height="49" fill="#131417"/>
+    <rect x="324" y="98" width="3" height="49" fill="#131417"/>
+    <path d="M242 122 H354" stroke="#5d7280" stroke-width="1"/>
+    <rect x="300" y="112" width="22" height="35" fill="#d8b46f" opacity="0.25"/>
+    <polygon points="246,98 268,98 254,147 242,147" fill="#fff" opacity="0.1"/>
+    <!-- right pavilion window -->
+    <rect x="388" y="92" width="66" height="48" fill="#131417"/>
+    <rect x="391.5" y="95.5" width="59" height="41" fill="#7e93a3"/>
+    <rect x="424" y="112" width="20" height="24" fill="#d8b46f" opacity="0.18"/>
+    <polygon points="396,96 410,96 400,136 391.5,136" fill="#fff" opacity="0.12"/>
+    <!-- flue -->
+    <rect x="294" y="36" width="5" height="46" fill="#17181b"/>
+    <rect x="292" y="58" width="9" height="4" fill="#0f1012"/>
+    <rect x="291.5" y="32" width="10" height="4" fill="#17181b"/>
+    <rect x="293.5" y="28.5" width="6" height="3" fill="#17181b"/>
+  </svg>
+
+  <div class="sound-hint" id="soundHint">&#9834; click for warble</div>
+
+  <div class="bird-anchor">
+    <div class="bird-wander">
+      <div class="bird-bob">
+        <svg class="bird" viewBox="0 0 200 130" width="190" role="img" aria-label="An Australian magpie flying">
+          <!-- far wing (behind body, darker, slightly out of phase): flap burst, then glide -->
+          <g transform="translate(96 52) scale(0.9)">
+            <path fill="#3f434d" d="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z">
+              <animate id="flapF" attributeName="d" dur="0.5s" repeatCount="6" begin="-0.07s; glideF.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
+                        M0 0 Q -26 14 -52 36 Q -24 13 0 0 Z;
+                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
+                        M0 0 Q -20 -30 -54 -48 Q -26 -14 0 0 Z;
+                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+              <animate id="glideF" attributeName="d" dur="2.2s" begin="flapF.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
+                        M0 0 Q -27 -20 -65 -26 Q -30 -8 0 0 Z;
+                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+            </path>
+          </g>
+
+          <!-- tail: white with black terminal band -->
+          <path d="M64 60 L 40 50 L 46 61 L 38 70 Z" fill="#f4f4f2"/>
+          <path d="M53 55 L 40 50 L 45 61 L 38 70 L 52 67 Z" fill="#1a1b1f"/>
+
+          <!-- body -->
+          <path d="M58 62 C 70 47 98 41 120 49 C 134 54 146 60 152 63 C 144 69 128 75 108 76 C 86 77 66 72 58 62 Z" fill="#202126"/>
+          <path d="M70 68 C 86 74 108 75 126 70 C 112 76 88 77 70 68 Z" fill="#3a3d45" opacity="0.6"/>
+          <!-- white nape and rump patches -->
+          <path d="M108 51 C 116 44 126 42 134 43 C 129 48 121 53 112 55 C 110 54 109 52 108 51 Z" fill="#f4f4f2"/>
+          <path d="M58 62 C 62 55 68 52 75 51 C 71 57 68 63 64 68 C 61 66 59 64 58 62 Z" fill="#f4f4f2"/>
+
+          <!-- head, beak, eye -->
+          <circle cx="142" cy="54" r="13" fill="#202126"/>
+          <path d="M150 51 L 174 55.5 L 150 60 Z" fill="#c3ccd3"/>
+          <path d="M165 53.6 L 174 55.5 L 165 57.6 Z" fill="#26272b"/>
+          <circle cx="146" cy="51" r="2.4" fill="#a8432e"/>
+          <circle cx="147" cy="50.3" r="0.8" fill="#fff"/>
+
+          <!-- near wing (in front, darkest): flap burst, then glide -->
+          <g transform="translate(100 58)">
+            <path fill="#15161a" stroke="#585d68" stroke-width="1.5" stroke-linejoin="round"
+                  d="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z">
+              <animate id="flapN" attributeName="d" dur="0.5s" repeatCount="6" begin="0s; glideN.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
+                        M0 0 Q -26 14 -52 36 Q -24 13 0 0 Z;
+                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
+                        M0 0 Q -20 -30 -54 -48 Q -26 -14 0 0 Z;
+                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+              <animate id="glideN" attributeName="d" dur="2.2s" begin="flapN.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
+                        M0 0 Q -27 -20 -65 -26 Q -30 -8 0 0 Z;
+                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+            </path>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+(function () {
+  var scene = document.querySelector('.scene');
+  var hint = document.getElementById('soundHint');
+  var bob = document.querySelector('.bird-bob');
+  var glideN = document.getElementById('glideN');
+
+  if (glideN && bob) {
+    glideN.addEventListener('beginEvent', function () { bob.style.animationPlayState = 'paused'; });
+    glideN.addEventListener('endEvent', function () { bob.style.animationPlayState = 'running'; });
+  }
+
+  var ctx = null, master = null, audioOn = false;
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+
+  function initAudio() {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain(); master.gain.value = 0.5;
+    var filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 3200;
+    var convolver = ctx.createConvolver();
+    var len = Math.floor(ctx.sampleRate * 0.7);
+    var ir = ctx.createBuffer(2, len, ctx.sampleRate);
+    for (var ch = 0; ch < 2; ch++) {
+      var d = ir.getChannelData(ch);
+      for (var i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6) * 0.4;
+    }
+    convolver.buffer = ir;
+    var dry = ctx.createGain(); dry.gain.value = 0.7;
+    var wet = ctx.createGain(); wet.gain.value = 0.35;
+    master.connect(filter);
+    filter.connect(dry); filter.connect(convolver); convolver.connect(wet);
+    dry.connect(ctx.destination); wet.connect(ctx.destination);
+  }
+
+  function syllable(t, dur, f0) {
+    var voices = [[1, 0.3, 'triangle'], [rnd(1.45, 1.58), 0.12, 'sine']];
+    for (var v = 0; v < voices.length; v++) {
+      var o = ctx.createOscillator(); o.type = voices[v][2];
+      var g = ctx.createGain();
+      var f = f0 * voices[v][0], vol = voices[v][1];
+      o.frequency.setValueAtTime(f, t);
+      var steps = 2 + Math.floor(Math.random() * 3);
+      for (var s = 1; s <= steps; s++) {
+        f = Math.min(2400, Math.max(260, f * rnd(0.55, 1.8)));
+        o.frequency.exponentialRampToValueAtTime(f, t + dur * s / steps);
+      }
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(vol, t + 0.015);
+      g.gain.setValueAtTime(vol, Math.max(t + 0.015, t + dur - 0.05));
+      g.gain.linearRampToValueAtTime(0, t + dur);
+      o.connect(g); g.connect(master);
+      o.start(t); o.stop(t + dur + 0.03);
+    }
+  }
+
+  function warble() {
+    var t = ctx.currentTime + 0.05;
+    var sylls = 4 + Math.floor(Math.random() * 4);
+    for (var i = 0; i < sylls; i++) {
+      var dur = rnd(0.09, 0.28);
+      syllable(t, dur, rnd(330, 900));
+      t += dur + rnd(0.02, 0.12);
+    }
+  }
+
+  function loop() {
+    setTimeout(function () { if (audioOn) warble(); loop(); }, rnd(4000, 10000));
+  }
+
+  scene.addEventListener('pointerdown', function () {
+    if (!ctx) initAudio();
+    ctx.resume().then(function () {
+      if (!audioOn) { audioOn = true; loop(); if (hint) hint.classList.add('off'); }
+      warble();
+    });
+  });
+})();
+</script>
+</body>
+</html>
