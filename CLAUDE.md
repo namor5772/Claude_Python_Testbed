@@ -65,7 +65,7 @@ There are no tests, linter, or build steps — these are testbed apps.
   - `event_loop_mixin.py` — check_queue, _on_close, _finish_close
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `CSVEditor.py` — Single-file tkinter GUI CSV editor (~520 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
-- `BirdFlying.html` — Self-contained HTML/SVG animation (no dependencies, opens in any browser): Australian magpie with SMIL flap-and-glide wing cycle and Web Audio synthesized warble (armed by first click, browser autoplay policy), flying over a stylized homestead scene
+- `BirdFlying.html` — Self-contained HTML/SVG animation (no dependencies, opens in any browser): two Australian magpies with desynchronized SMIL flap-and-glide wing cycles and a Web Audio synthesized warble (armed by first click, browser autoplay policy), flying over a stylized homestead scene with a gum grove
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
 - `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
 - `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)

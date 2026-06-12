@@ -60,6 +60,9 @@
   .bird-anchor { position: absolute; top: 30%; animation: fly 17s linear infinite; }
   .bird-wander { animation: wander 8.5s ease-in-out infinite alternate; }
   .bird-bob    { animation: bob .92s ease-in-out infinite; }
+  .bird2-anchor { position: absolute; top: 40%; left: -240px; animation: fly 17s linear infinite; animation-delay: 2s; }
+  .bird2-anchor .bird-wander { animation-delay: -4s; }
+  .bird2-anchor .bird-bob { animation-delay: -0.4s; }
 
   @keyframes fly    { from { left: -240px; } to { left: calc(100% + 80px); } }
   @keyframes wander { from { transform: translateY(-22px); } to { transform: translateY(20px); } }
@@ -69,6 +72,7 @@
   }
 
   .homestead { position: absolute; left: 4%; bottom: 26px; }
+  .grove { position: absolute; left: calc(4% + 538px); bottom: 26px; }
 
   .sound-hint {
     position: absolute; right: 14px; bottom: 34px;
@@ -105,8 +109,8 @@
   <div class="hill mid"></div>
   <div class="ground"></div>
 
-  <svg class="homestead" viewBox="0 0 480 190" width="340" role="img" aria-label="A black-clad modern homestead with a gum tree">
-    <ellipse cx="280" cy="183" rx="205" ry="6" fill="#69a254" opacity="0.55"/>
+  <svg class="homestead" viewBox="0 0 520 190" width="368" role="img" aria-label="A black-clad modern homestead with a gum tree">
+    <ellipse cx="295" cy="183" rx="225" ry="6" fill="#69a254" opacity="0.55"/>
     <!-- gum tree -->
     <path d="M72 181 C 74 150 69 132 78 118" fill="none" stroke="#b3a288" stroke-width="7" stroke-linecap="round"/>
     <path d="M78 118 C 70 100 60 92 52 84" fill="none" stroke="#ab9a80" stroke-width="4" stroke-linecap="round"/>
@@ -117,6 +121,7 @@
     <ellipse cx="68" cy="40" rx="24" ry="14" fill="#698c64"/>
     <ellipse cx="112" cy="74" rx="22" ry="13" fill="#5f8260"/>
     <ellipse cx="38" cy="52" rx="18" ry="12" fill="#74966d"/>
+    <g transform="translate(40 0)">
     <!-- low brick wall left of the house -->
     <rect x="96" y="150" width="34" height="28" fill="#2c2d31"/>
     <rect x="96" y="150" width="34" height="3" fill="#1d1e21"/>
@@ -168,33 +173,76 @@
     <rect x="292" y="58" width="9" height="4" fill="#0f1012"/>
     <rect x="291.5" y="32" width="10" height="4" fill="#17181b"/>
     <rect x="293.5" y="28.5" width="6" height="3" fill="#17181b"/>
+    </g>
+  </svg>
+
+  <svg class="grove" viewBox="0 -40 470 215" width="306" role="img" aria-label="A grove of gum trees">
+    <defs>
+      <g id="gumProto">
+        <path d="M0 0 C 2 -31 -3 -49 6 -63" fill="none" stroke="var(--tk)" stroke-width="7" stroke-linecap="round"/>
+        <path d="M6 -63 C -2 -81 -12 -89 -20 -97" fill="none" stroke="var(--tk)" stroke-width="4" stroke-linecap="round"/>
+        <path d="M6 -63 C 14 -81 20 -91 26 -101" fill="none" stroke="var(--tk)" stroke-width="4" stroke-linecap="round"/>
+        <path d="M6 -63 C 8 -85 8 -103 2 -117" fill="none" stroke="var(--tk)" stroke-width="3.5" stroke-linecap="round"/>
+        <ellipse cx="-20" cy="-109" rx="26" ry="16" fill="var(--c1)"/>
+        <ellipse cx="20" cy="-127" rx="30" ry="18" fill="var(--c2)"/>
+        <ellipse cx="-4" cy="-141" rx="24" ry="14" fill="var(--c3)"/>
+        <ellipse cx="40" cy="-107" rx="22" ry="13" fill="var(--c3)"/>
+        <ellipse cx="-34" cy="-129" rx="18" ry="12" fill="var(--c1)"/>
+      </g>
+    </defs>
+    <ellipse cx="235" cy="169" rx="228" ry="6" fill="#69a254" opacity="0.5"/>
+    <use href="#gumProto" transform="translate(46 160) scale(0.66)" style="--tk:#b8ab93; --c1:#7d967a; --c2:#8aa687; --c3:#71896f"/>
+    <use href="#gumProto" transform="translate(150 158) scale(0.72)" style="--tk:#b5a78e; --c1:#79927a; --c2:#87a384; --c3:#6d876d"/>
+    <use href="#gumProto" transform="translate(340 159) scale(-0.7 0.7)" style="--tk:#b8ab93; --c1:#7d967a; --c2:#8aa687; --c3:#71896f"/>
+    <use href="#gumProto" transform="translate(225 164) scale(0.9)" style="--tk:#b3a288; --c1:#6e8f69; --c2:#7c9d72; --c3:#5f8260"/>
+    <use href="#gumProto" transform="translate(412 165) scale(-0.86 0.86)" style="--tk:#ab9a80; --c1:#74966d; --c2:#7fa076; --c3:#647f5e"/>
+    <use href="#gumProto" transform="translate(100 171) scale(1.14)" style="--tk:#b3a288; --c1:#6e8f69; --c2:#7c9d72; --c3:#5f8260"/>
+    <use href="#gumProto" transform="translate(295 172) scale(-1.08 1.08)" style="--tk:#b3a288; --c1:#74966d; --c2:#7c9d72; --c3:#698c64"/>
   </svg>
 
   <div class="sound-hint" id="soundHint">&#9834; click for warble</div>
 
   <div class="bird-anchor">
     <div class="bird-wander">
-      <div class="bird-bob">
+      <div class="bird-bob" id="bob1">
         <svg class="bird" viewBox="0 0 200 130" width="190" role="img" aria-label="An Australian magpie flying">
           <!-- far wing (behind body, darker, slightly out of phase): flap burst, then glide -->
           <g transform="translate(96 52) scale(0.9)">
-            <path fill="#3f434d" d="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z">
+            <path fill="#3f434d" d="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z">
               <animate id="flapF" attributeName="d" dur="0.5s" repeatCount="6" begin="-0.07s; glideF.end"
                 calcMode="spline"
                 keyTimes="0;0.26;0.5;0.76;1"
                 keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
-                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
-                        M0 0 Q -26 14 -52 36 Q -24 13 0 0 Z;
-                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
-                        M0 0 Q -20 -30 -54 -48 Q -26 -14 0 0 Z;
-                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -18 2 -36 12 Q -54 24 -64 36 Q -66 44 -58 46 Q -46 42 -36 36 Q -18 24 -6 10 Q -2 4 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -14 -14 -28 -26 Q -44 -40 -56 -50 Q -64 -54 -62 -46 Q -52 -36 -42 -28 Q -22 -12 -8 -2 Q -2 -1 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
               <animate id="glideF" attributeName="d" dur="2.2s" begin="flapF.end"
                 calcMode="spline"
                 keyTimes="0;0.45;1"
                 keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
-                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
-                        M0 0 Q -27 -20 -65 -26 Q -30 -8 0 0 Z;
-                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -20 -11 -42 -16 Q -66 -21 -84 -22 Q -92 -17 -86 -9 Q -70 -2 -54 2 Q -28 8 -10 6 Q -3 3 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
+            </path>
+            <path fill="#aeb4bc" opacity="0.85" d="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z">
+              <animate id="flapFP" attributeName="d" dur="0.5s" repeatCount="6" begin="-0.07s; glideF.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 1 Q -16 6 -28 14 Q -20 18 -12 14 Q -5 8 -3 1 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 -3 Q -13 -13 -24 -22 Q -18 -24 -10 -16 Q -4 -8 -3 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
+              <animate id="glideFP" attributeName="d" dur="2.2s" begin="flapF.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -4 -3 Q -20 -11 -38 -14 Q -32 -4 -18 2 Q -8 4 -4 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
             </path>
           </g>
 
@@ -219,23 +267,138 @@
           <!-- near wing (in front, darkest): flap burst, then glide -->
           <g transform="translate(100 58)">
             <path fill="#15161a" stroke="#585d68" stroke-width="1.5" stroke-linejoin="round"
-                  d="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z">
+                  d="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z">
               <animate id="flapN" attributeName="d" dur="0.5s" repeatCount="6" begin="0s; glideN.end"
                 calcMode="spline"
                 keyTimes="0;0.26;0.5;0.76;1"
                 keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
-                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
-                        M0 0 Q -26 14 -52 36 Q -24 13 0 0 Z;
-                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
-                        M0 0 Q -20 -30 -54 -48 Q -26 -14 0 0 Z;
-                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -18 2 -36 12 Q -54 24 -64 36 Q -66 44 -58 46 Q -46 42 -36 36 Q -18 24 -6 10 Q -2 4 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -14 -14 -28 -26 Q -44 -40 -56 -50 Q -64 -54 -62 -46 Q -52 -36 -42 -28 Q -22 -12 -8 -2 Q -2 -1 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
               <animate id="glideN" attributeName="d" dur="2.2s" begin="flapN.end"
                 calcMode="spline"
                 keyTimes="0;0.45;1"
                 keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
-                values="M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z;
-                        M0 0 Q -27 -20 -65 -26 Q -30 -8 0 0 Z;
-                        M0 0 Q -30 -12 -66 -12 Q -32 -3 0 0 Z"/>
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -20 -11 -42 -16 Q -66 -21 -84 -22 Q -92 -17 -86 -9 Q -70 -2 -54 2 Q -28 8 -10 6 Q -3 3 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
+            </path>
+            <path fill="#f4f4f2" opacity="0.95" d="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z">
+              <animate id="flapNP" attributeName="d" dur="0.5s" repeatCount="6" begin="0s; glideN.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 1 Q -16 6 -28 14 Q -20 18 -12 14 Q -5 8 -3 1 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 -3 Q -13 -13 -24 -22 Q -18 -24 -10 -16 Q -4 -8 -3 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
+              <animate id="glideNP" attributeName="d" dur="2.2s" begin="flapN.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -4 -3 Q -20 -11 -38 -14 Q -32 -4 -18 2 Q -8 4 -4 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
+            </path>
+          </g>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="bird2-anchor">
+    <div class="bird-wander">
+      <div class="bird-bob" id="bob2">
+        <svg viewBox="0 0 200 130" width="165" role="img" aria-label="A second Australian magpie flying lower and behind">
+          <g transform="translate(96 52) scale(0.9)">
+            <path fill="#3f434d" d="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z">
+              <animate id="flapF2" attributeName="d" dur="0.5s" repeatCount="7" begin="-0.37s; glideF2.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -18 2 -36 12 Q -54 24 -64 36 Q -66 44 -58 46 Q -46 42 -36 36 Q -18 24 -6 10 Q -2 4 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -14 -14 -28 -26 Q -44 -40 -56 -50 Q -64 -54 -62 -46 Q -52 -36 -42 -28 Q -22 -12 -8 -2 Q -2 -1 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
+              <animate id="glideF2" attributeName="d" dur="1.9s" begin="flapF2.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -20 -11 -42 -16 Q -66 -21 -84 -22 Q -92 -17 -86 -9 Q -70 -2 -54 2 Q -28 8 -10 6 Q -3 3 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
+            </path>
+            <path fill="#aeb4bc" opacity="0.85" d="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z">
+              <animate id="flapFP2" attributeName="d" dur="0.5s" repeatCount="7" begin="-0.37s; glideF2.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 1 Q -16 6 -28 14 Q -20 18 -12 14 Q -5 8 -3 1 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 -3 Q -13 -13 -24 -22 Q -18 -24 -10 -16 Q -4 -8 -3 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
+              <animate id="glideFP2" attributeName="d" dur="1.9s" begin="flapF2.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -4 -3 Q -20 -11 -38 -14 Q -32 -4 -18 2 Q -8 4 -4 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
+            </path>
+          </g>
+          <path d="M64 60 L 40 50 L 46 61 L 38 70 Z" fill="#f4f4f2"/>
+          <path d="M53 55 L 40 50 L 45 61 L 38 70 L 52 67 Z" fill="#1a1b1f"/>
+          <path d="M58 62 C 70 47 98 41 120 49 C 134 54 146 60 152 63 C 144 69 128 75 108 76 C 86 77 66 72 58 62 Z" fill="#202126"/>
+          <path d="M70 68 C 86 74 108 75 126 70 C 112 76 88 77 70 68 Z" fill="#3a3d45" opacity="0.6"/>
+          <path d="M108 51 C 116 44 126 42 134 43 C 129 48 121 53 112 55 C 110 54 109 52 108 51 Z" fill="#f4f4f2"/>
+          <path d="M58 62 C 62 55 68 52 75 51 C 71 57 68 63 64 68 C 61 66 59 64 58 62 Z" fill="#f4f4f2"/>
+          <circle cx="142" cy="54" r="13" fill="#202126"/>
+          <path d="M150 51 L 174 55.5 L 150 60 Z" fill="#c3ccd3"/>
+          <path d="M165 53.6 L 174 55.5 L 165 57.6 Z" fill="#26272b"/>
+          <circle cx="146" cy="51" r="2.4" fill="#a8432e"/>
+          <circle cx="147" cy="50.3" r="0.8" fill="#fff"/>
+          <g transform="translate(100 58)">
+            <path fill="#15161a" stroke="#585d68" stroke-width="1.5" stroke-linejoin="round"
+                  d="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z">
+              <animate id="flapN2" attributeName="d" dur="0.5s" repeatCount="7" begin="-0.3s; glideN2.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -18 2 -36 12 Q -54 24 -64 36 Q -66 44 -58 46 Q -46 42 -36 36 Q -18 24 -6 10 Q -2 4 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -14 -14 -28 -26 Q -44 -40 -56 -50 Q -64 -54 -62 -46 Q -52 -36 -42 -28 Q -22 -12 -8 -2 Q -2 -1 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
+              <animate id="glideN2" attributeName="d" dur="1.9s" begin="flapN2.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z;
+                        M 0 0 Q -20 -11 -42 -16 Q -66 -21 -84 -22 Q -92 -17 -86 -9 Q -70 -2 -54 2 Q -28 8 -10 6 Q -3 3 0 0 Z;
+                        M 0 0 Q -20 -9 -40 -12 Q -64 -15 -80 -12 Q -88 -7 -83 2 Q -68 10 -52 13 Q -28 16 -10 9 Q -3 5 0 0 Z"/>
+            </path>
+            <path fill="#f4f4f2" opacity="0.95" d="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z">
+              <animate id="flapNP2" attributeName="d" dur="0.5s" repeatCount="7" begin="-0.3s; glideN2.end"
+                calcMode="spline"
+                keyTimes="0;0.26;0.5;0.76;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 1 Q -16 6 -28 14 Q -20 18 -12 14 Q -5 8 -3 1 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -3 -3 Q -13 -13 -24 -22 Q -18 -24 -10 -16 Q -4 -8 -3 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
+              <animate id="glideNP2" attributeName="d" dur="1.9s" begin="flapN2.end"
+                calcMode="spline"
+                keyTimes="0;0.45;1"
+                keySplines="0.4 0 0.6 1;0.4 0 0.6 1"
+                values="M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z;
+                        M -4 -3 Q -20 -11 -38 -14 Q -32 -4 -18 2 Q -8 4 -4 -3 Z;
+                        M -4 -2 Q -20 -9 -36 -10 Q -30 0 -18 5 Q -8 6 -4 -2 Z"/>
             </path>
           </g>
         </svg>
@@ -247,13 +410,14 @@
 (function () {
   var scene = document.querySelector('.scene');
   var hint = document.getElementById('soundHint');
-  var bob = document.querySelector('.bird-bob');
-  var glideN = document.getElementById('glideN');
-
-  if (glideN && bob) {
-    glideN.addEventListener('beginEvent', function () { bob.style.animationPlayState = 'paused'; });
-    glideN.addEventListener('endEvent', function () { bob.style.animationPlayState = 'running'; });
-  }
+  [['glideN', 'bob1'], ['glideN2', 'bob2']].forEach(function (pair) {
+    var g = document.getElementById(pair[0]);
+    var b = document.getElementById(pair[1]);
+    if (g && b) {
+      g.addEventListener('beginEvent', function () { b.style.animationPlayState = 'paused'; });
+      g.addEventListener('endEvent', function () { b.style.animationPlayState = 'running'; });
+    }
+  });
 
   var ctx = null, master = null, audioOn = false;
   function rnd(a, b) { return a + Math.random() * (b - a); }
