@@ -5,6 +5,11 @@
 # there is deliberately no launch-or-focus. The repo is resolved from this file's
 # own location, so any clone works unedited; only the .lnk shortcut is per-machine.
 #
+# Unlike the macOS launcher, no profile-sourcing is needed for API keys: Windows
+# environment variables (ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY) are
+# system/user-wide and inherited by GUI processes, so MyAgent's provider detection
+# (MyAgent.py:81-83) sees them directly.
+#
 # The desktop shortcut targets:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden
 #       -File "<repo>\desktop_launchers\MyAgent_Win.ps1"
