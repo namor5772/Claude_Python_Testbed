@@ -2,7 +2,7 @@
 
 ## macOS
 
-Sources for the two double-clickable launcher apps; the compiled `.app`
+Sources for the three double-clickable launcher apps; the compiled `.app`
 bundles themselves are per-machine and are NOT in git — rebuild them with:
 
 ```bash
@@ -21,6 +21,7 @@ affected either way — launchd runs the venv python directly.)
 |---|---|---|---|
 | `UnreadSummary.app` | `UnreadSummary.applescript` | `icon_unread_master.png` (anxious envelope, 99+ badge, sunrise) | Runs `UnreadSummary.py` with the venv python; success chime + self-dismissing dialog with the run's log line, error dialog with the log tail on failure. Deliberately TCC-free (notifications would re-ask consent after every rebuild) |
 | `CSVEditor.app` | `CSVEditor_launcher.applescript` | `icon_csv_master.png` (googly-eyed comma perched on a spreadsheet) | Launches `CSVEditor.py` detached; if it's already running, brings the window to front instead of starting a second instance |
+| `My Agent.app` | `MyAgent_launcher.applescript` | `icon_myagent_master.png` (blue robot face — googly eyes, gold-tipped antenna) | Launches `MyAgent.py` detached. No launch-or-focus: MyAgent is multi-instance by design (each claims the lowest free lock number), so every double-click starts a fresh agent |
 
 `rebuild.sh` patches the repo path into the AppleScript for whatever clone
 it runs from, renders the iconset from the 1024px master with `sips`
@@ -90,6 +91,36 @@ $lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.ex
 $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\CSVEditor_Win.ps1`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_csv.ico,0"
+$lnk.WindowStyle = 7
+$lnk.Save()
+```
+
+`MyAgent_Win.ps1` is the Windows twin of `MyAgent_launcher.applescript`: it
+launches `MyAgent.py` with the venv **pythonw** (no console window). Unlike the
+CSVEditor twin there is **no** launch-or-focus — MyAgent is multi-instance by
+design (each instance claims the lowest free lock number), so every launch
+starts a fresh agent. As with the others the repo is resolved from the script's
+own location, so any clone works as-is; only the `.lnk` is per-machine.
+
+`icon_myagent.ico` and the master `icon_myagent_master.png` both derive from the
+original repo-root `myagent.ico` (256px robot face, upscaled to 1024px with
+Lanczos); that repo-root copy is the legacy location, kept for any pre-existing
+Windows shortcut. Regenerate the `.ico` from the master with:
+
+```powershell
+.venv\Scripts\python.exe -c "from PIL import Image; Image.open(r'desktop_launchers\icon_myagent_master.png').convert('RGBA').save(r'desktop_launchers\icon_myagent.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+```
+
+Recreate the Desktop shortcut on a new machine (run from the repo root):
+
+```powershell
+$repo = (Get-Location).Path
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'My Agent.lnk'))
+$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\MyAgent_Win.ps1`""
+$lnk.WorkingDirectory = $repo
+$lnk.IconLocation = "$repo\desktop_launchers\icon_myagent.ico,0"
 $lnk.WindowStyle = 7
 $lnk.Save()
 ```

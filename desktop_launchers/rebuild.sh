@@ -60,10 +60,11 @@ build() { # <source.applescript> <master.png> <AppName>
 
 build UnreadSummary.applescript      icon_unread_master.png UnreadSummary
 build CSVEditor_launcher.applescript icon_csv_master.png    CSVEditor
+build MyAgent_launcher.applescript   icon_myagent_master.png "My Agent"
 
 # Desktop aliases (only for the real ~/Applications install, not test builds)
 if [ "$DEST" = "$HOME/Applications" ]; then
-  while read -r name png; do
+  while IFS='|' read -r name png; do
     rm -f "$HOME/Desktop/$name"
     osascript -e "tell application \"Finder\"" \
               -e "set a to make alias file at desktop to (POSIX file \"$DEST/$name.app\")" \
@@ -79,7 +80,8 @@ if [ "$DEST" = "$HOME/Applications" ]; then
       >/dev/null
     echo "alias  $HOME/Desktop/$name"
   done <<'PAIRS'
-UnreadSummary icon_unread_master.png
-CSVEditor icon_csv_master.png
+UnreadSummary|icon_unread_master.png
+CSVEditor|icon_csv_master.png
+My Agent|icon_myagent_master.png
 PAIRS
 fi

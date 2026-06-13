@@ -81,7 +81,7 @@ There are no tests, linter, or build steps — these are testbed apps.
 - `LaunchSelfBot.bat` — Launcher that starts both SelfBot instances side by side with focus on instance 1
 - `LaunchMyAgent.bat` — Launcher for MyAgent
 - `selfbot_position.ps1` — PowerShell helper used by the SelfBot launcher to position and focus windows
-- `desktop_launchers/` — Cross-platform "Desktop shortcut with a custom icon" sources: macOS AppleScript apps (compiled per-machine by `rebuild.sh`) and their Windows twins `UnreadSummary_Win.ps1` / `CSVEditor_Win.ps1`, with `icon_*.ico` rendered from the 1024px `icon_*_master.png` artwork. `CSVEditor_Win.ps1` is launch-or-focus (brings an already-open editor to the front instead of starting a second copy). Built `.app`s and Desktop `.lnk`s are per-machine and NOT committed; full details in `desktop_launchers/README.md`
+- `desktop_launchers/` — Cross-platform "Desktop shortcut with a custom icon" sources: macOS AppleScript apps (compiled per-machine by `rebuild.sh`) and their Windows twins `UnreadSummary_Win.ps1` / `CSVEditor_Win.ps1` / `MyAgent_Win.ps1`, with `icon_*.ico` rendered from the 1024px `icon_*_master.png` artwork. `CSVEditor_Win.ps1` is launch-or-focus (brings an already-open editor to the front instead of starting a second copy); `MyAgent_Win.ps1` always launches a fresh instance (MyAgent is multi-instance by design). The `My Agent.app` / `MyAgent_Win.ps1` robot icon (`icon_myagent_master.png`) is the macOS/Windows-matched twin of the legacy repo-root `myagent.ico`. Built `.app`s and Desktop `.lnk`s are per-machine and NOT committed; full details in `desktop_launchers/README.md`
 
 @CLAUDE_SELFBOT.md
 @CLAUDE_MYAGENT.md
