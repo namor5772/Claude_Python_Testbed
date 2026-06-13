@@ -63,3 +63,32 @@ $lnk.IconLocation = "$repo\desktop_launchers\icon_unread.ico,0"
 $lnk.WindowStyle = 7
 $lnk.Save()
 ```
+
+`CSVEditor_Win.ps1` is the Windows twin of `CSVEditor_launcher.applescript`:
+it launches `CSVEditor.py` with the venv **pythonw** (no console window), and if
+an instance is already running it brings that window to the front instead of
+starting a second copy — the same launch-or-focus behaviour as the AppleScript.
+As with the Unread twin the repo is resolved from the script's own location, so
+any clone works as-is; only the `.lnk` is per-machine.
+
+`icon_csv.ico` is rendered from the 1024px master `icon_csv_master.png`
+(sunglasses semicolon, deposed comma, spreadsheet; sizes 256/128/64/48/32/16).
+Regenerate with:
+
+```powershell
+.venv\Scripts\python.exe -c "from PIL import Image; Image.open(r'desktop_launchers\icon_csv_master.png').convert('RGBA').save(r'desktop_launchers\icon_csv.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+```
+
+Recreate the Desktop shortcut on a new machine (run from the repo root):
+
+```powershell
+$repo = (Get-Location).Path
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'CSV Editor.lnk'))
+$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\CSVEditor_Win.ps1`""
+$lnk.WorkingDirectory = $repo
+$lnk.IconLocation = "$repo\desktop_launchers\icon_csv.ico,0"
+$lnk.WindowStyle = 7
+$lnk.Save()
+```

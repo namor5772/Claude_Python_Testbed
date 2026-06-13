@@ -369,7 +369,7 @@ A single-file spreadsheet-style editor (~580 lines) used mostly on the bank CSV 
 - **Editing** — double-click any cell for an in-place entry (Enter commits, Esc cancels); insert row above/below, copy row, delete row, with selection restored after each operation.
 - **State** lives *outside* the repo at `~/.config/csveditor/state.json` (geometry, last file, filters, sort — a legacy repo-root state file migrates there automatically on first run).
 
-On macOS, `CSVEditor.app` (see desktop launchers) gives it a Dock-less double-click launch that focuses the existing window instead of starting a second copy.
+On macOS, `CSVEditor.app` (see desktop launchers) gives it a Dock-less double-click launch that focuses the existing window instead of starting a second copy; on Windows, a Desktop shortcut runs `desktop_launchers/CSVEditor_Win.ps1` (icon `icon_csv.ico`) for the same launch-or-focus behaviour.
 
 ---
 
@@ -389,7 +389,7 @@ A single-file tkinter todo app (~450 lines): tasks have **priority** (High/Mediu
 
 The script patches in the local repo path, renders each 1024-px icon master into an iconset with `sips`, compiles with `osacompile`, ad-hoc signs, and pastes the icon on via `NSWorkspace.setIconForFile` (which outranks macOS's stubborn IconServices cache). The built apps live in `~/Applications` with Finder **aliases** on the Desktop — an app *running from* a TCC-protected folder (Desktop/Documents/Downloads) triggers a consent prompt after every rebuild, aliases don't. Completion feedback is deliberately a **dialog + chime, not a notification**: Notification Center permission is per-code-hash, so every rebuild would re-ask, while `display dialog` needs no permission and isn't swallowed by Focus modes.
 
-**Windows** — `UnreadSummary_Win.ps1` is the AppleScript's twin: a desktop shortcut runs it via `powershell -WindowStyle Hidden`, the venv python executes the digest, and the feedback mirrors the Mac (chime + self-dismissing success dialog with the run's log line; blocking error dialog with the log tail on failure). The repo path is resolved from the script's own location, so any clone works unedited — only the `.lnk` shortcut is per-machine (icon: `icon_unread.ico`). A `-DryRun` switch passes `--dry-run` through for end-to-end plumbing tests.
+**Windows** — `UnreadSummary_Win.ps1` is the AppleScript's twin: a desktop shortcut runs it via `powershell -WindowStyle Hidden`, the venv python executes the digest, and the feedback mirrors the Mac (chime + self-dismissing success dialog with the run's log line; blocking error dialog with the log tail on failure). The repo path is resolved from the script's own location, so any clone works unedited — only the `.lnk` shortcut is per-machine (icon: `icon_unread.ico`). A `-DryRun` switch passes `--dry-run` through for end-to-end plumbing tests. `CSVEditor_Win.ps1` is the matching twin of `CSVEditor_launcher.applescript`: a `powershell -WindowStyle Hidden` shortcut launches the editor with the venv **pythonw** (no console window) and focuses an already-open window instead of starting a second copy (icon `icon_csv.ico`, rendered from `icon_csv_master.png` — a sunglasses-wearing semicolon dethroning the comma over a spreadsheet).
 
 Full details in [desktop_launchers/README.md](desktop_launchers/README.md).
 
@@ -444,7 +444,7 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | `MyAgent.py`, `myagent/` | The agent entry point + 19-mixin package |
 | `Account_Activity_WBC.py`, `CSVEditor.py`, `TodoList.py` | The three small single-file apps |
 | `UnreadSummary.py`, `Heartbeat.py`, `SpecifyingList.csv` | Zero-token production jobs + the bill-matching rules |
-| `desktop_launchers/` | macOS launcher sources + `rebuild.sh`, plus the Windows `UnreadSummary_Win.ps1` twin (built `.app`s / `.lnk`s are per-machine, not in git) |
+| `desktop_launchers/` | macOS launcher sources + `rebuild.sh`, plus the Windows `UnreadSummary_Win.ps1` / `CSVEditor_Win.ps1` twins and their `icon_*.ico` (built `.app`s / `.lnk`s are per-machine, not in git) |
 | `requirements.txt` | Core dependencies |
 | `*.Modelfile` ×3 | Ollama vision+tools template grafts |
 | `MyAgent_Pricing.txt` | Reference for the cost-tracking pricing tables |
