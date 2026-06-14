@@ -166,8 +166,15 @@ summary (grand total, today, this month, by provider, by model) then lists every
 run most-recent-first. Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On
 Windows **both logs live at the repo root** (`heartbeat.log` is
-`BASE_DIR / "heartbeat.log"` there, not under a `Logs` folder). Windows
-end-to-end is **untested** — verify before relying on them.
+`BASE_DIR / "heartbeat.log"` there, not under a `Logs` folder). Both read the log
+with `Get-Content -Encoding UTF8` and set `[Console]::OutputEncoding` to UTF-8
+(guarded by `try/catch` for redirected/headless runs): the logs are written UTF-8
+by Python (`open(..., encoding="utf-8")`), but Windows PowerShell 5.1 defaults to
+the ANSI codepage on both read and display, which would otherwise mojibake the
+em-dash in heartbeat's `checked — nothing found` ticks into `â€"`. Verified on
+Windows 11 — the cost viewer end-to-end, the heartbeat viewer's parse/encoding
+(its interactive `Out-Host -Paging` tail reads keypresses from the console, so it
+can't be driven non-interactively, but it shares the cost viewer's display path).
 
 `icon_heartbeat.ico` / `icon_costlog.ico` render from their 1024px masters
 (`make_heartbeat_icon.py` / `make_costlog_icon.py`). Regenerate with:

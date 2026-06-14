@@ -13,6 +13,10 @@ $repoDir = Split-Path -Parent $PSScriptRoot
 $log     = Join-Path $repoDir 'APICostLog.txt'
 $Host.UI.RawUI.WindowTitle = 'API Cost Log'
 $inv = [Globalization.CultureInfo]::InvariantCulture
+# MyAgent writes the log as UTF-8; read and render it as UTF-8 so a non-ASCII
+# provider/model name can't mojibake (guarded: the console-encoding setter
+# throws when there is no real console, e.g. a redirected/headless invocation).
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 try {
     if (-not (Test-Path $log)) {
@@ -23,7 +27,7 @@ try {
     }
 
     # Parse "timestamp;provider;model;cost", skipping blank/malformed lines.
-    $rows = foreach ($line in Get-Content -LiteralPath $log) {
+    $rows = foreach ($line in Get-Content -LiteralPath $log -Encoding UTF8) {
         if ([string]::IsNullOrWhiteSpace($line)) { continue }
         $f = $line.Split(';')
         if ($f.Count -lt 4) { continue }

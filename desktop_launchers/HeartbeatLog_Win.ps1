@@ -13,6 +13,11 @@
 $repoDir = Split-Path -Parent $PSScriptRoot
 $log     = Join-Path $repoDir 'heartbeat.log'
 $Host.UI.RawUI.WindowTitle = 'Heartbeat Log'
+# Heartbeat.py writes the log as UTF-8 (open(..., encoding="utf-8")); Windows
+# PowerShell 5.1 would otherwise read it as ANSI and mojibake the em-dashes in
+# "checked - nothing found". Render the console as UTF-8 too (guarded: throws
+# when there is no real console, e.g. a redirected/headless invocation).
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 
 try {
     if (-not (Test-Path $log)) {
@@ -21,7 +26,7 @@ try {
         return
     }
 
-    $lines  = @(Get-Content -LiteralPath $log)
+    $lines  = @(Get-Content -LiteralPath $log -Encoding UTF8)
     $events = @($lines | Where-Object { $_ -notmatch 'nothing found' })
 
     $out  = @("Heartbeat log - $log",
