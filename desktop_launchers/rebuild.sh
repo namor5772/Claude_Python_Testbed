@@ -71,27 +71,38 @@ build CostLog.applescript            icon_costlog_master.png   "API Cost Log"
 # Desktop aliases (only for the real ~/Applications install, not test builds)
 if [ "$DEST" = "$HOME/Applications" ]; then
   while IFS='|' read -r name png; do
-    # Idempotent: if a working alias is already on the Desktop, leave it exactly
-    # where the user placed it. Recreating every run churns icon positions and, on
-    # an iCloud-synced Desktop, races the file provider into "<name> 2" conflict
-    # copies (observed 2026-06-14). Only create the alias when it is missing.
-    if [ -e "$HOME/Desktop/$name" ]; then
-      echo "alias  $HOME/Desktop/$name (exists, left in place)"
-      continue
+    # Create the alias only if missing — recreating it every run churns icon
+    # positions and, on an iCloud-synced Desktop, races the file provider into
+    # "<name> 2" conflict copies (observed 2026-06-14). Never `xattr -c` an alias
+    # to "reset" it: that also strips the FinderInfo alias flag and the file stops
+    # being recognised as an alias.
+    if [ ! -e "$HOME/Desktop/$name" ]; then
+      osascript -e "tell application \"Finder\"" \
+                -e "set a to make alias file at desktop to (POSIX file \"$DEST/$name.app\")" \
+                -e "set name of a to \"$name\"" \
+                -e "end tell" >/dev/null
+      echo "alias  $HOME/Desktop/$name (created)"
+    else
+      echo "alias  $HOME/Desktop/$name (exists; re-pasting icon)"
     fi
-    osascript -e "tell application \"Finder\"" \
-              -e "set a to make alias file at desktop to (POSIX file \"$DEST/$name.app\")" \
-              -e "set name of a to \"$name\"" \
-              -e "end tell" >/dev/null
-    # Paste the icon onto the alias itself — alias creation snapshots the
-    # target's icon, which can be stale/generic if IconServices hasn't
-    # re-indexed the target at its (new) path yet.
+    # (Re-)paste the icon on EVERY run — modifying the existing alias in place, so
+    # positions are preserved and there's no "<name> 2" race. Necessary because (a)
+    # alias creation snapshots a stale/generic target icon until IconServices
+    # re-indexes, and (b) an iCloud-synced Desktop strips an alias's pasted-on icon
+    # after it's launched. So re-running rebuild.sh is the no-churn way to restore a
+    # launcher icon that has gone blank/generic. (A bare alias with no pasted icon
+    # renders generic on an iCloud Desktop — confirmed 2026-06-14 — so this paste
+    # is mandatory, not cosmetic.)
     osascript -l JavaScript \
       -e "ObjC.import('AppKit');" \
       -e "const i = \$.NSImage.alloc.initWithContentsOfFile('$DIR/$png');" \
       -e "\$.NSWorkspace.sharedWorkspace.setIconForFileOptions(i, '$HOME/Desktop/$name', 0);" \
       >/dev/null
-    echo "alias  $HOME/Desktop/$name (created)"
+    # setIcon writes the icon data but, on an iCloud-synced Desktop, doesn't
+    # reliably set the kHasCustomIcon flag — and without that flag Finder draws a
+    # generic icon (confirmed 2026-06-14). Force it on. (Do NOT chflags uchg here:
+    # the lock races the icon write for large icons and iCloud removes it anyway.)
+    SetFile -a C "$HOME/Desktop/$name" 2>/dev/null || true
   done <<'PAIRS'
 UnreadSummary|icon_unread_master.png
 CSVEditor|icon_csv_master.png
