@@ -68,6 +68,7 @@ class App:
         self._col_widths = {}
         self._date_sort_enabled = False
         self._date_sort_col = None  # column index of "Date" column
+        self._name_sort_enabled = False  # sort by first field A-Z (mutually exclusive with date sort)
 
         self._build_ui()
         self._load_state()
@@ -142,6 +143,10 @@ class App:
         self._sort_date_btn = tk.Button(ctrl_frame, text="Sort by Date: OFF",
                                          command=self._toggle_date_sort)
         self._sort_date_btn.pack(side=tk.LEFT, padx=6)
+
+        self._sort_name_btn = tk.Button(ctrl_frame, text="Sort A-Z: OFF",
+                                         command=self._toggle_name_sort)
+        self._sort_name_btn.pack(side=tk.LEFT, padx=2)
 
         self._filter_status_var = tk.StringVar()
         tk.Label(ctrl_frame, textvariable=self._filter_status_var, foreground="blue").pack(side=tk.LEFT, padx=4)
@@ -220,6 +225,10 @@ class App:
         self._date_sort_enabled = False
         self._sort_date_btn.config(text="Sort by Date: OFF",
                                     state=tk.NORMAL if self._date_sort_col is not None else tk.DISABLED)
+        # First-field A-Z sort is always available once a file is loaded
+        # (there is always a column 0); reset it off on each open.
+        self._name_sort_enabled = False
+        self._sort_name_btn.config(text="Sort A-Z: OFF", state=tk.NORMAL)
         self._refresh_tree()
         self._update_status()
 
@@ -290,9 +299,11 @@ class App:
             if show:
                 filtered.append((real_idx, row))
 
-        # Sort by Date if enabled
+        # Apply the active sort (Date and A-Z are mutually exclusive)
         if self._date_sort_enabled and self._date_sort_col is not None:
             filtered = self._sort_by_date(filtered)
+        elif self._name_sort_enabled:
+            filtered = self._sort_by_name(filtered)
 
         for real_idx, row in filtered:
             padded = row + [""] * (len(self.headers) - len(row))
@@ -476,8 +487,23 @@ class App:
 
     def _toggle_date_sort(self):
         self._date_sort_enabled = not self._date_sort_enabled
+        # Date and A-Z sorts are mutually exclusive — enabling one clears the other.
+        if self._date_sort_enabled and self._name_sort_enabled:
+            self._name_sort_enabled = False
+            self._sort_name_btn.config(text="Sort A-Z: OFF")
         self._sort_date_btn.config(
             text=f"Sort by Date: {'ON' if self._date_sort_enabled else 'OFF'}")
+        self._refresh_tree()
+        self._update_filter_status()
+
+    def _toggle_name_sort(self):
+        self._name_sort_enabled = not self._name_sort_enabled
+        # Date and A-Z sorts are mutually exclusive — enabling one clears the other.
+        if self._name_sort_enabled and self._date_sort_enabled:
+            self._date_sort_enabled = False
+            self._sort_date_btn.config(text="Sort by Date: OFF")
+        self._sort_name_btn.config(
+            text=f"Sort A-Z: {'ON' if self._name_sort_enabled else 'OFF'}")
         self._refresh_tree()
         self._update_filter_status()
 
@@ -496,6 +522,16 @@ class App:
             return datetime.max  # unparseable goes to end
 
         return sorted(filtered, key=lambda pair: parse_date(pair[1]))
+
+    def _sort_by_name(self, filtered):
+        """Sort list of (real_idx, row) alphabetically by the first field,
+        case-insensitively. Blank first cells sort to the top. The sort is
+        stable, so rows with equal first fields keep their original order."""
+        def key(pair):
+            row = pair[1]
+            return row[0].strip().casefold() if row else ""
+
+        return sorted(filtered, key=key)
 
     # ── State persistence ─────────────────────────────────────────────
 
@@ -556,10 +592,16 @@ class App:
                         self._filter_val_vars[0].set(fv)
                         self._on_filter_val_changed(0)
 
-            # Restore date sort
+            # Restore the active sort (Date and A-Z are mutually exclusive;
+            # Date wins if a stale state file somehow has both set).
             if state.get("date_sort_enabled") and self._date_sort_col is not None:
                 self._date_sort_enabled = True
                 self._sort_date_btn.config(text="Sort by Date: ON")
+                self._refresh_tree()
+                self._update_filter_status()
+            elif state.get("name_sort_enabled"):
+                self._name_sort_enabled = True
+                self._sort_name_btn.config(text="Sort A-Z: ON")
                 self._refresh_tree()
                 self._update_filter_status()
 
@@ -573,6 +615,7 @@ class App:
                 for i in range(3)
             ],
             "date_sort_enabled": self._date_sort_enabled,
+            "name_sort_enabled": self._name_sort_enabled,
             "col_widths": self._col_widths,
         }
         try:
