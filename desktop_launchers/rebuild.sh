@@ -1,5 +1,5 @@
 #!/bin/bash
-# Rebuild the two macOS launcher apps from the sources in this folder.
+# Rebuild the macOS launcher apps from the sources in this folder.
 #
 #   ./rebuild.sh                       # builds into ~/Applications + Desktop aliases
 #   LAUNCHER_DEST=/tmp/x ./rebuild.sh  # build somewhere else (testing; no aliases)
@@ -26,6 +26,10 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 DEST="${LAUNCHER_DEST:-$HOME/Applications}"
 mkdir -p "$DEST"
+
+# The log-viewer apps open .command helpers via `open -a Terminal`; Terminal only
+# runs a .command that is executable, so guarantee the bit survives a fresh clone.
+chmod +x "$DIR"/*.command 2>/dev/null || true
 
 build() { # <source.applescript> <master.png> <AppName>
   local src="$1" png="$2" name="$3"
@@ -58,14 +62,23 @@ build() { # <source.applescript> <master.png> <AppName>
   echo "built $app"
 }
 
-build UnreadSummary.applescript      icon_unread_master.png UnreadSummary
-build CSVEditor_launcher.applescript icon_csv_master.png    CSVEditor
-build MyAgent_launcher.applescript   icon_myagent_master.png "My Agent"
+build UnreadSummary.applescript      icon_unread_master.png    UnreadSummary
+build CSVEditor_launcher.applescript icon_csv_master.png       CSVEditor
+build MyAgent_launcher.applescript   icon_myagent_master.png   "My Agent"
+build HeartbeatLog.applescript       icon_heartbeat_master.png "Heartbeat Log"
+build CostLog.applescript            icon_costlog_master.png   "API Cost Log"
 
 # Desktop aliases (only for the real ~/Applications install, not test builds)
 if [ "$DEST" = "$HOME/Applications" ]; then
   while IFS='|' read -r name png; do
-    rm -f "$HOME/Desktop/$name"
+    # Idempotent: if a working alias is already on the Desktop, leave it exactly
+    # where the user placed it. Recreating every run churns icon positions and, on
+    # an iCloud-synced Desktop, races the file provider into "<name> 2" conflict
+    # copies (observed 2026-06-14). Only create the alias when it is missing.
+    if [ -e "$HOME/Desktop/$name" ]; then
+      echo "alias  $HOME/Desktop/$name (exists, left in place)"
+      continue
+    fi
     osascript -e "tell application \"Finder\"" \
               -e "set a to make alias file at desktop to (POSIX file \"$DEST/$name.app\")" \
               -e "set name of a to \"$name\"" \
@@ -78,10 +91,12 @@ if [ "$DEST" = "$HOME/Applications" ]; then
       -e "const i = \$.NSImage.alloc.initWithContentsOfFile('$DIR/$png');" \
       -e "\$.NSWorkspace.sharedWorkspace.setIconForFileOptions(i, '$HOME/Desktop/$name', 0);" \
       >/dev/null
-    echo "alias  $HOME/Desktop/$name"
+    echo "alias  $HOME/Desktop/$name (created)"
   done <<'PAIRS'
 UnreadSummary|icon_unread_master.png
 CSVEditor|icon_csv_master.png
 My Agent|icon_myagent_master.png
+Heartbeat Log|icon_heartbeat_master.png
+API Cost Log|icon_costlog_master.png
 PAIRS
 fi
