@@ -35,7 +35,7 @@ import mimetypes
 import os
 import re
 from email.message import EmailMessage
-from tkinter import messagebox
+from myagent.mail_common import confirm_action
 
 from myagent.helpers import extract_text_from_html
 
@@ -184,20 +184,7 @@ class GmailMixin:
         Uses messagebox.askyesno with a fixed-format prompt. Survives
         ``--headless`` mode because Tk dialogs work even when the main root
         is withdrawn (the dialog floats as a standalone window)."""
-        disabled = getattr(self, "_disabled_confirm_patterns", set())
-        if tool_name in disabled:
-            queue = getattr(self, "queue", None)
-            if queue is not None:
-                queue.put({
-                    "type": "warning",
-                    "content": f"⚠ Gmail confirm bypassed for {tool_name}\n",
-                })
-            return True
-        message = f"{summary}\n\n{detail}\n\nProceed?"
-        try:
-            return bool(messagebox.askyesno(title, message, parent=self.root))
-        except Exception:
-            return False
+        return confirm_action(self, "Gmail", tool_name, title, summary, detail)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 

@@ -77,7 +77,7 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
-from tkinter import messagebox
+from myagent.mail_common import confirm_action
 
 from myagent.helpers import extract_text_from_html
 
@@ -449,20 +449,7 @@ class ProtonMailMixin:
         """Same pattern as ``_confirm_gmail_action``. Returns True if the
         user clicks Yes; honours per-instruction bypass via
         ``_disabled_confirm_patterns``."""
-        disabled = getattr(self, "_disabled_confirm_patterns", set())
-        if tool_name in disabled:
-            queue = getattr(self, "queue", None)
-            if queue is not None:
-                queue.put({
-                    "type": "warning",
-                    "content": f"⚠ Proton confirm bypassed for {tool_name}\n",
-                })
-            return True
-        message = f"{summary}\n\n{detail}\n\nProceed?"
-        try:
-            return bool(messagebox.askyesno(title, message, parent=self.root))
-        except Exception:
-            return False
+        return confirm_action(self, "Proton", tool_name, title, summary, detail)
 
     # ── Helpers ─────────────────────────────────────────────────────────────
 

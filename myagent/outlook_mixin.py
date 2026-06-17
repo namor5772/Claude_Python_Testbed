@@ -55,7 +55,7 @@ import base64
 import json
 import mimetypes
 import os
-from tkinter import messagebox
+from myagent.mail_common import confirm_action
 
 from myagent.helpers import extract_text_from_html
 
@@ -274,20 +274,7 @@ class OutlookMixin:
         ``⚠ Outlook confirm bypassed`` warning to the activity output. Same
         pattern as the Gmail/Proton/shell confirmations; survives --headless
         because Tk dialogs float standalone when the root is withdrawn."""
-        disabled = getattr(self, "_disabled_confirm_patterns", set())
-        if tool_name in disabled:
-            queue = getattr(self, "queue", None)
-            if queue is not None:
-                queue.put({
-                    "type": "warning",
-                    "content": f"⚠ Outlook confirm bypassed for {tool_name}\n",
-                })
-            return True
-        message = f"{summary}\n\n{detail}\n\nProceed?"
-        try:
-            return bool(messagebox.askyesno(title, message, parent=self.root))
-        except Exception:
-            return False
+        return confirm_action(self, "Outlook", tool_name, title, summary, detail)
 
     # ── Helpers (all prefixed _outlook_ to avoid MRO shadowing) ──────────────
 
