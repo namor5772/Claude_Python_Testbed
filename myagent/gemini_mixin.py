@@ -7,6 +7,7 @@ import time
 from google.genai import types as genai_types
 
 from myagent.constants import GEMINI_FALLBACK_MODELS
+from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
 class GeminiMixin:
@@ -414,7 +415,7 @@ class GeminiMixin:
                     thinking_text = ""
                     tool_calls = []
                 elif is_rate_limit and attempt < max_retries - 1:
-                    wait = min(2 ** attempt * 5, 60)
+                    wait = rate_limit_backoff(attempt)
                     self.queue.put({
                         "type": "tool_info",
                         "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
@@ -424,7 +425,7 @@ class GeminiMixin:
                     thinking_text = ""
                     tool_calls = []
                 elif is_server_error and attempt < max_retries - 1:
-                    wait = min(2 ** attempt * 10, 90)
+                    wait = server_error_backoff(attempt)
                     self.queue.put({
                         "type": "tool_info",
                         "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",

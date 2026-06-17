@@ -10,6 +10,7 @@ from myagent.constants import (
     OPENAI_FALLBACK_MODELS,
     _HAS_DESKTOP,
 )
+from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
 class OpenAIMixin:
@@ -413,7 +414,7 @@ class OpenAIMixin:
                     raise
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
-                    wait = min(2 ** attempt * 5, 60)
+                    wait = rate_limit_backoff(attempt)
                     self.queue.put({
                         "type": "tool_info",
                         "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
@@ -423,7 +424,7 @@ class OpenAIMixin:
                     raise
             except openai.APIError as e:
                 if attempt < max_retries - 1 and getattr(e, 'status_code', 0) >= 500:
-                    wait = min(2 ** attempt * 10, 90)
+                    wait = server_error_backoff(attempt)
                     self.queue.put({
                         "type": "tool_info",
                         "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
