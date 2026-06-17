@@ -35,8 +35,14 @@ python Account_Activity_WBC.py
 taskkill //F //IM pythonw.exe 2>/dev/null; taskkill //F //IM python.exe 2>/dev/null
 # macOS:
 pkill -f "python.*MyAgent.py" 2>/dev/null; pkill -f "python.*SelfBot.py" 2>/dev/null
+
+# Run the MyAgent characterization test suite (stdlib unittest, no extra deps)
+python -m unittest discover -s tests -t .
+
+# Lint with ruff (no mypy or build step)
+ruff check MyAgent.py myagent/
 ```
-There are no tests, linter, or build steps — these are testbed apps.
+MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no extra dependencies) covering its pure / model-detection helpers — run it with `python -m unittest discover -s tests -t .`. `ruff` is available for linting (`ruff check MyAgent.py myagent/`); there is no `mypy` or build step. The single-file apps (SelfBot, CSVEditor, Account_Activity_WBC) have no tests.
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~4100 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
