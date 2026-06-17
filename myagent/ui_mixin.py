@@ -370,6 +370,22 @@ class UIMixin:
         mid = model_id or self.model or ""
         return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
 
+    @staticmethod
+    def _parse_claude_major_minor(mid, families):
+        """Parse the (major, minor) version tuple from a
+        claude-<family>-<major>-<minor> model id, for the first family prefix in
+        ``families`` that ``mid`` starts with. Returns None if no family matches
+        or major/minor aren't both integers. Shared by the Anthropic capability
+        helpers below, which each apply their own (major, minor) threshold."""
+        for family in families:
+            if mid.startswith(family):
+                parts = mid[len(family):].split("-")
+                try:
+                    return (int(parts[0]), int(parts[1]))
+                except (ValueError, IndexError):
+                    return None
+        return None
+
     def _anthropic_rejects_temperature(self, model_id=None):
         """True for Anthropic models that removed sampling params (temperature/
         top_p/top_k) — Opus 4.7+ and the Claude 5 family (Fable/Mythos) return
@@ -381,13 +397,8 @@ class UIMixin:
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
-        if mid.startswith("claude-opus-"):
-            parts = mid[len("claude-opus-"):].split("-")
-            try:
-                return (int(parts[0]), int(parts[1])) >= (4, 7)
-            except (ValueError, IndexError):
-                return False
-        return False
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        return version is not None and version >= (4, 7)
 
     def _anthropic_supports_max_effort(self, model_id=None):
         """True for Anthropic models that expose the 'max' thinking effort — Opus
@@ -401,13 +412,8 @@ class UIMixin:
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
-        if mid.startswith("claude-opus-"):
-            parts = mid[len("claude-opus-"):].split("-")
-            try:
-                return (int(parts[0]), int(parts[1])) >= (4, 6)
-            except (ValueError, IndexError):
-                return False
-        return False
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        return version is not None and version >= (4, 6)
 
     def _anthropic_supports_xhigh_effort(self, model_id=None):
         """True for Anthropic models that accept effort='xhigh' (between high and
@@ -418,13 +424,8 @@ class UIMixin:
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
-        if mid.startswith("claude-opus-"):
-            parts = mid[len("claude-opus-"):].split("-")
-            try:
-                return (int(parts[0]), int(parts[1])) >= (4, 7)
-            except (ValueError, IndexError):
-                return False
-        return False
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        return version is not None and version >= (4, 7)
 
     def _anthropic_mode_values(self, model_id=None):
         """Thinking-mode combobox values for an Anthropic adaptive model.
@@ -455,14 +456,8 @@ class UIMixin:
         # Claude 5 Mythos-class (Fable/Mythos): adaptive-only, always-on thinking.
         if self._is_anthropic_always_on_thinking(mid):
             return True
-        for family in ("claude-opus-", "claude-sonnet-"):
-            if mid.startswith(family):
-                parts = mid[len(family):].split("-")
-                try:
-                    return (int(parts[0]), int(parts[1])) >= (4, 6)
-                except (ValueError, IndexError):
-                    return False
-        return False
+        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
+        return version is not None and version >= (4, 6)
 
     def _is_gemini_thinking_model(self, model_id=None):
         mid = model_id or self.model
