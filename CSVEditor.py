@@ -225,10 +225,11 @@ class App:
         self._date_sort_enabled = False
         self._sort_date_btn.config(text="Sort by Date: OFF",
                                     state=tk.NORMAL if self._date_sort_col is not None else tk.DISABLED)
-        # First-field A-Z sort is always available once a file is loaded
-        # (there is always a column 0); reset it off on each open.
+        # A-Z sort (targets the 'To' column if present, else the first
+        # column) is always available once a file is loaded; reset off on open.
         self._name_sort_enabled = False
-        self._sort_name_btn.config(text="Sort A-Z: OFF", state=tk.NORMAL)
+        self._sort_name_btn.config(state=tk.NORMAL)
+        self._update_name_sort_btn()
         self._refresh_tree()
         self._update_status()
 
@@ -490,7 +491,7 @@ class App:
         # Date and A-Z sorts are mutually exclusive — enabling one clears the other.
         if self._date_sort_enabled and self._name_sort_enabled:
             self._name_sort_enabled = False
-            self._sort_name_btn.config(text="Sort A-Z: OFF")
+            self._update_name_sort_btn()
         self._sort_date_btn.config(
             text=f"Sort by Date: {'ON' if self._date_sort_enabled else 'OFF'}")
         self._refresh_tree()
@@ -502,8 +503,7 @@ class App:
         if self._name_sort_enabled and self._date_sort_enabled:
             self._date_sort_enabled = False
             self._sort_date_btn.config(text="Sort by Date: OFF")
-        self._sort_name_btn.config(
-            text=f"Sort A-Z: {'ON' if self._name_sort_enabled else 'OFF'}")
+        self._update_name_sort_btn()
         self._refresh_tree()
         self._update_filter_status()
 
@@ -523,13 +523,39 @@ class App:
 
         return sorted(filtered, key=lambda pair: parse_date(pair[1]))
 
+    def _name_sort_col(self):
+        """Column index that 'Sort A-Z' targets: the 'To' column if the file
+        has one (case-insensitive header match), otherwise the first column.
+        Returns None when no file is loaded."""
+        if not self.headers:
+            return None
+        for idx, h in enumerate(self.headers):
+            if h.strip().lower() == "to":
+                return idx
+        return 0
+
+    def _update_name_sort_btn(self):
+        """Refresh the Sort A-Z button label to name its target column and
+        on/off state — so adding a new first column can't silently change the
+        sort target without the button showing it."""
+        state = "ON" if self._name_sort_enabled else "OFF"
+        col = self._name_sort_col()
+        if col is not None and col < len(self.headers):
+            self._sort_name_btn.config(text=f"Sort A-Z [{self.headers[col]}]: {state}")
+        else:
+            self._sort_name_btn.config(text=f"Sort A-Z: {state}")
+
     def _sort_by_name(self, filtered):
-        """Sort list of (real_idx, row) alphabetically by the first field,
-        case-insensitively. Blank first cells sort to the top. The sort is
-        stable, so rows with equal first fields keep their original order."""
+        """Sort list of (real_idx, row) alphabetically (case-insensitive) by the
+        'To' column when present, else the first field. Blank cells sort to the
+        top; the sort is stable, so equal keys keep their original order."""
+        col = self._name_sort_col()
+        if col is None:
+            return filtered
+
         def key(pair):
             row = pair[1]
-            return row[0].strip().casefold() if row else ""
+            return row[col].strip().casefold() if col < len(row) else ""
 
         return sorted(filtered, key=key)
 
@@ -601,7 +627,7 @@ class App:
                 self._update_filter_status()
             elif state.get("name_sort_enabled"):
                 self._name_sort_enabled = True
-                self._sort_name_btn.config(text="Sort A-Z: ON")
+                self._update_name_sort_btn()
                 self._refresh_tree()
                 self._update_filter_status()
 
