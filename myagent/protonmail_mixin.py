@@ -887,6 +887,31 @@ class ProtonMailMixin:
                     new_uid = m.group(1).decode("ascii")
         return new_uid
 
+    @staticmethod
+    def _smtp_autosaves_to_sent(cfg):
+        """True if this account's SMTP server already stores a server-side
+        copy of every outgoing message in Sent — in which case the client
+        must NOT also APPEND one, or Sent ends up with two copies.
+
+        Proton (via Bridge) ALWAYS saves sent mail to Sent server-side, and
+        it can't be turned off, so for Bridge accounts the explicit APPEND is
+        a pure duplicate. Generic IMAP/SMTP servers (dovecot/cPanel, Fastmail,
+        custom-domain hosting) do NOT auto-save on SMTP send, so there the
+        client APPEND is exactly what populates Sent.
+
+        Resolution order:
+          1. Explicit per-account override ``smtp_saves_to_sent: true|false``.
+          2. Auto-detect Proton Bridge by a loopback SMTP host (matches the
+             loopback set used for TLS in _build_ssl_context).
+          3. Default False — assume a generic server that needs the APPEND.
+        """
+        if not cfg:
+            return False
+        if "smtp_saves_to_sent" in cfg:
+            return bool(cfg["smtp_saves_to_sent"])
+        host = (cfg.get("smtp_host") or "").strip().lower()
+        return host in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
+
     def do_proton_send(self, params):
         account = params.get("account")
         if not account:
@@ -906,13 +931,15 @@ class ProtonMailMixin:
         try:
             msg, att_info = self._build_outgoing_message(params, from_address)
             self._smtp_send(account, msg, from_address)
-            # Best-effort APPEND to Sent so Proton's UI shows the sent mail.
-            # Bridge can be configured to do this automatically; the APPEND
-            # is harmless if it does.
-            try:
-                self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
-            except Exception:
-                pass
+            # APPEND a copy to Sent only when SMTP didn't already store one.
+            # Proton Bridge always saves sent mail server-side, so APPENDing
+            # there duplicates it; generic IMAP needs the APPEND to populate
+            # Sent at all. See _smtp_autosaves_to_sent.
+            if not self._smtp_autosaves_to_sent(cfg):
+                try:
+                    self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
+                except Exception:
+                    pass
             return json.dumps({
                 "ok": True,
                 "to": params.get("to"),
@@ -971,10 +998,13 @@ class ProtonMailMixin:
             if new_refs:
                 msg["References"] = new_refs
             self._smtp_send(account, msg, from_address)
-            try:
-                self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
-            except Exception:
-                pass
+            # Skip the Sent APPEND when SMTP auto-saves (Proton Bridge) to
+            # avoid a duplicate; see _smtp_autosaves_to_sent.
+            if not self._smtp_autosaves_to_sent(cfg):
+                try:
+                    self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
+                except Exception:
+                    pass
             return json.dumps({
                 "ok": True,
                 "to": to_addr,
@@ -1044,10 +1074,13 @@ class ProtonMailMixin:
             return "user denied: proton_send_draft was rejected by the user"
         try:
             self._smtp_send(account, msg, from_address)
-            try:
-                self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
-            except Exception:
-                pass
+            # Skip the Sent APPEND when SMTP auto-saves (Proton Bridge) to
+            # avoid a duplicate; see _smtp_autosaves_to_sent.
+            if not self._smtp_autosaves_to_sent(cfg):
+                try:
+                    self._imap_append_to_drafts(account, msg, folder=self._proton_folder(account, "sent"))
+                except Exception:
+                    pass
             # Remove draft from Drafts folder
             try:
                 conn = self._proton_imap(account)
