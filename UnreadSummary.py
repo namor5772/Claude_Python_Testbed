@@ -6,8 +6,9 @@ Inbox and Spam/Junk folders and builds the COMPREHENSIVE LIST: one running
 sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv) are
-listed like any other email except for a "SPECIFYING LIST EMAIL" marker
-line at the top of the entry and, at the bottom, the names of their
+listed like any other email except for a "SPECIFYING LIST EMAIL - {Type}"
+marker line at the top of the entry (Type from the rule's column; the
+suffix is dropped when blank) and, at the bottom, the names of their
 downloaded PDF attachments plus a "Determine:" line echoing the rule's
 Determine column verbatim (a reference note — nothing is extracted from
 the email body). Their PDFs are saved to ~/Downloads (idempotently) and
@@ -125,6 +126,9 @@ def log(msg):
 # The rules live in SpecifyingList.csv in the repo root — one row per email
 # type, semicolon-delimited with every field double-quoted (same convention
 # as APICostLog.txt: the data itself is full of commas) — with columns:
+#   Type       the user's category for this bill type (e.g. "setup", "info").
+#              Echoed in the entry's marker line as
+#              "SPECIFYING LIST EMAIL - {Type}"; never used for matching.
 #   To         optional substring the To header must contain (forwarded bills)
 #   From       substring of the From header (display name or address)
 #   Subject    START of the subject — always a prefix match, never exact,
@@ -165,6 +169,7 @@ def load_specifying():
                     "from_has": frm.lower(),
                     "subject_pre": _norm_subject(subj),
                     "determine": (row.get("Determine") or "").strip(),
+                    "type": (row.get("Type") or "").strip(),
                 }
                 if to:
                     spec["to_has"] = to.lower()
@@ -698,14 +703,17 @@ def _field(label, value, width=9):
 
 def format_entry(n, entry):
     """A SPECIFYING match renders like any other email; the only additions
-    are the marker line at the top and, at the bottom, the names of any
-    downloaded PDF attachments plus a Determine: line echoing the rule's
-    Determine column verbatim from SpecifyingList.csv."""
+    are the marker line at the top — "SPECIFYING LIST EMAIL - {Type}", with
+    the Type suffix dropped when the rule has no Type — and, at the bottom,
+    the names of any downloaded PDF attachments plus a Determine: line
+    echoing the rule's Determine column verbatim from SpecifyingList.csv."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
     lines = []
     if entry.get("spec"):
-        lines.append(f"{num}SPECIFYING LIST EMAIL")
+        spec_type = entry["spec"].get("type") or ""
+        marker = f"SPECIFYING LIST EMAIL - {spec_type}" if spec_type else "SPECIFYING LIST EMAIL"
+        lines.append(f"{num}{marker}")
         lines.append(f"   Account:  {entry['account_email']}{tag}")
     else:
         lines.append(f"{num}Account:  {entry['account_email']}{tag}")
