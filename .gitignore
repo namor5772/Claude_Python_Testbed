@@ -45,6 +45,7 @@ unread_summary.log
 # Claude Code config
 .claude/*
 !.claude/skills/
+!.claude/commands/
 
 # macOS Finder metadata
 .DS_Store
