@@ -1,9 +1,9 @@
 """Heartbeat.py — zero-API-cost replacement for the Heartbeat_Instruction.
 
 Polls namor5772@gmail.com for an unread Inbox email with the per-machine
-Subject "AGENT PROMPT WIN" (Windows) or "AGENT PROMPT MAC" (macOS) — both
-machines poll the same inbox, so the suffix routes each trigger to exactly one
-executor instead of racing for it. A bare "AGENT PROMPT" is answered by nobody.
+Subject "APW" (Windows) or "APM" (macOS) — both machines poll the same inbox,
+so the per-machine subject routes each trigger to exactly one executor instead
+of racing for it.
 If found:
   line 1 of the body  -> {Instruction}  (name of a saved agent instruction)
   lines 3+ of the body -> {PromptCore}
@@ -45,9 +45,9 @@ from myagent.helpers import extract_text_from_html  # noqa: E402
 
 ACCOUNT = "namor5772"
 # Per-machine trigger subject: the Windows box and the Mac mini poll the SAME
-# inbox, so each answers only its own suffix — deterministic routing, and no
+# inbox, so each answers only its own subject — deterministic routing, and no
 # tick-timing race where both process (or one steals) the other's trigger.
-SUBJECT = "AGENT PROMPT WIN" if platform.system() == "Windows" else "AGENT PROMPT MAC"
+SUBJECT = "APW" if platform.system() == "Windows" else "APM"
 MARKER = "*****"
 GOOGLE_CONFIG_DIR = Path.home() / ".config" / "myagent-google"
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]

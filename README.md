@@ -12,7 +12,7 @@ The main residents:
 | **CSVEditor.py** | Spreadsheet-style CSV editor with filtering, date sort, and dialect preservation |
 | **TodoList.py** | Todo manager with priorities, categories, due dates, and overdue highlighting |
 | **UnreadSummary.py** | Zero-token daily unread-email digest across Gmail / IMAP / Outlook accounts (production launchd job) |
-| **Heartbeat.py** | Zero-token email-triggered agent dispatcher — email yourself `AGENT PROMPT WIN` / `AGENT PROMPT MAC` and that machine launches MyAgent (production launchd + Task Scheduler jobs) |
+| **Heartbeat.py** | Zero-token email-triggered agent dispatcher — email yourself `APW` / `APM` and that machine launches MyAgent (production launchd + Task Scheduler jobs) |
 
 ---
 
@@ -311,7 +311,7 @@ Two production scripts that replaced AI-run agent instructions with deterministi
 
 The AI version's "building the list is STRICTLY READ-ONLY" prompt guard holds here **by construction**: listing uses only read-only primitives (IMAP `EXAMINE` + `BODY.PEEK`, Gmail `messages.get`, Graph `GET`), and every mutation sits behind a flag (`SAVE_MATCH_PDFS` / `MARK_MATCHES_READ` on, `TRASH_MATCHES` off by default). `python UnreadSummary.py --dry-run` prints the would-be email with zero mutations and no send. Auth is silent-only — a dead token becomes an `ERROR:` line in the digest, repaired by running MyAgent once interactively. Logs: one line per pass to `~/Library/Logs/myagent/unread_summary.log` (repo-root fallback on Windows).
 
-**Heartbeat.py** (~280 lines) — on-demand agent dispatch from anywhere you can send an email. launchd (Mac mini, short `StartInterval`) and Task Scheduler (Windows, `MyAgent_Heartbeat_5min` every 5 min) both run it against the **same** Gmail account; each pass checks for an **unread** message with that machine's exact subject — **`AGENT PROMPT WIN`** (Windows) or **`AGENT PROMPT MAC`** (macOS), derived from `platform.system()` so the same file serves both. The suffix routes each trigger to exactly one executor — no tick-timing race, no machine-specific instruction landing on the wrong box; a bare `AGENT PROMPT` is answered by nobody:
+**Heartbeat.py** (~280 lines) — on-demand agent dispatch from anywhere you can send an email. launchd (Mac mini, short `StartInterval`) and Task Scheduler (Windows, `MyAgent_Heartbeat_5min` every 5 min) both run it against the **same** Gmail account; each pass checks for an **unread** message with that machine's exact subject — **`APW`** (Windows) or **`APM`** (macOS), derived from `platform.system()` so the same file serves both. The per-machine subject routes each trigger to exactly one executor — no tick-timing race, no machine-specific instruction landing on the wrong box:
 
 - body line 1 → the name of a saved instruction; lines 3+ → the new prompt core
 - the instruction's text between its **two** `*****` marker lines is rewritten (header and footer preserved; atomic temp-file replace, MyAgent-identical JSON formatting); fewer than two markers poison-pills the trigger instead of mangling the instruction
