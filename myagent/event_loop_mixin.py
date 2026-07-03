@@ -21,6 +21,31 @@ class EventLoopMixin:
             self.chat_display.see(tk.END)
         self.chat_display.config(state="disabled")
 
+    def _ci_file_name(self, file_id, data):
+        """Filename for a non-image code-execution output: the provider's
+        stored filename when retrievable, else an extension sniffed from
+        the bytes (utf-8 → .txt, otherwise .bin)."""
+        name = ""
+        try:
+            if file_id and self.provider == "Anthropic" and getattr(self, "client", None):
+                meta = self.client.beta.files.retrieve_metadata(file_id)
+                name = getattr(meta, "filename", "") or ""
+            elif file_id and getattr(self, "openai_client", None):
+                meta = self.openai_client.files.retrieve(file_id)
+                name = getattr(meta, "filename", "") or ""
+        except Exception:
+            name = ""
+        if name:
+            name = os.path.basename(name.replace("\\", "/"))
+            name = "".join("_" if c in '<>:"/|?*' else c for c in name)
+        if not name:
+            try:
+                data.decode("utf-8")
+                name = "output.txt"
+            except Exception:
+                name = "output.bin"
+        return name
+
     def check_queue(self):
         try:
             while True:
@@ -72,7 +97,9 @@ class EventLoopMixin:
                     # Code interpreter code — display as a single readable block
                     self._chat_insert((msg["content"] + "\n", "tool_info"))
                 elif msg["type"] == "ci_image":
-                    # Code interpreter image — decode/download, display inline, and save
+                    # Code interpreter file output — decode/download, display
+                    # inline if it's an image, else save it under its real name
+                    # (code execution exports .txt/.csv/etc. too, not just images)
                     try:
                         url = msg.get("url", "")
                         file_id = msg.get("file_id", "")
@@ -94,37 +121,48 @@ class EventLoopMixin:
                             content = self.openai_client.files.content(file_id)
                             img_data = content.read()
                         if img_data:
-                            # Save to saved_chats dir
+                            pil_img = None
+                            if Image is not None:
+                                try:
+                                    pil_img = Image.open(io.BytesIO(img_data))
+                                    pil_img.load()  # a valid header can still hide a truncated body
+                                except Exception:
+                                    pil_img = None
                             os.makedirs("saved_chats", exist_ok=True)
                             ts = time.strftime("%Y%m%d_%H%M%S")
-                            img_path = os.path.join("saved_chats", f"ci_output_{ts}.png")
-                            with open(img_path, "wb") as f:
-                                f.write(img_data)
-                            # Display inline in chat
-                            pil_img = Image.open(io.BytesIO(img_data))
-                            # Scale to fit chat display width (max ~600px)
-                            max_w = 600
-                            if pil_img.width > max_w:
-                                ratio = max_w / pil_img.width
-                                pil_img = pil_img.resize(
-                                    (max_w, int(pil_img.height * ratio)),
-                                    Image.LANCZOS,
-                                )
-                            tk_img = ImageTk.PhotoImage(pil_img)
-                            # Keep reference to prevent garbage collection
-                            if not hasattr(self, '_ci_images'):
-                                self._ci_images = []
-                            self._ci_images.append(tk_img)
-                            self.chat_display.config(state="normal")
-                            self._ensure_newline()
-                            self.chat_display.image_create(tk.END, image=tk_img)
-                            self.chat_display.insert(tk.END, f"\n[Saved: {img_path}]\n", "tool_info")
-                            self.chat_display.see(tk.END)
-                            self.chat_display.config(state="disabled")
+                            if pil_img is not None:
+                                img_path = os.path.join("saved_chats", f"ci_output_{ts}.png")
+                                with open(img_path, "wb") as f:
+                                    f.write(img_data)
+                                # Scale to fit chat display width (max ~600px)
+                                max_w = 600
+                                if pil_img.width > max_w:
+                                    ratio = max_w / pil_img.width
+                                    pil_img = pil_img.resize(
+                                        (max_w, int(pil_img.height * ratio)),
+                                        Image.LANCZOS,
+                                    )
+                                tk_img = ImageTk.PhotoImage(pil_img)
+                                # Keep reference to prevent garbage collection
+                                if not hasattr(self, '_ci_images'):
+                                    self._ci_images = []
+                                self._ci_images.append(tk_img)
+                                self.chat_display.config(state="normal")
+                                self._ensure_newline()
+                                self.chat_display.image_create(tk.END, image=tk_img)
+                                self.chat_display.insert(tk.END, f"\n[Saved: {img_path}]\n", "tool_info")
+                                self.chat_display.see(tk.END)
+                                self.chat_display.config(state="disabled")
+                            else:
+                                fname = self._ci_file_name(file_id, img_data)
+                                file_path = os.path.join("saved_chats", f"ci_output_{ts}_{fname}")
+                                with open(file_path, "wb") as f:
+                                    f.write(img_data)
+                                self._chat_insert((f"[File saved: {file_path}]\n", "tool_info"))
                     except Exception as e:
                         self.chat_display.config(state="normal")
                         self._ensure_newline()
-                        self.chat_display.insert(tk.END, f"[Code interpreter image error: {e}]\n", "error")
+                        self.chat_display.insert(tk.END, f"[Code interpreter file error: {e}]\n", "error")
                         self.chat_display.see(tk.END)
                         self.chat_display.config(state="disabled")
                 elif msg["type"] == "tool_info" and not self.show_activity.get():

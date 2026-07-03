@@ -103,7 +103,7 @@ class AnthropicMixin:
                     except Exception:
                         # Stream may be incomplete — synthesize a stop result
                         return "end_turn", [{"type": "text", "text": full_text}], full_text, had_thinking, label_emitted, None
-                # Extract code execution images from final message
+                # Extract code execution file outputs from final message
                 # (file IDs are only available after streaming completes)
                 for block in final_message.content:
                     if getattr(block, "type", None) in ("code_execution_tool_result",
