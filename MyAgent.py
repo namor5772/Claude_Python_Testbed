@@ -36,7 +36,8 @@ import urllib.request
 
 from myagent.constants import (
     DEFAULT_GEOMETRY, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
-    OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
+    OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL,
+    XAI_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL,
     OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA, _HAS_MCP, AGENT_STATE_FILE, _BASE_DIR,
 )
 from myagent.ui_mixin import UIMixin
@@ -47,6 +48,7 @@ from myagent.streaming_mixin import StreamingMixin
 from myagent.anthropic_mixin import AnthropicMixin
 from myagent.openai_mixin import OpenAIMixin
 from myagent.gemini_mixin import GeminiMixin
+from myagent.xai_mixin import XAIMixin
 from myagent.ollama_mixin import OllamaMixin
 from myagent.mcp_mixin import MCPMixin
 from myagent.gmail_mixin import GmailMixin
@@ -67,9 +69,9 @@ if _HAS_OLLAMA:
 
 class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
-          OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin,
-          DocumentMixin, DesktopMixin, BrowserMixin, SafetyMixin,
-          ChatMixin, EventLoopMixin):
+          XAIMixin, OllamaMixin, MCPMixin, GmailMixin, ProtonMailMixin,
+          OutlookMixin, DocumentMixin, DesktopMixin, BrowserMixin,
+          SafetyMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False):
         self.root = root
@@ -81,6 +83,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self._has_openai = bool(os.environ.get("OPENAI_API_KEY"))
         self._has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        self._has_xai = bool(os.environ.get("XAI_API_KEY"))
         # Ollama needs no API key — availability = local server responds on the
         # base URL. A quick HEAD on /api/tags with a short timeout catches the
         # common "Ollama not running" case without blocking UI init if the user
@@ -93,11 +96,12 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
                     self._has_ollama = True
             except Exception:
                 self._has_ollama = False
-        if not (self._has_anthropic or self._has_openai or self._has_gemini or self._has_ollama):
+        if not (self._has_anthropic or self._has_openai or self._has_gemini
+                or self._has_xai or self._has_ollama):
             messagebox.showerror(
                 "API Key Missing",
-                "Please set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, or "
-                "GEMINI_API_KEY — or start a local Ollama server.",
+                "Please set at least one of ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+                "GEMINI_API_KEY, or XAI_API_KEY — or start a local Ollama server.",
             )
             self.root.destroy()
             return
@@ -121,6 +125,12 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             api_key=gemini_key,
             http_options={"timeout": 120_000},  # 120s read timeout to prevent hung streams
         ) if self._has_gemini else None
+        # xAI is OpenAI-compatible — same SDK, different base URL and key.
+        self.xai_client = openai.OpenAI(
+            api_key=os.environ.get("XAI_API_KEY"),
+            base_url=XAI_DEFAULT_BASE_URL,
+            timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
+        ) if self._has_xai else None
         # 300s read timeout (max silent gap between stream chunks): tolerates a
         # cold model load, but a request stuck in Ollama's queue behind a wedged
         # instance raises instead of blocking forever (default is no timeout).
@@ -134,10 +144,13 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             self.provider = "OpenAI"
         elif self._has_gemini:
             self.provider = "Gemini"
+        elif self._has_xai:
+            self.provider = "xAI"
         else:
             self.provider = "Ollama"
         self._openai_model_display_names = {}
         self._gemini_model_display_names = {}
+        self._xai_model_display_names = {}
         self._ollama_model_display_names = {}
         self._model_display_names = {}
         # Per-model cache of OpenAI server-side tools that the model rejected
@@ -209,6 +222,8 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             self.model = OPENAI_DEFAULT_MODEL
         elif self.provider == "Gemini":
             self.model = GEMINI_DEFAULT_MODEL
+        elif self.provider == "xAI":
+            self.model = XAI_DEFAULT_MODEL
         else:
             self.model = OLLAMA_DEFAULT_MODEL
         self.temperature = 1.0

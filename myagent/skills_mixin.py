@@ -202,6 +202,8 @@ class SkillsMixin:
             return self._openai_model_display_names.get(model_id, model_id)
         if self.provider == "Gemini":
             return self._gemini_model_display_names.get(model_id, model_id)
+        if self.provider == "xAI":
+            return getattr(self, "_xai_model_display_names", {}).get(model_id, model_id)
         if self.provider == "Ollama":
             return getattr(self, "_ollama_model_display_names", {}).get(model_id, model_id)
         return self._model_display_names.get(model_id, model_id)

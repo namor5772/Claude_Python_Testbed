@@ -298,7 +298,7 @@ META_TOOLS = [
                 },
                 "provider": {
                     "type": "string",
-                    "enum": ["Anthropic", "OpenAI", "Gemini", "Ollama"],
+                    "enum": ["Anthropic", "OpenAI", "Gemini", "xAI", "Ollama"],
                     "description": "API provider (optional for update; create inherits current)",
                 },
                 "model": {
@@ -1104,6 +1104,37 @@ OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss")
 OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
                           "llava", "llama3.2-vision", "bakllava",
                           "moondream", "minicpm-v", "granite3.2-vision")
+# ── xAI (Grok) ────────────────────────────────────────────────────────────────
+# Reached with the openai SDK pointed at XAI_DEFAULT_BASE_URL (the API is
+# OpenAI-compatible; the primary surface is the Responses endpoint, same
+# input/tool shapes as OpenAI's — so xAI reuses _messages_to_responses /
+# _tools_to_responses). Requires XAI_API_KEY. Catalog, capabilities and
+# reasoning matrix verified against docs.x.ai 2026-07.
+XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1"
+XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.20-0309-reasoning",
+                       "grok-4.20-0309-non-reasoning",
+                       "grok-4.20-multi-agent-0309", "grok-build-0.1"]
+XAI_DEFAULT_MODEL = XAI_FALLBACK_MODELS[0]
+# models.list() entries that can't serve the agentic loop (image/video
+# generation, embeddings, TTS) — dropped by substring in _fetch_xai_models.
+XAI_NON_AGENTIC_SUBSTRINGS = ("-image", "imagine", "embed", "-video", "-tts")
+# reasoning_effort support by model family (longest prefix wins; families
+# absent here have no client-side knob and are sent no reasoning param).
+# grok-4.3: none/low/medium/high — low is the API default, "none" disables
+# reasoning. grok-4.20-multi-agent: the knob sets agent collaboration count
+# rather than depth — no "none". grok-3-mini (legacy): low/high only. The
+# pinned grok-4.20-*-reasoning / -non-reasoning variants and legacy
+# grok-4 / grok-3 / grok-2 have no knob at all.
+XAI_REASONING_EFFORT = {
+    "grok-4.20-multi-agent": ["low", "medium", "high", "xhigh"],
+    "grok-4.3": ["none", "low", "medium", "high"],
+    "grok-3-mini": ["low", "high"],
+}
+# Text-only Grok families (no image input) — the weak-desktop-combo warning
+# fires for these. Every current chat tier (grok-4.3 / grok-4.20) is
+# vision-capable; grok-build (code model) and the legacy grok-3 / grok-code
+# families are not.
+XAI_NON_VISION_PREFIXES = ("grok-build", "grok-code", "grok-3")
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document"}
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
@@ -2349,10 +2380,31 @@ GEMINI_PRICING = {
     "gemini-2.5-flash":    (0.30, 2.50),
     "gemini-2.5-pro":      (1.25, 10.00),
 }
+# xAI API pricing (USD per million tokens)
+# Each entry: (input_price, output_price) — reasoning tokens bill as output.
+# Current tiers verified against docs.x.ai 2026-07; the legacy families
+# (grok-4 / -fast, grok-3, grok-code, grok-2) are still returned by
+# /v1/models and keep their long-standing list prices.
+XAI_PRICING = {
+    # Current chat + code tiers
+    "grok-4.3":        (1.25, 2.50),
+    "grok-4.20":       (1.25, 2.50),   # covers all three 4.20 variants
+    "grok-build":      (1.00, 2.00),
+    # Legacy families (dotted and dashed 4.1-fast spellings both seen in the wild)
+    "grok-4-fast":     (0.20, 0.50),
+    "grok-4.1-fast":   (0.20, 0.50),
+    "grok-4-1-fast":   (0.20, 0.50),
+    "grok-4":          (3.00, 15.00),
+    "grok-3-mini":     (0.30, 0.50),
+    "grok-3":          (3.00, 15.00),
+    "grok-code-fast":  (0.20, 1.50),
+    "grok-2-vision":   (2.00, 10.00),
+    "grok-2":          (2.00, 10.00),
+}
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.
 OLLAMA_PRICING = {}
-PROVIDERS = ["Anthropic", "OpenAI", "Gemini", "Ollama"]
+PROVIDERS = ["Anthropic", "OpenAI", "Gemini", "xAI", "Ollama"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}

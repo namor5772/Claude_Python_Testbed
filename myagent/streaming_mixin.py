@@ -11,8 +11,8 @@ from myagent.constants import (
     GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
     _HAS_PROTONMAIL, _HAS_OUTLOOK,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
-    ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, OLLAMA_PRICING,
-    APICOST_LOG_FILE,
+    ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
+    OLLAMA_PRICING, APICOST_LOG_FILE,
 )
 from myagent.helpers import _ToolBlock
 
@@ -209,15 +209,18 @@ class StreamingMixin:
             if isinstance(content, list):
                 _truncate_images(content)
 
-        if self.provider == "OpenAI":
+        if self.provider in ("OpenAI", "xAI"):
+            # Both speak the Responses API format; xAI gets no server-side
+            # tools (see xai_mixin) while OpenAI appends its built-ins.
             system_prompt = self._build_system_prompt()
             tools = self._get_tools()
             responses_tools = self._tools_to_responses(tools) if tools else []
-            responses_tools.append({"type": "web_search_preview"})
-            # Code interpreter is gated off when desktop tools are enabled —
-            # see _stream_responses_call for the rationale.
-            if not (self.desktop_enabled.get() and _HAS_DESKTOP):
-                responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+            if self.provider == "OpenAI":
+                responses_tools.append({"type": "web_search_preview"})
+                # Code interpreter is gated off when desktop tools are enabled —
+                # see _stream_responses_call for the rationale.
+                if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+                    responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
             responses_input = self._messages_to_responses(display_msgs)
             # Truncate input_image data in Responses API input
             for item in responses_input:
@@ -241,13 +244,23 @@ class StreamingMixin:
                 "instructions": system_prompt,
                 "tools": responses_tools,
                 "store": False,
-                "include": ["code_interpreter_call.outputs"],
             }
-            is_reasoning = self._is_openai_reasoning_model()
-            if is_reasoning and self.thinking_enabled:
-                payload["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
-            elif not is_reasoning:
+            if self.provider == "OpenAI":
+                payload["include"] = ["code_interpreter_call.outputs"]
+                is_reasoning = self._is_openai_reasoning_model()
+                if is_reasoning and self.thinking_enabled:
+                    payload["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+                elif not is_reasoning:
+                    payload["temperature"] = self.temperature
+            else:
+                # xAI — mirror _stream_xai_call: temperature always, reasoning
+                # only for families with an effort knob.
                 payload["temperature"] = self.temperature
+                values = self._xai_reasoning_values()
+                if values:
+                    effort = (self.thinking_effort if self.thinking_effort in values
+                              else ("low" if "low" in values else values[0]))
+                    payload["reasoning"] = {"effort": effort, "summary": "auto"}
         else:
             tools = self._get_tools()
             if self.provider == "Anthropic":
@@ -695,6 +708,15 @@ class StreamingMixin:
                     "like close buttons. Consider switching to gemini-3.1-pro-preview "
                     "(or any gemini-3.x) for desktop work."
                 )
+        elif self.provider == "xAI":
+            # grok-build and the legacy grok-3 / grok-code families are
+            # text-only — they cannot see screenshots at all.
+            if not self._is_xai_vision_model():
+                return (
+                    f"{self.model} is a text-only model — it cannot see screenshots. "
+                    "Desktop/browser tools will not work with this model. "
+                    "Switch to grok-4.3 (or any grok-4.x chat tier) for desktop work."
+                )
         elif self.provider == "Ollama":
             # Text-only local models cannot see screenshots — Ollama accepts
             # image parts without error but non-vision models drop them.
@@ -715,6 +737,7 @@ class StreamingMixin:
         table = {"Anthropic": ANTHROPIC_PRICING,
                  "OpenAI": OPENAI_PRICING,
                  "Gemini": GEMINI_PRICING,
+                 "xAI": XAI_PRICING,
                  "Ollama": OLLAMA_PRICING}.get(provider)
         if not table:
             return None
@@ -816,6 +839,9 @@ class StreamingMixin:
                 elif self.provider == "Gemini":
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_gemini_call(messages, max_retries, label_emitted)
+                elif self.provider == "xAI":
+                    stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
+                        self._stream_xai_call(messages, max_retries, label_emitted)
                 elif self.provider == "Ollama":
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_ollama_call(messages, max_retries, label_emitted)
@@ -863,8 +889,8 @@ class StreamingMixin:
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})
 
-                    # Wrap dict-based blocks (OpenAI/Gemini/Ollama) in _ToolBlock for uniform attribute access
-                    if self.provider in ("OpenAI", "Gemini", "Ollama"):
+                    # Wrap dict-based blocks (OpenAI/Gemini/xAI/Ollama) in _ToolBlock for uniform attribute access
+                    if self.provider in ("OpenAI", "Gemini", "xAI", "Ollama"):
                         tool_blocks = [
                             _ToolBlock(b["name"], b["id"], b["input"])
                             for b in content_blocks if isinstance(b, dict) and b.get("type") == "tool_use"

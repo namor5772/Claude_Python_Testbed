@@ -5,7 +5,7 @@ from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
     ADAPTIVE_MODE_VALUES, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
-    GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
+    GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
 
 
@@ -241,6 +241,7 @@ class InstructionsMixin:
                                if (p == "Anthropic" and self._has_anthropic)
                                or (p == "OpenAI" and self._has_openai)
                                or (p == "Gemini" and self._has_gemini)
+                               or (p == "xAI" and self._has_xai)
                                or (p == "Ollama" and self._has_ollama)]
         self._provider_combo = ttk.Combobox(
             model_frame, textvariable=self._provider_var, state="readonly",
@@ -583,6 +584,9 @@ class InstructionsMixin:
         elif self._has_gemini:
             default_provider = "Gemini"
             default_model = GEMINI_DEFAULT_MODEL
+        elif self._has_xai:
+            default_provider = "xAI"
+            default_model = XAI_DEFAULT_MODEL
         else:
             default_provider = "Ollama"
             default_model = OLLAMA_DEFAULT_MODEL

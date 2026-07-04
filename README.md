@@ -7,7 +7,7 @@ The main residents:
 | App | One-liner |
 |---|---|
 | **SelfBot.py** | Full-featured Claude chatbot (Anthropic-only) that can also run as *two instances talking to each other* |
-| **MyAgent.py** + **myagent/** | Fire-and-forget autonomous task agent — Anthropic, OpenAI, Gemini, and Ollama (local) providers, ~82 built-in tools, MCP, native Gmail/IMAP/Outlook mail |
+| **MyAgent.py** + **myagent/** | Fire-and-forget autonomous task agent — Anthropic, OpenAI, Gemini, xAI (Grok), and Ollama (local) providers, ~82 built-in tools, MCP, native Gmail/IMAP/Outlook mail |
 | **Account_Activity_WBC.py** | Browser-automation utility that extracts Westpac bank transactions to HTML + CSV |
 | **CSVEditor.py** | Spreadsheet-style CSV editor with filtering, date sort, and dialect preservation |
 | **TodoList.py** | Todo manager with priorities, categories, due dates, and overdue highlighting |
@@ -52,6 +52,7 @@ pip install -r requirements.txt
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-proj-..."       # optional — MyAgent OpenAI provider
 export GEMINI_API_KEY="..."               # optional — MyAgent Gemini provider
+export XAI_API_KEY="xai-..."              # optional — MyAgent xAI (Grok) provider
 ```
 
 **macOS:**
@@ -143,7 +144,7 @@ python MyAgent.py -l "Weather_Agent3" --headless   # no main window, auto-closes
 
 ### Providers & model controls
 
-A **Provider** combobox switches between **Anthropic**, **OpenAI**, **Gemini**, and **Ollama**; only providers with a key (or a reachable Ollama server) appear. Model lists are fetched live per provider and filtered to what actually works (OpenAI: Responses-API families only; Gemini: generative, non-deprecated models). The internal message format stays Anthropic-style — translation to each API happens only at the boundary.
+A **Provider** combobox switches between **Anthropic**, **OpenAI**, **Gemini**, **xAI**, and **Ollama**; only providers with a key (or a reachable Ollama server) appear. Model lists are fetched live per provider and filtered to what actually works (OpenAI: Responses-API families only; Gemini: generative, non-deprecated models; xAI: grok chat/code tiers, image/video-gen dropped). The internal message format stays Anthropic-style — translation to each API happens only at the boundary. xAI rides on the OpenAI SDK pointed at `https://api.x.ai/v1` (its Responses API is OpenAI-compatible), so it reuses the same message/tool translators with its own streaming caller.
 
 The parameter widgets are **model-aware**: controls that a model rejects are *hidden, not just disabled*.
 
@@ -156,6 +157,9 @@ The parameter widgets are **model-aware**: controls that a model rejects are *hi
 | OpenAI o1/o3/o4, GPT-5.0 | Effort combobox (5.0 adds "minimal") | Hidden |
 | OpenAI `gpt-5.x-chat-*` "Instant" | None (non-reasoning) | Hidden (rejected by API); Verbosity combobox shown — all GPT-5 variants get Low/Medium/High `text.verbosity` |
 | Gemini 2.5 / 3.x | Effort: low (1K) / medium (8K) / high (24K) thinking budget | Always shown (API accepts both) |
+| xAI grok-4.3 | Reasoning combobox: None/Low/Medium/High (Low = API default) | Always shown (API accepts both) |
+| xAI grok-4.20-multi-agent | Reasoning combobox: Low/Medium/High/Xhigh (sets agent collaboration count) | Always shown |
+| xAI pinned `-reasoning`/`-non-reasoning`, legacy grok | None — behaviour baked into the model id | Shown |
 | Ollama thinking models (Qwen3, DeepSeek-R1, gpt-oss) | Boolean `think` checkbox | Shown |
 
 ### Ollama (local inference)
@@ -179,7 +183,7 @@ The repo also ships three **custom Modelfiles** (`Qwen25VL-tools.Modelfile`, `Ll
 Roughly **82 built-in tools in eight families**, plus dynamic MCP tools and the on-demand `get_skill`:
 
 - **Core (always on):** `run_powershell`/`run_shell`, `csv_search`, `read_document` (PDF via pypdf, DOCX via python-docx, HTML, plain text — with page ranges, encrypted-PDF detection, per-page error isolation), `user_prompt` (the *only* way the agent can ask you something mid-task; empty reply = stop the agent), and `web_search` + `fetch_webpage` for providers without server-side search.
-- **Server-side (replaces local search):** OpenAI gets `web_search_preview` + `code_interpreter`; Anthropic gets `web_search` + `code_execution` betas with Files-API downloads. Generated charts render inline (max 600 px) and save to `saved_chats/`. Gemini/Ollama keep local DuckDuckGo (Gemini's API can't mix built-in tools with custom function declarations).
+- **Server-side (replaces local search):** OpenAI gets `web_search_preview` + `code_interpreter`; Anthropic gets `web_search` + `code_execution` betas with Files-API downloads. Generated charts render inline (max 600 px) and save to `saved_chats/`. Gemini/xAI/Ollama keep local DuckDuckGo (Gemini's API can't mix built-in tools with custom function declarations; xAI's mixing rules for its `web_search`/`x_search` built-ins are undocumented, so the custom-function loop stays safe with local tools).
 - **Desktop (checkbox):** 13 pyautogui tools + the **Gemini-only `find_element`**, which uses Gemini's trained pointing API (with Google's exact documented prompt phrasing — the capability only fires on that wording) to turn "the blue Save button" into pixel coordinates.
 - **Browser (checkbox):** 11 Playwright/CDP tools. On macOS the auto-launch search order is Brave → Chrome → Edge, with a persistent debug profile so logins survive runs.
 - **Meta (checkbox):** `manage_instructions`, `manage_skills`, `run_instruction` — the agent can manage its own instruction/skill libraries and spawn other instructions as fire-and-forget headless processes (orchestrator pattern).
@@ -195,7 +199,7 @@ Saved task profiles in `agent_instructions.json` (tracked in git so the library 
 
 ### MCP Integration
 
-A generic Model Context Protocol client (`myagent/mcp_mixin.py`) connects to stdio MCP servers (filesystem, GitHub, Slack, …) and pipes their tools through the same loop as native tools, on **all four providers**.
+A generic Model Context Protocol client (`myagent/mcp_mixin.py`) connects to stdio MCP servers (filesystem, GitHub, Slack, …) and pipes their tools through the same loop as native tools, on **all five providers**.
 
 ```bash
 pip install mcp            # + pywin32 on Windows
@@ -293,7 +297,7 @@ Live cost accounting across Anthropic / OpenAI / Gemini: each streamed call's us
 | `ui_mixin` / `state_mixin` / `event_loop_mixin` | Widget construction, instance locks + geometry persistence, queue polling |
 | `instructions_mixin` / `skills_mixin` | Instruction CRUD + editor, skills CRUD + system-prompt assembly |
 | `streaming_mixin` | The agentic loop, tool dispatch, pricing lookup, message translation |
-| `anthropic_mixin` / `openai_mixin` / `gemini_mixin` / `ollama_mixin` | One streaming caller per provider |
+| `anthropic_mixin` / `openai_mixin` / `gemini_mixin` / `xai_mixin` / `ollama_mixin` | One streaming caller per provider |
 | `mcp_mixin` | Async MCP client on a background event loop |
 | `gmail_mixin` / `protonmail_mixin` / `outlook_mixin` | The three 16-tool mail families |
 | `document_mixin` / `desktop_mixin` / `browser_mixin` | read_document, pyautogui tools + coordinate pipeline, Playwright tools |

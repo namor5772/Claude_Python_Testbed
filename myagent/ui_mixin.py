@@ -2,7 +2,8 @@ import tkinter as tk
 
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
-    GEMINI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS,
+    GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
+    ADAPTIVE_THINKING_MODELS,
     ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
@@ -205,6 +206,8 @@ class UIMixin:
             default = OPENAI_DEFAULT_MODEL
         elif new_provider == "Gemini":
             default = GEMINI_DEFAULT_MODEL
+        elif new_provider == "xAI":
+            default = XAI_DEFAULT_MODEL
         elif new_provider == "Ollama":
             default = OLLAMA_DEFAULT_MODEL
         else:
@@ -278,6 +281,23 @@ class UIMixin:
                 # Show verbosity after mode combo
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
+            elif support == "extended" and self.provider == "xAI":
+                # Grok models with a reasoning_effort knob (grok-4.3:
+                # None/Low/Medium/High; grok-4.20-multi-agent: Low..Xhigh —
+                # the knob is agent collaboration count there). Unlike OpenAI,
+                # xAI accepts temperature alongside reasoning, so
+                # _on_thinking_mode_changed packs the temp widgets after the combo.
+                self._thinking_mode_label.config(text="Reasoning")
+                self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+                values = [v.capitalize() for v in self._xai_reasoning_values()]
+                self._thinking_mode_combo["values"] = values
+                current = self._thinking_mode_var.get()
+                if current not in values:
+                    # Default to Low — xAI's documented default effort for
+                    # grok-4.3, and the floor where "None" doesn't exist.
+                    self._thinking_mode_var.set("Low" if "Low" in values else values[0])
+                self._on_thinking_mode_changed()
             elif support is not None:
                 # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength.
                 # Ollama is an exception — its `think` flag is boolean-only today,
@@ -342,6 +362,12 @@ class UIMixin:
             return None
         if self.provider == "Gemini":
             return "adaptive" if self._is_gemini_thinking_model(mid) else None
+        if self.provider == "xAI":
+            # Grok families with a reasoning_effort knob get the OpenAI-style
+            # "extended" mode combobox; the rest (pinned -reasoning /
+            # -non-reasoning variants, legacy grok-4 / grok-2) have no
+            # client-side knob — reasoning behaviour is baked into the id.
+            return "extended" if self._xai_reasoning_values(mid) else None
         if self.provider == "Ollama":
             # Qwen3 / DeepSeek-R1 / gpt-oss get the manual checkbox+strength UI.
             # Strength is display-only for now — Ollama's `think` flag is
@@ -525,6 +551,7 @@ class UIMixin:
             can_switch = (saved_provider == "Anthropic" and self._has_anthropic) or \
                          (saved_provider == "OpenAI" and self._has_openai) or \
                          (saved_provider == "Gemini" and self._has_gemini) or \
+                         (saved_provider == "xAI" and self._has_xai) or \
                          (saved_provider == "Ollama" and self._has_ollama)
             if can_switch:
                 self.provider = saved_provider
@@ -675,7 +702,11 @@ class UIMixin:
         #  so packing here places them directly after the mode combo)
         if self._has_model_widgets():
             show_temp = False
-            if mode in ("off", "none"):
+            if self.provider == "xAI":
+                # xAI accepts temperature alongside reasoning (Gemini-style);
+                # _stream_xai_call drops it reactively if a model refuses.
+                show_temp = True
+            elif mode in ("off", "none"):
                 if self.provider == "Anthropic" and self._anthropic_rejects_temperature():
                     show_temp = False  # Opus 4.7+ removed temperature (400 if sent)
                 elif self.provider != "OpenAI" or not self._is_gpt5_family():
@@ -719,6 +750,10 @@ class UIMixin:
                 parts.append(f"verbosity={self.text_verbosity}")
             if mode in ("", "none") and self._gpt5_supports_temp_at_none():
                 parts.append(f"temp={self.temperature:g}")
+        elif support == "extended" and self.provider == "xAI":
+            # Mirror _stream_xai_call: reasoning knob + temperature always sent.
+            parts.append(f"reasoning={mode.capitalize() or 'Low'}")
+            parts.append(f"temp={self.temperature:g}")
         elif support is not None:
             if self.thinking_enabled:
                 if self.provider == "Ollama":

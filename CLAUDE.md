@@ -46,9 +46,9 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~4100 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
-- `MyAgent.py` — Entry point (~170 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, and Gemini providers, supports `-l` argument for command-line auto-launch of saved instructions
+- `MyAgent.py` — Entry point (~180 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, Gemini, and xAI providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
-  - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING), file paths
+  - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING), file paths
   - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock
   - `ui_mixin.py` — setup_ui(), model/provider/thinking widget handlers
   - `state_mixin.py` — Instance management, display geometry, state persistence
@@ -58,6 +58,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
   - `anthropic_mixin.py` — _stream_anthropic_call
   - `openai_mixin.py` — OpenAI helpers, _stream_responses, _stream_responses_call
   - `gemini_mixin.py` — Gemini helpers, _tools_to_gemini, _messages_to_gemini, _stream_gemini_call
+  - `xai_mixin.py` — xAI (Grok) provider via the OpenAI SDK against https://api.x.ai/v1 (Responses API), _stream_xai_call, reasoning-effort matrix, model fetch
   - `ollama_mixin.py` — Ollama local-inference provider, per-model capability auto-detection
   - `mcp_mixin.py` — Model Context Protocol client (async stdio servers from `mcp_servers.json`)
   - `gmail_mixin.py` — Native multi-account Gmail tools (Google API client, per-account OAuth)
@@ -106,5 +107,5 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
 - SelfBot uses single-file architecture: all changes go in `SelfBot.py`
-- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 19 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 20 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
 - Bank extractor changes go in `Account_Activity_WBC.py`

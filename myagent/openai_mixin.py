@@ -204,6 +204,8 @@ class OpenAIMixin:
             return self._fetch_openai_models()
         if self.provider == "Gemini":
             return self._fetch_gemini_models()
+        if self.provider == "xAI":
+            return self._fetch_xai_models()
         if self.provider == "Ollama":
             return self._fetch_ollama_models()
         return self._fetch_available_models()
