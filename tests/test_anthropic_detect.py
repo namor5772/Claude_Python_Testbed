@@ -1,10 +1,14 @@
 """Characterization test: UIMixin Anthropic model-detection helpers.
 
-These are the methods Phase 1 will refactor (the four version-parsers
-_is_anthropic_adaptive_model / _anthropic_rejects_temperature /
-_anthropic_supports_max_effort / _anthropic_supports_xhigh_effort, plus the
-composed _anthropic_mode_values and _is_anthropic_always_on_thinking).
-Every expected value is an ACTUAL captured output from current code."""
+Covers the version-parsers (_is_anthropic_adaptive_model /
+_anthropic_rejects_temperature / _anthropic_supports_max_effort /
+_anthropic_supports_xhigh_effort / _anthropic_thinking_on_by_default), plus
+the composed _anthropic_mode_values and _is_anthropic_always_on_thinking.
+Expected values reflect the LIVE Models API capability tree (verified
+2026-07): Sonnet 5 is adaptive-only with xhigh+max effort, rejects
+temperature, and runs adaptive thinking when the param is omitted; Sonnet
+4.6 supports max (an older revision capped Sonnet at High — stale); minor-
+less Claude 5 ids parse as (major, 0)."""
 import unittest
 
 from tests._util import stub
@@ -24,16 +28,32 @@ EXPECTED = {
                                    ["Off", "Adaptive", "Low", "Medium", "High", "Max"]),
     "claude-opus-4-5":            (False, False, False, False, False,
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
-    "claude-sonnet-4-6":          (False, False, False, False, True,
-                                   ["Off", "Adaptive", "Low", "Medium", "High"]),
-    "claude-sonnet-4-6-20260101": (False, False, False, False, True,
-                                   ["Off", "Adaptive", "Low", "Medium", "High"]),
+    "claude-sonnet-5":            (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-sonnet-5-20260601":   (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-sonnet-4-6":          (False, False, True,  False, True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Max"]),
+    "claude-sonnet-4-6-20260101": (False, False, True,  False, True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Max"]),
     "claude-sonnet-4-5":          (False, False, False, False, False,
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
     "claude-haiku-4-5":           (False, False, False, False, False,
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
     "claude-opus-3":              (False, False, False, False, False,
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
+}
+
+# model -> omitting the thinking param runs adaptive (True) vs thinking-off
+THINKING_DEFAULT_ON = {
+    "claude-fable-5": True,
+    "claude-mythos-5": True,
+    "claude-sonnet-5": True,
+    "claude-sonnet-5-20260601": True,
+    "claude-sonnet-4-6": False,
+    "claude-sonnet-4-5": False,
+    "claude-opus-4-8": False,
+    "claude-haiku-4-5": False,
 }
 
 
@@ -51,6 +71,11 @@ class TestAnthropicDetect(unittest.TestCase):
                 self.assertEqual(self.u._anthropic_supports_xhigh_effort(model), xh)
                 self.assertEqual(self.u._is_anthropic_adaptive_model(model), adp)
                 self.assertEqual(self.u._anthropic_mode_values(model), modes)
+
+    def test_thinking_on_by_default(self):
+        for model, expected in THINKING_DEFAULT_ON.items():
+            with self.subTest(model=model):
+                self.assertEqual(self.u._anthropic_thinking_on_by_default(model), expected)
 
     def test_adaptive_requires_anthropic_provider(self):
         # _is_anthropic_adaptive_model returns False unless self.provider == "Anthropic"

@@ -370,62 +370,98 @@ class UIMixin:
         mid = model_id or self.model or ""
         return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
 
+    def _anthropic_thinking_on_by_default(self, model_id=None):
+        """True for Anthropic models that run ADAPTIVE thinking when the
+        `thinking` parameter is omitted — Sonnet 5+ (a silent change from
+        Sonnet 4.6, which ran thinking-off on omission) and the always-on
+        Mythos class. For these, "Off" must be sent as an explicit
+        thinking={"type": "disabled"} or the model silently thinks (and
+        bills thinking tokens) against the non-thinking max_tokens cap.
+        The always-on models never reach the off branch (their disable is
+        HTTP 400 and the UI drops "Off"), so in practice this steers the
+        Sonnet 5 family."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        if self._is_anthropic_always_on_thinking(mid):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        return version is not None and version >= (5, 0)
+
     @staticmethod
     def _parse_claude_major_minor(mid, families):
         """Parse the (major, minor) version tuple from a
-        claude-<family>-<major>-<minor> model id, for the first family prefix in
-        ``families`` that ``mid`` starts with. Returns None if no family matches
-        or major/minor aren't both integers. Shared by the Anthropic capability
-        helpers below, which each apply their own (major, minor) threshold."""
+        claude-<family>-<major>[-<minor>] model id, for the first family prefix
+        in ``families`` that ``mid`` starts with. Returns None if no family
+        matches or the major isn't an integer. A missing or non-numeric minor
+        parses as 0 — the Claude 5 generation dropped the minor from its ids
+        (claude-sonnet-5 → (5, 0)), and dated snapshots keep working because
+        the date lands in the minor slot ((5, 20260601) ≥ (5, 0)). Shared by
+        the Anthropic capability helpers below, which each apply their own
+        (major, minor) threshold."""
         for family in families:
             if mid.startswith(family):
                 parts = mid[len(family):].split("-")
                 try:
-                    return (int(parts[0]), int(parts[1]))
+                    major = int(parts[0])
                 except (ValueError, IndexError):
                     return None
+                try:
+                    minor = int(parts[1]) if len(parts) > 1 else 0
+                except ValueError:
+                    minor = 0
+                return (major, minor)
         return None
 
     def _anthropic_rejects_temperature(self, model_id=None):
         """True for Anthropic models that removed sampling params (temperature/
-        top_p/top_k) — Opus 4.7+ and the Claude 5 family (Fable/Mythos) return
-        HTTP 400 if temperature is sent. Parses claude-opus-<major>-<minor> >=
-        (4, 7) so future Opus releases are covered without a hardcoded list; the
-        reactive cache in _stream_anthropic_call backstops anything this misses."""
+        top_p/top_k) — Opus 4.7+, Sonnet 5+, and the Claude 5 Mythos class
+        (Fable/Mythos) return HTTP 400 if a non-default temperature is sent.
+        Version-parsed per family so future releases are covered without a
+        hardcoded list; the reactive cache in _stream_anthropic_call backstops
+        anything this misses."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-",))
-        return version is not None and version >= (4, 7)
+        if version is not None and version >= (4, 7):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        return version is not None and version >= (5, 0)
 
     def _anthropic_supports_max_effort(self, model_id=None):
-        """True for Anthropic models that expose the 'max' thinking effort — Opus
-        4.6 and later, plus the Claude 5 family (Fable/Mythos). Parses
-        claude-opus-<major>-<minor> >= (4, 6) so future Opus releases keep "Max"
-        without editing a hardcoded list (mirrors _anthropic_rejects_temperature).
-        Otherwise Opus-only: adaptive Sonnet (4.6+) deliberately caps at High,
-        and the API 400s on effort='max' for non-Opus."""
+        """True for Anthropic models that expose the 'max' thinking effort —
+        Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5), and the Claude 5 Mythos class
+        (Fable/Mythos). Version-parsed per family so future releases keep "Max"
+        without editing a hardcoded list. (An older revision capped Sonnet at
+        High claiming the API 400s effort='max' for non-Opus — stale: the
+        Models API capability tree reports max=True for claude-sonnet-4-6 and
+        claude-sonnet-5, verified live 2026-07.)"""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
-        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (4, 6)
 
     def _anthropic_supports_xhigh_effort(self, model_id=None):
-        """True for Anthropic models that accept effort='xhigh' (between high and
-        max) — Opus 4.7 and later, plus the Claude 5 family (Fable/Mythos).
-        Same version-parsing pattern as the helpers above."""
+        """True for Anthropic models that accept effort='xhigh' (between high
+        and max) — Opus 4.7+, Sonnet 5+ (the first Sonnet tier with xhigh —
+        verified live 2026-07 via the Models API capability tree; Sonnet 4.6
+        reports xhigh=False), plus the Claude 5 Mythos class (Fable/Mythos)."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-",))
-        return version is not None and version >= (4, 7)
+        if version is not None and version >= (4, 7):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        return version is not None and version >= (5, 0)
 
     def _anthropic_mode_values(self, model_id=None):
         """Thinking-mode combobox values for an Anthropic adaptive model.
@@ -460,10 +496,24 @@ class UIMixin:
         return version is not None and version >= (4, 6)
 
     def _is_gemini_thinking_model(self, model_id=None):
+        # No "lite" carve-out: the Flash-Lite tiers are thinking-capable too
+        # (verified live 2026-07 — see GEMINI_THINKING_PREFIXES).
         mid = model_id or self.model
-        if "lite" in mid:
-            return False
         return any(mid.startswith(p) for p in GEMINI_THINKING_PREFIXES)
+
+    def _gemini_uses_thinking_level(self, model_id=None):
+        """True for Gemini models that take ThinkingConfig.thinking_level
+        (Gemini 3+); False for 2.5, which still requires the legacy
+        thinking_budget — sending thinking_level to a 2.5 model is HTTP 400
+        "Thinking level is not supported for this model", while 3.x tolerates
+        either style (both verified live 2026-07). Non-versioned "-latest"
+        aliases float to 3.x+ models, so anything without a parsable version
+        defaults to True — as do unknown future generations."""
+        mid = model_id or self.model or ""
+        try:
+            return float(mid.split("-")[1]) >= 3
+        except (IndexError, ValueError):
+            return True
 
     def _restore_model_params(self, entry, state_file=False):
         """Restore provider, model, temperature, and thinking settings from an instruction entry or state file."""

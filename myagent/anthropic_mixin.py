@@ -45,10 +45,19 @@ class AnthropicMixin:
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
             api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-            # Opus 4.7+ and Fable/Mythos 5 removed temperature/top_p/top_k — sending
-            # temperature returns a 400. Skip it for those models (parsed by version)
-            # and for any model that rejected it earlier this session (reactive cache
-            # below).
+            # Sonnet 5+ runs ADAPTIVE thinking when the param is omitted (a
+            # silent change from 4.6-era models, which ran thinking-off on
+            # omission) — "Off" must be an explicit disable there, or the model
+            # silently thinks against the non-thinking max_tokens cap with the
+            # Show Thinking pane dark. Explicit disabled is accepted on the
+            # whole 4.6+/5 Sonnet-Opus range; the always-on Fable/Mythos models
+            # (where it is HTTP 400) never reach this branch.
+            if self._anthropic_thinking_on_by_default():
+                api_kwargs["thinking"] = {"type": "disabled"}
+            # Opus 4.7+, Sonnet 5+, and Fable/Mythos 5 removed temperature/top_p/
+            # top_k — sending temperature returns a 400. Skip it for those models
+            # (parsed by version) and for any model that rejected it earlier this
+            # session (reactive cache below).
             if not self._anthropic_rejects_temperature() and self.model not in self._anthropic_no_temperature:
                 api_kwargs["temperature"] = self.temperature
 
@@ -163,10 +172,10 @@ class AnthropicMixin:
                     self.queue.put({"type": "error", "content":
                         f"⚠ Context window exceeded on {self.model}:\n  {detail}\n"
                         "  The conversation is now larger than this model can hold, so resending "
-                        "it cannot succeed. 200K-window models (Haiku 4.5, Sonnet 4.5) cannot run "
+                        "it cannot succeed. 200K-window models (Haiku 4.5, Opus 4.5) cannot run "
                         "very long tasks — switch this instruction to a 1M-context model "
-                        "(claude-sonnet-4-6 or claude-opus-4-8/4.7/4.6), or split the task into "
-                        "smaller parts.\n"})
+                        "(claude-sonnet-5, claude-sonnet-4-6, or claude-opus-4-8/4.7/4.6), or "
+                        "split the task into smaller parts.\n"})
                     return ("end_turn", [{"type": "text", "text": full_text}],
                             full_text, had_thinking, label_emitted, None)
                 raise

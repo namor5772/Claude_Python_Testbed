@@ -1011,10 +1011,10 @@ else:
 # ── Constants ─────────────��─────────────────────────────────────────────────
 
 FALLBACK_MODELS = [
-    "claude-sonnet-4-5-20250929",
-    "claude-fable-5",
     "claude-opus-4-8",
-    "claude-opus-4-6",
+    "claude-fable-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
@@ -1027,7 +1027,8 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-sonnet-20240229": 4096,
 }
 ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
-                            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
+                            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+                            "claude-sonnet-5", "claude-sonnet-4-6"}
 # Claude 5 Mythos-class models (Fable 5 / Mythos 5): thinking is ALWAYS ON.
 # The API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400 —
 # only omitting the param or {"type": "adaptive"} is accepted, and sampling
@@ -1045,24 +1046,41 @@ EFFORT_LEVELS = ["low", "medium", "high", "max"]
 # builds the real per-model list (drops "Off" for always-on models, gates Xhigh/Max).
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
-OPENAI_FALLBACK_MODELS = ["gpt-5", "gpt-5-mini", "gpt-4.1", "gpt-4.1-mini", "o4-mini"]
+OPENAI_FALLBACK_MODELS = ["gpt-5.4", "gpt-5.5", "gpt-5.4-mini", "gpt-4.1", "o4-mini"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
 OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 # Model families that support the Responses API (gpt-3.5, gpt-4 base/turbo do not)
 OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
                              "o1", "o3", "o4")
-GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro"]
+GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-pro-preview",
+                          "gemini-2.5-flash", "gemini-2.5-pro"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
-# Models that support thinking via ThinkingConfig (except any with "lite" in the
-# name — Flash-Lite has no thinking; the "lite" check in _is_gemini_thinking_model
-# drops those). The version-pinned prefixes cover dated/preview IDs like
-# gemini-3-pro-preview and gemini-3.5-flash. The floating "-latest" aliases that
-# models.list() returns (gemini-pro-latest → 3.x Pro, gemini-flash-latest → 3
-# Flash) carry the version AFTER the tier word, so no version-pinned prefix
-# matches them — list them explicitly so their thinking UI isn't hidden.
-# (gemini-flash-lite-latest is excluded by the "lite" check, as intended.)
-GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3",
-                            "gemini-pro-latest", "gemini-flash-latest")
+# Models that support thinking via ThinkingConfig. EVERY current Gemini text
+# tier is thinking-capable, including Flash-Lite (2.5-flash-lite ships thinking
+# off by default but accepts a budget; 3.1-flash-lite accepts thinking_level —
+# both verified live 2026-07), so there is no "lite" carve-out. The
+# version-pinned prefixes cover dated/preview IDs like gemini-3-pro-preview and
+# gemini-3.5-flash. The floating "-latest" aliases that models.list() returns
+# carry the version AFTER the tier word (gemini-pro-latest, not gemini-3.1-pro),
+# so no version-pinned prefix matches them — all three are listed explicitly so
+# their thinking UI isn't hidden. Whether the config ships as the legacy
+# thinking_budget (2.5) or thinking_level (3+) is decided per-model by
+# _gemini_uses_thinking_level.
+GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3", "gemini-pro-latest",
+                            "gemini-flash-latest", "gemini-flash-lite-latest")
+# models.list() entries that can't serve MyAgent's agentic loop (text chat +
+# custom function declarations on generateContent), dropped by substring in
+# _fetch_gemini_models. Groups: wrong output modality (TTS, image generation —
+# the gemini-*-image / Nano Banana lines, lyria music, veo video, omni AV,
+# bidi-only live/audio); different API surface (deep-research and antigravity
+# are managed agents on the Interactions API; computer-use needs its own
+# predefined tool protocol); no function calling (gemma open models); and
+# niche/legacy (robotics-er spatial models, embedding, imagen, aqa).
+GEMINI_NON_AGENTIC_SUBSTRINGS = (
+    "embedding", "imagen", "aqa", "bisheng", "text-", "-tts", "-image",
+    "nano-banana", "lyria", "veo", "-live", "-audio", "omni", "gemma",
+    "robotics", "computer-use", "deep-research", "antigravity",
+)
 # Ollama (local inference) — no API key needed; availability probed at startup.
 OLLAMA_FALLBACK_MODELS = ["qwen3:32b-q4_K_M"]
 OLLAMA_DEFAULT_MODEL = OLLAMA_FALLBACK_MODELS[0]
@@ -2226,6 +2244,10 @@ ANTHROPIC_PRICING = {
     "claude-opus-4-7":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-6":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-5":     (5.00, 25.00, 6.25, 0.50),
+    # Sonnet 5 launched at $3/$15 sticker with INTRO pricing $2/$10 through
+    # 2026-08-31 — the tracker mirrors what the API actually bills today, so
+    # flip this entry to (3.00, 15.00, 3.75, 0.30) from September 2026.
+    "claude-sonnet-5":     (2.00, 10.00, 2.50, 0.20),
     "claude-sonnet-4-6":   (3.00, 15.00, 3.75, 0.30),
     "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
     # Claude 4.0/4.1 family (original pricing)
@@ -2247,7 +2269,10 @@ ANTHROPIC_PRICING = {
 # Reasoning/thinking tokens are billed at output rate.
 # Prefix-matched longest-first, same as Anthropic.
 OPENAI_PRICING = {
-    # GPT-5.4 family  (input, output)
+    # GPT-5.5 family  (input, output)
+    "gpt-5.5-pro":         (30.00, 180.00),
+    "gpt-5.5":             (5.00, 30.00),
+    # GPT-5.4 family
     "gpt-5.4-pro":         (30.00, 180.00),
     "gpt-5.4-mini":        (0.75, 4.50),
     "gpt-5.4-nano":        (0.20, 1.25),
@@ -2302,12 +2327,16 @@ GEMINI_PRICING = {
     # Floating "-latest" aliases that models.list() returns. The version sits
     # AFTER the tier word (gemini-pro-latest, not gemini-3.1-pro), so none of the
     # version-pinned prefixes below match them — without explicit entries they
-    # get no cost line. Priced at the tier each alias currently resolves to;
-    # revisit when a new Gemini generation changes the underlying pricing.
-    "gemini-pro-latest":        (2.00, 12.00),  # -> Gemini 3.x Pro tier
-    "gemini-flash-latest":      (0.50, 3.00),   # -> Gemini 3 Flash tier
-    "gemini-flash-lite-latest": (0.25, 1.50),   # -> Gemini 3.1 Flash-Lite tier
-    # Gemini 3.1 family  (input, output per million tokens)
+    # get no cost line. Priced at the model each alias resolves to (verified
+    # live via response.model_version, 2026-07); revisit when the aliases move.
+    "gemini-pro-latest":        (2.00, 12.00),  # -> gemini-3.1-pro-preview
+    "gemini-flash-latest":      (1.50, 9.00),   # -> gemini-3.5-flash
+    "gemini-flash-lite-latest": (0.25, 1.50),   # -> gemini-3.1-flash-lite
+    # Gemini 3.5 family
+    "gemini-3.5-flash":    (1.50, 9.00),
+    # Gemini 3.1 family  (input, output per million tokens; 3.1-pro doubles
+    # input above 200k tokens — the table keeps the ≤200k tier, matching the
+    # 2.5-pro entry's convention)
     "gemini-3.1-flash-lite": (0.25, 1.50),
     "gemini-3.1-pro":      (2.00, 12.00),
     # Gemini 3 family

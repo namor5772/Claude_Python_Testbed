@@ -6,7 +6,7 @@ import time
 
 from google.genai import types as genai_types
 
-from myagent.constants import GEMINI_FALLBACK_MODELS
+from myagent.constants import GEMINI_FALLBACK_MODELS, GEMINI_NON_AGENTIC_SUBSTRINGS
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -32,6 +32,9 @@ class GeminiMixin:
     # JSON-Schema dialect markers ($schema/$id/$ref/$defs/definitions) and
     # pure-metadata fields (title/examples/default) plus the original
     # additionalProperties (kept here for one consolidated drop list).
+    # NB: these are dropped from SCHEMA dicts only — a `properties` map's keys
+    # are property names that may legitimately collide (find_window's "title")
+    # and are protected by _clean_schema_for_gemini's is_property_map guard.
     _GEMINI_SCHEMA_DROPS = frozenset({
         "$schema", "$id", "$ref", "$defs", "definitions",
         "title", "examples", "default",
@@ -71,7 +74,7 @@ class GeminiMixin:
                     })
         return declarations
 
-    def _clean_schema_for_gemini(self, schema):
+    def _clean_schema_for_gemini(self, schema, is_property_map=False):
         """Recursively drop JSON-Schema fields the google-genai Schema
         validator rejects, and normalize enum constraints.
 
@@ -86,8 +89,21 @@ class GeminiMixin:
            Gemini rejects them with "enum[i]: cannot be empty" — and an enum
            left empty afterwards is removed so the param degrades to a plain
            string instead of an impossible zero-choice constraint.
+
+        A ``properties`` dict is a map of property NAMES to sub-schemas — its
+        keys are user-chosen identifiers, not schema keywords, and they can
+        collide with the drop list: find_window/wait_for_window's required
+        "title" param, or an MCP tool's "title"/"default" argument. Dropping
+        those keys deletes the property while ``required`` still references
+        it, which Gemini rejects with 400 "required[0]: property is not
+        defined". So for a properties map only the VALUES are cleaned (each
+        one is a schema); key-dropping and enum handling are skipped.
         """
         if isinstance(schema, dict):
+            if is_property_map:
+                for v in schema.values():
+                    self._clean_schema_for_gemini(v)
+                return
             for k in self._GEMINI_SCHEMA_DROPS:
                 schema.pop(k, None)
             if "enum" in schema and isinstance(schema["enum"], list):
@@ -107,8 +123,8 @@ class GeminiMixin:
                         schema.pop("enum")
                 else:
                     schema.pop("enum")
-            for v in schema.values():
-                self._clean_schema_for_gemini(v)
+            for key, v in schema.items():
+                self._clean_schema_for_gemini(v, is_property_map=(key == "properties"))
         elif isinstance(schema, list):
             for item in schema:
                 self._clean_schema_for_gemini(item)
@@ -294,6 +310,37 @@ class GeminiMixin:
 
         return contents
 
+    def _gemini_thinking_config(self, style=None):
+        """Build the ThinkingConfig for the current model + effort.
+
+        Gemini 3+ takes thinking_level using the UI's exact strength values
+        (low/medium/high; a stale saved "max" coerces to high, "minimal" to
+        low); Gemini 2.5 still requires the legacy thinking_budget —
+        thinking_level is HTTP 400 there (verified live 2026-07).
+        gemini-3-pro-preview accepts only low|high, so medium coerces to high
+        for it. include_thoughts=True makes thought summaries stream so the
+        Show Thinking pane gets text — without it Gemini returns no thought
+        parts at all. ``style`` ("level"/"budget") overrides the version
+        rules — used by the reactive 400 fallback in _stream_gemini_call when
+        a model rejects the style the rules picked."""
+        if style is None:
+            style = "level" if self._gemini_uses_thinking_level() else "budget"
+        if style == "level":
+            level_map = {"minimal": "low", "low": "low", "medium": "medium",
+                         "high": "high", "max": "high"}
+            level = level_map.get(self.thinking_effort, "medium")
+            if self.model.startswith("gemini-3-pro") and level == "medium":
+                level = "high"
+            return genai_types.ThinkingConfig(
+                thinking_level=level, include_thoughts=True,
+            )
+        budget_map = {"minimal": 1024, "low": 1024, "medium": 8192,
+                      "high": 24576, "max": 32768}
+        return genai_types.ThinkingConfig(
+            thinking_budget=budget_map.get(self.thinking_effort, 8192),
+            include_thoughts=True,
+        )
+
     def _stream_gemini_call(self, messages, max_retries, label_emitted):
         """Execute one Gemini API call with streaming and retry logic.
         Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted)."""
@@ -308,11 +355,7 @@ class GeminiMixin:
             "temperature": self.temperature,
         }
         if self.thinking_enabled and self._is_gemini_thinking_model():
-            budget_map = {"minimal": 1024, "low": 1024, "medium": 8192, "high": 24576, "max": 32768}
-            budget = budget_map.get(self.thinking_effort, 8192)
-            config_kwargs["thinking_config"] = genai_types.ThinkingConfig(
-                thinking_budget=budget,
-            )
+            config_kwargs["thinking_config"] = self._gemini_thinking_config()
         if gemini_tools:
             config_kwargs["tools"] = gemini_tools
 
@@ -323,6 +366,7 @@ class GeminiMixin:
         thinking_text = ""  # accumulate thinking for message history
         tool_calls = []  # list of {name, id, input}
         usage_dict = None
+        thinking_style_swapped = False
 
         for attempt in range(max_retries):
             try:
@@ -431,6 +475,28 @@ class GeminiMixin:
                         "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
                     })
                     time.sleep(wait)
+                    full_text = ""
+                    thinking_text = ""
+                    tool_calls = []
+                elif ("thinking" in err_str.lower()
+                      and ("invalid_argument" in err_str.lower() or "400" in err_str)
+                      and not thinking_style_swapped
+                      and "thinking_config" in config_kwargs
+                      and attempt < max_retries - 1):
+                    # The model rejected the thinking style the version rules
+                    # picked (e.g. a future generation dropping the legacy
+                    # budget, or a -latest alias floating to a new family) —
+                    # retry once with the other style before giving up.
+                    thinking_style_swapped = True
+                    was_level = getattr(config_kwargs["thinking_config"],
+                                        "thinking_level", None) is not None
+                    new_style = "budget" if was_level else "level"
+                    config_kwargs["thinking_config"] = self._gemini_thinking_config(style=new_style)
+                    config = genai_types.GenerateContentConfig(**config_kwargs)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"⚠ Gemini rejected the thinking config — retrying with thinking_{new_style} (attempt {attempt + 1}/{max_retries})...\n",
+                    })
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []
@@ -566,7 +632,19 @@ class GeminiMixin:
             return f"find_element error: {e}"
 
     def _fetch_gemini_models(self):
-        """Fetch available Gemini generative models."""
+        """Fetch the Gemini models suitable for the agentic loop.
+
+        Two-stage filter over models.list(): require the generateContent
+        action (drops bidi-only live/audio models, embeddings, imagen, veo),
+        then drop by-name families that can't drive custom function calling —
+        specialized output modalities (TTS, image/music/video generation),
+        managed agents that live on the Interactions API (deep-research,
+        antigravity), the computer-use preview (needs its own tool protocol),
+        gemma open models (no function calling), robotics previews, and
+        shut-down generations (2.0/1.x, which the API still lists). What
+        remains: the pro / flash / flash-lite text tiers, their dated
+        previews and variants (e.g. -customtools), and the floating -latest
+        aliases."""
         if not self.gemini_client:
             return list(GEMINI_FALLBACK_MODELS)
         try:
@@ -576,11 +654,11 @@ class GeminiMixin:
                 # Strip "models/" prefix
                 if mid.startswith("models/"):
                     mid = mid[len("models/"):]
-                # Skip non-generative models
-                if any(skip in mid for skip in ("embedding", "imagen", "aqa",
-                                                "bisheng", "text-")):
+                actions = getattr(m, "supported_actions", None) or []
+                if actions and "generateContent" not in actions:
                     continue
-                # Skip deprecated models
+                if any(skip in mid for skip in GEMINI_NON_AGENTIC_SUBSTRINGS):
+                    continue
                 if mid.startswith(("gemini-2.0-", "gemini-1.")):
                     continue
                 model_ids.append(mid)

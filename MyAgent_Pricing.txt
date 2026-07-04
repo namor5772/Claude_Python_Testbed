@@ -33,8 +33,13 @@
   claude-opus-4-7        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-6        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-5        $5.00    $25.00   $6.25        $0.50
+  claude-sonnet-5        $2.00    $10.00   $2.50        $0.20
   claude-sonnet-4-6      $3.00    $15.00   $3.75        $0.30
   claude-sonnet-4-5      $3.00    $15.00   $3.75        $0.30
+
+  (claude-sonnet-5 is at its launch INTRO price — $2/$10 through 2026-08-31,
+   $3/$15 sticker afterwards. Flip the ANTHROPIC_PRICING entry and this row
+   from September 2026.)
 
   Claude 4.0/4.1 Family (Legacy — Higher Pricing)
   ──────────────────────────────────────────────────────────────────────────
@@ -67,7 +72,14 @@
   OpenAI reasoning/thinking tokens are billed at the output token rate.
   Server-side web search has an additional per-search charge (not tracked).
 
-  GPT-5.4 Family (Flagship)
+  GPT-5.5 Family (Flagship)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5.5-pro            $30.00   $180.00
+  gpt-5.5                $5.00    $30.00
+
+  GPT-5.4 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────
@@ -169,19 +181,27 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix               Input    Output   Resolves to
   ──────────────────────────────────────────────────────────────────────────
-  gemini-pro-latest          $2.00    $12.00   Gemini 3.x Pro tier
-  gemini-flash-latest        $0.50    $3.00    Gemini 3 Flash tier
-  gemini-flash-lite-latest   $0.25    $1.50    Gemini 3.1 Flash-Lite tier
+  gemini-pro-latest          $2.00    $12.00   gemini-3.1-pro-preview
+  gemini-flash-latest        $1.50    $9.00    gemini-3.5-flash
+  gemini-flash-lite-latest   $0.25    $1.50    gemini-3.1-flash-lite
 
   (These aliases float to whatever Google currently serves; the version sits
    after the tier word, so the version-pinned prefixes below don't match them.
-   Revisit when a new Gemini generation changes the underlying pricing.)
+   Resolution verified live via response.model_version, 2026-07 — revisit
+   when the aliases move to a new generation.)
+
+  Gemini 3.5 Family
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-3.5-flash       $1.50    $9.00
 
   Gemini 3.1 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────
-  gemini-3.1-pro         $2.00    $12.00
+  gemini-3.1-pro         $2.00    $12.00   (doubles above 200k input tokens;
+                                            table keeps the ≤200k tier)
   gemini-3.1-flash-lite  $0.25    $1.50
 
   Gemini 3 Family

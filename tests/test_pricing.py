@@ -23,11 +23,23 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-fable-5"): {
             "input": 1e-05, "output": 5e-05,
             "cache_write": 1.25e-05, "cache_read": 1e-06},
+        # Intro pricing through 2026-08-31 ($2/$10) — update alongside the
+        # constants.py entry when it flips to the $3/$15 sticker.
+        ("Anthropic", "claude-sonnet-5"): {
+            "input": 2e-06, "output": 1e-05,
+            "cache_write": 2.5e-06, "cache_read": 2.0000000000000002e-07},
         ("Anthropic", "totally-unknown-xyz"): None,
         ("OpenAI", "gpt-5.2"): {"input": 8.75e-07, "output": 7e-06},
         ("OpenAI", "gpt-4o"): {"input": 2.5e-06, "output": 1e-05},
+        # gpt-5.5 must NOT prefix-match down to the cheap bare "gpt-5" entry
+        ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05},
+        ("OpenAI", "gpt-5.5-pro"): {"input": 3e-05, "output": 0.00018},
         ("Gemini", "gemini-2.5-pro"): {"input": 1.25e-06, "output": 1e-05},
         ("Gemini", "gemini-3-pro"): {"input": 2e-06, "output": 1.2e-05},
+        # gemini-3.5-flash must NOT prefix-match down to the cheaper
+        # "gemini-3" fallback entry; the -latest alias resolves to it too.
+        ("Gemini", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06},
+        ("Gemini", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06},
         ("Ollama", "qwen3"): None,
         ("Bogus", "x"): None,
     }

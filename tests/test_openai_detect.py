@@ -16,6 +16,8 @@ EXPECTED = {
     "gpt-5.1":             (1, True,  True,  True,  False, False, False, True),
     "gpt-5.2":             (2, True,  True,  True,  True,  False, False, True),
     "gpt-5.4":             (4, True,  True,  True,  True,  True,  False, True),
+    "gpt-5.5":             (5, True,  True,  True,  True,  True,  False, True),
+    "gpt-5.5-pro":         (5, True,  True,  True,  True,  True,  False, True),
     "gpt-5.2-mini":        (2, True,  True,  True,  False, False, False, True),
     "gpt-5.1-nano":        (1, True,  True,  True,  False, False, False, True),
     "gpt-5.1-chat-latest": (1, False, False, False, False, False, True,  True),
