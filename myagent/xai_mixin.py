@@ -15,12 +15,18 @@ Deliberate differences from the OpenAI mixin:
    machine tuned to OpenAI's exact event sequences; raw events keep xAI's
    compatibility surface as small as possible. Usage is read from the
    ``response.completed`` event rather than ``get_final_response()``.
-2. **No server-side tools** — xAI offers ``web_search`` / ``x_search`` /
-   ``code_interpreter`` server tools, but whether they can be MIXED with
-   client-side function tools is not clearly documented (Gemini has exactly
-   this restriction). MyAgent's agentic loop is custom-function-first, so xAI
-   keeps the local DuckDuckGo ``web_search`` / ``fetch_webpage`` tools instead
-   (the Gemini pattern) and sends no built-ins.
+2. **Server-side tools, verified mixable** — live probes (2026-07-05) proved
+   xAI's ``web_search`` / ``x_search`` / ``code_interpreter`` built-ins mix
+   cleanly with client-side function tools in one request (the model routes
+   correctly with both present), so xAI follows the OpenAI pattern: the local
+   DuckDuckGo ``web_search`` / ``fetch_webpage`` tools are stripped in
+   ``_get_tools()`` and the built-ins are appended here. Each server-tool
+   invocation bills a flat $0.005 (folded into ``cost_in_usd_ticks``).
+   ``code_interpreter`` is gated off while desktop tools are on, mirroring
+   the OpenAI rationale (a CI-equipped model inspects screenshot bytes and
+   pre-scales coordinates, colliding with our scaling). A 400 naming a
+   server tool strips it and retries, so models that reject a built-in
+   degrade gracefully.
 3. **Reasoning knob per family** — ``XAI_REASONING_EFFORT`` maps model
    families to their accepted ``reasoning.effort`` values (grok-4.3:
    none/low/medium/high; grok-4.20-multi-agent: low..xhigh, where the knob is
@@ -46,6 +52,7 @@ from myagent.constants import (
     XAI_NON_AGENTIC_SUBSTRINGS,
     XAI_NON_VISION_PREFIXES,
     XAI_REASONING_EFFORT,
+    _HAS_DESKTOP,
 )
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
@@ -156,13 +163,24 @@ class XAIMixin:
                     if hasattr(self, "_xai_first_content"):
                         self._xai_first_content.set()
                     item = getattr(event, "item", None)
-                    if item and getattr(item, "type", None) == "function_call":
+                    itype = getattr(item, "type", None) if item else None
+                    if itype == "function_call":
                         idx = getattr(event, "output_index", len(tool_calls_acc))
                         tool_calls_acc[idx] = {
                             "call_id": item.call_id,
                             "name": item.name,
                             "arguments": "",
                         }
+                    # Server-side tool activity — executed on xAI's servers,
+                    # surfaced as an activity notice only. x_search arrives
+                    # as a generic custom_tool_call item (observed live).
+                    elif itype == "web_search_call":
+                        self._tool_info("Searching the web (xAI server-side)...\n")
+                    elif itype == "code_interpreter_call":
+                        self._tool_info("Running code interpreter (xAI server-side)...\n")
+                    elif itype == "custom_tool_call":
+                        name = getattr(item, "name", "") or "x_search"
+                        self._tool_info(f"Running xAI server-side tool ({name})...\n")
 
                 elif etype == "response.function_call_arguments.delta":
                     idx = getattr(event, "output_index", None)
@@ -181,6 +199,23 @@ class XAIMixin:
                             "input_tokens": getattr(usage, "input_tokens", 0) or 0,
                             "output_tokens": getattr(usage, "output_tokens", 0) or 0,
                         }
+                        # xAI extras (the SDK's pydantic models keep unknown
+                        # fields, so plain getattr works). cached_tokens are a
+                        # subset of input_tokens, billed at the $0.20/M cache
+                        # rate; cost_in_usd_ticks is the AUTHORITATIVE billed
+                        # cost (1 tick = $1e-10) including cache discounts and
+                        # the flat $0.005 per server-tool invocation —
+                        # stream_worker prefers it over the table estimate.
+                        details = getattr(usage, "input_tokens_details", None)
+                        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+                        if cached:
+                            usage_dict["cache_read_input_tokens"] = cached
+                        ticks = getattr(usage, "cost_in_usd_ticks", None)
+                        if isinstance(ticks, (int, float)) and ticks >= 0:
+                            usage_dict["cost_usd"] = ticks / 1e10
+                        server_calls = getattr(usage, "num_server_side_tools_used", 0) or 0
+                        if server_calls:
+                            usage_dict["server_tool_calls"] = server_calls
 
                 elif etype == "response.failed":
                     resp = getattr(event, "response", None)
@@ -227,6 +262,18 @@ class XAIMixin:
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
         responses_tools = self._tools_to_responses(tools) if tools else []
+        # xAI server-side built-ins — mixing with custom function tools
+        # verified live 2026-07-05 (correct routing with both present).
+        # Flat $0.005/invocation, already folded into cost_in_usd_ticks.
+        # _get_tools() strips the local web_search/fetch_webpage for xAI so
+        # search flows through these instead (the OpenAI pattern).
+        responses_tools.append({"type": "web_search"})
+        responses_tools.append({"type": "x_search"})
+        # Code interpreter is gated off when desktop tools are on — same
+        # rationale as OpenAI: a CI-equipped model loads screenshot bytes,
+        # sees resized dimensions, and pre-scales click coordinates.
+        if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+            responses_tools.append({"type": "code_interpreter"})
 
         api_kwargs = {
             "model": self.model,
@@ -293,6 +340,22 @@ class XAIMixin:
                         "content": "Model does not support temperature — retrying without it...\n",
                     })
                     continue
+                # A 400 naming a server-side built-in (e.g. a model that
+                # doesn't support code_interpreter) strips just that tool.
+                # Checked before the generic "reasoning" branch because tool
+                # names are more specific than that substring.
+                rejected = [t for t in ("web_search", "x_search", "code_interpreter")
+                            if t in err_str and any(
+                                d.get("type") == t for d in api_kwargs.get("tools", []))]
+                if rejected:
+                    api_kwargs["tools"] = [
+                        d for d in api_kwargs["tools"] if d.get("type") not in rejected]
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": (f"Model rejected server-side tool(s) "
+                                    f"{', '.join(rejected)} — retrying without...\n"),
+                    })
+                    continue
                 if "reasoning" in err_str.lower() and "reasoning" in api_kwargs:
                     r = api_kwargs["reasoning"]
                     if isinstance(r, dict) and "summary" in r:
@@ -348,4 +411,9 @@ class XAIMixin:
         self._xai_first_content.set()
         if stop_reason is None:
             raise RuntimeError("xAI call failed: retries exhausted without a successful response")
+        if usage_dict and usage_dict.get("server_tool_calls"):
+            n = usage_dict["server_tool_calls"]
+            self._tool_info(
+                f"xAI server-side tools used this call: {n} "
+                f"(flat $0.005 each, included in the cost line)\n")
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict

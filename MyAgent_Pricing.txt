@@ -251,8 +251,14 @@
   Notes:
   - The legacy families (grok-4 / -fast, grok-3, grok-2) are fully retired —
     /v1/models no longer serves them and the API rejects their ids.
-  - Cached input bills at $0.20/M (not tracked — MyAgent's 2-tuple treats
-    all input at full rate, a slight overestimate when caching kicks in).
+  - MyAgent's xAI cost line is EXACT: the API reports the billed cost per
+    call (usage.cost_in_usd_ticks, 1 tick = $1e-10) and stream_worker uses
+    it directly. It includes the cached-input discount ($0.20/M — xAI
+    caches aggressively) and server-side tool fees. The table above is the
+    fallback estimate only.
+  - Server-side tools (web_search, x_search, code_interpreter) bill a flat
+    $0.005 per invocation (derived live: reported cost minus token cost is
+    always a clean multiple of $0.005).
   - Input above 200K tokens bills at double rate (long-context tier); the
     table keeps the ≤200K tier, same convention as gemini-3.1-pro.
 

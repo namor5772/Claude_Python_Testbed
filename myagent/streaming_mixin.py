@@ -221,6 +221,12 @@ class StreamingMixin:
                 # see _stream_responses_call for the rationale.
                 if not (self.desktop_enabled.get() and _HAS_DESKTOP):
                     responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+            else:
+                # xAI — mirror _stream_xai_call's server-side built-ins
+                responses_tools.append({"type": "web_search"})
+                responses_tools.append({"type": "x_search"})
+                if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+                    responses_tools.append({"type": "code_interpreter"})
             responses_input = self._messages_to_responses(display_msgs)
             # Truncate input_image data in Responses API input
             for item in responses_input:
@@ -300,9 +306,11 @@ class StreamingMixin:
 
     def _get_tools(self):
         tools = copy.deepcopy(TOOLS)
-        # OpenAI/Anthropic use native server-side web search; exclude custom web tools
-        # (Gemini can't combine built-in tools with function calling, so it keeps local tools)
-        if self.provider in ("OpenAI", "Anthropic"):
+        # OpenAI/Anthropic/xAI use native server-side web search; exclude custom
+        # web tools (xAI mixing custom functions with built-ins verified live
+        # 2026-07-05). Gemini can't combine built-in tools with function
+        # calling, so it keeps local tools.
+        if self.provider in ("OpenAI", "Anthropic", "xAI"):
             tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
@@ -852,7 +860,14 @@ class StreamingMixin:
                 # Accumulate cost
                 if usage:
                     pricing = self._get_pricing(self.provider, self.model)
-                    if pricing:
+                    # xAI reports the authoritative billed cost per call
+                    # (cost_in_usd_ticks → cost_usd, set in _stream_xai_events).
+                    # Prefer it over the table estimate: it already includes
+                    # the cached-input discount ($0.20/M vs full input rate)
+                    # and the flat $0.005 per server-side tool invocation,
+                    # neither of which the 2-tuple estimate can see.
+                    authoritative_cost = usage.get("cost_usd")
+                    if pricing or authoritative_cost is not None:
                         call_input = usage.get("input_tokens", 0)
                         call_output = usage.get("output_tokens", 0)
                         call_cache_write = usage.get("cache_creation_input_tokens", 0)
@@ -861,10 +876,13 @@ class StreamingMixin:
                         total_output_tokens += call_output
                         total_cache_write_tokens += call_cache_write
                         total_cache_read_tokens += call_cache_read
-                        call_cost = (call_input * pricing["input"]
-                                     + call_output * pricing["output"]
-                                     + call_cache_write * pricing.get("cache_write", 0)
-                                     + call_cache_read * pricing.get("cache_read", 0))
+                        if authoritative_cost is not None:
+                            call_cost = authoritative_cost
+                        else:
+                            call_cost = (call_input * pricing["input"]
+                                         + call_output * pricing["output"]
+                                         + call_cache_write * pricing.get("cache_write", 0)
+                                         + call_cache_read * pricing.get("cache_read", 0))
                         total_cost += call_cost
                         self.queue.put({
                             "type": "cost_update",
