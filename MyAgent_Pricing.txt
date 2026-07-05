@@ -232,31 +232,33 @@
   Reasoning tokens are billed at the output token rate. Reached via the
   OpenAI SDK at https://api.x.ai/v1 with XAI_API_KEY.
 
-  Current Chat + Code Tiers (verified docs.x.ai 2026-07)
+  Current Catalog — verified LIVE 2026-07-05 against /v1/models' own price
+  fields (unit = $1/10000 per MTok; grok-4.3 reports 12500/25000 = $1.25/$2.50)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────
-  grok-4.3               $1.25    $2.50
+  grok-4.3               $1.25    $2.50    (aliases: grok-4.3-latest,
+                                            grok-latest)
   grok-4.20              $1.25    $2.50    (all three 4.20 variants:
                                             -reasoning / -non-reasoning /
-                                            -multi-agent)
-  grok-build             $1.00    $2.00    (code model, text-only)
+                                            -multi-agent, + bare grok-4.20
+                                            alias -> the reasoning variant)
+  grok-build             $1.00    $2.00    (code model, text-only; aliases:
+                                            grok-code-fast-1, grok-code-fast)
+  grok-code-fast         $1.00    $2.00    (alias prefix for grok-build-0.1)
+  grok-latest            $1.25    $2.50    (alias for grok-4.3)
 
-  Legacy Families (still served by /v1/models; long-standing list prices)
-  ──────────────────────────────────────────────────────────────────────────
-  Model Prefix           Input    Output
-  ──────────────────────────────────────────────────────────────────────────
-  grok-4-fast            $0.20    $0.50
-  grok-4.1-fast          $0.20    $0.50    (also grok-4-1-fast spelling)
-  grok-4                 $3.00    $15.00
-  grok-3-mini            $0.30    $0.50
-  grok-3                 $3.00    $15.00
-  grok-code-fast         $0.20    $1.50
-  grok-2-vision          $2.00    $10.00
-  grok-2                 $2.00    $10.00
+  Notes:
+  - The legacy families (grok-4 / -fast, grok-3, grok-2) are fully retired —
+    /v1/models no longer serves them and the API rejects their ids.
+  - Cached input bills at $0.20/M (not tracked — MyAgent's 2-tuple treats
+    all input at full rate, a slight overestimate when caching kicks in).
+  - Input above 200K tokens bills at double rate (long-context tier); the
+    table keeps the ≤200K tier, same convention as gemini-3.1-pro.
 
   Sources:
     https://docs.x.ai/developers/models
+    Live GET https://api.x.ai/v1/models (2026-07-05)
 
 
 ================================================================================

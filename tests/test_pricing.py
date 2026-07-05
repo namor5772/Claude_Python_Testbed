@@ -42,12 +42,13 @@ class TestGetPricing(unittest.TestCase):
         ("Gemini", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06},
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.20-multi-agent-0309"): {"input": 1.25e-06, "output": 2.5e-06},
-        # grok-4-fast must NOT prefix-match down to the pricey bare "grok-4"
-        # entry (the 0.20-rate float artifact matches haiku's cache_read above)
-        ("xAI", "grok-4-fast-reasoning"): {
-            "input": 2.0000000000000002e-07, "output": 5e-07},
-        ("xAI", "grok-4-0709"): {"input": 3e-06, "output": 1.5e-05},
         ("xAI", "grok-build-0.1"): {"input": 1e-06, "output": 2e-06},
+        # Aliases (live catalog 2026-07-05): grok-code-fast-1 folds into
+        # grok-build-0.1's price; grok-latest resolves to grok-4.3.
+        ("xAI", "grok-code-fast-1"): {"input": 1e-06, "output": 2e-06},
+        ("xAI", "grok-latest"): {"input": 1.25e-06, "output": 2.5e-06},
+        # Retired families are no longer priced (the API rejects their ids)
+        ("xAI", "grok-3-mini"): None,
         ("xAI", "totally-unknown-xyz"): None,
         ("Ollama", "qwen3"): None,
         ("Bogus", "x"): None,

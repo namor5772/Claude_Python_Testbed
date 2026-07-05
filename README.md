@@ -159,7 +159,7 @@ The parameter widgets are **model-aware**: controls that a model rejects are *hi
 | Gemini 2.5 / 3.x | Effort: low (1K) / medium (8K) / high (24K) thinking budget | Always shown (API accepts both) |
 | xAI grok-4.3 | Reasoning combobox: None/Low/Medium/High (Low = API default) | Always shown (API accepts both) |
 | xAI grok-4.20-multi-agent | Reasoning combobox: Low/Medium/High/Xhigh (sets agent collaboration count) | Always shown |
-| xAI pinned `-reasoning`/`-non-reasoning`, legacy grok | None — behaviour baked into the model id | Shown |
+| xAI pinned `-reasoning`/`-non-reasoning`, grok-build | None — behaviour baked into the model id | Shown |
 | Ollama thinking models (Qwen3, DeepSeek-R1, gpt-oss) | Boolean `think` checkbox | Shown |
 
 ### Ollama (local inference)

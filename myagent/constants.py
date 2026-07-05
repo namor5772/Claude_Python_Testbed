@@ -1122,19 +1122,19 @@ XAI_NON_AGENTIC_SUBSTRINGS = ("-image", "imagine", "embed", "-video", "-tts")
 # absent here have no client-side knob and are sent no reasoning param).
 # grok-4.3: none/low/medium/high — low is the API default, "none" disables
 # reasoning. grok-4.20-multi-agent: the knob sets agent collaboration count
-# rather than depth — no "none". grok-3-mini (legacy): low/high only. The
-# pinned grok-4.20-*-reasoning / -non-reasoning variants and legacy
-# grok-4 / grok-3 / grok-2 have no knob at all.
+# rather than depth — no "none". The pinned grok-4.20-*-reasoning /
+# -non-reasoning variants have no knob at all, and neither do the aliases
+# (bare grok-4.20 → the pinned reasoning variant; grok-latest → grok-4.3
+# running its server-side default effort).
 XAI_REASONING_EFFORT = {
     "grok-4.20-multi-agent": ["low", "medium", "high", "xhigh"],
     "grok-4.3": ["none", "low", "medium", "high"],
-    "grok-3-mini": ["low", "high"],
 }
 # Text-only Grok families (no image input) — the weak-desktop-combo warning
 # fires for these. Every current chat tier (grok-4.3 / grok-4.20) is
-# vision-capable; grok-build (code model) and the legacy grok-3 / grok-code
-# families are not.
-XAI_NON_VISION_PREFIXES = ("grok-build", "grok-code", "grok-3")
+# vision-capable; grok-build (docs list it text-only) and its grok-code-fast
+# alias are not.
+XAI_NON_VISION_PREFIXES = ("grok-build", "grok-code")
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document"}
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
@@ -2382,24 +2382,20 @@ GEMINI_PRICING = {
 }
 # xAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output.
-# Current tiers verified against docs.x.ai 2026-07; the legacy families
-# (grok-4 / -fast, grok-3, grok-code, grok-2) are still returned by
-# /v1/models and keep their long-standing list prices.
+# Verified LIVE 2026-07-05 against /v1/models' own price fields (unit =
+# $1/10000 per MTok: grok-4.3 reports 12500/25000 = $1.25/$2.50). The legacy
+# families (grok-4 / -fast, grok-3, grok-2) are fully retired — the API no
+# longer serves them, and unknown ids are rejected, so they can never bill.
+# grok-code-fast survives only as an ALIAS of grok-build-0.1 at grok-build's
+# price. Cached input bills at $0.20/M (not tracked — the 2-tuple treats all
+# input at full rate, a slight overestimate); input above 200K tokens bills
+# double (table keeps the ≤200K tier, same convention as gemini-3.1-pro).
 XAI_PRICING = {
-    # Current chat + code tiers
-    "grok-4.3":        (1.25, 2.50),
-    "grok-4.20":       (1.25, 2.50),   # covers all three 4.20 variants
-    "grok-build":      (1.00, 2.00),
-    # Legacy families (dotted and dashed 4.1-fast spellings both seen in the wild)
-    "grok-4-fast":     (0.20, 0.50),
-    "grok-4.1-fast":   (0.20, 0.50),
-    "grok-4-1-fast":   (0.20, 0.50),
-    "grok-4":          (3.00, 15.00),
-    "grok-3-mini":     (0.30, 0.50),
-    "grok-3":          (3.00, 15.00),
-    "grok-code-fast":  (0.20, 1.50),
-    "grok-2-vision":   (2.00, 10.00),
-    "grok-2":          (2.00, 10.00),
+    "grok-4.3":       (1.25, 2.50),
+    "grok-4.20":      (1.25, 2.50),   # covers all three 4.20 variants + bare alias
+    "grok-build":     (1.00, 2.00),
+    "grok-code-fast": (1.00, 2.00),   # alias of grok-build-0.1
+    "grok-latest":    (1.25, 2.50),   # alias of grok-4.3
 }
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.
