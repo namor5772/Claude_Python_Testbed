@@ -207,6 +207,7 @@ def load_specifying():
         log(f"WARNING: could not parse {SPECIFYING_CSV.name}: {e} — "
             f"no SPECIFYING matching this run")
         return []
+    log(f"SpecifyingList: {len(specs)} rules from {SPECIFYING_CSV}")
     return specs
 
 
