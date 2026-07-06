@@ -5,7 +5,9 @@ WebCentral via IMAP, Outlook via Microsoft Graph) for unread email in the
 Inbox and Spam/Junk folders and builds the COMPREHENSIVE LIST: one running
 sequence numbered across all accounts, each entry showing Account, From,
 Subject, Date, To (when forwarded) and a short summary. Emails matching the
-SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv) are
+SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv —
+kept in the OneDrive MyImportant/DeathFinances folder shared by all
+machines, with a repo-root fallback) are
 listed like any other email except for a "SPECIFYING LIST EMAIL - {Type}"
 marker line at the top of the entry (Type from the rule's column; the
 suffix is dropped when blank) and, at the bottom, the names of their
@@ -123,7 +125,11 @@ def log(msg):
 
 
 # ── SPECIFYING LIST (loaded from SpecifyingList.csv) ─────────────────────────
-# The rules live in SpecifyingList.csv in the repo root — one row per email
+# The rules live in SpecifyingList.csv in the shared OneDrive folder
+# MyImportant/DeathFinances — one copy synced to all three machines (Mac mini,
+# Windows laptop, Windows desktop), so an edit on any of them propagates via
+# OneDrive rather than git. A repo-root copy is the fallback when no OneDrive
+# copy is found (see _locate_specifying_csv). One row per email
 # type, semicolon-delimited with every field double-quoted (same convention
 # as APICostLog.txt: the data itself is full of commas) — with columns:
 #   Type       the user's category for this bill type (e.g. "setup", "info").
@@ -142,7 +148,30 @@ def log(msg):
 #              email body (the per-field extraction engine was removed; see
 #              git history before 2026-06-11 if it's ever wanted back).
 
-SPECIFYING_CSV = BASE_DIR / "SpecifyingList.csv"
+def _locate_specifying_csv():
+    """Return the path of SpecifyingList.csv: the shared OneDrive copy
+    (MyImportant/DeathFinances) when one exists, else the repo root.
+    OneDrive roots probed, in order: the Windows %OneDrive% /
+    %OneDriveConsumer% env vars, ~/OneDrive (older clients on either OS),
+    and macOS ~/Library/CloudStorage/OneDrive-* (current Mac client)."""
+    roots = []
+    for var in ("OneDrive", "OneDriveConsumer"):
+        val = os.environ.get(var)
+        if val:
+            roots.append(Path(val))
+    home = Path.home()
+    roots.append(home / "OneDrive")
+    cloud = home / "Library" / "CloudStorage"
+    if cloud.is_dir():
+        roots.extend(sorted(cloud.glob("OneDrive-*")))
+    for root in roots:
+        p = root / "MyImportant" / "DeathFinances" / "SpecifyingList.csv"
+        if p.is_file():
+            return p
+    return BASE_DIR / "SpecifyingList.csv"
+
+
+SPECIFYING_CSV = _locate_specifying_csv()
 
 
 def load_specifying():
@@ -151,7 +180,7 @@ def load_specifying():
     are skipped with a log line. utf-8-sig tolerates an Excel-written BOM."""
     specs = []
     if not SPECIFYING_CSV.exists():
-        log(f"WARNING: {SPECIFYING_CSV.name} not found — no SPECIFYING matching this run")
+        log(f"WARNING: {SPECIFYING_CSV} not found — no SPECIFYING matching this run")
         return specs
     try:
         with open(SPECIFYING_CSV, newline="", encoding="utf-8-sig") as f:
