@@ -1,13 +1,16 @@
 # SelfBot_Win.ps1 -- Desktop-shortcut launcher for SelfBot.py (Windows twin of
-# SelfBot_launcher.applescript). Launches the chatbot with the venv pythonw (no
-# console window); if an instance is already running it brings that window to the
-# front instead of starting a second copy -- the same launch-or-focus behaviour as
-# the CSVEditor twin. The repo is resolved from this file's own location, so any
-# clone works unedited; only the .lnk shortcut is per-machine.
+# SelfBot_launcher.applescript). Launches a NEW SelfBot instance each time with the
+# venv pythonw (no console window). SelfBot is a two-instance app by design -- the
+# whole point is that a second instance can chat with the first (self-chat) -- so,
+# like MyAgent_Win.ps1 and unlike CSVEditor_Win.ps1, there is deliberately no
+# launch-or-focus: a launch-or-focus shortcut could never open the second window.
+# SelfBot.py itself cascades a manually-opened second instance down-right so the two
+# windows don't stack on the same saved geometry. The repo is resolved from this
+# file's own location, so any clone works unedited; only the .lnk is per-machine.
 #
-# This launches ONE solo SelfBot. To start the two-instance self-chat (the duo
-# mode where SelfBot talks to itself), use LaunchSelfBot.bat at the repo root,
-# which starts both instances with --no-geometry and positions them side by side.
+# This launches solo instances (no --no-geometry). Double-click twice to get the
+# two self-chatting windows; for the auto-positioned side-by-side duo layout with
+# name/focus wiring, use LaunchSelfBot.bat at the repo root instead.
 #
 # The desktop shortcut targets:
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden
@@ -17,33 +20,6 @@ $repoDir = Split-Path -Parent $PSScriptRoot
 $pythonw = Join-Path $repoDir '.venv\Scripts\pythonw.exe'
 $script  = Join-Path $repoDir 'SelfBot.py'
 
-# Already running? Focus its window rather than starting a second instance.
-# The venv pythonw is a stub that re-execs base python, so match on either image
-# name and pick whichever process actually owns the Tk window.
-$running = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe' OR Name='python.exe'" |
-    Where-Object { $_.CommandLine -like '*SelfBot.py*' })
-
-if ($running.Count -gt 0) {
-    Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public static class SelfBotWin {
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-    [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int n);
-}
-"@
-    foreach ($p in $running) {
-        $proc = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
-        if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {
-            [void][SelfBotWin]::ShowWindowAsync($proc.MainWindowHandle, 9)  # SW_RESTORE
-            [void][SelfBotWin]::SetForegroundWindow($proc.MainWindowHandle)
-            return
-        }
-    }
-    return  # running but the window isn't mapped yet -- don't start a duplicate
-}
-
-# Not running: launch detached. Fall back to a system pythonw if the venv
-# hasn't been built on this machine yet.
+# Fall back to a system pythonw if the venv hasn't been built on this machine yet.
 if (-not (Test-Path $pythonw)) { $pythonw = 'pythonw.exe' }
 Start-Process -FilePath $pythonw -ArgumentList @("`"$script`"") -WorkingDirectory $repoDir -WindowStyle Hidden

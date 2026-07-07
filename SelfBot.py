@@ -695,6 +695,7 @@ BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
 ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
 DEFAULT_GEOMETRY = "1050x930"
+CASCADE_OFFSET = 60  # px a manually-opened 2nd instance cascades off instance 1 so they don't stack
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -1459,16 +1460,46 @@ class App:
             geometry = state.get("geometry", "")
             saved_sw = state.get("screen_width", 0)
             saved_sh = state.get("screen_height", 0)
+            geo_re = r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)"
             if geometry and saved_sw and saved_sh:
                 cur_sw = self.root.winfo_screenwidth()
                 cur_sh = self.root.winfo_screenheight()
                 if saved_sw == cur_sw and saved_sh == cur_sh:
-                    m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geometry)
+                    m = re.match(geo_re, geometry)
                     if m:
                         w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
                         if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0 and w >= 400 and h >= 300:
+                            # A manually-opened 2nd instance restores the SAME solo geometry
+                            # as instance 1 and lands exactly on top of it — which looks like
+                            # nothing opened (or a crash). If its saved position (nearly)
+                            # coincides with instance 1's, cascade it down-right so it's a
+                            # visibly separate window. Cascade only on collision, so manual
+                            # placement is preserved and the offset can't drift across launches.
+                            if self._is_second_instance:
+                                i1x = i1y = None
+                                try:
+                                    with open(APP_STATE_FILE, encoding="utf-8") as f:
+                                        im = re.match(geo_re, json.load(f).get("geometry", ""))
+                                    if im:
+                                        i1x, i1y = int(im.group(3)), int(im.group(4))
+                                except (OSError, json.JSONDecodeError):
+                                    pass
+                                if i1x is not None and abs(x - i1x) < 30 and abs(y - i1y) < 30:
+                                    # Fixed cascade off instance 1 — no clamp against
+                                    # winfo_screenwidth/height, which report only the PRIMARY
+                                    # monitor and would yank instance 2 onto it when the pair
+                                    # lives on a secondary display. A 60 px shift keeps a
+                                    # window that already passed the on-screen validity check
+                                    # on the same monitor and still reachable.
+                                    x, y = x + CASCADE_OFFSET, y + CASCADE_OFFSET
+                                    geometry = f"{w}x{h}+{x}+{y}"
                             self.root.update_idletasks()
                             self.root.geometry(geometry)
+            elif self._is_second_instance:
+                # No usable saved solo geometry — still offset instance 2 off the default
+                # top-left position so it doesn't stack on instance 1.
+                self.root.update_idletasks()
+                self.root.geometry(f"+{CASCADE_OFFSET}+{CASCADE_OFFSET}")
 
     def _retry_load_names(self):
         """Instance 2: retry reading names from instance 1's state if they were empty."""
