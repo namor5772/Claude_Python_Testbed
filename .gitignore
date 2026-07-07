@@ -27,6 +27,10 @@ csv_editor_state.json
 selfbot.lock
 agent_lock_*.lock
 
+# SelfBot runtime IPC files (cross-instance message passing; created/deleted at runtime)
+selfbot_auto_msg.json
+selfbot_inject.txt
+
 # Error logs
 launch_err.txt
 
