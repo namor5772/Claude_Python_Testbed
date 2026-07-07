@@ -4126,6 +4126,16 @@ class App:
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
 
+    def _tool_info(self, message):
+        """Post a tool_info activity line to the GUI queue.
+
+        check_queue renders it with the grey-italic "tool_info" tag and gates it on
+        the Activity (show_activity) toggle. Every tool-dispatch path calls this;
+        without it, executing any tool raised AttributeError: 'App' object has no
+        attribute '_tool_info'.
+        """
+        self.queue.put({"type": "tool_info", "content": message})
+
     def _ensure_newline(self):
         """Ensure the chat display ends with a newline so the next insert starts on a fresh line."""
         end_pos = self.chat_display.index("end-1c")
