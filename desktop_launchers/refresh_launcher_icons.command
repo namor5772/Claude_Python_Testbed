@@ -10,7 +10,8 @@
 # Finder. Double-click whenever an icon has reverted to a generic/default look.
 #
 # Resolves the icon masters from this script's own folder, so it works from any
-# clone. Pairs must match rebuild.sh's alias list.
+# clone. Pairs must match rebuild.sh's alias list, plus launchers built outside
+# this repo (Numc lives in ~/projects/numc; only its icon master is kept here).
 DIR="$(cd "$(dirname "$0")" && pwd)"
 n=0
 while IFS='|' read -r name png; do
@@ -30,6 +31,7 @@ CSVEditor|icon_csv_master.png
 My Agent|icon_myagent_master.png
 Heartbeat Log|icon_heartbeat_master.png
 API Cost Log|icon_costlog_master.png
+Numc|icon_numc_master.png
 PAIRS
 killall Finder 2>/dev/null                  # force Finder to re-read the icons
 echo "Done — refreshed $n launcher icon(s) and relaunched Finder. You can close this window."
