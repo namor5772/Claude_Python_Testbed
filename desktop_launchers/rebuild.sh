@@ -65,6 +65,7 @@ build() { # <source.applescript> <master.png> <AppName>
 build UnreadSummary.applescript      icon_unread_master.png    UnreadSummary
 build CSVEditor_launcher.applescript icon_csv_master.png       CSVEditor
 build MyAgent_launcher.applescript   icon_myagent_master.png   "My Agent"
+build SelfBot_launcher.applescript   icon_selfbot_master.png   SelfBot
 build HeartbeatLog.applescript       icon_heartbeat_master.png "Heartbeat Log"
 build CostLog.applescript            icon_costlog_master.png   "API Cost Log"
 
@@ -107,6 +108,7 @@ if [ "$DEST" = "$HOME/Applications" ]; then
 UnreadSummary|icon_unread_master.png
 CSVEditor|icon_csv_master.png
 My Agent|icon_myagent_master.png
+SelfBot|icon_selfbot_master.png
 Heartbeat Log|icon_heartbeat_master.png
 API Cost Log|icon_costlog_master.png
 PAIRS

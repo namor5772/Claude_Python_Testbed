@@ -29,6 +29,7 @@ done <<'PAIRS'
 UnreadSummary|icon_unread_master.png
 CSVEditor|icon_csv_master.png
 My Agent|icon_myagent_master.png
+SelfBot|icon_selfbot_master.png
 Heartbeat Log|icon_heartbeat_master.png
 API Cost Log|icon_costlog_master.png
 Numc|icon_numc_master.png
