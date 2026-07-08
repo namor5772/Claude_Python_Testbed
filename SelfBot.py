@@ -1538,12 +1538,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         except (json.JSONDecodeError, OSError):
             return
         prompt_name = state.get("last_system_prompt_name", "")
-        if prompt_name:
-            prompts = self._load_saved_prompts()
-            if prompt_name in prompts:
-                self.system_prompt = prompts[prompt_name]
-                self.system_prompt_name = prompt_name
-                self._update_title()
+        # Load unconditionally so legacy flat prompts migrate to the bundled dict form
+        # on every launch, not just when a prompt name is remembered.
+        prompts = self._load_saved_prompts()
+        if prompt_name and prompt_name in prompts:
+            self.system_prompt = self._prompt_entry_text(prompts[prompt_name])
+            self.system_prompt_name = prompt_name
+            self._update_title()
         model = state.get("last_model", "")
         if model and model in self.available_models:
             self.model = model
@@ -1573,8 +1574,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # Restore save_thinking setting
         if "save_thinking" in state:
             self.save_thinking.set(state["save_thinking"])
-        # Restore MyAgent-style tool toggles (only when their libs are available,
-        # so a saved-on flag can't re-enable a checkbox that is disabled here).
+        # Restore the tool-row toggles (only when their libs are available, so a
+        # saved-on flag can't re-enable a checkbox that is disabled here).
+        if state.get("desktop_enabled") and _HAS_DESKTOP:
+            self.desktop_enabled.set(True)
+        if state.get("browser_enabled"):
+            self.browser_enabled.set(True)
         if state.get("meta_enabled"):
             self.meta_enabled.set(True)
         if _HAS_MYAGENT_TOOLS and _HAS_MCP and state.get("mcp_enabled"):
@@ -1740,6 +1745,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "my_name": self.my_name_entry.get(),
             "my_friend": self.my_friend_entry.get(),
             "delay_seconds": self._delay_seconds,
+            "desktop_enabled": self.desktop_enabled.get(),
+            "browser_enabled": self.browser_enabled.get(),
             "meta_enabled": self.meta_enabled.get(),
             "mcp_enabled": self.mcp_enabled.get(),
             "google_enabled": self.google_enabled.get(),
@@ -1805,14 +1812,129 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 prompts = json.load(f)
         else:
             prompts = {}
+        # Migrate legacy flat {name: "text"} entries → {name: {"text": "..."}} so each
+        # prompt can bundle a full environment (names, model, skills, tools, safety).
+        migrated = False
+        for pname, entry in list(prompts.items()):
+            if not isinstance(entry, dict):
+                prompts[pname] = {"text": entry if isinstance(entry, str) else ""}
+                migrated = True
         if "Default" not in prompts:
-            prompts["Default"] = DEFAULT_SYSTEM_PROMPT
+            prompts["Default"] = {"text": DEFAULT_SYSTEM_PROMPT}
+            migrated = True
+        if migrated:
             self._save_prompts_to_disk(prompts)
         return prompts
 
     def _save_prompts_to_disk(self, prompts):
         with open(PROMPTS_FILE, "w", encoding="utf-8") as f:
             json.dump(prompts, f, indent=2, ensure_ascii=False)
+
+    @staticmethod
+    def _prompt_entry_text(entry):
+        """A saved prompt is the new dict form ({"text": ..., <settings>}) or a legacy
+        bare string. Return its text either way."""
+        if isinstance(entry, dict):
+            return entry.get("text", "")
+        return entry or ""
+
+    def _capture_prompt_settings(self):
+        """Snapshot the current main-screen environment for bundling into a saved
+        system prompt: names, model params, the tool-row toggles, per-skill modes, and
+        the Safety confirm-bypass set. The Debug/display toggle row stays global."""
+        return {
+            "my_name": self.my_name_entry.get(),
+            "my_friend": self.my_friend_entry.get(),
+            "model": self.model,
+            "temperature": self.temperature,
+            "thinking_enabled": self.thinking_enabled,
+            "thinking_effort": self.thinking_effort,
+            "thinking_budget": self.thinking_budget,
+            "thinking_mode": self.thinking_mode,
+            "desktop": self.desktop_enabled.get(),
+            "browser": self.browser_enabled.get(),
+            "meta": self.meta_enabled.get(),
+            "mcp": self.mcp_enabled.get(),
+            "google": self.google_enabled.get(),
+            "proton": self.proton_enabled.get(),
+            "outlook": self.outlook_enabled.get(),
+            "skill_modes": {n: s.get("mode", "disabled") for n, s in self.skills.items()},
+            "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
+        }
+
+    def _apply_prompt_settings(self, entry):
+        """Apply a saved prompt's bundled environment to the live main screen. Only keys
+        present in the entry are applied, so a legacy text-only prompt leaves the current
+        environment untouched."""
+        if not isinstance(entry, dict):
+            return
+        if "my_name" in entry and not self._is_second_instance:
+            self.my_name_entry.delete(0, tk.END)
+            self.my_name_entry.insert(0, entry["my_name"])
+        if "my_friend" in entry and not self._is_second_instance:
+            self.my_friend_entry.delete(0, tk.END)
+            self.my_friend_entry.insert(0, entry["my_friend"])
+        model = entry.get("model")
+        if model and model in self.available_models:
+            self.model = model
+            self._model_var.set(self._model_display_names.get(model, model))
+        if "temperature" in entry:
+            try:
+                self.temperature = max(0.0, min(1.0, float(entry["temperature"])))
+                self._temp_var.set(self.temperature)
+            except (TypeError, ValueError):
+                pass
+        if "thinking_enabled" in entry:
+            self.thinking_enabled = bool(entry.get("thinking_enabled", False))
+            self.thinking_effort = entry.get("thinking_effort", self.thinking_effort)
+            self.thinking_budget = entry.get("thinking_budget", self.thinking_budget)
+            self.thinking_mode = entry.get(
+                "thinking_mode", self.thinking_effort if self.thinking_enabled else "off")
+            self._thinking_var.set(self.thinking_enabled)
+            self._thinking_mode_var.set(
+                self.thinking_mode.capitalize() if self.thinking_mode != "off" else "Off")
+            if self._model_supports_thinking() == "manual":
+                for k, v in BUDGET_PRESETS.items():
+                    if v == self.thinking_budget:
+                        self._thinking_strength_var.set(k)
+                        break
+        # Tool-row toggles — respect the same _HAS_* gating as _load_last_state.
+        if "desktop" in entry and _HAS_DESKTOP:
+            self.desktop_enabled.set(bool(entry["desktop"]))
+        if "browser" in entry:
+            self.browser_enabled.set(bool(entry["browser"]))
+        if "meta" in entry:
+            self.meta_enabled.set(bool(entry["meta"]))
+        if "mcp" in entry and _HAS_MYAGENT_TOOLS and _HAS_MCP:
+            self.mcp_enabled.set(bool(entry["mcp"]))
+        if "google" in entry and _HAS_MYAGENT_TOOLS and _HAS_GOOGLE:
+            self.google_enabled.set(bool(entry["google"]))
+        if "proton" in entry and _HAS_MYAGENT_TOOLS and _HAS_PROTONMAIL:
+            self.proton_enabled.set(bool(entry["proton"]))
+        if "outlook" in entry and _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK:
+            self.outlook_enabled.set(bool(entry["outlook"]))
+        if "disabled_confirm_patterns" in entry:
+            self._disabled_confirm_patterns = set(entry["disabled_confirm_patterns"])
+            self._update_ps_safety_button()
+        if "skill_modes" in entry:
+            self._restore_skill_modes(entry["skill_modes"])
+        # Refresh the model-dependent thinking widgets for the (possibly new) model.
+        self._on_model_selected()
+
+    def _restore_skill_modes(self, saved):
+        """Apply a prompt's saved skill modes to the live session ONLY — this does NOT
+        rewrite skills.json (the sticky global store), matching MyAgent. Skills absent
+        from the snapshot fall back to disabled for this session."""
+        if not isinstance(saved, dict):
+            return
+        for sname in self.skills:
+            mode = saved.get(sname, "disabled")
+            if mode in ("disabled", "enabled", "on_demand"):
+                self.skills[sname]["mode"] = mode
+        self._update_skills_button()
+        if (self.skills_editor_window and self.skills_editor_window.winfo_exists()
+                and self._skills_refresh_list):
+            self._skills_refresh_list()
 
     def open_prompt_editor(self):
         if self.prompt_editor_window and self.prompt_editor_window.winfo_exists():
@@ -1896,7 +2018,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             messagebox.showwarning("Empty prompt", "The prompt text is empty.", parent=self.prompt_editor_window)
             return
         prompts = self._load_saved_prompts()
-        prompts[name] = text
+        # Bundle the current main-screen environment with the prompt text so loading
+        # this prompt later restores names, model params, skills, tools and safety.
+        prompts[name] = {"text": text, **self._capture_prompt_settings()}
         self._save_prompts_to_disk(prompts)
         self._refresh_prompt_list()
         self._prompt_combo_var.set(name)
@@ -1927,10 +2051,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         name = self._prompt_combo_var.get()
         prompts = self._load_saved_prompts()
         if name in prompts:
+            entry = prompts[name]
             self._prompt_text.delete("1.0", tk.END)
-            self._prompt_text.insert("1.0", prompts[name])
+            self._prompt_text.insert("1.0", self._prompt_entry_text(entry))
             self._prompt_name_entry.delete(0, tk.END)
             self._prompt_name_entry.insert(0, name)
+            # Loading a saved prompt restores its bundled environment to the main screen.
+            self._apply_prompt_settings(entry)
 
     def _apply_prompt(self):
         text = self._prompt_text.get("1.0", "end-1c").strip()
@@ -4438,7 +4565,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if action == "read":
             if name not in prompts:
                 return f"Prompt not found: {name}"
-            return f"Prompt: {name}\n\n{prompts[name]}"
+            return f"Prompt: {name}\n\n{self._prompt_entry_text(prompts[name])}"
         if action == "create":
             if not name:
                 return "create requires 'name'."
@@ -4447,7 +4574,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             text = params.get("text", "")
             if not text:
                 return "create requires 'text'."
-            prompts[name] = text
+            prompts[name] = {"text": text}
             self._save_prompts_to_disk(prompts)
             return f"Created system prompt '{name}'."
         if action == "update":
@@ -4455,7 +4582,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 return f"Prompt not found: {name}"
             if "text" not in params:
                 return "update requires 'text'."
-            prompts[name] = params["text"]
+            entry = prompts[name]
+            if isinstance(entry, dict):
+                entry["text"] = params["text"]  # preserve the bundled settings
+            else:
+                prompts[name] = {"text": params["text"]}
             self._save_prompts_to_disk(prompts)
             return f"Updated system prompt '{name}'."
         if action == "delete":

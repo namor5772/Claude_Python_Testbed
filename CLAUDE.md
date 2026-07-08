@@ -74,7 +74,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 - `CSVEditor.py` — Single-file tkinter GUI CSV editor (~520 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
 - `BirdFlying.html` — Self-contained HTML/SVG animation (no dependencies, opens in any browser): two Australian magpies with desynchronized SMIL flap-and-glide wing cycles and a Web Audio synthesized warble (armed by first click, browser autoplay policy), flying over a stylized homestead scene with a gum grove
 - `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
-- `system_prompts.json` — Saved system prompts for SelfBot (created at runtime)
+- `system_prompts.json` — Saved system prompts for SelfBot (created at runtime); each entry now bundles a full main-screen environment (terminal user / chatting-with names, model + thinking params, the tool-row toggles, per-skill modes, and Safety confirm-bypass patterns), analogous to MyAgent's instructions — see `CLAUDE_SELFBOT.md`. Legacy flat `{name: "text"}` files migrate to the dict form on launch
 - `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)
 - `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat; a matching `.txt` export of the output window is always saved alongside each `.json` file
 - `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
