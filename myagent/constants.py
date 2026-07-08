@@ -968,8 +968,11 @@ if IS_WINDOWS:
         r"\bInvoke-WebRequest\b.*-OutFile",
         r"\bStart-Process\b",
         r"\bNew-Service\b",
-        r"\b-Recurse\b",
-        r"\b-Force\b",
+        # Bare switches: a leading \b never matches before '-' when it's preceded by a
+        # space (both non-word chars = no boundary), so anchor with (?<!\S) instead —
+        # the flag must sit at a line start or after whitespace.
+        r"(?<!\S)-Recurse\b",
+        r"(?<!\S)-Force\b",
     ]
 else:
     COMMAND_BLOCKED = [
