@@ -1245,7 +1245,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         # Checkbox row (below buttons)
         checkbox_frame = tk.Frame(self.root)
-        checkbox_frame.grid(row=6, column=0, columnspan=2, pady=(0, 5))
+        checkbox_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 5))
 
         self.debug_toggle = tk.Checkbutton(
             checkbox_frame, text="Debug", variable=self.debug_enabled,
@@ -1277,8 +1277,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         )
         self.save_thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+        # Tool row (below the Debug/display-toggle row) — Desktop / Browser plus the
+        # MyAgent-style subsystems Meta / MCP / Google / IMAP / Outlook. Anthropic-only;
+        # each is disabled when its optional libraries are absent (Meta needs none).
+        # Proton is labelled IMAP. Left-aligned (sticky="w") to match the Debug row above.
+        tools_frame = tk.Frame(self.root)
+        tools_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 5))
+
         self.desktop_toggle = tk.Checkbutton(
-            checkbox_frame, text="Desktop", variable=self.desktop_enabled,
+            tools_frame, text="Desktop", variable=self.desktop_enabled,
             font=("Arial", 9),
         )
         self.desktop_toggle.pack(side=tk.LEFT, padx=(5, 0))
@@ -1287,16 +1294,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.desktop_toggle.config(state=tk.DISABLED)
 
         self.browser_toggle = tk.Checkbutton(
-            checkbox_frame, text="Browser", variable=self.browser_enabled,
+            tools_frame, text="Browser", variable=self.browser_enabled,
             font=("Arial", 9),
         )
         self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
-
-        # Tool-subsystem row (below the Debug/display-toggle row) — Meta / MCP /
-        # Google / IMAP / Outlook. Anthropic-only; each is disabled when its
-        # optional libraries are absent (Meta needs none). Proton is labelled IMAP.
-        tools_frame = tk.Frame(self.root)
-        tools_frame.grid(row=7, column=0, columnspan=2, pady=(0, 5))
 
         self.meta_toggle = tk.Checkbutton(
             tools_frame, text="Meta", variable=self.meta_enabled, font=("Arial", 9),
