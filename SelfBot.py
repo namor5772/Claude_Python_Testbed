@@ -30,6 +30,41 @@ import re
 import io
 import time
 import concurrent.futures
+
+# --- Optional MyAgent tool subsystems (reused as mixins) --------------------
+# SelfBot borrows MyAgent's native MCP / Gmail / Proton(IMAP) / Outlook mixins
+# verbatim. They share state with the host only through self.root / self.queue /
+# self._disabled_confirm_patterns, so SelfBot's App can host them directly. All
+# optional: a missing myagent package (or missing provider libs) degrades to
+# disabled checkboxes with the feature simply absent. These tools are
+# Anthropic-only in SelfBot (SelfBot has no other provider).
+try:
+    from myagent.constants import (
+        GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
+        _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
+    )
+    from myagent.mcp_mixin import MCPMixin
+    from myagent.gmail_mixin import GmailMixin
+    from myagent.protonmail_mixin import ProtonMailMixin
+    from myagent.outlook_mixin import OutlookMixin
+    _HAS_MYAGENT_TOOLS = True
+except Exception:
+    _HAS_MYAGENT_TOOLS = False
+    _HAS_MCP = _HAS_GOOGLE = _HAS_PROTONMAIL = _HAS_OUTLOOK = False
+    GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
+
+    class MCPMixin:
+        pass
+
+    class GmailMixin:
+        pass
+
+    class ProtonMailMixin:
+        pass
+
+    class OutlookMixin:
+        pass
+
 _HAS_DESKTOP = True
 try:
     # On macOS ARM64, rubicon-objc (used by mouseinfo) may fail to find
@@ -120,6 +155,68 @@ TOOLS = [
                 },
             },
             "required": ["file_path", "search_value"],
+        },
+    },
+]
+
+# Meta tools — SelfBot's analog of MyAgent's META_TOOLS. MyAgent's manage_instructions/
+# run_instruction are tied to its agent-instruction system, which SelfBot lacks; SelfBot's
+# equivalents are its shared skills library and its saved system prompts. So SelfBot's Meta
+# exposes manage_skills (shared skills.json, same as MyAgent) and manage_prompts (the
+# system-prompt analog of manage_instructions). Gated by the Meta checkbox; provider-agnostic.
+SELFBOT_META_TOOLS = [
+    {
+        "name": "manage_skills",
+        "description": (
+            "Manage the shared skills library on disk (skills.json, shared with MyAgent). "
+            "Skills can be injected into the system prompt (enabled), retrieved on demand "
+            "(on_demand), or inactive (disabled). Actions: list, read, create, update, delete."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "create", "update", "delete"],
+                    "description": "The operation to perform",
+                },
+                "name": {"type": "string", "description": "Skill name (required for all except list)"},
+                "content": {
+                    "type": "string",
+                    "description": "Skill text content (required for create, optional for update)",
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["disabled", "enabled", "on_demand"],
+                    "description": "Skill mode (default: disabled on create)",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "manage_prompts",
+        "description": (
+            "Manage SelfBot's saved system prompts on disk (system_prompts.json) — SelfBot's "
+            "analog of MyAgent's agent instructions. Changes are saved to disk; the live "
+            "session's active prompt is unaffected until a prompt is loaded. The 'Default' "
+            "prompt cannot be deleted. Actions: list, read, create, update, delete."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "create", "update", "delete"],
+                    "description": "The operation to perform",
+                },
+                "name": {"type": "string", "description": "System prompt name (required for all except list)"},
+                "text": {
+                    "type": "string",
+                    "description": "Prompt text (required for create, optional for update)",
+                },
+            },
+            "required": ["action"],
         },
     },
 ]
@@ -774,7 +871,7 @@ def _get_window_pid(hwnd):
     return 0
 
 
-class App:
+class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     def __init__(self, root):
         self.root = root
         self.root.title("Claude SelfBot")
@@ -805,6 +902,21 @@ class App:
         self.save_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
+        # MyAgent-style tool subsystems (Meta / MCP / Google / IMAP / Outlook).
+        self.meta_enabled = tk.BooleanVar(value=False)
+        self.mcp_enabled = tk.BooleanVar(value=False)
+        self.google_enabled = tk.BooleanVar(value=False)
+        self.proton_enabled = tk.BooleanVar(value=False)
+        self.outlook_enabled = tk.BooleanVar(value=False)
+        # Set of tool names whose confirmation dialog is bypassed (read by the mail
+        # mixins' confirm_action). Empty = every destructive mail action confirms.
+        self._disabled_confirm_patterns = set()
+        # Seed each subsystem's instance state (connection caches, etc.).
+        if _HAS_MYAGENT_TOOLS:
+            self._init_mcp_state()
+            self._google_init_state()
+            self._proton_init_state()
+            self._outlook_init_state()
         self._playwright = None
         self._browser = None
         self._page = None
@@ -884,6 +996,10 @@ class App:
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # Connect MCP servers after the UI is up so a slow stdio handshake never
+        # blocks launch (no-op without mcp_servers.json / the mcp package).
+        if _HAS_MYAGENT_TOOLS and _HAS_MCP:
+            self.root.after(100, self._connect_mcp_servers)
         # Instance 2: start polling for injected chat content
         if self._is_second_instance:
             self.root.after(500, self._poll_inject_file)
@@ -1176,11 +1292,54 @@ class App:
         )
         self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+        # Tool-subsystem row (below the Debug/display-toggle row) — Meta / MCP /
+        # Google / IMAP / Outlook. Anthropic-only; each is disabled when its
+        # optional libraries are absent (Meta needs none). Proton is labelled IMAP.
+        tools_frame = tk.Frame(self.root)
+        tools_frame.grid(row=7, column=0, columnspan=2, pady=(0, 5))
+
+        self.meta_toggle = tk.Checkbutton(
+            tools_frame, text="Meta", variable=self.meta_enabled, font=("Arial", 9),
+        )
+        self.meta_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.mcp_toggle = tk.Checkbutton(
+            tools_frame, text="MCP", variable=self.mcp_enabled, font=("Arial", 9),
+        )
+        self.mcp_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not (_HAS_MYAGENT_TOOLS and _HAS_MCP):
+            self.mcp_enabled.set(False)
+            self.mcp_toggle.config(state=tk.DISABLED)
+
+        self.google_toggle = tk.Checkbutton(
+            tools_frame, text="Google", variable=self.google_enabled, font=("Arial", 9),
+        )
+        self.google_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not (_HAS_MYAGENT_TOOLS and _HAS_GOOGLE):
+            self.google_enabled.set(False)
+            self.google_toggle.config(state=tk.DISABLED)
+
+        self.proton_toggle = tk.Checkbutton(
+            tools_frame, text="IMAP", variable=self.proton_enabled, font=("Arial", 9),
+        )
+        self.proton_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not (_HAS_MYAGENT_TOOLS and _HAS_PROTONMAIL):
+            self.proton_enabled.set(False)
+            self.proton_toggle.config(state=tk.DISABLED)
+
+        self.outlook_toggle = tk.Checkbutton(
+            tools_frame, text="Outlook", variable=self.outlook_enabled, font=("Arial", 9),
+        )
+        self.outlook_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not (_HAS_MYAGENT_TOOLS and _HAS_OUTLOOK):
+            self.outlook_enabled.set(False)
+            self.outlook_toggle.config(state=tk.DISABLED)
+
         # Attachment indicator (hidden until an image is attached)
         self.attach_label = tk.Label(
             self.root, text="", foreground="#6a1b9a", font=("Arial", 9)
         )
-        self.attach_label.grid(row=7, column=0, columnspan=2)
+        self.attach_label.grid(row=8, column=0, columnspan=2)
 
     # --- App State Persistence ---
 
@@ -1397,6 +1556,18 @@ class App:
         # Restore save_thinking setting
         if "save_thinking" in state:
             self.save_thinking.set(state["save_thinking"])
+        # Restore MyAgent-style tool toggles (only when their libs are available,
+        # so a saved-on flag can't re-enable a checkbox that is disabled here).
+        if state.get("meta_enabled"):
+            self.meta_enabled.set(True)
+        if _HAS_MYAGENT_TOOLS and _HAS_MCP and state.get("mcp_enabled"):
+            self.mcp_enabled.set(True)
+        if _HAS_MYAGENT_TOOLS and _HAS_GOOGLE and state.get("google_enabled"):
+            self.google_enabled.set(True)
+        if _HAS_MYAGENT_TOOLS and _HAS_PROTONMAIL and state.get("proton_enabled"):
+            self.proton_enabled.set(True)
+        if _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK and state.get("outlook_enabled"):
+            self.outlook_enabled.set(True)
         # Restore delay setting
         saved_delay = state.get("delay_seconds")
         if saved_delay is not None:
@@ -1544,6 +1715,11 @@ class App:
             "my_name": self.my_name_entry.get(),
             "my_friend": self.my_friend_entry.get(),
             "delay_seconds": self._delay_seconds,
+            "meta_enabled": self.meta_enabled.get(),
+            "mcp_enabled": self.mcp_enabled.get(),
+            "google_enabled": self.google_enabled.get(),
+            "proton_enabled": self.proton_enabled.get(),
+            "outlook_enabled": self.outlook_enabled.get(),
         }
         # Load existing state to preserve the other mode's geometry
         try:
@@ -3314,6 +3490,12 @@ class App:
         self._save_last_state()
         # Auto-save the chat on close (all instances)
         self._auto_save_on_close()
+        # Tear down MCP servers (no-op if never connected).
+        if _HAS_MYAGENT_TOOLS and _HAS_MCP:
+            try:
+                self._disconnect_mcp_servers()
+            except Exception:
+                pass
         # Find any remaining peer windows to close
         if IS_WINDOWS and _HAS_DESKTOP:
             peer_windows = []
@@ -3721,6 +3903,36 @@ class App:
             tools.extend(desktop)
         if self.browser_enabled.get():
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
+        # MyAgent-style tool subsystems (Anthropic-only). Each mail group patches
+        # its `account` enum at runtime so the model only sees configured accounts.
+        if self.meta_enabled.get():
+            tools.extend(copy.deepcopy(SELFBOT_META_TOOLS))
+        if _HAS_MYAGENT_TOOLS and _HAS_MCP and self.mcp_enabled.get() and MCP_TOOLS:
+            tools.extend(copy.deepcopy(MCP_TOOLS))
+        if _HAS_MYAGENT_TOOLS and _HAS_GOOGLE and self.google_enabled.get():
+            google_tools = copy.deepcopy(GOOGLE_TOOLS)
+            names = self._get_google_account_names()
+            for t in google_tools:
+                props = t.get("input_schema", {}).get("properties", {})
+                if "account" in props:
+                    props["account"]["enum"] = names
+            tools.extend(google_tools)
+        if _HAS_MYAGENT_TOOLS and _HAS_PROTONMAIL and self.proton_enabled.get():
+            proton_tools = copy.deepcopy(PROTON_TOOLS)
+            names = self._get_proton_account_names()
+            for t in proton_tools:
+                props = t.get("input_schema", {}).get("properties", {})
+                if "account" in props:
+                    props["account"]["enum"] = names
+            tools.extend(proton_tools)
+        if _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK and self.outlook_enabled.get():
+            outlook_tools = copy.deepcopy(OUTLOOK_TOOLS)
+            names = self._get_outlook_account_names()
+            for t in outlook_tools:
+                props = t.get("input_schema", {}).get("properties", {})
+                if "account" in props:
+                    props["account"]["enum"] = names
+            tools.extend(outlook_tools)
         # Add get_skill tool if any on-demand skills exist
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
@@ -3749,6 +3961,24 @@ class App:
         called from one thread.
         """
         inp = block.input
+        # --- MyAgent-style subsystems (checked before the native tool chain) ---
+        # MCP tools are namespaced "<server>__<tool>"; route by exact lookup.
+        if _HAS_MYAGENT_TOOLS and _HAS_MCP and block.name in getattr(self, "_mcp_tools_by_name", {}):
+            self._tool_info(f"MCP: {block.name}\n")
+            return self.do_mcp_call(block.name, inp or {})
+        # Native mail tools — dynamic dispatch to do_<name> on the mail mixins.
+        if _HAS_MYAGENT_TOOLS and block.name.startswith(("gmail_", "proton_", "outlook_")):
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown mail tool: {block.name}"
+            self._tool_info(f"{block.name.split('_', 1)[0].capitalize()}: {block.name}\n")
+            return method(inp or {})
+        if block.name == "manage_skills":
+            self._tool_info(f"manage_skills: {inp.get('action', '')}\n")
+            return self.do_manage_skills(inp)
+        if block.name == "manage_prompts":
+            self._tool_info(f"manage_prompts: {inp.get('action', '')}\n")
+            return self.do_manage_prompts(inp)
         if block.name == "run_command":
             cmd = inp.get("command", "")
             self._tool_info(f"Running: {cmd}\n")
@@ -3916,6 +4146,98 @@ class App:
         # Catch-all: an unknown tool name, or a family branch above (desktop/
         # browser) that matched the group test but no specific handler.
         return f"Unknown tool: {block.name}"
+
+    # --- Meta tools (SelfBot's analog of MyAgent's meta-agent tools) ---
+
+    def do_manage_skills(self, params):
+        """CRUD the shared skills library (skills.json). Mirrors MyAgent's manage_skills."""
+        action = params.get("action", "")
+        name = params.get("name", "")
+        if action == "list":
+            if not self.skills:
+                return "No skills defined."
+            return "Skills:\n" + "\n".join(
+                f"- {n} [{s.get('mode', 'disabled')}]" for n, s in self.skills.items()
+            )
+        if action == "read":
+            if name not in self.skills:
+                return f"Skill not found: {name}"
+            s = self.skills[name]
+            return f"Skill: {name}\nMode: {s.get('mode', 'disabled')}\n\n{s.get('content', '')}"
+        if action == "create":
+            if not name:
+                return "create requires 'name'."
+            if name in self.skills:
+                return f"Skill already exists: {name} (use action='update')."
+            content = params.get("content", "")
+            if not content:
+                return "create requires 'content'."
+            mode = params.get("mode", "disabled")
+            if mode not in ("disabled", "enabled", "on_demand"):
+                mode = "disabled"
+            self.skills[name] = {"content": content, "mode": mode}
+            self._save_skills()
+            self.root.after(0, self._update_skills_button)
+            return f"Created skill '{name}' (mode={mode})."
+        if action == "update":
+            if name not in self.skills:
+                return f"Skill not found: {name}"
+            if "content" in params:
+                self.skills[name]["content"] = params["content"]
+            if params.get("mode") in ("disabled", "enabled", "on_demand"):
+                self.skills[name]["mode"] = params["mode"]
+            self._save_skills()
+            self.root.after(0, self._update_skills_button)
+            return f"Updated skill '{name}'."
+        if action == "delete":
+            if name not in self.skills:
+                return f"Skill not found: {name}"
+            del self.skills[name]
+            self._save_skills()
+            self.root.after(0, self._update_skills_button)
+            return f"Deleted skill '{name}'."
+        return f"Unknown action: {action}"
+
+    def do_manage_prompts(self, params):
+        """CRUD SelfBot's saved system prompts (system_prompts.json) — the analog of
+        MyAgent's manage_instructions. Disk-only; the live active prompt is untouched."""
+        action = params.get("action", "")
+        name = params.get("name", "")
+        prompts = self._load_saved_prompts()
+        if action == "list":
+            return "System prompts:\n" + "\n".join(f"- {n}" for n in prompts)
+        if action == "read":
+            if name not in prompts:
+                return f"Prompt not found: {name}"
+            return f"Prompt: {name}\n\n{prompts[name]}"
+        if action == "create":
+            if not name:
+                return "create requires 'name'."
+            if name in prompts:
+                return f"Prompt already exists: {name} (use action='update')."
+            text = params.get("text", "")
+            if not text:
+                return "create requires 'text'."
+            prompts[name] = text
+            self._save_prompts_to_disk(prompts)
+            return f"Created system prompt '{name}'."
+        if action == "update":
+            if name not in prompts:
+                return f"Prompt not found: {name}"
+            if "text" not in params:
+                return "update requires 'text'."
+            prompts[name] = params["text"]
+            self._save_prompts_to_disk(prompts)
+            return f"Updated system prompt '{name}'."
+        if action == "delete":
+            if name not in prompts:
+                return f"Prompt not found: {name}"
+            if name == "Default":
+                return "Cannot delete the 'Default' prompt."
+            del prompts[name]
+            self._save_prompts_to_disk(prompts)
+            return f"Deleted system prompt '{name}'."
+        return f"Unknown action: {action}"
 
     def stream_worker(self, messages):
         try:
@@ -4250,6 +4572,9 @@ class App:
                     pass  # skip tool activity when activity display disabled
                 elif msg["type"] == "tool_info":
                     self._chat_insert((msg["content"], "tool_info"))
+                elif msg["type"] == "warning":
+                    # Always shown (e.g. mail confirm-bypass notices), regardless of Activity.
+                    self._chat_insert((f"⚠ {msg['content']}\n", "error"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()

@@ -45,7 +45,7 @@ ruff check MyAgent.py myagent/
 MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no extra dependencies) covering its pure / model-detection helpers — run it with `python -m unittest discover -s tests -t .`. `ruff` is available for linting (`ruff check MyAgent.py myagent/`); there is no `mypy` or build step. The single-file apps (SelfBot, CSVEditor, Account_Activity_WBC) have no tests.
 
 ## Project Structure
-- `SelfBot.py` — Single-file tkinter GUI chatbot (~4100 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing
+- `SelfBot.py` — Single-file tkinter GUI chatbot (~4400 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing. Anthropic-only; besides its own desktop/browser tools it reuses MyAgent's MCP / Gmail / Proton(IMAP) / Outlook mixins by inheritance plus a SelfBot-native Meta tool set (`manage_skills` + `manage_prompts`), toggled from a second checkbox row (see `CLAUDE_SELFBOT.md`)
 - `MyAgent.py` — Entry point (~180 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, Gemini, and xAI providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
   - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING), file paths

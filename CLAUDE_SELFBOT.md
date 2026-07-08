@@ -2,16 +2,26 @@
 
 **Single class design** — The `App` class contains all UI, API, tool execution, and persistence logic. No separate modules.
 
-**Tool system** — Three global tool lists define API tool schemas:
-- `TOOLS` — Core tools always sent to the API (web_search, fetch_webpage, run_command, csv_search)
+**Tool system** — Global tool lists define API tool schemas:
+- `TOOLS` — Core tools always sent to the API (`run_command`, `csv_search`); Anthropic server-side `web_search`/`code_execution` are appended in `stream_worker`
 - `DESKTOP_TOOLS` — 13 pyautogui-based tools, conditionally included when Desktop checkbox is enabled
 - `BROWSER_TOOLS` — 11 Playwright/CDP tools, conditionally included when Browser checkbox is enabled
+- `SELFBOT_META_TOOLS` — 2 meta tools (`manage_skills`, `manage_prompts`), included when the Meta checkbox is enabled
+- `GOOGLE_TOOLS`/`PROTON_TOOLS`/`OUTLOOK_TOOLS`/`MCP_TOOLS` — imported from `myagent.constants`, included when the Google/IMAP/Outlook/MCP checkboxes are enabled (see the tool-subsystems note below)
 - `_get_tools()` assembles the final tool list dynamically based on UI toggle state
 
 **Adding a new tool** requires three changes:
 1. Add schema dict to the appropriate tool list (`TOOLS`, `DESKTOP_TOOLS`, or `BROWSER_TOOLS`)
 2. Add a `do_<tool_name>()` method to the `App` class
-3. Wire it up in the `stream_worker()` method's tool dispatch block (`elif block.name == "..."`)
+3. Wire it up in the `_execute_tool()` method's tool dispatch block (`elif block.name == "..."`)
+
+**MyAgent tool subsystems (Meta / MCP / Google / IMAP / Outlook)** — SelfBot reuses MyAgent's native MCP + mail mixins **by inheritance** (not reimplementation): `class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin)`, imported optionally at the module top (`try: from myagent… except:` → empty-class stubs), gated by `_HAS_MYAGENT_TOOLS` plus per-provider `_HAS_MCP`/`_HAS_GOOGLE`/`_HAS_PROTONMAIL`/`_HAS_OUTLOOK` (from `myagent.constants`). The mixin order matches MyAgent's so Proton/Outlook's helper-prefix anti-shadowing (vs Gmail's unprefixed `_header`/`_extract_bodies`) holds. These tools are **Anthropic-only** (SelfBot has no other provider) and each subsystem's checkbox is `state=DISABLED` when its lib is absent (Meta needs none; Proton is labelled **IMAP**).
+- **Host contract** (all the mixins need): `self.root`, `self.queue`, and `self._disabled_confirm_patterns` (a `set`, added in `__init__` — empty means every destructive mail action confirms). `__init__` also calls `_init_mcp_state()`/`_google_init_state()`/`_proton_init_state()`/`_outlook_init_state()` to seed connection caches. MCP is the only subsystem that eagerly connects — `root.after(100, self._connect_mcp_servers)` at startup **regardless of the checkbox** (like MyAgent; the checkbox only gates whether the tools are *offered*), and it is torn down in `_finish_close` via `_disconnect_mcp_servers()`.
+- **Toggles**: five `BooleanVar`s (`meta_enabled`/`mcp_enabled`/`google_enabled`/`proton_enabled`/`outlook_enabled`) in a **second checkbox row** (grid row 7, directly under the Debug/display-toggle row 6; `attach_label` moved to row 8). Persisted in `app_state.json` (keys `meta_enabled`…`outlook_enabled`) and restored only when the corresponding lib is present (a saved-on flag can't re-enable a disabled checkbox). **Convo is deliberately NOT wired** (irrelevant to SelfBot).
+- **`_get_tools()`** appends `SELFBOT_META_TOOLS` (Meta), the runtime-populated `MCP_TOOLS`, and deep-copied `GOOGLE_TOOLS`/`PROTON_TOOLS`/`OUTLOOK_TOOLS` with each tool's `account` enum patched from `_get_google_account_names()`/`_get_proton_account_names()`/`_get_outlook_account_names()`.
+- **`_execute_tool()`** routes (before the native chain): MCP by `block.name in self._mcp_tools_by_name` → `do_mcp_call(name, input)`; mail by `startswith(("gmail_","proton_","outlook_"))` → dynamic `getattr(self, f"do_{name}")(input)`; Meta → `do_manage_skills`/`do_manage_prompts`.
+- **Meta is SelfBot-native**, not MyAgent's `META_TOOLS`: MyAgent's `manage_instructions`/`run_instruction` are tied to its agent-instruction system, which SelfBot lacks. `SELFBOT_META_TOOLS` = `manage_skills` (shared `skills.json`, identical to MyAgent) + `manage_prompts` (CRUD `system_prompts.json`, SelfBot's analog of `manage_instructions`). `do_manage_skills`/`do_manage_prompts` live on the App; UI refreshes (`_update_skills_button`) are scheduled via `root.after(0, …)` for thread safety.
+- **Queue types**: the mail mixins emit `{"type": "warning"}` on confirm-bypass — `check_queue` renders it in the red `error` tag, always shown (independent of Activity). MCP emits `{"type": "tool_info"}` (already handled).
 
 **Threading model** — API calls run in a background `stream_worker` thread. A `queue.Queue` passes events (text, thinking, tool info, errors) to the main thread, polled every 50ms via `root.after()`. `_ensure_newline()` guarantees each new output block starts on a fresh line; an `ensure_newline` queue event between loop iterations prevents text merging when Activity is off.
 
