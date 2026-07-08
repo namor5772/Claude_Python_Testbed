@@ -1215,12 +1215,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         # Button bar
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=5, column=0, columnspan=2, pady=(0, 10))
+        button_frame.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         self.attach_button = tk.Button(
             button_frame, text="Attach Images", command=self.attach_image, width=14
         )
-        self.attach_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.attach_button.pack(side=tk.LEFT, padx=(5, 5))
 
 
         self.prompt_button = tk.Button(
