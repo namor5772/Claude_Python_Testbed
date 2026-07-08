@@ -41,6 +41,7 @@ import concurrent.futures
 try:
     from myagent.constants import (
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
+        GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
     from myagent.mcp_mixin import MCPMixin
@@ -52,6 +53,7 @@ except Exception:
     _HAS_MYAGENT_TOOLS = False
     _HAS_MCP = _HAS_GOOGLE = _HAS_PROTONMAIL = _HAS_OUTLOOK = False
     GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
+    GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
 
     class MCPMixin:
         pass
@@ -908,9 +910,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.google_enabled = tk.BooleanVar(value=False)
         self.proton_enabled = tk.BooleanVar(value=False)
         self.outlook_enabled = tk.BooleanVar(value=False)
-        # Set of tool names whose confirmation dialog is bypassed (read by the mail
-        # mixins' confirm_action). Empty = every destructive mail action confirms.
+        # Confirm-bypass set — command regex patterns (checked in _check_command_safety)
+        # AND mail tool names (read by the mail mixins' confirm_action). Managed via the
+        # Safety dialog; empty = every risky command / mail action confirms.
         self._disabled_confirm_patterns = set()
+        self._ps_safety_dialog = None            # open Safety dialog (or None)
+        self._last_ps_safety_geometry = None     # persisted Safety dialog geometry
         # Seed each subsystem's instance state (connection caches, etc.).
         if _HAS_MYAGENT_TOOLS:
             self._init_mcp_state()
@@ -1245,6 +1250,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         )
         self.skills_button.pack(side=tk.LEFT, padx=(5, 5))
 
+        self.ps_safety_button = tk.Button(
+            button_frame, text="Safety", command=self._open_ps_safety_dialog, padx=10
+        )
+        self.ps_safety_button.pack(side=tk.LEFT, padx=(0, 5))
+        self._update_ps_safety_button()
+
         # Checkbox row (below buttons)
         checkbox_frame = tk.Frame(self.root)
         checkbox_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 5))
@@ -1574,6 +1585,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # Restore the Skills Manager dialog geometry (applied when it next opens).
         if state.get("skills_dialog_geometry"):
             self._last_skills_dialog_geometry = state["skills_dialog_geometry"]
+        # Restore the Safety dialog's confirm-bypass set + geometry.
+        self._disabled_confirm_patterns = set(state.get("disabled_confirm_patterns", []))
+        if state.get("ps_safety_dialog_geometry"):
+            self._last_ps_safety_geometry = state["ps_safety_dialog_geometry"]
+        self._update_ps_safety_button()
         # Restore delay setting
         saved_delay = state.get("delay_seconds")
         if saved_delay is not None:
@@ -1732,6 +1748,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             state["skills_dialog_geometry"] = self.skills_editor_window.geometry()
         elif getattr(self, "_last_skills_dialog_geometry", None):
             state["skills_dialog_geometry"] = self._last_skills_dialog_geometry
+        # Safety dialog: the confirm-bypass set + its geometry (live if open).
+        state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
+        if self._ps_safety_dialog and self._ps_safety_dialog.winfo_exists():
+            state["ps_safety_dialog_geometry"] = self._ps_safety_dialog.geometry()
+        elif getattr(self, "_last_ps_safety_geometry", None):
+            state["ps_safety_dialog_geometry"] = self._last_ps_safety_geometry
         # Load existing state to preserve the other mode's geometry
         try:
             with open(self._state_file, encoding="utf-8") as f:
@@ -2597,10 +2619,116 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         for pattern in COMMAND_CONFIRM:
             if re.search(pattern, command, re.IGNORECASE):
+                if pattern in self._disabled_confirm_patterns:
+                    return "skipped", pattern  # bypassed via the Safety dialog
                 return "confirm", pattern
         return "safe", ""
 
-    def _request_confirmation(self, command):
+    def _open_ps_safety_dialog(self):
+        """Show the Safety dialog: one checkbox per confirm pattern (checked = confirm
+        required, unchecked = bypass). Mirrors MyAgent's PS Safety dialog, with the mail
+        destructive-tool sections gated by the corresponding _HAS_* flags."""
+        if self._ps_safety_dialog and self._ps_safety_dialog.winfo_exists():
+            self._ps_safety_dialog.lift()
+            return
+        dlg = tk.Toplevel(self.root)
+        self._ps_safety_dialog = dlg
+        dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
+        dlg.title("Safety — Confirm Patterns")
+        if IS_WINDOWS:
+            dlg.transient(self.root)
+        dlg.resizable(True, True)
+
+        tk.Label(
+            dlg, text="Checked items require confirmation before execution.\n"
+                      "Uncheck to bypass the confirmation dialog. Command patterns\n"
+                      "are matched by regex; mail entries match the tool name.",
+            font=("Arial", 9), justify="left",
+        ).pack(padx=15, pady=(12, 6), anchor="w")
+
+        # A Text widget with embedded checkbuttons gives a reliably scrollable list.
+        text_frame = tk.Frame(dlg)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=15, pady=(0, 5))
+        scrollbar = tk.Scrollbar(text_frame, orient="vertical")
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        text_widget = tk.Text(
+            text_frame, wrap="none", cursor="arrow",
+            yscrollcommand=scrollbar.set, highlightthickness=0,
+            borderwidth=1, relief="sunken",
+        )
+        scrollbar.config(command=text_widget.yview)
+        text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def _add_section(header, entries, label_fn=None):
+            # checked = confirm required (pattern NOT in the disabled set); the p=entry
+            # default-arg binding captures the per-iteration value (loop-closure fix).
+            text_widget.insert("end", header + "\n")
+            for entry in entries:
+                var = tk.BooleanVar(value=entry not in self._disabled_confirm_patterns)
+                cb = tk.Checkbutton(
+                    text_widget, text=(label_fn(entry) if label_fn else entry),
+                    variable=var, font=(MONO_FONT, 9), anchor="w",
+                    bg="white", activebackground="white",
+                    command=lambda p=entry, v=var: self._toggle_confirm_pattern(p, v),
+                )
+                text_widget.window_create("end", window=cb, stretch=True)
+                text_widget.insert("end", "\n")
+
+        shell_label = "── PowerShell command patterns ──" if IS_WINDOWS else "── Shell command patterns ──"
+        _add_section(shell_label, COMMAND_CONFIRM)
+        # Mail destructive-tool sections — only when the provider libs are present.
+        # These bind the real tool name (proton_* even though it's shown as IMAP_*),
+        # matching what the mail mixins' confirm_action checks against.
+        if _HAS_MYAGENT_TOOLS and _HAS_GOOGLE and GMAIL_CONFIRM_TOOLS:
+            _add_section("\n── Gmail destructive tools ──", GMAIL_CONFIRM_TOOLS)
+        if _HAS_MYAGENT_TOOLS and _HAS_PROTONMAIL and PROTON_CONFIRM_TOOLS:
+            _add_section("\n── IMAP mail destructive tools ──", PROTON_CONFIRM_TOOLS,
+                         label_fn=lambda t: t.replace("proton_", "IMAP_", 1))
+        if _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK and OUTLOOK_CONFIRM_TOOLS:
+            _add_section("\n── Outlook destructive tools ──", OUTLOOK_CONFIRM_TOOLS)
+
+        text_widget.configure(state="disabled")
+
+        def _on_close():
+            self._last_ps_safety_geometry = dlg.geometry()
+            self._ps_safety_dialog = None
+            self._save_last_state()
+            dlg.destroy()
+
+        dlg.protocol("WM_DELETE_WINDOW", _on_close)
+
+        # Set geometry AFTER layout but BEFORE showing; re-apply after deiconify because
+        # the embedded checkbuttons request a large natural size that overrides it on map.
+        dlg.update_idletasks()
+        saved_geo = getattr(self, "_last_ps_safety_geometry", None)
+        if saved_geo:
+            geo = self._sanitize_geometry(saved_geo)
+        else:
+            w, h = 560, 760
+            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
+            geo = f"{w}x{h}+{x}+{y}"
+        dlg.geometry(geo)
+        dlg.deiconify()
+        dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
+
+    def _toggle_confirm_pattern(self, pattern, var):
+        if var.get():
+            self._disabled_confirm_patterns.discard(pattern)  # checked → confirm required
+        else:
+            self._disabled_confirm_patterns.add(pattern)      # unchecked → bypass
+        self._update_ps_safety_button()
+        self._save_last_state()
+
+    def _update_ps_safety_button(self):
+        n = len(self._disabled_confirm_patterns)
+        label = f"Safety ({n} bypassed)" if n else "Safety"
+        try:
+            self.ps_safety_button.config(text=label)
+        except (AttributeError, tk.TclError):
+            pass  # Button doesn't exist yet
+
+    def _request_confirmation(self, command, matched_pattern=""):
         """Request user confirmation from the main thread via a scrollable dialog. Returns True/False."""
         event = threading.Event()
         result_holder = [False]  # mutable container for the response
@@ -2612,20 +2740,30 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             dlg.grab_set()
             dlg.resizable(True, True)
 
-            # Fixed layout: label at top, scrollable command in middle, buttons at bottom
-            dlg.grid_rowconfigure(1, weight=1)
+            row = 0
             dlg.grid_columnconfigure(0, weight=1)
 
             tk.Label(
                 dlg, text="The following command requires your approval:",
                 font=("Arial", 10), wraplength=450, justify="left",
-            ).grid(row=0, column=0, sticky="w", padx=15, pady=(15, 5))
+            ).grid(row=row, column=0, sticky="w", padx=15, pady=(15, 5))
+            row += 1
+
+            # Which Safety pattern triggered this confirmation (uncheck it in Safety to bypass).
+            if matched_pattern:
+                tk.Label(
+                    dlg, text=f"Triggered by:  {matched_pattern}",
+                    font=(MONO_FONT, 9), fg="#cc3300", wraplength=450, justify="left",
+                ).grid(row=row, column=0, sticky="w", padx=15, pady=(0, 5))
+                row += 1
 
             # Scrollable text area for the command
+            dlg.grid_rowconfigure(row, weight=1)
             text_frame = tk.Frame(dlg)
-            text_frame.grid(row=1, column=0, sticky="nsew", padx=15, pady=5)
+            text_frame.grid(row=row, column=0, sticky="nsew", padx=15, pady=5)
             text_frame.grid_rowconfigure(0, weight=1)
             text_frame.grid_columnconfigure(0, weight=1)
+            row += 1
 
             cmd_text = tk.Text(
                 text_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
@@ -2640,11 +2778,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
             tk.Label(
                 dlg, text="Allow execution?", font=("Arial", 10),
-            ).grid(row=2, column=0, pady=(5, 5))
+            ).grid(row=row, column=0, pady=(5, 5))
+            row += 1
 
             # Button bar — always visible at bottom
             btn_frame = tk.Frame(dlg)
-            btn_frame.grid(row=3, column=0, pady=(0, 15))
+            btn_frame.grid(row=row, column=0, pady=(0, 15))
 
             def on_yes():
                 result_holder[0] = True
@@ -2690,7 +2829,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if safety == "blocked":
             return info
 
-        if safety == "confirm" and not self._request_confirmation(command):
+        if safety == "skipped":
+            self.queue.put({"type": "warning", "content": f"⚠ Confirm bypassed (pattern: {info})\n"})
+        elif safety == "confirm" and not self._request_confirmation(command, info):
             return "Command was rejected by the user."
 
         try:
@@ -4658,8 +4799,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 elif msg["type"] == "tool_info":
                     self._chat_insert((msg["content"], "tool_info"))
                 elif msg["type"] == "warning":
-                    # Always shown (e.g. mail confirm-bypass notices), regardless of Activity.
-                    self._chat_insert((f"⚠ {msg['content']}\n", "error"))
+                    # Always shown (e.g. confirm-bypass notices), regardless of Activity.
+                    # Content already includes the ⚠ sign and a trailing newline.
+                    self._chat_insert((msg["content"], "error"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()
