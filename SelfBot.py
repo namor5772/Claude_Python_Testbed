@@ -931,6 +931,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.thinking_mode = "off"
         self.prompt_editor_window = None
         self.skills_editor_window = None
+        self._skills_refresh_list = None            # set while the Skills Manager is open
+        self._last_skills_dialog_geometry = None    # persisted Skills Manager geometry
         self.skills = self._load_skills()
         self.available_models = self._fetch_available_models()
 
@@ -1569,6 +1571,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.proton_enabled.set(True)
         if _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK and state.get("outlook_enabled"):
             self.outlook_enabled.set(True)
+        # Restore the Skills Manager dialog geometry (applied when it next opens).
+        if state.get("skills_dialog_geometry"):
+            self._last_skills_dialog_geometry = state["skills_dialog_geometry"]
         # Restore delay setting
         saved_delay = state.get("delay_seconds")
         if saved_delay is not None:
@@ -1722,6 +1727,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "proton_enabled": self.proton_enabled.get(),
             "outlook_enabled": self.outlook_enabled.get(),
         }
+        # Skills Manager dialog geometry — live value if open, else the last-known one.
+        if self.skills_editor_window and self.skills_editor_window.winfo_exists():
+            state["skills_dialog_geometry"] = self.skills_editor_window.geometry()
+        elif getattr(self, "_last_skills_dialog_geometry", None):
+            state["skills_dialog_geometry"] = self._last_skills_dialog_geometry
         # Load existing state to preserve the other mode's geometry
         try:
             with open(self._state_file, encoding="utf-8") as f:
@@ -1933,6 +1943,31 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         with open(SKILLS_FILE, "w", encoding="utf-8") as f:
             json.dump(self.skills, f, indent=2, ensure_ascii=False)
 
+    def _post_skill_ui_refresh(self):
+        """Thread-safe refresh of the Skills button and the open Skills Manager listbox.
+        Called from the streaming thread (do_manage_skills); marshals onto the Tk main
+        thread via root.after so the in-dialog list repaints when the agent edits skills."""
+        def _refresh():
+            self._update_skills_button()
+            if (self.skills_editor_window and self.skills_editor_window.winfo_exists()
+                    and self._skills_refresh_list):
+                self._skills_refresh_list()
+        self.root.after(0, _refresh)
+
+    def _sanitize_geometry(self, geo, min_w=400, min_h=300):
+        """Validate a saved 'WxH+X+Y' geometry: enforce a minimum size and drop an
+        off-screen position (letting the WM place it) — matching SelfBot's main-window
+        geometry-restore checks."""
+        m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geo or "")
+        if not m:
+            return f"{max(min_w, 900)}x{max(min_h, 500)}"
+        w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        w, h = max(w, min_w), max(h, min_h)
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        if x < sw and y < sh and x + w > 0 and y + h > 0:
+            return f"{w}x{h}+{x}+{y}"
+        return f"{w}x{h}"
+
     def _update_skills_button(self):
         on_count = sum(1 for s in self.skills.values() if s.get("mode") == "enabled")
         od_count = sum(1 for s in self.skills.values() if s.get("mode") == "on_demand")
@@ -1944,7 +1979,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             label = f"Skills (0+{od_count})"
         else:
             label = "Skills"
-        self.skills_button.config(text=label)
+        try:
+            self.skills_button.config(text=label)
+        except (AttributeError, tk.TclError):
+            pass  # Button doesn't exist yet or was destroyed
 
     def _build_system_prompt(self):
         parts = [self.system_prompt]
@@ -1969,18 +2007,26 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return
 
         win = tk.Toplevel(self.root)
+        win.withdraw()  # Hide until geometry is set (avoids a flash at the wrong spot)
         win.title("Skills Manager")
-        win.geometry("750x500")
-        win.transient(self.root)
+        if IS_WINDOWS:
+            win.transient(self.root)
         self.skills_editor_window = win
 
-        # Top bar: name entry + buttons
+        def _on_skills_close():
+            self._last_skills_dialog_geometry = win.geometry()
+            self._save_last_state()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_skills_close)
+
+        # Top bar: name entry (expands) + SAVE / DELETE / NEW hugging the right edge
         top = tk.Frame(win)
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
 
         tk.Label(top, text="Skill Name", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
-        name_entry.pack(side=tk.LEFT, padx=(0, 5))
+        name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
         def save_skill():
             name = name_entry.get().strip()
@@ -2017,24 +2063,27 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
 
-        tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.LEFT, padx=(5, 2))
-        tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.LEFT, padx=(2, 2))
-        tk.Button(top, text="NEW", command=new_skill, width=5).pack(side=tk.LEFT, padx=(2, 0))
+        # Packed side=RIGHT in reverse order so the visual left-to-right order stays
+        # SAVE, DELETE, NEW while the buttons hug the right edge; the name entry
+        # (fill=X, expand) absorbs all the space in between.
+        tk.Button(top, text="NEW", command=new_skill, width=5).pack(side=tk.RIGHT, padx=2)
+        tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.RIGHT, padx=2)
+        tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.RIGHT, padx=2)
 
-        # Left panel: listbox of skills
+        # Left panel: Cycle Mode button ABOVE the listbox
         left = tk.Frame(win)
         left.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
-        left.grid_rowconfigure(0, weight=1)
+        left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
-        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=20)
-        skill_listbox.grid(row=0, column=0, sticky="nsew")
-        list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
-        list_scrollbar.grid(row=0, column=1, sticky="ns")
-        skill_listbox.config(yscrollcommand=list_scrollbar.set)
-
         toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
-        toggle_btn.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(5, 0))
+        toggle_btn.grid(row=0, column=0, sticky="w", pady=(0, 5))
+
+        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
+        skill_listbox.grid(row=1, column=0, sticky="nsew")
+        list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
+        list_scrollbar.grid(row=1, column=1, sticky="ns")
+        skill_listbox.config(yscrollcommand=list_scrollbar.set)
 
         def refresh_list():
             skill_listbox.delete(0, tk.END)
@@ -2053,6 +2102,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     skill_listbox.itemconfig(i, fg="#2e7d32")
                 elif mode == "on_demand":
                     skill_listbox.itemconfig(i, fg="#1565c0")
+
+        # Expose the refresher so tool-driven CRUD (do_manage_skills, running on the
+        # streaming thread) can repaint this list via _post_skill_ui_refresh.
+        self._skills_refresh_list = refresh_list
 
         def on_select(event):
             sel = skill_listbox.curselection()
@@ -2082,10 +2135,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 skill_listbox.see(idx)
                 self._update_skills_button()
 
+        def _cycle_on_space(event):
+            # Space bar mirrors the Cycle Mode button on the selected skill.
+            toggle_skill()
+            return "break"  # suppress Tk's default <space> select-active binding
+
         skill_listbox.bind("<<ListboxSelect>>", on_select)
+        skill_listbox.bind("<space>", _cycle_on_space)
         toggle_btn.config(command=toggle_skill)
 
-        # Right panel: text editor
+        # Right panel: content editor
         right = tk.Frame(win)
         right.grid(row=1, column=1, sticky="nsew", padx=(5, 10), pady=(0, 10))
         right.grid_rowconfigure(0, weight=1)
@@ -2097,12 +2156,20 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         text_scrollbar.grid(row=0, column=1, sticky="ns")
         text_editor.config(yscrollcommand=text_scrollbar.set)
 
-        # Grid weights
         win.grid_columnconfigure(0, weight=0)
         win.grid_columnconfigure(1, weight=1)
         win.grid_rowconfigure(1, weight=1)
 
         refresh_list()
+
+        # Restore geometry AFTER content is laid out, then show (withdraw/deiconify).
+        win.update_idletasks()
+        saved_geo = getattr(self, '_last_skills_dialog_geometry', None)
+        if saved_geo:
+            win.geometry(self._sanitize_geometry(saved_geo, min_w=400, min_h=300))
+        else:
+            win.geometry("900x500")
+        win.deiconify()
 
     # --- Chat Save / Load ---
 
@@ -4151,53 +4218,70 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     # --- Meta tools (SelfBot's analog of MyAgent's meta-agent tools) ---
 
     def do_manage_skills(self, params):
-        """CRUD the shared skills library (skills.json). Mirrors MyAgent's manage_skills."""
+        """CRUD the shared skills library (skills.json). Mirrors MyAgent's manage_skills,
+        including thread-safe UI refresh via _post_skill_ui_refresh."""
         action = params.get("action", "")
         name = params.get("name", "")
+
         if action == "list":
             if not self.skills:
                 return "No skills defined."
-            return "Skills:\n" + "\n".join(
-                f"- {n} [{s.get('mode', 'disabled')}]" for n, s in self.skills.items()
-            )
+            lines = []
+            for sn, sd in sorted(self.skills.items()):
+                mode = sd.get("mode", "disabled")
+                preview = sd.get("content", "")[:100].replace("\n", " ")
+                lines.append(f"• {sn}  [{mode}]\n  {preview}...")
+            return "\n".join(lines)
+
+        if not name:
+            return "Error: 'name' is required for this action."
+
         if action == "read":
             if name not in self.skills:
-                return f"Skill not found: {name}"
-            s = self.skills[name]
-            return f"Skill: {name}\nMode: {s.get('mode', 'disabled')}\n\n{s.get('content', '')}"
+                return f"Error: Skill '{name}' not found."
+            sd = self.skills[name]
+            return json.dumps({"name": name, "content": sd.get("content", ""), "mode": sd.get("mode", "disabled")}, indent=2)
+
         if action == "create":
-            if not name:
-                return "create requires 'name'."
             if name in self.skills:
-                return f"Skill already exists: {name} (use action='update')."
+                return f"Error: Skill '{name}' already exists. Use 'update' to modify it."
             content = params.get("content", "")
             if not content:
-                return "create requires 'content'."
+                return "Error: 'content' is required when creating a skill."
             mode = params.get("mode", "disabled")
             if mode not in ("disabled", "enabled", "on_demand"):
-                mode = "disabled"
+                return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
             self.skills[name] = {"content": content, "mode": mode}
             self._save_skills()
-            self.root.after(0, self._update_skills_button)
-            return f"Created skill '{name}' (mode={mode})."
+            self._post_skill_ui_refresh()
+            return f"Skill '{name}' created successfully."
+
         if action == "update":
             if name not in self.skills:
-                return f"Skill not found: {name}"
-            if "content" in params:
-                self.skills[name]["content"] = params["content"]
-            if params.get("mode") in ("disabled", "enabled", "on_demand"):
-                self.skills[name]["mode"] = params["mode"]
+                return f"Error: Skill '{name}' not found. Use 'create' to add it."
+            content = params.get("content")
+            mode = params.get("mode")
+            if content is None and mode is None:
+                return "Error: At least one of 'content' or 'mode' must be provided for update."
+            if mode is not None and mode not in ("disabled", "enabled", "on_demand"):
+                return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
+            if content is not None:
+                self.skills[name]["content"] = content
+            if mode is not None:
+                self.skills[name]["mode"] = mode
             self._save_skills()
-            self.root.after(0, self._update_skills_button)
-            return f"Updated skill '{name}'."
+            self._post_skill_ui_refresh()
+            return f"Skill '{name}' updated successfully."
+
         if action == "delete":
             if name not in self.skills:
-                return f"Skill not found: {name}"
+                return f"Error: Skill '{name}' not found."
             del self.skills[name]
             self._save_skills()
-            self.root.after(0, self._update_skills_button)
-            return f"Deleted skill '{name}'."
-        return f"Unknown action: {action}"
+            self._post_skill_ui_refresh()
+            return f"Skill '{name}' deleted."
+
+        return f"Error: Unknown action '{action}'."
 
     def do_manage_prompts(self, params):
         """CRUD SelfBot's saved system prompts (system_prompts.json) — the analog of
