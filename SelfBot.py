@@ -779,8 +779,10 @@ else:
     ]
 
 FALLBACK_MODELS = [
-    "claude-sonnet-4-5-20250929",
-    "claude-opus-4-6",
+    "claude-opus-4-8",
+    "claude-fable-5",
+    "claude-sonnet-5",
+    "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
@@ -792,12 +794,39 @@ MODEL_MAX_OUTPUT_TOKENS = {
     "claude-3-opus-20240229": 4096,
     "claude-3-sonnet-20240229": 4096,
 }
-ADAPTIVE_THINKING_MODELS = {"claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6"}
-MANUAL_THINKING_PREFIXES = ("claude-3-5-sonnet", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
-EFFORT_LEVELS = ["low", "medium", "high", "max"]
+# Deprecated / soon-to-be-retired model id prefixes hidden from the picker.
+# _fetch_available_models filters the live models.list() against these, so newer
+# models appear automatically and only the retiring ones drop out. Opus 4.5 /
+# Sonnet 4.5 stay — still active. The dated 4.0 ids are claude-opus-4-20250514 /
+# claude-sonnet-4-20250514, matched by the "-4-20" prefix (a real "-4-20" minor
+# is implausible — minors run 5, 6, 7, 8…).
+DEPRECATED_MODEL_PREFIXES = (
+    "claude-opus-4-1",       # Opus 4.1 — deprecated (retires 2026-08-05)
+    "claude-opus-4-0",       # Opus 4.0 alias
+    "claude-opus-4-20",      # Opus 4.0 dated id (claude-opus-4-20250514)
+    "claude-sonnet-4-0",     # Sonnet 4.0 alias
+    "claude-sonnet-4-20",    # Sonnet 4.0 dated id (claude-sonnet-4-20250514)
+    "claude-3",              # every Claude 3.x — retired/deprecated
+    "claude-2",              # Claude 2.x — retired
+)
+# Exact-match aliases for adaptive-thinking models; the version-parsed
+# _is_adaptive_model backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
+ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
+                            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+                            "claude-sonnet-5", "claude-sonnet-4-6"}
+# Claude 5 Mythos-class (Fable 5 / Mythos 5): thinking is ALWAYS ON — the API
+# rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400, and
+# sampling params (temperature/top_p/top_k) are rejected unconditionally.
+ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
+# Budget-based ("manual") extended thinking — Opus/Sonnet 4.5 and Haiku 4.5.
+# claude-3-5-sonnet is deliberately excluded: extended thinking arrived with
+# 3.7 / 4, so a thinking block to a 3.5 model is HTTP 400.
+MANUAL_THINKING_PREFIXES = ("claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
+EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
-ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Max"]
-ADAPTIVE_MODE_VALUES_NO_MAX = ["Off", "Adaptive", "Low", "Medium", "High"]
+# Static superset for the combobox placeholder; _anthropic_mode_values() builds
+# the real per-model list (drops "Off" for always-on models, gates Xhigh/Max).
+ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]
 DEFAULT_GEOMETRY = "1050x930"
 CASCADE_OFFSET = 60  # px a manually-opened 2nd instance cascades off instance 1 so they don't stack
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
@@ -943,6 +972,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.thinking_effort = "high"
         self.thinking_budget = 8192
         self.thinking_mode = "off"
+        # Models that 400'd on temperature this session — a reactive backstop for
+        # any rejecting model the version parser doesn't know yet (e.g. a future
+        # Haiku tier). Populated by the stream_worker BadRequest handler.
+        self._no_temperature = set()
         self.prompt_editor_window = None
         self.skills_editor_window = None
         self._skills_refresh_list = None            # set while the Skills Manager is open
@@ -1370,13 +1403,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     # --- App State Persistence ---
 
     def _fetch_available_models(self):
-        """Fetch available models from the Anthropic API, fall back to hardcoded list."""
+        """Fetch available models from the Anthropic API — hiding deprecated /
+        soon-to-be-retired ids — and fall back to the hardcoded list."""
         try:
             response = self.client.models.list(limit=100)
             # Build {id: display_name} mapping and id list
             self._model_display_names = {}
             model_ids = []
             for m in response.data:
+                if m.id.startswith(DEPRECATED_MODEL_PREFIXES):
+                    continue  # skip deprecated / soon-to-be-retired models
                 self._model_display_names[m.id] = m.display_name
                 model_ids.append(m.id)
             return model_ids if model_ids else FALLBACK_MODELS
@@ -1399,13 +1435,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self._thinking_strength_combo.pack_forget()
             self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
             self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-            # Set values with/without Max based on model
-            if "opus-4-7" in self.model or "opus-4-6" in self.model:
-                self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
-            else:
-                self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES_NO_MAX
-                if self._thinking_mode_var.get() == "Max":
-                    self._thinking_mode_var.set("High")
+            # Per-model values: always-on models (Fable/Mythos 5) drop "Off";
+            # Xhigh needs Opus 4.7+ / Sonnet 5+, Max needs Opus 4.6+ / Sonnet 4.6+.
+            values = self._anthropic_mode_values()
+            self._thinking_mode_combo["values"] = values
+            if self._thinking_mode_var.get() not in values:
+                # "Off" on an always-on model coerces to Adaptive; an unsupported
+                # Xhigh/Max coerces down to High.
+                coerced = "Adaptive" if self._thinking_mode_var.get() == "Off" else "High"
+                self._thinking_mode_var.set(coerced)
             self._on_thinking_mode_changed()
         elif support == "manual":
             # Hide mode combobox, show checkbox + strength
@@ -1445,9 +1483,110 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._temp_var.set(self.temperature)
         self._save_last_state()
 
+    @staticmethod
+    def _parse_claude_major_minor(mid, families):
+        """Parse the (major, minor) version tuple from a
+        claude-<family>-<major>[-<minor>] id, for the first family prefix in
+        ``families`` that ``mid`` starts with. None if no family matches or the
+        major isn't an integer. A missing/non-numeric minor parses as 0 — the
+        Claude 5 generation dropped the minor (claude-sonnet-5 -> (5, 0)), and
+        dated snapshots keep working (the date lands in the minor slot, so
+        (5, 20260601) >= (5, 0))."""
+        for family in families:
+            if mid.startswith(family):
+                parts = mid[len(family):].split("-")
+                try:
+                    major = int(parts[0])
+                except (ValueError, IndexError):
+                    return None
+                try:
+                    minor = int(parts[1]) if len(parts) > 1 else 0
+                except ValueError:
+                    minor = 0
+                return (major, minor)
+        return None
+
+    def _is_always_on_thinking(self, model_id=None):
+        """Fable 5 / Mythos 5: thinking is always on (disable / budget_tokens are
+        HTTP 400) and sampling params are rejected unconditionally."""
+        mid = model_id or self.model or ""
+        return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
+
+    def _is_adaptive_model(self, model_id=None):
+        """Adaptive-thinking models — Opus/Sonnet 4.6+ and the always-on Mythos
+        class. Version-parsed so dated snapshots and future minors are caught
+        without editing ADAPTIVE_THINKING_MODELS."""
+        mid = model_id or self.model or ""
+        if self._is_always_on_thinking(mid):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
+        return version is not None and version >= (4, 6)
+
+    def _thinking_on_by_default(self, model_id=None):
+        """Models that run ADAPTIVE thinking when `thinking` is omitted — Sonnet
+        5+ and the always-on class. For these, "Off" must be sent as an explicit
+        thinking={"type": "disabled"} or the model silently thinks against the
+        non-thinking max_tokens cap."""
+        mid = model_id or self.model or ""
+        if self._is_always_on_thinking(mid):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        return version is not None and version >= (5, 0)
+
+    def _rejects_temperature(self, model_id=None):
+        """Models that removed sampling params — Opus 4.7+, Sonnet 5+, and the
+        always-on Mythos class (a non-default temperature returns HTTP 400)."""
+        mid = model_id or self.model or ""
+        if self._is_always_on_thinking(mid):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        if version is not None and version >= (4, 7):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        return version is not None and version >= (5, 0)
+
+    def _supports_max_effort(self, model_id=None):
+        """'max' thinking effort — Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5), and
+        the always-on Mythos class."""
+        mid = model_id or self.model or ""
+        if self._is_always_on_thinking(mid):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
+        return version is not None and version >= (4, 6)
+
+    def _supports_xhigh_effort(self, model_id=None):
+        """'xhigh' thinking effort (between high and max) — Opus 4.7+, Sonnet 5+,
+        and the always-on Mythos class. Sonnet 4.6 does NOT support it."""
+        mid = model_id or self.model or ""
+        if self._is_always_on_thinking(mid):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        if version is not None and version >= (4, 7):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        return version is not None and version >= (5, 0)
+
+    def _anthropic_mode_values(self, model_id=None):
+        """Thinking-mode combobox values for an adaptive model: always-on models
+        (Fable/Mythos 5) drop "Off"; Xhigh and Max appear only where accepted."""
+        values = [] if self._is_always_on_thinking(model_id) else ["Off"]
+        values += ["Adaptive", "Low", "Medium", "High"]
+        if self._supports_xhigh_effort(model_id):
+            values.append("Xhigh")
+        if self._supports_max_effort(model_id):
+            values.append("Max")
+        return values
+
+    def _set_temp_state(self, state):
+        """Enable ('normal') or disable the temperature label + spinbox together."""
+        self._temp_label.config(state=state)
+        self._temp_spin.config(state=state)
+
     def _model_supports_thinking(self, model_id=None):
         mid = model_id or self.model
-        if mid in ADAPTIVE_THINKING_MODELS:
+        # Exact-match set catches undated aliases; the version-parsed helper
+        # backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
+        if mid in ADAPTIVE_THINKING_MODELS or self._is_adaptive_model(mid):
             return "adaptive"
         for prefix in MANUAL_THINKING_PREFIXES:
             if mid.startswith(prefix):
@@ -1472,20 +1611,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if val == "Off":
             self.thinking_enabled = False
             self.thinking_mode = "off"
-            self._temp_label.config(state="normal")
-            self._temp_spin.config(state="normal")
+            # Opus 4.7+, Sonnet 5+, and Fable/Mythos reject temperature even with
+            # thinking off — keep the spinbox disabled for them (it's never sent).
+            self._set_temp_state("disabled" if self._rejects_temperature() else "normal")
         elif val == "Adaptive":
             self.thinking_enabled = True
             self.thinking_mode = "adaptive"
             self.thinking_effort = "adaptive"
-            self._temp_label.config(state="disabled")
-            self._temp_spin.config(state="disabled")
+            self._set_temp_state("disabled")
         else:
             self.thinking_enabled = True
             self.thinking_mode = val.lower()
             self.thinking_effort = val.lower()
-            self._temp_label.config(state="disabled")
-            self._temp_spin.config(state="disabled")
+            self._set_temp_state("disabled")
         self._save_last_state()
 
     def _update_thinking_strength_options(self):
@@ -4123,20 +4261,39 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "tools": self._get_tools(),
             "messages": display_msgs,
         }
-        model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-        if self.thinking_enabled:
-            support = self._model_supports_thinking()
-            payload["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
-            if support == "adaptive":
-                payload["thinking"] = {"type": "adaptive"}
-                if self.thinking_mode not in ("off", "adaptive"):
-                    payload["output_config"] = {"effort": self.thinking_mode}
-            elif support == "manual":
-                payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
-        else:
-            payload["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-            payload["temperature"] = self.temperature
+        self._apply_thinking_params(payload)
         return json.dumps(payload, indent=2)
+
+    def _apply_thinking_params(self, kwargs):
+        """Populate max_tokens + thinking / effort / temperature on an Anthropic
+        request dict per the current model's capabilities. Shared by the live
+        request and the debug-payload preview so the two never drift.
+
+        Handles the per-family quirks: Fable/Mythos 5 thinking is always on (a
+        stale "off" still takes the thinking branch and is sent as plain
+        adaptive); adaptive thinking asks for display="summarized" so the Show
+        Thinking pane isn't blank on Fable 5 / Opus 4.7+ (their default became
+        "omitted"); Sonnet 5+ "Off" is an explicit disable (omitting `thinking`
+        runs adaptive there); and Opus 4.7+ / Sonnet 5+ / Fable reject
+        temperature (HTTP 400), so it's skipped for them."""
+        model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
+        always_on = self._is_always_on_thinking()
+        if self.thinking_enabled or always_on:
+            support = self._model_supports_thinking()
+            kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
+            if support == "adaptive":
+                kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+                if self.thinking_mode not in ("off", "adaptive"):
+                    kwargs["output_config"] = {"effort": self.thinking_mode}
+            elif support == "manual":
+                kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
+        else:
+            kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
+            if self._thinking_on_by_default():
+                kwargs["thinking"] = {"type": "disabled"}
+            if not self._rejects_temperature() and self.model not in self._no_temperature:
+                kwargs["temperature"] = self.temperature
+        return kwargs
 
     @staticmethod
     def _get_macos_display_rects():
@@ -4648,19 +4805,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     "messages": messages,
                     "tools": tools,
                 }
-                model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-                if self.thinking_enabled:
-                    support = self._model_supports_thinking()
-                    api_kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
-                    if support == "adaptive":
-                        api_kwargs["thinking"] = {"type": "adaptive"}
-                        if self.thinking_mode not in ("off", "adaptive"):
-                            api_kwargs["output_config"] = {"effort": self.thinking_mode}
-                    elif support == "manual":
-                        api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
-                else:
-                    api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-                    api_kwargs["temperature"] = self.temperature
+                self._apply_thinking_params(api_kwargs)
 
                 for attempt in range(max_retries):
                     try:
@@ -4739,6 +4884,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         else:
                             raise  # final attempt — let outer except handle it
                     except anthropic.APIStatusError as e:
+                        emsg = str(getattr(e, "message", "") or e).lower()
+                        if (e.status_code == 400 and "temperature" in emsg
+                                and "temperature" in api_kwargs):
+                            # A model the version parser didn't flag rejected the
+                            # sampling param — cache it, drop temperature, and retry.
+                            self._no_temperature.add(self.model)
+                            api_kwargs.pop("temperature", None)
+                            self.queue.put({
+                                "type": "tool_info",
+                                "content": "Model rejected temperature — retrying without it...\n",
+                            })
+                            full_text = ""
+                            continue
                         if e.status_code == 529 and attempt < max_retries - 1:
                             wait = min(2 ** attempt * 10, 90)  # 10s, 20s, 40s, 80s, 90s, 90s… (capped)
                             self.queue.put({
