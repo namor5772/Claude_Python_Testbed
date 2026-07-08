@@ -42,6 +42,7 @@ try:
     from myagent.constants import (
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
         GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
+        ANTHROPIC_PRICING,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
     from myagent.mcp_mixin import MCPMixin
@@ -54,6 +55,7 @@ except Exception:
     _HAS_MCP = _HAS_GOOGLE = _HAS_PROTONMAIL = _HAS_OUTLOOK = False
     GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
+    ANTHROPIC_PRICING = {}
 
     class MCPMixin:
         pass
@@ -857,6 +859,9 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompts.json")
+# Same per-run cost log MyAgent writes (repo root / APICostLog.txt); SelfBot is at the
+# repo root, so this resolves to MyAgent's _BASE_DIR path — one shared file for both apps.
+APICOST_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "APICostLog.txt")
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
@@ -896,6 +901,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False
+        self._session_cost = 0.0  # cumulative Anthropic API cost for this process (logged on close)
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
@@ -1211,6 +1217,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.chat_display.tag_config(
             "thinking_label", foreground="#b8860b", background="#fffde7",
             font=(MONO_FONT, 9, "bold italic")
+        )
+        self.chat_display.tag_config(
+            "cost_info", foreground="#0277bd", font=(MONO_FONT, 9)
         )
 
         # Input field
@@ -3829,6 +3838,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._save_last_state()
         # Auto-save the chat on close (all instances)
         self._auto_save_on_close()
+        # Log this process's cumulative API cost to the shared APICostLog.txt (skips if 0).
+        self._log_api_cost(self._session_cost)
         # Tear down MCP servers (no-op if never connected).
         if _HAS_MYAGENT_TOOLS and _HAS_MCP:
             try:
@@ -4739,6 +4750,30 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         else:
                             raise
 
+                # --- API cost tracking (Anthropic) — accumulate this API call ---
+                usage = getattr(final_message, "usage", None)
+                if usage:
+                    pricing = self._get_pricing(self.model)
+                    if pricing:
+                        ci = getattr(usage, "input_tokens", 0) or 0
+                        co = getattr(usage, "output_tokens", 0) or 0
+                        cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                        cr = getattr(usage, "cache_read_input_tokens", 0) or 0
+                        # input_tokens is the NON-cached count; cache-write/read are
+                        # disjoint buckets, each with its own rate — no double-counting.
+                        call_cost = (ci * pricing["input"] + co * pricing["output"]
+                                     + cw * pricing["cache_write"] + cr * pricing["cache_read"])
+                        self._session_cost += call_cost
+                        self.queue.put({
+                            "type": "cost_update",
+                            "call_cost": call_cost,
+                            "total_cost": self._session_cost,
+                            "input_tokens": ci,
+                            "output_tokens": co,
+                            "cache_write_tokens": cw,
+                            "cache_read_tokens": cr,
+                        })
+
                 if final_message.stop_reason == "tool_use":
                     # Append the full assistant message (with tool_use blocks) to history
                     messages.append({"role": "assistant", "content": final_message.content})
@@ -4817,6 +4852,36 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         attribute '_tool_info'.
         """
         self.queue.put({"type": "tool_info", "content": message})
+
+    @staticmethod
+    def _get_pricing(model_name):
+        """Longest-prefix Anthropic pricing lookup → a per-token dict, or None. Uses
+        MyAgent's ANTHROPIC_PRICING table (per-MTok 4-tuples: input, output,
+        cache_write, cache_read) so the two apps' pricing stays in sync."""
+        best, best_len = None, 0
+        for prefix, prices in ANTHROPIC_PRICING.items():
+            if model_name.startswith(prefix) and len(prefix) > best_len:
+                best, best_len = prices, len(prefix)
+        if best is None:
+            return None
+        pt = tuple(p / 1_000_000 for p in best)
+        return {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
+
+    def _log_api_cost(self, total_cost):
+        """Append the session's cumulative API cost to APICostLog.txt (repo root — the
+        SAME file MyAgent writes). Called once when the app closes. Semicolon-delimited
+        {timestamp};{provider};{model};{cost} so a comma in a model name can't split a
+        field; 4-decimal cost for spreadsheet summing. Skipped when the cost is zero (no
+        priced usage — e.g. an unmatched model prefix). Best-effort; never raises."""
+        if not total_cost or total_cost <= 0:
+            return
+        try:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            line = f"{timestamp};Anthropic;{self.model};{total_cost:.4f}\n"
+            with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(line)
+        except Exception:
+            pass
 
     def _ensure_newline(self):
         """Ensure the chat display ends with a newline so the next insert starts on a fresh line."""
@@ -4936,6 +5001,24 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     # Always shown (e.g. confirm-bypass notices), regardless of Activity.
                     # Content already includes the ⚠ sign and a trailing newline.
                     self._chat_insert((msg["content"], "error"))
+                elif msg["type"] == "cost_update" and not self.show_activity.get():
+                    pass  # skip the cost line when the Activity display is off
+                elif msg["type"] == "cost_update":
+                    call_cost = msg["call_cost"]
+                    total_cost = msg["total_cost"]
+                    inp, out = msg["input_tokens"], msg["output_tokens"]
+                    cw, cr = msg["cache_write_tokens"], msg["cache_read_tokens"]
+                    parts = [f"in:{inp:,}  out:{out:,}"]
+                    if cw:
+                        parts.append(f"cache_write:{cw:,}")
+                    if cr:
+                        parts.append(f"cache_read:{cr:,}")
+                    token_str = "  ".join(parts)
+                    # Magnitude-dependent precision: sub-cent totals show 4 decimals.
+                    total_str = f"{total_cost:.4f}" if total_cost < 0.01 else f"{total_cost:.2f}"
+                    self._chat_insert(
+                        (f"  ${call_cost:.4f} this call  |  ${total_str} session  ({token_str})\n",
+                         "cost_info"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()
