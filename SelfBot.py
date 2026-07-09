@@ -1775,6 +1775,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if self._is_second_instance:
             self.my_name_entry.config(state="readonly")
             self.my_friend_entry.config(state="readonly")
+        # Make the current system prompt authoritative for the layout on startup.
+        # The independent last-live-state restores above cover the no-prompt case and
+        # non-bundled keys (save_thinking, delay, geometry), but they do NOT carry the
+        # prompt's per-skill modes and can drift from the prompt if a toggle was tweaked
+        # without re-saving. Re-applying the current prompt's bundled environment on top
+        # makes the skills AND the rest of the layout reflect the loaded prompt. Names are
+        # guarded inside _apply_prompt_settings for the 2nd instance, so the swap survives;
+        # a legacy text-only prompt has no bundled keys, so this is a safe no-op there.
+        if prompt_name and prompt_name in prompts:
+            self._apply_prompt_settings(prompts[prompt_name])
         # Restore window geometry — duo and solo modes are independent
         if self._duo_mode:
             # Launched from LaunchSelfBot.bat — restore saved duo geometry or default side-by-side
