@@ -201,10 +201,18 @@ SELFBOT_META_TOOLS = [
     {
         "name": "manage_prompts",
         "description": (
-            "Manage SelfBot's saved system prompts on disk (system_prompts.json) — SelfBot's "
-            "analog of MyAgent's agent instructions. Changes are saved to disk; the live "
+            "Manage SelfBot's saved system prompts on disk (system_prompts.json). Unlike a "
+            "plain prompt string, every SelfBot system prompt is a full ENVIRONMENT BUNDLE "
+            "(the analog of a MyAgent instruction): the prompt text PLUS the model, thinking "
+            "params, per-skill modes, tool-row toggles, the Safety confirm-bypass set, and "
+            "the terminal/chatting-with names. On 'create' the current live model, thinking "
+            "settings, skill modes and Safety set are inherited automatically; the tool "
+            "toggles default OFF unless you pass them. 'read' returns the bundled environment "
+            "too, and 'update' can change any bundled field. Loading a prompt (from the GUI) "
+            "restores that whole environment. Changes here are saved to disk; the live "
             "session's active prompt is unaffected until a prompt is loaded. The 'Default' "
-            "prompt cannot be deleted. Actions: list, read, create, update, delete."
+            "prompt cannot be deleted. SelfBot is Anthropic-only, so there is no "
+            "provider/conversational field. Actions: list, read, create, update, delete."
         ),
         "input_schema": {
             "type": "object",
@@ -219,6 +227,34 @@ SELFBOT_META_TOOLS = [
                     "type": "string",
                     "description": "Prompt text (required for create, optional for update)",
                 },
+                "model": {"type": "string", "description": "Anthropic model id to bundle (optional; create inherits the current model)"},
+                "temperature": {"type": "number", "description": "Temperature 0.0-1.0 (optional; create inherits current)"},
+                "thinking_enabled": {"type": "boolean", "description": "Enable extended thinking (optional; create inherits current)"},
+                "thinking_effort": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "xhigh", "max"],
+                    "description": "Thinking effort (optional; create inherits current). 'xhigh'/'max' need newer Opus/Sonnet/Fable tiers.",
+                },
+                "thinking_budget": {"type": "integer", "description": "Manual thinking token budget for Opus/Sonnet/Haiku 4.5 (optional; create inherits current)"},
+                "thinking_mode": {
+                    "type": "string",
+                    "enum": ["off", "adaptive", "low", "medium", "high", "xhigh", "max"],
+                    "description": "Adaptive thinking mode for newer models (optional; create inherits current). Fable/Mythos 5 are always-on — 'off' is invalid there, use 'adaptive'.",
+                },
+                "desktop": {"type": "boolean", "description": "Bundle Desktop tools ON (default false on create)"},
+                "browser": {"type": "boolean", "description": "Bundle Browser tools ON (default false on create)"},
+                "meta": {"type": "boolean", "description": "Bundle Meta tools ON (default false on create)"},
+                "mcp": {"type": "boolean", "description": "Bundle MCP tools ON (default false on create)"},
+                "google": {"type": "boolean", "description": "Bundle Gmail tools ON (default false on create)"},
+                "proton": {"type": "boolean", "description": "Bundle Proton/IMAP mail tools ON (default false on create)"},
+                "outlook": {"type": "boolean", "description": "Bundle Outlook tools ON (default false on create)"},
+                "skill_modes": {
+                    "type": "object",
+                    "description": "Map of skill name -> mode ('disabled'/'enabled'/'on_demand'). On create, defaults to the current skill modes; on update, only listed skills change.",
+                    "additionalProperties": {"type": "string", "enum": ["disabled", "enabled", "on_demand"]},
+                },
+                "my_name": {"type": "string", "description": "Bundle the 'Terminal user' name (optional; omit to leave names unbundled)"},
+                "my_friend": {"type": "string", "description": "Bundle the 'Chatting with' name (optional; omit to leave names unbundled)"},
             },
             "required": ["action"],
         },
@@ -4732,9 +4768,21 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         return f"Error: Unknown action '{action}'."
 
+    # Environment-bundle keys the model may author on create/update (SelfBot's env
+    # schema — Anthropic-only, so no provider/conversational; includes proton + names).
+    _PROMPT_MODEL_KEYS = ("model", "temperature", "thinking_enabled", "thinking_effort",
+                          "thinking_budget", "thinking_mode")
+    _PROMPT_TOGGLE_KEYS = ("desktop", "browser", "meta", "mcp", "google", "proton", "outlook")
+    _PROMPT_NAME_KEYS = ("my_name", "my_friend")
+
     def do_manage_prompts(self, params):
         """CRUD SelfBot's saved system prompts (system_prompts.json) — the analog of
-        MyAgent's manage_instructions. Disk-only; the live active prompt is untouched."""
+        MyAgent's manage_instructions, adapted to SelfBot's environment-bundle prompts.
+        Disk-only; the live active prompt is untouched. THREAD-SAFE: reads only plain
+        attributes (self.model / temperature / thinking_* / skills / _disabled_confirm_patterns)
+        and params — never Tk widgets — so it is safe to call from the streaming worker,
+        which is why create inherits from those attrs (like MyAgent) rather than from
+        _capture_prompt_settings() (which reads Tk widgets on the main thread only)."""
         action = params.get("action", "")
         name = params.get("name", "")
         prompts = self._load_saved_prompts()
@@ -4743,7 +4791,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if action == "read":
             if name not in prompts:
                 return f"Prompt not found: {name}"
-            return f"Prompt: {name}\n\n{self._prompt_entry_text(prompts[name])}"
+            entry = prompts[name]
+            text = self._prompt_entry_text(entry)
+            out = [f"Prompt: {name}", "", text]
+            if isinstance(entry, dict):
+                bundle = {k: v for k, v in entry.items() if k != "text"}
+                if bundle:
+                    out += ["", "Bundled environment:",
+                            json.dumps(bundle, indent=2, ensure_ascii=False)]
+            return "\n".join(out)
         if action == "create":
             if not name:
                 return "create requires 'name'."
@@ -4752,19 +4808,50 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             text = params.get("text", "")
             if not text:
                 return "create requires 'text'."
-            prompts[name] = {"text": text}
+            # Inherit the current live environment from thread-safe plain attributes
+            # (mirrors MyAgent's manage_instructions create); tool toggles come from
+            # params defaulting OFF; names are bundled only if explicitly provided.
+            entry = {
+                "text": text,
+                "model": params.get("model", self.model),
+                "temperature": params.get("temperature", self.temperature),
+                "thinking_enabled": params.get("thinking_enabled", self.thinking_enabled),
+                "thinking_effort": params.get("thinking_effort", self.thinking_effort),
+                "thinking_budget": params.get("thinking_budget", self.thinking_budget),
+                "thinking_mode": params.get("thinking_mode", self.thinking_mode),
+                "skill_modes": params.get(
+                    "skill_modes",
+                    {sn: sd.get("mode", "disabled") for sn, sd in self.skills.items()}),
+                "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
+            }
+            for k in self._PROMPT_TOGGLE_KEYS:
+                entry[k] = bool(params.get(k, False))
+            for k in self._PROMPT_NAME_KEYS:
+                if k in params:
+                    entry[k] = params[k]
+            prompts[name] = entry
             self._save_prompts_to_disk(prompts)
-            return f"Created system prompt '{name}'."
+            return f"Created system prompt '{name}' (bundled current environment)."
         if action == "update":
             if name not in prompts:
                 return f"Prompt not found: {name}"
-            if "text" not in params:
-                return "update requires 'text'."
             entry = prompts[name]
-            if isinstance(entry, dict):
-                entry["text"] = params["text"]  # preserve the bundled settings
-            else:
-                prompts[name] = {"text": params["text"]}
+            if not isinstance(entry, dict):
+                entry = {"text": self._prompt_entry_text(entry)}
+            overlay_keys = ("text", *self._PROMPT_MODEL_KEYS,
+                            *self._PROMPT_TOGGLE_KEYS, *self._PROMPT_NAME_KEYS)
+            provided = [k for k in (*overlay_keys, "skill_modes") if k in params]
+            if not provided:
+                return "update requires 'text' and/or at least one environment field."
+            for k in overlay_keys:
+                if k in params:
+                    entry[k] = params[k]
+            # skill_modes merges (only listed skills change), matching manage_instructions.
+            if isinstance(params.get("skill_modes"), dict):
+                merged = dict(entry.get("skill_modes", {}))
+                merged.update(params["skill_modes"])
+                entry["skill_modes"] = merged
+            prompts[name] = entry
             self._save_prompts_to_disk(prompts)
             return f"Updated system prompt '{name}'."
         if action == "delete":
