@@ -209,18 +209,20 @@ SELFBOT_META_TOOLS = [
             "settings, skill modes and Safety set are inherited automatically; the tool "
             "toggles default OFF unless you pass them. 'read' returns the bundled environment "
             "too, and 'update' can change any bundled field. Loading a prompt (from the GUI) "
-            "restores that whole environment. Changes here are saved to disk; the live "
-            "session's active prompt is unaffected until a prompt is loaded. The 'Default' "
-            "prompt cannot be deleted. SelfBot is Anthropic-only, so there is no "
-            "provider/conversational field. Actions: list, read, create, update, delete."
+            "restores that whole environment. create/update/delete are saved to disk and do "
+            "NOT change the running session; the 'apply' action loads a saved prompt into the "
+            "LIVE session (environment + text) at once — the only action that mutates live "
+            "state. The 'Default' prompt cannot be deleted. SelfBot is Anthropic-only, so "
+            "there is no provider/conversational field. Actions: list, read, create, update, "
+            "delete, apply."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "read", "create", "update", "delete"],
-                    "description": "The operation to perform",
+                    "enum": ["list", "read", "create", "update", "delete", "apply"],
+                    "description": "The operation to perform. 'apply' loads the named prompt into the LIVE running session (environment + text) immediately; create/update/delete only touch disk.",
                 },
                 "name": {"type": "string", "description": "System prompt name (required for all except list)"},
                 "text": {
@@ -4800,6 +4802,36 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     out += ["", "Bundled environment:",
                             json.dumps(bundle, indent=2, ensure_ascii=False)]
             return "\n".join(out)
+        if action == "apply":
+            if name not in prompts:
+                return f"Prompt not found: {name}"
+            entry = prompts[name]
+            # _apply_prompt_settings mutates the live main screen (name entries, model /
+            # thinking vars, tool-toggle BooleanVars, _on_model_selected) — all Tk, which is
+            # main-thread-only. do_manage_prompts runs on the stream worker, so marshal the
+            # apply onto the Tk loop and wait, mirroring _request_confirmation. Also set the
+            # active prompt text/name (the env-apply alone doesn't) so the switch is complete.
+            done = threading.Event()
+            err = []
+
+            def _do_apply():
+                try:
+                    self.system_prompt = self._prompt_entry_text(entry)
+                    self.system_prompt_name = name
+                    self._apply_prompt_settings(entry)
+                    self._update_title()
+                except Exception as exc:            # never crash the worker on a UI error
+                    err.append(str(exc))
+                finally:
+                    done.set()
+
+            self.root.after(0, _do_apply)
+            if not done.wait(timeout=10):
+                return f"apply timed out applying '{name}' to the live session."
+            if err:
+                return f"apply failed for '{name}': {err[0]}"
+            return (f"Applied '{name}' to the LIVE session — prompt text + environment "
+                    "(model, thinking, tool toggles, skills, safety) are now active.")
         if action == "create":
             if not name:
                 return "create requires 'name'."
