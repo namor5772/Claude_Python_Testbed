@@ -1,0 +1,563 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SelfBot · Tool System Audit</title>
+<style>
+  :root {
+    --bg: #f5f6f9;
+    --surface: #ffffff;
+    --surface-2: #eceff4;
+    --ink: #191c24;
+    --ink-soft: #545b69;
+    --ink-faint: #868d9c;
+    --line: #dde1e9;
+    --line-strong: #c8cdd8;
+    --accent: #a8621b;
+    --accent-soft: #f3e6d4;
+    --ok: #1c7a4a;
+    --ok-soft: #dcefe3;
+    --warn: #8f6300;
+    --warn-soft: #f4ebd3;
+    --danger: #ad362d;
+    --danger-soft: #f6ddda;
+    --server: #3c568a;
+    --server-soft: #dce4f2;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --maxw: 940px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131519;
+      --surface: #1a1d23;
+      --surface-2: #23262f;
+      --ink: #e7e9ee;
+      --ink-soft: #a3aab8;
+      --ink-faint: #6d7686;
+      --line: #2a2e38;
+      --line-strong: #3a404c;
+      --accent: #e0a445;
+      --accent-soft: #38301f;
+      --ok: #4cc38a;
+      --ok-soft: #163027;
+      --warn: #d9a441;
+      --warn-soft: #33290f;
+      --danger: #e06a5f;
+      --danger-soft: #38201d;
+      --server: #82a0dc;
+      --server-soft: #1d2740;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #131519; --surface: #1a1d23; --surface-2: #23262f;
+    --ink: #e7e9ee; --ink-soft: #a3aab8; --ink-faint: #6d7686;
+    --line: #2a2e38; --line-strong: #3a404c;
+    --accent: #e0a445; --accent-soft: #38301f;
+    --ok: #4cc38a; --ok-soft: #163027; --warn: #d9a441; --warn-soft: #33290f;
+    --danger: #e06a5f; --danger-soft: #38201d; --server: #82a0dc; --server-soft: #1d2740;
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6f9; --surface: #ffffff; --surface-2: #eceff4;
+    --ink: #191c24; --ink-soft: #545b69; --ink-faint: #868d9c;
+    --line: #dde1e9; --line-strong: #c8cdd8;
+    --accent: #a8621b; --accent-soft: #f3e6d4;
+    --ok: #1c7a4a; --ok-soft: #dcefe3; --warn: #8f6300; --warn-soft: #f4ebd3;
+    --danger: #ad362d; --danger-soft: #f6ddda; --server: #3c568a; --server-soft: #dce4f2;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    margin: 0;
+  }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px 96px; }
+
+  /* ---- Masthead ---- */
+  header.mast {
+    max-width: var(--maxw); margin: 0 auto; padding: 56px 24px 32px;
+    border-bottom: 1px solid var(--line);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before {
+    content: ""; width: 26px; height: 2px; background: var(--accent);
+    display: inline-block;
+  }
+  h1 {
+    font-family: var(--mono); font-weight: 650; letter-spacing: -0.01em;
+    font-size: clamp(28px, 5vw, 42px); line-height: 1.1; margin: 18px 0 10px;
+    text-wrap: balance;
+  }
+  .lede { font-size: 17px; color: var(--ink-soft); max-width: 62ch; margin: 0; }
+  .meta-row {
+    display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 20px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--ink-faint);
+  }
+  .meta-row b { color: var(--ink-soft); font-weight: 600; }
+
+  /* ---- Verdict panel ---- */
+  .verdict {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--line); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; margin: 32px 0 8px;
+  }
+  .vcell { background: var(--surface); padding: 18px 20px; }
+  .vcell .num {
+    font-family: var(--mono); font-size: 30px; font-weight: 650;
+    letter-spacing: -0.02em; line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .vcell .lbl {
+    font-size: 12px; color: var(--ink-faint); margin-top: 8px;
+    text-transform: uppercase; letter-spacing: 0.06em; font-family: var(--mono);
+  }
+  .vcell .num.ok { color: var(--ok); }
+  .vcell .num.accent { color: var(--accent); }
+
+  /* ---- Sections ---- */
+  section { margin-top: 52px; }
+  h2 {
+    font-family: var(--mono); font-size: 21px; font-weight: 640;
+    letter-spacing: -0.01em; margin: 0 0 6px; scroll-margin-top: 24px;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2 .idx {
+    font-size: 13px; color: var(--accent); font-weight: 600;
+  }
+  h2 + .sub { color: var(--ink-soft); margin: 0 0 22px; max-width: 66ch; }
+  h3 {
+    font-family: var(--mono); font-size: 15px; font-weight: 620; margin: 30px 0 12px;
+    color: var(--ink); letter-spacing: -0.005em;
+  }
+  p { max-width: 68ch; }
+  code, .mono { font-family: var(--mono); }
+  p code, li code, td code, .inline-code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--surface-2); padding: 1px 6px; border-radius: 5px;
+    border: 1px solid var(--line); white-space: nowrap;
+  }
+
+  /* ---- Pipeline diagram ---- */
+  .pipe {
+    display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px;
+    margin: 20px 0 8px;
+  }
+  .pipe .stage {
+    flex: 1 1 160px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; position: relative;
+  }
+  .pipe .stage .tag {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+  }
+  .pipe .stage .title { font-family: var(--mono); font-weight: 620; margin: 6px 0 4px; font-size: 14px; }
+  .pipe .stage .desc { font-size: 13px; color: var(--ink-soft); line-height: 1.45; }
+  .pipe .arrow {
+    align-self: center; color: var(--ink-faint); font-size: 20px; flex: 0 0 auto;
+  }
+  @media (max-width: 640px) { .pipe .arrow { transform: rotate(90deg); } }
+
+  /* ---- Tables ---- */
+  .tscroll {
+    overflow-x: auto; border: 1px solid var(--line); border-radius: 12px;
+    margin: 8px 0 6px; background: var(--surface);
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 640px; }
+  thead th {
+    text-align: left; font-family: var(--mono); font-weight: 600; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-faint);
+    padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--line);
+    white-space: nowrap; position: sticky; top: 0;
+  }
+  tbody td { padding: 11px 16px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--surface-2); }
+  td .tname { font-family: var(--mono); font-weight: 600; color: var(--ink); white-space: nowrap; }
+  td .route { font-family: var(--mono); font-size: 12.5px; color: var(--ink-soft); white-space: nowrap; }
+  td.note { color: var(--ink-soft); font-size: 12.5px; }
+  .grp-cap {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin: 34px 0 4px;
+  }
+  .grp-cap h3 { margin: 0; }
+  .grp-cap .gate { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+
+  /* ---- Pills ---- */
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600;
+    letter-spacing: 0.03em; padding: 2px 8px; border-radius: 20px; white-space: nowrap;
+    border: 1px solid transparent;
+  }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .pill.danger { background: var(--danger-soft); color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+  .pill.server { background: var(--server-soft); color: var(--server); border-color: color-mix(in srgb, var(--server) 30%, transparent); }
+  .pill.plain { background: var(--surface-2); color: var(--ink-soft); border-color: var(--line); }
+
+  /* ---- Findings ---- */
+  .finding {
+    border: 1px solid var(--line); border-left: 3px solid var(--line-strong);
+    border-radius: 10px; background: var(--surface); padding: 16px 20px; margin: 14px 0;
+  }
+  .finding.pass { border-left-color: var(--ok); }
+  .finding.note { border-left-color: var(--accent); }
+  .finding.doc { border-left-color: var(--warn); }
+  .finding .fhead {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px;
+  }
+  .finding .fhead .ftitle { font-family: var(--mono); font-weight: 620; font-size: 14.5px; }
+  .finding p { margin: 6px 0 0; font-size: 14px; color: var(--ink-soft); max-width: 74ch; }
+  .finding p:first-of-type { color: var(--ink); }
+
+  /* ---- Ordered dispatch list ---- */
+  ol.dispatch { list-style: none; counter-reset: d; padding: 0; margin: 16px 0; }
+  ol.dispatch li {
+    counter-increment: d; position: relative; padding: 10px 0 10px 46px;
+    border-bottom: 1px solid var(--line); font-size: 14px;
+  }
+  ol.dispatch li:last-child { border-bottom: none; }
+  ol.dispatch li::before {
+    content: counter(d); position: absolute; left: 0; top: 9px;
+    width: 28px; height: 28px; border-radius: 7px; background: var(--surface-2);
+    border: 1px solid var(--line); color: var(--accent); font-family: var(--mono);
+    font-weight: 650; font-size: 13px; display: flex; align-items: center; justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }
+  ol.dispatch li .cond { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+  ol.dispatch li .to { color: var(--ink-soft); }
+
+  hr.soft { border: none; border-top: 1px solid var(--line); margin: 40px 0; }
+  .callout {
+    background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+    border-radius: 10px; padding: 14px 18px; margin: 18px 0; font-size: 14px;
+  }
+  .callout .k { font-family: var(--mono); font-weight: 620; color: var(--accent); }
+  footer {
+    max-width: var(--maxw); margin: 60px auto 0; padding: 24px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header class="mast">
+  <div class="eyebrow">SelfBot · Tool System Audit</div>
+  <h1>Every tool call, traced schema&nbsp;→&nbsp;dispatch&nbsp;→&nbsp;handler</h1>
+  <p class="lede">A wiring audit of the complete tool surface exposed by <code class="mono">SelfBot.py</code> — first-party tools, inherited MyAgent subsystems, and Anthropic server-side tools — checking that what the API is told exists is what actually runs.</p>
+  <div class="meta-row">
+    <span><b>File</b> SelfBot.py (~4,400 lines)</span>
+    <span><b>Provider</b> Anthropic-only</span>
+    <span><b>Method</b> three-layer contract verification</span>
+    <span><b>Date</b> 2026-07-09</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="verdict" role="group" aria-label="Audit summary">
+    <div class="vcell"><div class="num accent">29</div><div class="lbl">First-party schemas</div></div>
+    <div class="vcell"><div class="num accent">48</div><div class="lbl">Inherited mail tools</div></div>
+    <div class="vcell"><div class="num accent">2</div><div class="lbl">Server-side tools</div></div>
+    <div class="vcell"><div class="num ok">0</div><div class="lbl">Wiring defects</div></div>
+    <div class="vcell"><div class="num ok">0</div><div class="lbl">Orphan handlers</div></div>
+  </div>
+  <p class="sub" style="margin-top:14px;color:var(--ink-soft)">
+    <span class="pill ok">VERDICT · CLEAN</span> &nbsp;Every advertised schema resolves to a live handler, and every <code class="mono">do_&lt;name&gt;</code> handler is reachable from a schema. One <em>documentation</em> drift item was found (§7) — the code is correct; a comment in <code class="mono">CLAUDE_SELFBOT.md</code> is stale.
+  </p>
+
+  <!-- ============================================================ -->
+  <section id="model">
+    <h2><span class="idx">01</span> The three-layer contract</h2>
+    <p class="sub">SelfBot's own convention (from <code class="mono">CLAUDE_SELFBOT.md</code>) is that adding a tool requires three edits. The audit reverses that rule into a test: a tool is <em>correctly wired</em> only when all three layers agree. A gap in either direction is a bug.</p>
+
+    <div class="pipe">
+      <div class="stage">
+        <div class="tag">Layer 1</div>
+        <div class="title">Schema</div>
+        <div class="desc">A dict in a tool list (<code>TOOLS</code>, <code>DESKTOP_TOOLS</code>, …). Assembled by <code>_get_tools()</code> and shipped to the API.</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <div class="tag">Layer 2</div>
+        <div class="title">Dispatch</div>
+        <div class="desc"><code>_execute_tool(block)</code> matches <code>block.name</code> and routes it to a handler — or returns <code>"Unknown tool"</code>.</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage">
+        <div class="tag">Layer 3</div>
+        <div class="title">Implementation</div>
+        <div class="desc">A <code>do_&lt;name&gt;()</code> method (or inline code) that does the work and returns a string or content-block list.</div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <span class="k">Two deliberate exceptions.</span> <code class="mono">run_command</code> has no <code class="mono">do_run_command</code> — it routes to <code class="mono">run_powershell()</code> so it can pass through the safety gate. <code class="mono">get_skill</code> has no handler method — it is resolved inline inside dispatch. Both are intentional, not gaps.
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="precedence">
+    <h2><span class="idx">02</span> Dispatch precedence</h2>
+    <p class="sub"><code class="mono">_execute_tool()</code> is an ordered sequence of early-returns, not a flat lookup. Prefix-routed subsystems are tested <em>before</em> the native chain — which is why no native tool may begin with a mail prefix or contain <code class="mono">__</code>.</p>
+
+    <ol class="dispatch">
+      <li><span class="cond">block.name in _mcp_tools_by_name</span> <span class="to">→ <code>do_mcp_call(name, input)</code></span></li>
+      <li><span class="cond">name.startswith("gmail_"/"proton_"/"outlook_")</span> <span class="to">→ <code>getattr(self, "do_"+name)(input)</code></span></li>
+      <li><span class="cond">name == "manage_skills"</span> <span class="to">→ <code>do_manage_skills</code></span></li>
+      <li><span class="cond">name == "manage_prompts"</span> <span class="to">→ <code>do_manage_prompts</code></span></li>
+      <li><span class="cond">name == "run_command"</span> <span class="to">→ <code>run_powershell</code> (safety-gated)</span></li>
+      <li><span class="cond">name == "csv_search"</span> <span class="to">→ <code>do_csv_search</code></span></li>
+      <li><span class="cond">name in {13 desktop tools}</span> <span class="to">→ inner if-chain → <code>do_&lt;name&gt;</code> (guarded by desktop toggle)</span></li>
+      <li><span class="cond">name in {11 browser tools}</span> <span class="to">→ inner if-chain → <code>do_browser_*</code> (guarded by browser toggle)</span></li>
+      <li><span class="cond">name == "get_skill"</span> <span class="to">→ inline on-demand-skill lookup</span></li>
+      <li><span class="cond">otherwise</span> <span class="to">→ <code>"Unknown tool: {name}"</code> (catch-all)</span></li>
+    </ol>
+    <p style="font-size:13.5px;color:var(--ink-soft)">Because MCP (1) and mail (2) are matched first, their namespacing is load-bearing: MCP tools are <code class="mono">&lt;server&gt;__&lt;tool&gt;</code> (double underscore) and mail tools carry a family prefix — neither collides with any native name.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="inventory">
+    <h2><span class="idx">03</span> Complete tool inventory</h2>
+    <p class="sub">Every tool grouped by its schema list, with its dispatch route, implementation site, and gating. <span class="pill ok">∥ SAFE</span> marks the two tools eligible for concurrent execution; all others run sequentially.</p>
+
+    <!-- Core -->
+    <div class="grp-cap">
+      <h3>Core · <code class="mono">TOOLS</code></h3>
+      <span class="gate">Always sent — no toggle</span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Tool</th><th>Dispatch route</th><th>Implementation</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tname">run_command</span></td><td><span class="route">run_powershell()</span></td><td class="note">inline subprocess (PowerShell / bash)</td><td class="note">Safety-gated; no <code>do_</code> by design</td></tr>
+          <tr><td><span class="tname">csv_search</span></td><td><span class="route">do_csv_search</span></td><td class="note">SelfBot.py :3139</td><td class="note"><span class="pill ok">∥ SAFE</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Meta -->
+    <div class="grp-cap">
+      <h3>Meta · <code class="mono">SELFBOT_META_TOOLS</code></h3>
+      <span class="gate">Meta checkbox</span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Tool</th><th>Dispatch route</th><th>Implementation</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tname">manage_skills</span></td><td><span class="route">do_manage_skills</span></td><td class="note">SelfBot.py :4659</td><td class="note">CRUD <code>skills.json</code> (shared w/ MyAgent)</td></tr>
+          <tr><td><span class="tname">manage_prompts</span></td><td><span class="route">do_manage_prompts</span></td><td class="note">SelfBot.py :4725</td><td class="note">CRUD <code>system_prompts.json</code>; "Default" undeletable</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Desktop -->
+    <div class="grp-cap">
+      <h3>Desktop · <code class="mono">DESKTOP_TOOLS</code> <span style="color:var(--ink-faint);font-weight:400">(13)</span></h3>
+      <span class="gate">Desktop checkbox + <code>_HAS_DESKTOP</code> (pyautogui)</span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Tool</th><th>Implementation</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tname">screenshot</span></td><td class="route">do_screenshot :3349</td><td class="note">Full/region/multi-display capture → text+image blocks; desc patched at runtime with live resolution</td></tr>
+          <tr><td><span class="tname">mouse_click</span></td><td class="route">do_mouse_click :3379</td><td class="note">L/R/M button, single/double; accepts <code>x,y</code> or a <code>coordinate</code> pair fallback</td></tr>
+          <tr><td><span class="tname">type_text</span></td><td class="route">do_type_text :3399</td><td class="note">Types at cursor; clipboard-paste for non-ASCII</td></tr>
+          <tr><td><span class="tname">press_key</span></td><td class="route">do_press_key :3414</td><td class="note">Key / combo via pyautogui naming</td></tr>
+          <tr><td><span class="tname">mouse_scroll</span></td><td class="route">do_mouse_scroll :3434</td><td class="note">Wheel scroll, optional position</td></tr>
+          <tr><td><span class="tname">open_application</span></td><td class="route">do_open_application :3451</td><td class="note">Known-name map or full path; optional args</td></tr>
+          <tr><td><span class="tname">find_window</span></td><td class="route">do_find_window :3488</td><td class="note">Title match; optional activate</td></tr>
+          <tr><td><span class="tname">clipboard_read</span></td><td class="route">do_clipboard_read :3518</td><td class="note">Read clipboard text</td></tr>
+          <tr><td><span class="tname">clipboard_write</span></td><td class="route">do_clipboard_write :3528</td><td class="note">Write clipboard text</td></tr>
+          <tr><td><span class="tname">wait_for_window</span></td><td class="route">do_wait_for_window :3538</td><td class="note">Poll until a title appears (0.5s)</td></tr>
+          <tr><td><span class="tname">read_screen_text</span></td><td class="route">do_read_screen_text :3556</td><td class="note">OCR a screen region</td></tr>
+          <tr><td><span class="tname">find_image_on_screen</span></td><td class="route">do_find_image_on_screen :3603</td><td class="note">Template-match a reference image</td></tr>
+          <tr><td><span class="tname">mouse_drag</span></td><td class="route">do_mouse_drag :3626</td><td class="note">Drag between two points</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13px;color:var(--ink-soft)">All 13 share the group guard: if the Desktop toggle is off when one is called, dispatch returns a "Desktop control is disabled" string rather than executing.</p>
+
+    <!-- Browser -->
+    <div class="grp-cap">
+      <h3>Browser · <code class="mono">BROWSER_TOOLS</code> <span style="color:var(--ink-faint);font-weight:400">(11)</span></h3>
+      <span class="gate">Browser checkbox (Playwright/CDP)</span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Tool</th><th>Implementation</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tname">browser_open</span></td><td class="route">do_browser_open :4029</td><td class="note">Connect/launch Chrome or Edge on real profile</td></tr>
+          <tr><td><span class="tname">browser_navigate</span></td><td class="route">do_browser_navigate :4049</td><td class="note">Go to URL</td></tr>
+          <tr><td><span class="tname">browser_click</span></td><td class="route">do_browser_click :4058</td><td class="note">By CSS selector or visible text</td></tr>
+          <tr><td><span class="tname">browser_fill</span></td><td class="route">do_browser_fill :4072</td><td class="note">Clear + fill an input</td></tr>
+          <tr><td><span class="tname">browser_get_text</span></td><td class="route">do_browser_get_text :4081</td><td class="note">Element or full-page text</td></tr>
+          <tr><td><span class="tname">browser_run_js</span></td><td class="route">do_browser_run_js :4094</td><td class="note">Evaluate JS in page context</td></tr>
+          <tr><td><span class="tname">browser_screenshot</span></td><td class="route">do_browser_screenshot :4108</td><td class="note">Page capture → text+image blocks (max 2048px)</td></tr>
+          <tr><td><span class="tname">browser_close</span></td><td class="route">do_browser_close :4133</td><td class="note">Disconnect (browser stays open)</td></tr>
+          <tr><td><span class="tname">browser_wait_for</span></td><td class="route">do_browser_wait_for :4140</td><td class="note">Wait for a selector</td></tr>
+          <tr><td><span class="tname">browser_select</span></td><td class="route">do_browser_select :4155</td><td class="note">Choose a <code>&lt;select&gt;</code> option</td></tr>
+          <tr><td><span class="tname">browser_get_elements</span></td><td class="route">do_browser_get_elements :4170</td><td class="note">Query matching elements' metadata</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Dynamic -->
+    <div class="grp-cap">
+      <h3>Dynamic · <code class="mono">get_skill</code></h3>
+      <span class="gate">Injected only when ≥1 on-demand skill exists</span>
+    </div>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Tool</th><th>Dispatch route</th><th>Implementation</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tname">get_skill</span></td><td><span class="route">inline in _execute_tool</span></td><td class="note">Returns <code>skills[name]["content"]</code></td><td class="note"><span class="pill ok">∥ SAFE</span> · <code>enum</code> = live on-demand skill names</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="inherited">
+    <h2><span class="idx">04</span> Inherited MyAgent subsystems</h2>
+    <p class="sub">SelfBot gains MCP and three mail providers <em>by inheritance</em> — <code class="mono">class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin)</code> — imported optionally at module top and gated by <code class="mono">_HAS_MYAGENT_TOOLS</code> plus a per-subsystem <code class="mono">_HAS_*</code> capability flag. The mixin order matches MyAgent's exactly, preserving the <code class="mono">_proton_*</code>/<code class="mono">_outlook_*</code> helper-prefix anti-shadowing.</p>
+
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Subsystem</th><th>Count</th><th>Names</th><th>Route</th><th>Gate</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="tname">MCP</span></td>
+            <td class="note" style="font-variant-numeric:tabular-nums">runtime</td>
+            <td class="note"><code>&lt;server&gt;__&lt;tool&gt;</code> from <code>mcp_servers.json</code></td>
+            <td class="route">do_mcp_call :514</td>
+            <td class="note">MCP box + <code>_HAS_MCP</code></td>
+          </tr>
+          <tr>
+            <td><span class="tname">Gmail</span></td>
+            <td class="note" style="font-variant-numeric:tabular-nums">16</td>
+            <td class="note"><code>gmail_*</code> — search/read/send/reply/draft/label/trash/…</td>
+            <td class="route">do_gmail_* (GmailMixin)</td>
+            <td class="note">Google box + <code>_HAS_GOOGLE</code></td>
+          </tr>
+          <tr>
+            <td><span class="tname">Proton (IMAP)</span></td>
+            <td class="note" style="font-variant-numeric:tabular-nums">16</td>
+            <td class="note"><code>proton_*</code> — 1:1 mirror of Gmail surface</td>
+            <td class="route">do_proton_* (ProtonMailMixin)</td>
+            <td class="note">IMAP box + <code>_HAS_PROTONMAIL</code></td>
+          </tr>
+          <tr>
+            <td><span class="tname">Outlook</span></td>
+            <td class="note" style="font-variant-numeric:tabular-nums">16</td>
+            <td class="note"><code>outlook_*</code> — 1:1 mirror via MS Graph</td>
+            <td class="route">do_outlook_* (OutlookMixin)</td>
+            <td class="note">Outlook box + <code>_HAS_OUTLOOK</code></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Runtime enum patching</h3>
+    <p>Each mail tool declares an <code class="inline-code">account</code> parameter whose <code class="inline-code">enum</code> is a placeholder in the schema. <code class="mono">_get_tools()</code> deep-copies the list and injects the live account names (<code class="mono">_get_google_account_names()</code> etc.) before shipping — so the model only ever sees configured accounts, and an empty accounts file yields an empty enum (a clearer failure than dropping the tools).</p>
+
+    <div class="callout">
+      <span class="k">Correctness note — MCP_TOOLS aliasing.</span> SelfBot does <code class="mono">from myagent.constants import MCP_TOOLS</code>, binding its name to the <em>same list object</em>. <code class="mono">mcp_mixin.py</code> populates it with <code class="mono">MCP_TOOLS.clear()</code> / <code class="mono">.append()</code> — in-place mutation, never rebinding — so the runtime-discovered tools are visible through SelfBot's alias. A <code class="mono">MCP_TOOLS = […]</code> reassignment would have left SelfBot holding a forever-empty list. This is the subtlest wiring point in the system, and it is correct.
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="server">
+    <h2><span class="idx">05</span> Server-side tools <span class="pill server" style="font-size:11px">ANTHROPIC-HOSTED</span></h2>
+    <p class="sub">Two tools execute on Anthropic's servers, not in <code class="mono">_execute_tool</code>. They are appended to <em>every</em> request in <code class="mono">stream_worker</code> — there is no checkbox — via <code class="mono">client.beta.messages.stream()</code> with the matching beta headers.</p>
+
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Tool</th><th>API type</th><th>Beta header</th><th>Handling</th></tr></thead>
+        <tbody>
+          <tr><td><span class="tname">web_search</span></td><td class="route">web_search_20250305</td><td class="route">web-search-2025-03-05</td><td class="note">Streams a <code>server_tool_use</code> block → "Searching the web…" activity notice</td></tr>
+          <tr><td><span class="tname">code_execution</span></td><td class="route">code_execution_20250825</td><td class="route">code-execution-2025-08-25</td><td class="note">"Running code execution…" notice; file outputs extracted from <code>final_message</code> post-stream</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13.5px;color:var(--ink-soft)">The stream also carries the <code class="mono">files-api-2025-04-14</code> beta so code-execution file artifacts can be downloaded after the turn (file IDs aren't available mid-stream). Because these are always-on, every SelfBot conversation can search the web or run code without any toggle — a design fact worth knowing for cost, since server tool use bills through <code class="mono">usage</code>.</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="exec">
+    <h2><span class="idx">06</span> Execution model &amp; safety gate</h2>
+
+    <h3>Parallel vs. sequential</h3>
+    <p>When a turn requests multiple tools, <code class="mono">stream_worker</code> partitions them by original index into <code class="inline-code">PARALLEL_SAFE = {"csv_search", "get_skill"}</code> (run concurrently via <code class="mono">ThreadPoolExecutor</code>) and everything else (run one at a time, in order). Results land in a pre-allocated list keyed by original position, preserving the API-expected ordering.</p>
+    <p style="color:var(--ink-soft);font-size:13.5px">This is deliberately conservative: MCP, mail, and web tools are network-bound and could safely parallelize, but SelfBot keeps them sequential. Correct and safe — just not maximally fast. Desktop/browser tools <em>must</em> be sequential (shared UI state).</p>
+
+    <h3>run_command safety — two tiers</h3>
+    <p><code class="mono">run_powershell()</code> funnels every command through <code class="mono">_check_command_safety()</code>, which regex-matches against platform-specific lists:</p>
+    <div class="tscroll">
+      <table>
+        <thead><tr><th>Outcome</th><th>Trigger</th><th>Behavior</th></tr></thead>
+        <tbody>
+          <tr><td><span class="pill danger">blocked</span></td><td class="note"><code>COMMAND_BLOCKED</code> match (Format-Volume, diskpart, rm -rf /, …)</td><td class="note">Rejected outright — never runs</td></tr>
+          <tr><td><span class="pill warn">confirm</span></td><td class="note"><code>COMMAND_CONFIRM</code> match, pattern <em>not</em> bypassed</td><td class="note">Modal dialog naming the matched pattern</td></tr>
+          <tr><td><span class="pill server">skipped</span></td><td class="note"><code>COMMAND_CONFIRM</code> match, pattern in <code>_disabled_confirm_patterns</code></td><td class="note">Runs, emits a red ⚠ "Confirm bypassed" warning</td></tr>
+          <tr><td><span class="pill ok">safe</span></td><td class="note">No match</td><td class="note">Runs silently</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="font-size:13.5px;color:var(--ink-soft)">The same <code class="mono">_disabled_confirm_patterns</code> set — editable via the <strong>Safety</strong> dialog — also gates the 5 destructive tools per mail family (<code class="mono">*_send/reply/send_draft/trash/delete_label</code>), which the mail mixins consult through <code class="mono">mail_common.confirm_action</code>. It persists top-level in <code class="mono">app_state.json</code> (SelfBot has no per-instruction store).</p>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="findings">
+    <h2><span class="idx">07</span> Findings</h2>
+    <p class="sub">Cross-referencing all three layers plus the safety and execution paths. One documentation-drift item; no code defects.</p>
+
+    <div class="finding pass">
+      <div class="fhead"><span class="pill ok">PASS</span><span class="ftitle">Schema ↔ dispatch ↔ handler are consistent</span></div>
+      <p>All 29 first-party schemas resolve to a handler, and every <code class="mono">do_&lt;name&gt;</code> method is reachable from a schema. No orphan schemas (which would return "Unknown tool") and no dead handlers.</p>
+    </div>
+
+    <div class="finding pass">
+      <div class="fhead"><span class="pill ok">PASS</span><span class="ftitle">Dynamic mail dispatch resolves via the MRO</span></div>
+      <p>Dispatch uses <code class="mono">getattr(self, f"do_{block.name}")</code> with no local mail methods — the 48 handlers live only on the inherited mixins. Spot-checks (<code class="mono">do_gmail_search/trash</code>, <code class="mono">do_proton_trash</code>, <code class="mono">do_outlook_trash</code>) all resolve. The <code class="mono">do_mcp_call(tool_name, arguments)</code> signature matches its call site exactly.</p>
+    </div>
+
+    <div class="finding pass">
+      <div class="fhead"><span class="pill ok">PASS</span><span class="ftitle">Image-returning tools honor the tool_result contract</span></div>
+      <p><code class="mono">do_screenshot</code> and <code class="mono">do_browser_screenshot</code> return a <em>list</em> of <code>text</code>+<code>image</code> blocks, and the loop assigns it straight to <code>tool_result.content</code> — which Anthropic accepts as either a string or a block list. Valid either way.</p>
+    </div>
+
+    <div class="finding note">
+      <div class="fhead"><span class="pill plain">NOTE</span><span class="ftitle">Server-side tools are unconditionally on</span></div>
+      <p><code class="mono">web_search</code> and <code class="mono">code_execution</code> are appended to every request with no gating checkbox. Intentional for an Anthropic-only app, but it means every conversation carries their capability (and potential billing) — unlike the desktop/browser/mail groups, which are opt-in.</p>
+    </div>
+
+    <div class="finding note">
+      <div class="fhead"><span class="pill plain">NOTE</span><span class="ftitle">Parallelism is conservative</span></div>
+      <p>Only <code class="mono">csv_search</code> and <code class="mono">get_skill</code> run concurrently. Network-bound MCP/mail/web tools are executed sequentially even though they'd be safe to parallelize. No correctness impact — purely a latency trade-off.</p>
+    </div>
+
+    <div class="finding doc">
+      <div class="fhead"><span class="pill warn">DOC DRIFT</span><span class="ftitle">The <code>-Force</code>/<code>-Recurse</code> patterns are fixed, but the doc still calls them a no-op</span></div>
+      <p>The code (SelfBot.py :741–742) now uses <code class="inline-code">(?&lt;!\S)-Recurse\b</code> / <code class="inline-code">(?&lt;!\S)-Force\b</code> lookbehind anchors — so those bare-switch confirm patterns <em>do</em> match now (fixed in commit <code class="mono">bace7bb</code>). But <code class="mono">CLAUDE_SELFBOT.md</code> still states they "never actually match … a latent no-op." The documentation is stale relative to the fix; the code is correct. Worth a one-line doc update.</p>
+    </div>
+  </section>
+
+  <hr class="soft">
+  <p style="font-size:13px;color:var(--ink-faint)">Line numbers reference <code class="mono">SelfBot.py</code> as audited on the <code class="mono">refultra</code> branch. Mail-tool bodies live in <code class="mono">myagent/{gmail,protonmail,outlook}_mixin.py</code>; MCP in <code class="mono">myagent/mcp_mixin.py</code>; tool schemas for the inherited groups in <code class="mono">myagent/constants.py</code>.</p>
+</div>
+
+<footer>
+  SelfBot Tool System Audit · schema → dispatch → handler · verdict: clean, 1 doc-drift item
+</footer>
+</body>
+</html>
