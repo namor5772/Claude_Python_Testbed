@@ -29,6 +29,7 @@ import subprocess
 import re
 import io
 import time
+import signal
 import concurrent.futures
 
 # --- Optional MyAgent tool subsystems (reused as mixins) --------------------
@@ -1083,6 +1084,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if not IS_WINDOWS:
+            # macOS: a SIGTERM (peer duo-shutdown, kill/pkill) runs the same
+            # graceful close as [X] — Windows gets this for free via WM_CLOSE.
+            try:
+                signal.signal(signal.SIGTERM, self._handle_sigterm)
+            except ValueError:
+                pass  # not on the main thread (never in practice)
         # Connect MCP servers after the UI is up so a slow stdio handshake never
         # blocks launch (no-op without mcp_servers.json / the mcp package).
         if _HAS_MYAGENT_TOOLS and _HAS_MCP:
@@ -1191,11 +1199,23 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._send_delay = 0  # 0 when solo, delay_seconds*1000 when paired
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
         if not self._is_second_instance:
-            self._auto_chat_btn = tk.Button(
-                names_toolbar, text="Auto: OFF", font=("Arial", 9),
-                width=10, command=self._toggle_auto_chat,
-                bg="#c62828", fg="white", pady=0, bd=1, highlightthickness=0,
-            )
+            if IS_WINDOWS:
+                self._auto_chat_btn = tk.Button(
+                    names_toolbar, text="Auto: OFF", font=("Arial", 9),
+                    width=10, command=self._toggle_auto_chat,
+                    bg="#c62828", fg="white", pady=0, bd=1, highlightthickness=0,
+                )
+            else:
+                # macOS: Aqua tk.Buttons ignore bg — the face stays white, so the
+                # white fg made the green/red state unreadable. A Label honours
+                # bg/fg on Aqua; style it as a button and bind the click —
+                # .config/.pack/.winfo_ismapped all behave identically.
+                self._auto_chat_btn = tk.Label(
+                    names_toolbar, text="Auto: OFF", font=("Arial", 9),
+                    width=10, bg="#c62828", fg="white", bd=1, relief="raised",
+                    padx=4, cursor="pointinghand",
+                )
+                self._auto_chat_btn.bind("<Button-1>", lambda e: self._toggle_auto_chat())
             # Start hidden — shown by _poll_for_peer when paired
             # Delay selector (also hidden until peer detected)
             self._delay_label = tk.Label(names_toolbar, text="Delay(s)", font=("Arial", 10))
@@ -3851,6 +3871,37 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if self._auto_chat.get():
             self._send_delay = val * 1000
 
+    def _macos_peer_pids(self):
+        """PIDs of other running SelfBot.py processes — macOS peer detection.
+
+        Windows finds the peer by enumerating visible "Claude SelfBot" windows,
+        but pygetwindow is Win32-only and reading another app's window title on
+        macOS needs a Screen Recording consent. Detect by process instead: a
+        SelfBot.py process IS a live window (a Tk failure kills the process, and
+        a zombie's parenthesised ps command never matches). A match is a python
+        executable with a SelfBot.py argument — the same shape the startup lock
+        check verifies.
+        """
+        try:
+            out = subprocess.run(
+                ["ps", "-axo", "pid=,command="],
+                capture_output=True, text=True, timeout=5,
+            ).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        peers = []
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) < 3 or not parts[0].isdigit():
+                continue
+            pid = int(parts[0])
+            if pid == self._my_pid:
+                continue
+            exe = os.path.basename(parts[1]).lower()
+            if exe.startswith("python") and any(p.endswith("SelfBot.py") for p in parts[2:]):
+                peers.append(pid)
+        return peers
+
     def _poll_for_peer(self):
         """Check for another SelfBot window; enable/disable auto-chat and delay accordingly."""
         if getattr(self, '_closing', False):
@@ -3863,6 +3914,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 ]
             except Exception:
                 peers = []
+        elif not IS_WINDOWS:
+            peers = self._macos_peer_pids()
         else:
             peers = []
         has_peer = len(peers) > 0
@@ -3995,6 +4048,21 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         except Exception:
             pass
 
+    def _handle_sigterm(self, signum, frame):
+        """Graceful close on SIGTERM (macOS) — the analog of Windows' WM_CLOSE.
+
+        Received from a closing peer's duo shutdown or a plain kill/pkill. The
+        handler runs between bytecodes on the main thread, so hand off to the
+        Tk event loop instead of tearing down widgets from inside a signal
+        frame.
+        """
+        if getattr(self, '_closing', False):
+            return
+        try:
+            self.root.after(0, self._on_close)
+        except tk.TclError:
+            pass  # root already destroyed — process is exiting anyway
+
     def _on_close(self):
         """Window close handler — stop auto-chat, wait for streaming, save, close peer, destroy."""
         # Guard against re-entrant calls (peer sending WM_CLOSE back)
@@ -4054,6 +4122,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         os.kill(pid, 9)
                     except Exception:
                         pass
+        elif not IS_WINDOWS:
+            # macOS analog of the WM_CLOSE broadcast: SIGTERM each peer — its
+            # _handle_sigterm schedules _on_close, so it finishes any stream,
+            # saves its chat, and exits cleanly (the _closing guard stops the
+            # peers from bouncing the shutdown back and forth).
+            for pid in self._macos_peer_pids():
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                except OSError:
+                    pass
         # First instance owns the lock file — remove it on exit
         if not self._is_second_instance:
             try:
@@ -5349,7 +5427,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
 
 if __name__ == "__main__":
-    import signal
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     root = tk.Tk()
     app = App(root)

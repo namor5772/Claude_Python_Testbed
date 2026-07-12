@@ -37,6 +37,23 @@ the built apps afterwards: that strips the pasted-on icon (re-run
 one-time permission prompts (notifications / System Events) because the
 code hash changed.
 
+**Detachment trap (why the launch lines read `cd X && (nohup ... &)`)** — under
+`do shell script`, a trailing `&` on a *compound* list (`cd X && cmd &`) does
+NOT detach: the spawned `sh` sits in `wait4()` on the child until the Python app
+exits, `do shell script` waits on the `sh`, and the applet never quits (the same
+string through a plain `/bin/sh -c` detaches instantly — it's specific to
+osascript's spawn context). A still-running applet then swallows every further
+double-click, because macOS sends a running app a `reopen` event instead of
+launching it again — and an applet blocked inside its `run` handler can't
+service events. Symptom (until fixed 2026-07-13): the second press of the
+SelfBot alias, which should open the self-chat peer, did nothing (on Windows
+each press starts a fresh `pythonw`, so the twins never had the problem).
+Backgrounding a *simple* command inside a foreground subshell —
+`cd X && (nohup cmd > /dev/null 2>&1 &)` — detaches for real; the applet quits
+about a second after launch, so each press is a fresh launch, and the launchers
+also carry an `on reopen` handler that launches/focuses directly in case a
+second press lands inside that one still-alive second.
+
 The **Heartbeat Log** launcher is the odd one out — it opens a *viewer*, not a
 Python app. Its `.app` does nothing but `open -a Terminal` the bundled
 `view_heartbeat.command`, which pages `~/Library/Logs/myagent/heartbeat.log` in
