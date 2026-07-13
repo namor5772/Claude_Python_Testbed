@@ -2600,7 +2600,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     @staticmethod
     def _sanitize_filename(name, ext='.json'):
         """Convert a chat name to a safe filename."""
-        safe = re.sub(r'[<>:"/\\|?*]', '_', name)
+        # \x00-\x1f: Windows open() rejects control characters — a multi-line
+        # first user message otherwise puts \n into the auto-save filename.
+        safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', name)
         safe = safe.strip('. ')
         return (safe or '_') + ext
 
@@ -4240,9 +4242,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if self.streaming:
             self.root.after(200, self._finish_close)
             return
-        self._save_last_state()
+        # Best-effort saves — a failure must never abort the close: _closing is
+        # already latched, so an exception past this point leaves [X] permanently
+        # dead (every later click returns at the re-entrancy guard).
+        try:
+            self._save_last_state()
+        except Exception:
+            pass
         # Auto-save the chat on close (all instances)
-        self._auto_save_on_close()
+        try:
+            self._auto_save_on_close()
+        except Exception:
+            pass
         # Log this process's cumulative API cost to the shared APICostLog.txt (skips if 0).
         self._log_api_cost(self._session_cost)
         # Tear down MCP servers (no-op if never connected).
