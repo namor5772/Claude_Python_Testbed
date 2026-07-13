@@ -4997,6 +4997,78 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return f"Deleted system prompt '{name}'."
         return f"Unknown action: {action}"
 
+    @staticmethod
+    def _estimate_content_tokens(content):
+        """Rough token estimate for one message's content: ~chars/4, images ~1600 flat.
+
+        Used only to decide how much history to drop on a context-overflow 400 —
+        never for billing — so a coarse heuristic is fine (and deliberately errs
+        toward over-counting base64 images, which is the safe direction for trimming)."""
+        if isinstance(content, str):
+            return len(content) // 4
+        if not isinstance(content, list):
+            return len(str(content)) // 4
+        total = 0
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "image":
+                    total += 1600  # ~1MP image ≈ 1.15–1.6K tokens regardless of base64 length
+                else:
+                    try:
+                        total += len(json.dumps(block, default=str)) // 4
+                    except (TypeError, ValueError):
+                        total += len(str(block)) // 4
+            else:
+                # Anthropic SDK block objects (assistant tool_use/text) — repr is roughly proportional
+                total += len(str(block)) // 4
+        return total
+
+    def _trim_history_for_context(self, messages, reported_tokens=None, reported_max=None):
+        """Drop the oldest conversation rounds so `messages` fits the context window.
+
+        Self-chatting duos accumulate history without bound; eventually the prompt
+        exceeds the model's context window and the API returns a 400 'prompt is too
+        long' — which, unlike 429/529, is not retryable as-is. This trims `messages`
+        in place, cutting ONLY at genuine user-turn boundaries so tool_use/tool_result
+        pairs are never orphaned and the first kept message is always a real user turn.
+        Always keeps at least the last two rounds. Returns the count removed (0 = could
+        not trim further, i.e. even the recent context alone is over budget)."""
+        def is_turn_start(m):
+            # A "real" user turn (injected peer text or human input), NOT a tool_result carrier.
+            if m.get("role") != "user":
+                return False
+            c = m.get("content")
+            if isinstance(c, str):
+                return True
+            if isinstance(c, list):
+                for b in c:
+                    btype = b.get("type") if isinstance(b, dict) else getattr(b, "type", None)
+                    return btype != "tool_result"
+                return True  # empty list — treat as a turn start
+            return True
+        starts = [i for i, m in enumerate(messages) if is_turn_start(m)]
+        if len(starts) <= 2:
+            return 0  # nothing safe to drop — keep the current exchange intact
+        max_cut = starts[-2]  # never cut past this: preserve the last two rounds
+        if reported_tokens and reported_max and reported_tokens > reported_max:
+            target = int(reported_max * 0.75)  # headroom for system prompt, tools, and output
+            need_remove = reported_tokens - target
+            cut_at, removed = 0, 0
+            for s in starts[1:]:
+                if s > max_cut:
+                    break
+                removed += sum(self._estimate_content_tokens(messages[i].get("content"))
+                               for i in range(cut_at, s))
+                cut_at = s
+                if removed >= need_remove:
+                    break
+        else:
+            cut_at = min(starts[len(starts) // 2], max_cut)  # unknown size — drop the oldest half
+        if cut_at <= 0:
+            cut_at = min(starts[1], max_cut)  # guarantee at least one round is dropped
+        del messages[:cut_at]
+        return cut_at
+
     def stream_worker(self, messages):
         try:
             # Sync temperature from spinbox in case user typed a value without pressing Enter
@@ -5115,6 +5187,22 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                             raise  # final attempt — let outer except handle it
                     except anthropic.APIStatusError as e:
                         emsg = str(getattr(e, "message", "") or e).lower()
+                        if e.status_code == 400 and "too long" in emsg:
+                            # Context-window overflow — inevitable in a long self-chat, and
+                            # NOT retryable as-is (unlike 429/529). Drop the oldest rounds and
+                            # retry; the reported "<T> tokens > <M> maximum" sizes the trim.
+                            mt = re.search(r"(\d[\d,]*)\s*tokens\s*>\s*(\d[\d,]*)", emsg)
+                            rep_tok = int(mt.group(1).replace(",", "")) if mt else None
+                            rep_max = int(mt.group(2).replace(",", "")) if mt else None
+                            removed = self._trim_history_for_context(messages, rep_tok, rep_max)
+                            if removed > 0:
+                                self.queue.put({"type": "warning", "content":
+                                    f"⚠ Context exceeded the model's limit — dropped the {removed} "
+                                    f"oldest message(s) and retried; earlier history is no longer in "
+                                    f"context.\n"})
+                                full_text = ""
+                                continue
+                            raise  # only the last two rounds remain and still overflow — surface it
                         if (e.status_code == 400 and "temperature" in emsg
                                 and "temperature" in api_kwargs):
                             # A model the version parser didn't flag rejected the
