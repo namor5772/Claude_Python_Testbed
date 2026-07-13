@@ -1194,7 +1194,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # Auto-chat starts disabled (solo mode); enabled when peer detected
         self._auto_chat = tk.BooleanVar(value=False)
         self._auto_chat_user_off = False  # set when user manually toggles off; cleared when peer leaves
-        self._ever_had_peer = False  # set True when a peer is first detected; used by close-save logic
+        self._ever_had_peer = False  # set True when a peer is first detected; arms the duo-shutdown watchdog
+        self._peer_gone_polls = 0  # consecutive peer-less polls once armed (watchdog debounce)
         self._pending_injection = False  # True when a response completed but wasn't injected (Auto was OFF)
         self._send_delay = 0  # 0 when solo, delay_seconds*1000 when paired
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
@@ -3903,9 +3904,20 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return peers
 
     def _poll_for_peer(self):
-        """Check for another SelfBot window; enable/disable auto-chat and delay accordingly."""
+        """Check for another SelfBot window; enable/disable auto-chat and delay accordingly.
+
+        Also the duo-shutdown watchdog: once this instance has been paired
+        (_ever_had_peer), a vanished peer means the duo is over — the survivor
+        closes itself gracefully (finish streaming, save chat, exit) instead of
+        lingering solo. This covers UNGRACEFUL peer deaths (crash, taskkill /F,
+        a model-driven self-kill via run_command) where the dying peer never
+        reached _finish_close's WM_CLOSE/SIGTERM broadcast. Three consecutive
+        peer-less polls (~6 s) debounce the trigger; enumeration failures don't
+        count, so a transient pygetwindow hiccup can't false-fire it.
+        """
         if getattr(self, '_closing', False):
             return
+        enum_ok = True
         if IS_WINDOWS and _HAS_DESKTOP:
             try:
                 peers = [
@@ -3914,15 +3926,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 ]
             except Exception:
                 peers = []
+                enum_ok = False
         elif not IS_WINDOWS:
             peers = self._macos_peer_pids()
         else:
             peers = []
         has_peer = len(peers) > 0
         was_paired = self._auto_chat.get()
+        if has_peer:
+            self._ever_had_peer = True
+            self._peer_gone_polls = 0
         if has_peer and not was_paired and not self._auto_chat_user_off:
             # Peer just appeared — enable auto-chat and delay, show controls
-            self._ever_had_peer = True
             self._auto_chat.set(True)
             self._send_delay = self._delay_seconds * 1000
             if not self._is_second_instance:
@@ -3945,6 +3960,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 self._auto_chat_btn.pack_forget()
                 self._delay_label.pack_forget()
                 self._delay_spin.pack_forget()
+            # Duo-shutdown watchdog: we were paired and the peer is gone.
+            if self._ever_had_peer and enum_ok:
+                self._peer_gone_polls += 1
+                if self._peer_gone_polls >= 3:
+                    self.queue.put({"type": "warning",
+                                    "content": "⚠ Peer SelfBot instance is gone — closing this instance too (duo shutdown)."})
+                    self._on_close()
+                    return
         self.root.after(2000, self._poll_for_peer)
 
     def _inject_response_to_other(self):
