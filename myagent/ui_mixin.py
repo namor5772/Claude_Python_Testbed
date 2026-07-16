@@ -283,8 +283,9 @@ class UIMixin:
                 self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
             elif support == "extended" and self.provider == "xAI":
                 # Grok models with a reasoning_effort knob (grok-4.3:
-                # None/Low/Medium/High; grok-4.20-multi-agent: Low..Xhigh —
-                # the knob is agent collaboration count there). Unlike OpenAI,
+                # None/Low/Medium/High; grok-4.5 and grok-4.20-multi-agent:
+                # Low..Xhigh — 4.5 is always-reasoning, and the multi-agent
+                # knob is agent collaboration count). Unlike OpenAI,
                 # xAI accepts temperature alongside reasoning, so
                 # _on_thinking_mode_changed packs the temp widgets after the combo.
                 self._thinking_mode_label.config(text="Reasoning")

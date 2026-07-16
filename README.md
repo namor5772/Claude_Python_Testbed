@@ -159,6 +159,7 @@ The parameter widgets are **model-aware**: controls that a model rejects are *hi
 | OpenAI `gpt-5.x-chat-*` "Instant" | None (non-reasoning) | Hidden (rejected by API); Verbosity combobox shown — all GPT-5 variants get Low/Medium/High `text.verbosity` |
 | Gemini 2.5 / 3.x | Effort: low (1K) / medium (8K) / high (24K) thinking budget | Always shown (API accepts both) |
 | xAI grok-4.3 | Reasoning combobox: None/Low/Medium/High (Low = API default) | Always shown (API accepts both) |
+| xAI grok-4.5 | Reasoning combobox: Low/Medium/High/Xhigh — always-reasoning, no None (explicit disable is a 400); the 2026-07 agentic-coding flagship at $2/$6 per MTok, 500K context | Always shown |
 | xAI grok-4.20-multi-agent | Reasoning combobox: Low/Medium/High/Xhigh (sets agent collaboration count) | Always shown |
 | xAI pinned `-reasoning`/`-non-reasoning`, grok-build | None — behaviour baked into the model id | Shown |
 | Ollama thinking models (Qwen3, DeepSeek-R1, gpt-oss) | Boolean `think` checkbox | Shown |
@@ -278,7 +279,7 @@ First use opens a browser sign-in; the token cache then refreshes silently — t
 
 ### API Cost Tracking
 
-Live cost accounting across Anthropic / OpenAI / Gemini / xAI: each streamed call's usage (including cache write/read tokens) is priced against the longest-prefix-matched tables in `myagent/constants.py` (documented in `MyAgent_Pricing.txt`) and shown as a running blue cost line. **xAI is exact, not estimated**: the API reports the authoritative billed cost per call (`usage.cost_in_usd_ticks`, 1 tick = $10⁻¹⁰), which already includes its cached-input discount ($0.20/M — xAI caches aggressively) and the $0.005 server-tool invocation fees; MyAgent uses that figure directly and falls back to the table only if the field is absent (verified live: tracker matched the API to ten decimals). When a run ends — GUI or headless, success or failure — one semicolon-delimited line `{timestamp};{provider};{model};{cost}` is appended to `APICostLog.txt` (gitignored, per-machine). Ollama runs are free and skip the log.
+Live cost accounting across Anthropic / OpenAI / Gemini / xAI: each streamed call's usage (including cache write/read tokens) is priced against the longest-prefix-matched tables in `myagent/constants.py` (documented in `MyAgent_Pricing.txt`) and shown as a running blue cost line. **xAI is exact, not estimated**: the API reports the authoritative billed cost per call (`usage.cost_in_usd_ticks`, 1 tick = $10⁻¹⁰), which already includes its cached-input discount ($0.20/M on most families, $0.50/M on grok-4.5 — xAI caches aggressively) and the $0.005 server-tool invocation fees; MyAgent uses that figure directly and falls back to the table only if the field is absent (verified live: tracker matched the API to ten decimals). When a run ends — GUI or headless, success or failure — one semicolon-delimited line `{timestamp};{provider};{model};{cost}` is appended to `APICostLog.txt` (gitignored, per-machine). Ollama runs are free and skip the log.
 
 ### Other niceties
 

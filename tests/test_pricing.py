@@ -41,12 +41,16 @@ class TestGetPricing(unittest.TestCase):
         ("Gemini", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06},
         ("Gemini", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06},
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
+        ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.20-multi-agent-0309"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-build-0.1"): {"input": 1e-06, "output": 2e-06},
-        # Aliases (live catalog 2026-07-05): grok-code-fast-1 folds into
-        # grok-build-0.1's price; grok-latest resolves to grok-4.3.
+        # Aliases (live catalog 2026-07-17): grok-code-fast-1 folds into
+        # grok-build-0.1's price; grok-latest resolves to grok-4.3; the
+        # longer grok-build-latest entry (re-aliased to grok-4.5) must win
+        # over the cheaper grok-build prefix.
         ("xAI", "grok-code-fast-1"): {"input": 1e-06, "output": 2e-06},
         ("xAI", "grok-latest"): {"input": 1.25e-06, "output": 2.5e-06},
+        ("xAI", "grok-build-latest"): {"input": 2e-06, "output": 6e-06},
         # Retired families are no longer priced (the API rejects their ids)
         ("xAI", "grok-3-mini"): None,
         ("xAI", "totally-unknown-xyz"): None,

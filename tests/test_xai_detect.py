@@ -3,11 +3,11 @@
 Locks the reasoning-effort matrix (longest-prefix match), the text-only
 vision detection, and the UIMixin thinking-support plumbing that hangs off
 them for provider "xAI". The matrix mirrors the LIVE /v1/models catalog
-(verified 2026-07-05): grok-4.3 takes none/low/medium/high,
-grok-4.20-multi-agent takes low..xhigh (the knob is agent collaboration
-count), and everything else — the pinned -reasoning/-non-reasoning
-variants, grok-build, and the aliases (bare grok-4.20, grok-latest) — has
-no client-side knob."""
+(verified 2026-07-17): grok-4.3 takes none/low/medium/high, grok-4.5 takes
+low..xhigh (always-reasoning — "none" is HTTP 400), grok-4.20-multi-agent
+takes low..xhigh (the knob is agent collaboration count), and everything
+else — the pinned -reasoning/-non-reasoning variants, grok-build, and the
+aliases (bare grok-4.20, grok-latest) — has no client-side knob."""
 import unittest
 
 from myagent.ui_mixin import UIMixin
@@ -25,6 +25,9 @@ class TestXaiReasoningValues(unittest.TestCase):
         "grok-4.3": ["none", "low", "medium", "high"],
         # Alias/dated ids inherit their family's knob by prefix
         "grok-4.3-latest": ["none", "low", "medium", "high"],
+        # grok-4.5 is always-reasoning — no "none" (HTTP 400, live-verified)
+        "grok-4.5": ["low", "medium", "high", "xhigh"],
+        "grok-4.5-latest": ["low", "medium", "high", "xhigh"],
         # Longest prefix wins — multi-agent must NOT fall through to a
         # shorter family entry
         "grok-4.20-multi-agent-0309": ["low", "medium", "high", "xhigh"],
@@ -54,8 +57,12 @@ class TestXaiReasoningValues(unittest.TestCase):
 class TestXaiVisionModel(unittest.TestCase):
     CASES = {
         "grok-4.3": True,
+        "grok-4.5": True,
         "grok-4.20-0309-non-reasoning": True,
         "grok-latest": True,
+        # Re-aliased to grok-4.5 (vision) in the 2026-07 catalog — must NOT
+        # be caught by the grok-build-0 prefix
+        "grok-build-latest": True,
         "grok-build-0.1": False,
         "grok-code-fast-1": False,  # alias of grok-build-0.1
     }
@@ -69,7 +76,7 @@ class TestXaiVisionModel(unittest.TestCase):
 
 class TestModelSupportsThinkingXai(unittest.TestCase):
     def test_extended_for_knob_families(self):
-        for mid in ("grok-4.3", "grok-4.20-multi-agent-0309"):
+        for mid in ("grok-4.3", "grok-4.5", "grok-4.20-multi-agent-0309"):
             with self.subTest(model=mid):
                 obj = stub(_UIStub, provider="xAI", model=mid)
                 self.assertEqual(obj._model_supports_thinking(), "extended")

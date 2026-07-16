@@ -232,17 +232,26 @@
   Reasoning tokens are billed at the output token rate. Reached via the
   OpenAI SDK at https://api.x.ai/v1 with XAI_API_KEY.
 
-  Current Catalog — verified LIVE 2026-07-05 against /v1/models' own price
-  fields (unit = $1/10000 per MTok; grok-4.3 reports 12500/25000 = $1.25/$2.50)
+  Current Catalog — verified LIVE 2026-07-17 against /v1/models' own price
+  fields (unit = $1/10000 per MTok; grok-4.3 reports 12500/25000 = $1.25/$2.50,
+  grok-4.5 reports 20000/60000 = $2/$6)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────
   grok-4.3               $1.25    $2.50    (aliases: grok-4.3-latest,
                                             grok-latest)
+  grok-4.5               $2.00    $6.00    (agentic-coding flagship, 500K
+                                            context, reasoning low..xhigh
+                                            always-on; aliases:
+                                            grok-4.5-latest,
+                                            grok-build-latest)
   grok-4.20              $1.25    $2.50    (all three 4.20 variants:
                                             -reasoning / -non-reasoning /
                                             -multi-agent, + bare grok-4.20
                                             alias -> the reasoning variant)
+  grok-build-latest      $2.00    $6.00    (re-aliased to grok-4.5 in the
+                                            2026-07 catalog — the longer
+                                            prefix wins over grok-build)
   grok-build             $1.00    $2.00    (code model, text-only; aliases:
                                             grok-code-fast-1, grok-code-fast)
   grok-code-fast         $1.00    $2.00    (alias prefix for grok-build-0.1)
@@ -253,9 +262,9 @@
     /v1/models no longer serves them and the API rejects their ids.
   - MyAgent's xAI cost line is EXACT: the API reports the billed cost per
     call (usage.cost_in_usd_ticks, 1 tick = $1e-10) and stream_worker uses
-    it directly. It includes the cached-input discount ($0.20/M — xAI
-    caches aggressively) and server-side tool fees. The table above is the
-    fallback estimate only.
+    it directly. It includes the cached-input discount ($0.20/M for most
+    families, $0.50/M for grok-4.5 — xAI caches aggressively) and
+    server-side tool fees. The table above is the fallback estimate only.
   - Server-side tools (web_search, x_search, code_interpreter) bill a flat
     $0.005 per invocation (derived live: reported cost minus token cost is
     always a clean multiple of $0.005).
@@ -264,7 +273,7 @@
 
   Sources:
     https://docs.x.ai/developers/models
-    Live GET https://api.x.ai/v1/models (2026-07-05)
+    Live GET https://api.x.ai/v1/models (2026-07-17)
 
 
 ================================================================================
@@ -289,5 +298,5 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: July 5, 2026 (added xAI Grok provider)
+  Last updated: July 17, 2026 (added grok-4.5)
 ================================================================================

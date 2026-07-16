@@ -1114,7 +1114,7 @@ OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
 # _tools_to_responses). Requires XAI_API_KEY. Catalog, capabilities and
 # reasoning matrix verified against docs.x.ai 2026-07.
 XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1"
-XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.20-0309-reasoning",
+XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.5", "grok-4.20-0309-reasoning",
                        "grok-4.20-0309-non-reasoning",
                        "grok-4.20-multi-agent-0309", "grok-build-0.1"]
 XAI_DEFAULT_MODEL = XAI_FALLBACK_MODELS[0]
@@ -1124,20 +1124,25 @@ XAI_NON_AGENTIC_SUBSTRINGS = ("-image", "imagine", "embed", "-video", "-tts")
 # reasoning_effort support by model family (longest prefix wins; families
 # absent here have no client-side knob and are sent no reasoning param).
 # grok-4.3: none/low/medium/high — low is the API default, "none" disables
-# reasoning. grok-4.20-multi-agent: the knob sets agent collaboration count
-# rather than depth — no "none". The pinned grok-4.20-*-reasoning /
-# -non-reasoning variants have no knob at all, and neither do the aliases
-# (bare grok-4.20 → the pinned reasoning variant; grok-latest → grok-4.3
-# running its server-side default effort).
+# reasoning. grok-4.5: low/medium/high/xhigh — always-reasoning, "none" is
+# HTTP 400 (verified live 2026-07-17; the agentic-coding flagship, aliases
+# grok-4.5-latest + grok-build-latest). grok-4.20-multi-agent: the knob sets
+# agent collaboration count rather than depth — no "none". The pinned
+# grok-4.20-*-reasoning / -non-reasoning variants have no knob at all, and
+# neither do the aliases (bare grok-4.20 → the pinned reasoning variant;
+# grok-latest → grok-4.3 running its server-side default effort).
 XAI_REASONING_EFFORT = {
     "grok-4.20-multi-agent": ["low", "medium", "high", "xhigh"],
     "grok-4.3": ["none", "low", "medium", "high"],
+    "grok-4.5": ["low", "medium", "high", "xhigh"],
 }
 # Text-only Grok families (no image input) — the weak-desktop-combo warning
-# fires for these. Every current chat tier (grok-4.3 / grok-4.20) is
-# vision-capable; grok-build (docs list it text-only) and its grok-code-fast
-# alias are not.
-XAI_NON_VISION_PREFIXES = ("grok-build", "grok-code")
+# fires for these. Every current chat tier (grok-4.3 / grok-4.5 / grok-4.20)
+# is vision-capable; grok-build-0.x (docs list it text-only) and its
+# grok-code-fast alias are not. The prefix is "grok-build-0", NOT
+# "grok-build": grok-build-latest re-aliased to grok-4.5 (vision) in the
+# 2026-07 catalog, so the shorter prefix would false-flag it.
+XAI_NON_VISION_PREFIXES = ("grok-build-0", "grok-code")
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document"}
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
@@ -2385,20 +2390,23 @@ GEMINI_PRICING = {
 }
 # xAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output.
-# Verified LIVE 2026-07-05 against /v1/models' own price fields (unit =
-# $1/10000 per MTok: grok-4.3 reports 12500/25000 = $1.25/$2.50). The legacy
-# families (grok-4 / -fast, grok-3, grok-2) are fully retired — the API no
-# longer serves them, and unknown ids are rejected, so they can never bill.
-# grok-code-fast survives only as an ALIAS of grok-build-0.1 at grok-build's
-# price. Cached input bills at $0.20/M (not tracked — the 2-tuple treats all
-# input at full rate, a slight overestimate); input above 200K tokens bills
-# double (table keeps the ≤200K tier, same convention as gemini-3.1-pro).
+# Verified LIVE 2026-07-17 against /v1/models' own price fields (unit =
+# $1/10000 per MTok: grok-4.3 reports 12500/25000 = $1.25/$2.50, grok-4.5
+# reports 20000/60000 = $2/$6). The legacy families (grok-4 / -fast, grok-3,
+# grok-2) are fully retired — the API no longer serves them, and unknown ids
+# are rejected, so they can never bill. grok-code-fast survives only as an
+# ALIAS of grok-build-0.1 at grok-build's price. Cached input bills at
+# $0.20/M ($0.50/M for grok-4.5) — not tracked, the 2-tuple treats all input
+# at full rate, a slight overestimate; input above 200K tokens bills double
+# (table keeps the ≤200K tier, same convention as gemini-3.1-pro).
 XAI_PRICING = {
-    "grok-4.3":       (1.25, 2.50),
-    "grok-4.20":      (1.25, 2.50),   # covers all three 4.20 variants + bare alias
-    "grok-build":     (1.00, 2.00),
-    "grok-code-fast": (1.00, 2.00),   # alias of grok-build-0.1
-    "grok-latest":    (1.25, 2.50),   # alias of grok-4.3
+    "grok-4.3":          (1.25, 2.50),
+    "grok-4.5":          (2.00, 6.00),
+    "grok-4.20":         (1.25, 2.50),   # covers all three 4.20 variants + bare alias
+    "grok-build-latest": (2.00, 6.00),   # re-aliased to grok-4.5 in the 2026-07 catalog
+    "grok-build":        (1.00, 2.00),
+    "grok-code-fast":    (1.00, 2.00),   # alias of grok-build-0.1
+    "grok-latest":       (1.25, 2.50),   # alias of grok-4.3
 }
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.
