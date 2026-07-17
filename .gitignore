@@ -44,7 +44,7 @@ APICostLog.txt*
 heartbeat.log*
 
 # UnreadSummary per-pass log (repo-root fallback on Windows; macOS logs to ~/Library/Logs)
-unread_summary.log
+unread_summary.log*
 
 # Claude Code config
 .claude/*

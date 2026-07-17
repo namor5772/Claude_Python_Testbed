@@ -80,6 +80,7 @@ from googleapiclient.discovery import build
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 from myagent.helpers import extract_text_from_html  # noqa: E402
+from myagent.helpers import rotate_log_if_needed as _rotate_log  # noqa: E402
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
@@ -122,6 +123,17 @@ def log(msg):
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as f:
         f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
+
+
+# One-slot log rotation: past this size the log is renamed to
+# unread_summary.log.old (replacing the previous archive) and restarts with a
+# marker line. The mechanics are the shared myagent.helpers.rotate_log_if_needed,
+# same as heartbeat.log and APICostLog.txt.
+LOG_MAX_BYTES = 100_000
+
+
+def rotate_log_if_needed():
+    _rotate_log(LOG_FILE, LOG_MAX_BYTES)
 
 
 # ── SPECIFYING LIST (loaded from SpecifyingList.csv) ─────────────────────────
@@ -900,6 +912,7 @@ def main():
 
 
 if __name__ == "__main__":
+    rotate_log_if_needed()
     try:
         main()
     except Exception as e:
