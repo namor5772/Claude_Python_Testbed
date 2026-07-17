@@ -54,6 +54,26 @@ about a second after launch, so each press is a fresh launch, and the launchers
 also carry an `on reopen` handler that launches/focuses directly in case a
 second press lands inside that one still-alive second.
 
+**Environment sourcing (why the MyAgent/SelfBot launch lines start with
+`. ~/.zshenv > /dev/null 2>&1; . ~/.zshrc > /dev/null 2>&1`)** — macOS GUI apps
+(Finder / LaunchServices) start with a bare environment, and `do shell script`
+runs **/bin/sh, not zsh**, so no zsh dotfile is sourced automatically. MyAgent
+decides which providers to offer from `ANTHROPIC`/`OPENAI`/`GEMINI`/`XAI`
+`_API_KEY` at startup, and SelfBot aborts outright without `ANTHROPIC_API_KEY`,
+so those two launchers must source the keys in explicitly. BOTH files, because
+the keys are split across them: `OPENAI_API_KEY` lives in `~/.zshenv` (moved
+there 2026-07 for zsh-invoked launchers in other repos — zsh reads `.zshenv` on
+*every* invocation, including `zsh -c`, but /bin/sh never does; the move
+silently dropped the OpenAI provider from GUI launches here, while terminal
+launches kept working, until both files were sourced 2026-07-17), the rest in
+`~/.zshrc`. `.zshenv` is sourced first, matching zsh's own order, and a missing
+file is harmless (errors suppressed, `;` continues) — so a key works from
+either file. Diagnose with `ps eww <pid> | grep -o '[A-Z_]*_API_KEY'` against a
+GUI-launched process; simulate with `env -i HOME="$HOME" /bin/sh -c '...'` — a
+plain terminal test inherits your shell's keys and false-passes. The viewers
+and CSVEditor need no keys and source nothing. Windows has no equivalent
+problem: its env vars are system-wide and inherited by GUI processes.
+
 The **Heartbeat Log** launcher is the odd one out — it opens a *viewer*, not a
 Python app. Its `.app` does nothing but `open -a Terminal` the bundled
 `view_heartbeat.command`, which pages `~/Library/Logs/myagent/heartbeat.log` in

@@ -66,9 +66,13 @@ python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# Keys go in ~/.zshrc. Append them with echo rather than a terminal-embedded
-# editor — bracketed-paste escape sequences pasted into an editor can corrupt
-# the key (it ends up as \x1b[200~sk-...~ and every API call 400s).
+# Keys go in ~/.zshrc or ~/.zshenv — zsh terminals read both, and the Desktop
+# .app launchers source both explicitly (AppleScript's `do shell script` runs
+# /bin/sh, NOT zsh, so neither file is read automatically — see
+# desktop_launchers/README.md). Append them with echo rather than a
+# terminal-embedded editor — bracketed-paste escape sequences pasted into an
+# editor can corrupt the key (it ends up as \x1b[200~sk-...~ and every API
+# call 400s).
 echo 'export ANTHROPIC_API_KEY="sk-ant-..."' >> ~/.zshrc
 source ~/.zshrc
 ```
@@ -85,7 +89,7 @@ source ~/.zshrc
 | `winocr` | `read_screen_text` OCR on Windows (macOS uses the built-in Vision framework) |
 | `opencv-python` | `find_image_on_screen` template matching |
 
-At least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY` must be set for MyAgent — **or** a local [Ollama](https://ollama.com) server, which is auto-detected at `localhost:11434` with no key at all. SelfBot requires `ANTHROPIC_API_KEY` specifically. The `.venv` is gitignored and recreated per machine; all runtime state files appear on first run.
+At least one of `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`/`GOOGLE_API_KEY`, or `XAI_API_KEY` must be set for MyAgent — **or** a local [Ollama](https://ollama.com) server, which is auto-detected at `localhost:11434` with no key at all. SelfBot requires `ANTHROPIC_API_KEY` specifically. The `.venv` is gitignored and recreated per machine; all runtime state files appear on first run.
 
 Run anything with the venv active:
 
@@ -394,7 +398,7 @@ A single-file tkinter todo app (~450 lines): tasks have **priority** (High/Mediu
 ./desktop_launchers/rebuild.sh
 ```
 
-The script patches in the local repo path, renders each 1024-px icon master into an iconset with `sips`, compiles with `osacompile`, ad-hoc signs, and pastes the icon on via `NSWorkspace.setIconForFile` (which outranks macOS's stubborn IconServices cache). The built apps live in `~/Applications` with Finder **aliases** on the Desktop — an app *running from* a TCC-protected folder (Desktop/Documents/Downloads) triggers a consent prompt after every rebuild, aliases don't. Completion feedback is deliberately a **dialog + chime, not a notification**: Notification Center permission is per-code-hash, so every rebuild would re-ask, while `display dialog` needs no permission and isn't swallowed by Focus modes. The launch lines background via `cd X && (nohup … &)` — under `do shell script` a trailing `&` on a *compound* list does not detach, which used to keep the applet alive for the app's whole lifetime and swallow every second double-click (details in the launcher README).
+The script patches in the local repo path, renders each 1024-px icon master into an iconset with `sips`, compiles with `osacompile`, ad-hoc signs, and pastes the icon on via `NSWorkspace.setIconForFile` (which outranks macOS's stubborn IconServices cache). The built apps live in `~/Applications` with Finder **aliases** on the Desktop — an app *running from* a TCC-protected folder (Desktop/Documents/Downloads) triggers a consent prompt after every rebuild, aliases don't. Completion feedback is deliberately a **dialog + chime, not a notification**: Notification Center permission is per-code-hash, so every rebuild would re-ask, while `display dialog` needs no permission and isn't swallowed by Focus modes. The launch lines background via `cd X && (nohup … &)` — under `do shell script` a trailing `&` on a *compound* list does not detach, which used to keep the applet alive for the app's whole lifetime and swallow every second double-click (details in the launcher README). The MyAgent/SelfBot launch lines also source `~/.zshenv` **and** `~/.zshrc` first: GUI apps start with a bare environment, and `do shell script` runs `/bin/sh` — not zsh — so no dotfile is read automatically. The API keys are split across those two files, and when `OPENAI_API_KEY` moved to `~/.zshenv` the OpenAI provider silently vanished from GUI launches (terminal launches kept working) until the launchers sourced both.
 
 **Windows** — `UnreadSummary_Win.ps1` is the AppleScript's twin: a desktop shortcut runs it via `powershell -WindowStyle Hidden`, the venv python executes the digest, and the feedback mirrors the Mac (chime + self-dismissing success dialog with the run's log line; blocking error dialog with the log tail on failure). The repo path is resolved from the script's own location, so any clone works unedited — only the `.lnk` shortcut is per-machine (icon: `icon_unread.ico`). A `-DryRun` switch passes `--dry-run` through for end-to-end plumbing tests. `CSVEditor_Win.ps1` is the matching twin of `CSVEditor_launcher.applescript`: a `powershell -WindowStyle Hidden` shortcut launches the editor with the venv **pythonw** (no console window) and focuses an already-open window instead of starting a second copy (icon `icon_csv.ico`, rendered from `icon_csv_master.png` — a googly-eyed comma perched on a spreadsheet, generated by `make_csv_icon.py`).
 

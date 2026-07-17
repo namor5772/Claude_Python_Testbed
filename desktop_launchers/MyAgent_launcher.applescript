@@ -5,13 +5,17 @@
 -- multi-instance by design (each instance claims the lowest free lock number),
 -- so — unlike the CSVEditor launcher — there is deliberately no launch-or-focus.
 --
--- IMPORTANT: the `. ~/.zshrc` is load-bearing — do NOT remove it. macOS GUI apps
--- (Finder / LaunchServices) start with a bare environment and do NOT source the
--- shell profile. MyAgent reads ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
--- from the environment to decide which providers to offer (MyAgent.py:81-83), and
--- those keys live in ~/.zshrc. Without sourcing it, a GUI launch sees no keys, so
--- only the keyless Ollama provider appears. Windows needs no equivalent: its env
--- vars are system-wide and inherited by GUI processes.
+-- IMPORTANT: the `. ~/.zshenv; . ~/.zshrc` is load-bearing — do NOT remove it, and
+-- source BOTH files. macOS GUI apps (Finder / LaunchServices) start with a bare
+-- environment, and `do shell script` runs /bin/sh — NOT zsh — so no zsh dotfile is
+-- sourced automatically. MyAgent reads ANTHROPIC/OPENAI/GEMINI/XAI _API_KEY from
+-- the environment to decide which providers to offer (MyAgent.py:83-86), and the
+-- keys are split across both files: OPENAI_API_KEY moved to ~/.zshenv 2026-07 (for
+-- zsh-invoked launchers in other repos — a move that silently dropped the OpenAI
+-- provider from GUI launches here until .zshenv was sourced too), the rest live in
+-- ~/.zshrc. .zshenv is sourced first, matching zsh's own order. A missing file is
+-- harmless (errors suppressed, `;` continues). Windows needs no equivalent: its
+-- env vars are system-wide and inherited by GUI processes.
 --
 -- IMPORTANT: the subshell parentheses in `&& (nohup ... &)` are load-bearing — do
 -- NOT "simplify" to `cd X && nohup ... &`. Under `do shell script`, a trailing &
@@ -27,7 +31,7 @@
 on launchInstance()
 	set repoDir to "/Users/roman/projects/Claude_Python_Testbed"
 	try
-		do shell script ". ~/.zshrc > /dev/null 2>&1; cd " & quoted form of repoDir & " && (nohup .venv/bin/python MyAgent.py > /dev/null 2>&1 &)"
+		do shell script ". ~/.zshenv > /dev/null 2>&1; . ~/.zshrc > /dev/null 2>&1; cd " & quoted form of repoDir & " && (nohup .venv/bin/python MyAgent.py > /dev/null 2>&1 &)"
 	on error errMsg number errNum
 		display dialog "My Agent launch failed (" & errNum & "): " & errMsg buttons {"OK"} default button 1 with icon stop with title "My Agent"
 	end try
