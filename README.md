@@ -448,9 +448,10 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | Path | What it is |
 |---|---|
 | `SelfBot.py` | The chatbot (single file by convention) |
-| `MyAgent.py`, `myagent/` | The agent entry point + 19-mixin package |
+| `MyAgent.py`, `myagent/` | The agent entry point + 20-mixin package |
 | `Account_Activity_WBC.py`, `CSVEditor.py`, `TodoList.py` | The three small single-file apps |
 | `UnreadSummary.py`, `Heartbeat.py` | Zero-token production jobs (their bill-matching rules, `SpecifyingList.csv`, live in OneDrive `MyImportant/DeathFinances`, not in git) |
+| `tests/` | Characterization test suite (stdlib `unittest`, no extra deps) for MyAgent's pure/model-detection helpers and Heartbeat's log rotation — `python -m unittest discover -s tests -t .` |
 | `desktop_launchers/` | macOS launcher sources + `rebuild.sh`, plus the Windows `UnreadSummary_Win.ps1` / `CSVEditor_Win.ps1` twins and their `icon_*.ico` (built `.app`s / `.lnk`s are per-machine, not in git) |
 | `requirements.txt` | Core dependencies |
 | `*.Modelfile` ×3 | Ollama vision+tools template grafts |
@@ -464,6 +465,6 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | `mcp_servers.example.json` | Tracked template for the gitignored `mcp_servers.json` |
 | `make_weather_pdf.py` / `make_weather_pdf_print.py`, `plot*.py`, `create_chart.py`, `move_window.py`, `agent_demo.py` | One-off agent-written scripts kept as testbed artifacts |
 | `BirdFlying.html` | Self-contained browser animation: two Australian magpies (SMIL flap-and-glide wings with white covert patches, Web Audio synthesized warble — click the scene to enable sound) flying over a stylized black-clad homestead and gum grove. No dependencies; open directly in any browser |
-| `app_state*.json`, `agent_state*.json`, `*.lock`, `saved_chats/`, `APICostLog.txt`, `Account_Activity_WBC.{txt,csv}` | Runtime state and output — created automatically, mostly gitignored |
+| `app_state*.json`, `agent_state*.json`, `*.lock`, `saved_chats/`, `APICostLog.txt`, `heartbeat.log*`, `unread_summary.log`, `Account_Activity_WBC.{txt,csv}` | Runtime state and output — created automatically, mostly gitignored |
 
-**Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor, TodoList and the bank extractor stay single-file; MyAgent changes go in the appropriate mixin. There are no tests, linters, or build steps. After editing a `.py` file, re-run it (closing any running instance first) — the apps are their own test suite.
+**Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor, TodoList and the bank extractor stay single-file; MyAgent changes go in the appropriate mixin. Tests exist where the logic is pure: the characterization suite under `tests/` (run `python -m unittest discover -s tests -t .`), with `ruff check MyAgent.py myagent/` for linting — no mypy, no build step. After editing a `.py` file, re-run it (closing any running instance first) — for the GUI apps, the running app is still the real test suite.
