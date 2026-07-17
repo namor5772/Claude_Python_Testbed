@@ -40,8 +40,8 @@ APICostLog.txt
 # Saved email output from summary runs (per-machine runtime output)
 *.eml
 
-# Heartbeat per-pass log (repo-root fallback on Windows; macOS logs to ~/Library/Logs)
-heartbeat.log
+# Heartbeat per-pass log + rotated archives (repo-root fallback on Windows; macOS logs to ~/Library/Logs)
+heartbeat.log*
 
 # UnreadSummary per-pass log (repo-root fallback on Windows; macOS logs to ~/Library/Logs)
 unread_summary.log
