@@ -49,7 +49,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 - `MyAgent.py` — Entry point (~180 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, Gemini, and xAI providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
   - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING), file paths
-  - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock
+  - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock, rotate_log_if_needed (shared one-slot size-cap rotation for the runtime logs: APICostLog.txt here and in SelfBot, heartbeat.log via Heartbeat.py)
   - `ui_mixin.py` — setup_ui(), model/provider/thinking widget handlers
   - `state_mixin.py` — Instance management, display geometry, state persistence
   - `instructions_mixin.py` — Instruction CRUD, editor Toplevel dialog

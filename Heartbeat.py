@@ -42,6 +42,7 @@ from googleapiclient.discovery import build
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 from myagent.helpers import extract_text_from_html  # noqa: E402
+from myagent.helpers import rotate_log_if_needed as _rotate_log  # noqa: E402
 
 ACCOUNT = "namor5772"
 # Per-machine trigger subject: the Windows box and the Mac mini poll the SAME
@@ -68,17 +69,13 @@ def log(msg):
 # One-slot log rotation: past this size the log is renamed to heartbeat.log.old
 # (replacing the previous archive) and restarts with a marker line, so the
 # 5-minute ticks can't grow it unbounded. ~100 KB is roughly 2,000 lines.
+# The mechanics live in myagent.helpers.rotate_log_if_needed, shared with
+# the APICostLog.txt writers in MyAgent and SelfBot.
 LOG_MAX_BYTES = 100_000
 
 
 def rotate_log_if_needed():
-    try:
-        if LOG_FILE.stat().st_size <= LOG_MAX_BYTES:
-            return
-        LOG_FILE.replace(LOG_FILE.with_name(LOG_FILE.name + ".old"))
-    except OSError:
-        return  # no log yet, or the archive is locked open — try next tick
-    log(f"log restarted (previous log archived to {LOG_FILE.name}.old)")
+    _rotate_log(LOG_FILE, LOG_MAX_BYTES)
 
 
 def gmail_service():

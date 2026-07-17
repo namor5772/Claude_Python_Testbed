@@ -35,7 +35,7 @@ selfbot_inject.txt
 launch_err.txt
 
 # API cost log (per-run, per-machine — appended by MyAgent after each run)
-APICostLog.txt
+APICostLog.txt*
 
 # Saved email output from summary runs (per-machine runtime output)
 *.eml

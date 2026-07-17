@@ -43,9 +43,10 @@ try:
     from myagent.constants import (
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
         GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-        ANTHROPIC_PRICING,
+        ANTHROPIC_PRICING, APICOST_LOG_MAX_BYTES,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
+    from myagent.helpers import rotate_log_if_needed
     from myagent.mcp_mixin import MCPMixin
     from myagent.gmail_mixin import GmailMixin
     from myagent.protonmail_mixin import ProtonMailMixin
@@ -57,6 +58,10 @@ except Exception:
     GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
     ANTHROPIC_PRICING = {}
+    APICOST_LOG_MAX_BYTES = 100_000
+
+    def rotate_log_if_needed(log_path, max_bytes):
+        return False  # no myagent package -> no rotation; the log just grows
 
     class MCPMixin:
         pass
@@ -5499,6 +5504,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         try:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             line = f"{timestamp};Anthropic;{self.model};{total_cost:.4f}\n"
+            rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(line)
         except Exception:

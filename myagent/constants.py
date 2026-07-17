@@ -2424,6 +2424,7 @@ AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 def
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
 SKILLS_FILE = os.path.join(_BASE_DIR, "skills.json")
 APICOST_LOG_FILE = os.path.join(_BASE_DIR, "APICostLog.txt")  # per-run cost log (repo root, gitignored)
+APICOST_LOG_MAX_BYTES = 100_000  # one-slot rotation cap (helpers.rotate_log_if_needed), same as heartbeat.log's
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are an autonomous AI agent with access to a rich set of tools. "

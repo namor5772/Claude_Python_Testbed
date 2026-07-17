@@ -1,4 +1,26 @@
+from datetime import datetime
 from html.parser import HTMLParser
+from pathlib import Path
+
+
+def rotate_log_if_needed(log_path, max_bytes):
+    """One-slot size-cap rotation for the append-only runtime logs
+    (heartbeat.log, APICostLog.txt): past max_bytes the log is atomically
+    renamed to <name>.old — replacing the previous archive — and restarts
+    with a timestamped marker line. Best-effort: any OSError (no log yet,
+    or the archive locked open) skips rotation until the next call, so
+    housekeeping can never break the caller. Returns True on rotation."""
+    path = Path(log_path)
+    try:
+        if path.stat().st_size <= max_bytes:
+            return False
+        path.replace(path.with_name(path.name + ".old"))
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} log restarted "
+                    f"(previous log archived to {path.name}.old)\n")
+    except OSError:
+        return False
+    return True
 
 
 class HTMLTextExtractor(HTMLParser):

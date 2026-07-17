@@ -12,9 +12,9 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
-    OLLAMA_PRICING, APICOST_LOG_FILE,
+    OLLAMA_PRICING, APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
 )
-from myagent.helpers import _ToolBlock
+from myagent.helpers import _ToolBlock, rotate_log_if_needed
 
 if _HAS_DESKTOP:
     import pyautogui
@@ -784,6 +784,7 @@ class StreamingMixin:
             # ';' delimiter (not ',') so a comma inside a model name can't be
             # misread as a field separator.
             line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f}\n"
+            rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
                 f.write(line)
             self._tool_info(f"Logged API cost to {APICOST_LOG_FILE}: {line}")
