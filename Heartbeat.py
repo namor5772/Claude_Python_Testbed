@@ -65,6 +65,22 @@ def log(msg):
         f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
 
 
+# One-slot log rotation: past this size the log is renamed to heartbeat.log.old
+# (replacing the previous archive) and restarts with a marker line, so the
+# 5-minute ticks can't grow it unbounded. ~100 KB is roughly 2,000 lines.
+LOG_MAX_BYTES = 100_000
+
+
+def rotate_log_if_needed():
+    try:
+        if LOG_FILE.stat().st_size <= LOG_MAX_BYTES:
+            return
+        LOG_FILE.replace(LOG_FILE.with_name(LOG_FILE.name + ".old"))
+    except OSError:
+        return  # no log yet, or the archive is locked open — try next tick
+    log(f"log restarted (previous log archived to {LOG_FILE.name}.old)")
+
+
 def gmail_service():
     token_path = GOOGLE_CONFIG_DIR / f"{ACCOUNT}_token.json"
     if not token_path.exists():
@@ -283,6 +299,7 @@ def main():
 
 
 if __name__ == "__main__":
+    rotate_log_if_needed()
     try:
         main()
     except Exception as e:
