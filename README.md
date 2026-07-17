@@ -291,7 +291,7 @@ Live cost accounting across Anthropic / OpenAI / Gemini / xAI: each streamed cal
 
 ### Architecture (mixins)
 
-`MyAgent.py` (~270 lines) holds only `__init__` and the entry point; the `App` class inherits from **19 mixins** in `myagent/` (~13,400 lines total), all sharing state through `self.*`:
+`MyAgent.py` (~280 lines) holds only `__init__` and the entry point; the `App` class inherits from **20 mixins** in `myagent/` (~14,400 lines total), all sharing state through `self.*`:
 
 | Module | Concern |
 |---|---|
@@ -314,11 +314,11 @@ Adding a static tool = schema dict in `constants.py` + an `elif` in `_execute_to
 
 Two production scripts that replaced AI-run agent instructions with deterministic Python, after the realisation that *polling and list-building need no judgment* — the LLM spend belongs in the work, not the trigger.
 
-**UnreadSummary.py** (~870 lines) — the daily unread-mail digest. One pass scans **every configured account** (Gmail, Proton Bridge / IMAP, Outlook) for unread mail in Inbox and Spam/Junk, builds one continuously-numbered COMPREHENSIVE LIST (account, from, subject, date, first ~45 words of cleaned body), matches known bill/receipt senders against the rules in **`SpecifyingList.csv`** — which lives in the OneDrive folder `MyImportant/DeathFinances` shared by all three machines (found via `%OneDrive%`/`%OneDriveConsumer%`, `~/OneDrive`, or macOS `~/Library/CloudStorage/OneDrive-*`; repo-root fallback if no OneDrive copy exists, and the file is gitignored so the OneDrive copy is the single source of truth) — (semicolon-delimited, all fields quoted; columns `To`, `From`, `From email`, `Subject` — a *prefix* match — and `Determine`, a display-only reference note echoed under the entry; the `From email` column records each sender's actual address for reference and is not read by the parser, which matches by column name), saves matched PDF attachments to `~/Downloads` idempotently, marks matches read, and emails the digest from the Outlook account. Replaced a ~$0.57/day Haiku instruction.
+**UnreadSummary.py** (~920 lines) — the daily unread-mail digest. One pass scans **every configured account** (Gmail, Proton Bridge / IMAP, Outlook) for unread mail in Inbox and Spam/Junk, builds one continuously-numbered COMPREHENSIVE LIST (account, from, subject, date, first ~45 words of cleaned body), matches known bill/receipt senders against the rules in **`SpecifyingList.csv`** — which lives in the OneDrive folder `MyImportant/DeathFinances` shared by all three machines (found via `%OneDrive%`/`%OneDriveConsumer%`, `~/OneDrive`, or macOS `~/Library/CloudStorage/OneDrive-*`; repo-root fallback if no OneDrive copy exists, and the file is gitignored so the OneDrive copy is the single source of truth) — (semicolon-delimited, all fields quoted; columns `To`, `From`, `From email`, `Subject` — a *prefix* match — and `Determine`, a display-only reference note echoed under the entry; the `From email` column records each sender's actual address for reference and is not read by the parser, which matches by column name), saves matched PDF attachments to `~/Downloads` idempotently, marks matches read, and emails the digest from the Outlook account. Replaced a ~$0.57/day Haiku instruction.
 
 The AI version's "building the list is STRICTLY READ-ONLY" prompt guard holds here **by construction**: listing uses only read-only primitives (IMAP `EXAMINE` + `BODY.PEEK`, Gmail `messages.get`, Graph `GET`), and every mutation sits behind a flag (`SAVE_MATCH_PDFS` / `MARK_MATCHES_READ` on, `TRASH_MATCHES` off by default). `python UnreadSummary.py --dry-run` prints the would-be email with zero mutations and no send. Auth is silent-only — a dead token becomes an `ERROR:` line in the digest, repaired by running MyAgent once interactively. Logs: one line per pass to `~/Library/Logs/myagent/unread_summary.log` (repo-root fallback on Windows), self-rotating past ~100 KB to a one-slot `unread_summary.log.old` archive via the shared `rotate_log_if_needed`.
 
-**Heartbeat.py** (~280 lines) — on-demand agent dispatch from anywhere you can send an email. launchd (Mac mini, short `StartInterval`) and Task Scheduler (Windows, `MyAgent_Heartbeat_5min` every 5 min) both run it against the **same** Gmail account; each pass checks for an **unread** message with that machine's exact subject — **`APW`** (Windows) or **`APM`** (macOS), derived from `platform.system()` so the same file serves both. The per-machine subject routes each trigger to exactly one executor — no tick-timing race, no machine-specific instruction landing on the wrong box:
+**Heartbeat.py** (~300 lines) — on-demand agent dispatch from anywhere you can send an email. launchd (Mac mini, short `StartInterval`) and Task Scheduler (Windows, `MyAgent_Heartbeat_5min` every 5 min) both run it against the **same** Gmail account; each pass checks for an **unread** message with that machine's exact subject — **`APW`** (Windows) or **`APM`** (macOS), derived from `platform.system()` so the same file serves both. The per-machine subject routes each trigger to exactly one executor — no tick-timing race, no machine-specific instruction landing on the wrong box:
 
 - body line 1 → the name of a saved instruction; lines 3+ → the new prompt core
 - the instruction's text between its **two** `*****` marker lines is rewritten (header and footer preserved; atomic temp-file replace, MyAgent-identical JSON formatting); fewer than two markers poison-pills the trigger instead of mangling the instruction
@@ -368,7 +368,7 @@ Outputs `Account_Activity_WBC.txt` (raw HTML) and `Account_Activity_WBC.csv` (`D
 
 ## CSVEditor.py — Lightweight CSV Editor
 
-A single-file spreadsheet-style editor (~580 lines) used mostly on the bank CSV and `SpecifyingList.csv`:
+A single-file spreadsheet-style editor (~670 lines) used mostly on the bank CSV and `SpecifyingList.csv`:
 
 - **Dialect preservation** — on open, the delimiter (`,` `;` tab `|`) is sniffed and a quote-all heuristic detects "every field quoted" files; saves reproduce both, so a `;`-delimited fully-quoted file round-trips byte-faithfully.
 - **Three independent filters** (column + value comboboxes, values populated from the data), with a live "Showing X of Y rows" status.
