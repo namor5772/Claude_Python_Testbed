@@ -1,13 +1,71 @@
-"""Todo List — Tkinter GUI for managing tasks with priorities, due dates, and categories."""
+"""Todo List — Tkinter GUI for managing tasks with priorities, due dates, and categories.
 
+todos.json lives in a OneDrive subfolder (<OneDrive>/TodoList) when a OneDrive
+sync client is present, so one list follows the user across machines; without
+OneDrive it falls back to the script directory as before. todo_state.json
+(geometry, filters, sort) is deliberately per-machine and stays local — synced
+window geometry would fight between different screens."""
+
+import glob
 import json
 import os
+import shutil
+import sys
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk
 
-STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "todo_state.json")
-DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "todos.json")
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE = os.path.join(_BASE_DIR, "todo_state.json")  # per-machine UI state
+
+
+def _find_onedrive_root():
+    """This machine's OneDrive sync root, or None. The Windows client
+    publishes it in the OneDrive / OneDriveConsumer / OneDriveCommercial env
+    vars; the macOS File Provider client syncs under
+    ~/Library/CloudStorage/OneDrive-* (legacy installs used ~/OneDrive)."""
+    if sys.platform == "win32":
+        for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+            root = os.environ.get(var)
+            if root and os.path.isdir(root):
+                return root
+        return None
+    home = os.path.expanduser("~")
+    candidates = sorted(glob.glob(os.path.join(home, "Library", "CloudStorage", "OneDrive-*")))
+    for cand in candidates:  # prefer the personal account when several are synced
+        if cand.endswith("OneDrive-Personal"):
+            return cand
+    if candidates:
+        return candidates[0]
+    legacy = os.path.join(home, "OneDrive")
+    return legacy if os.path.isdir(legacy) else None
+
+
+def _resolve_data_file():
+    """Shared todos.json path: TODOLIST_DATA_DIR override, else
+    <OneDrive>/TodoList, else the script directory (solo machine). The first
+    run that finds the shared slot empty seeds it from the local file, so an
+    existing list migrates instead of starting blank — and a second machine
+    joining later adopts the already-synced file rather than overwriting it."""
+    local = os.path.join(_BASE_DIR, "todos.json")
+    shared_dir = os.environ.get("TODOLIST_DATA_DIR")
+    if not shared_dir:
+        onedrive = _find_onedrive_root()
+        if not onedrive:
+            return local
+        shared_dir = os.path.join(onedrive, "TodoList")
+    try:
+        os.makedirs(shared_dir, exist_ok=True)
+        shared = os.path.join(shared_dir, "todos.json")
+        if not os.path.exists(shared) and os.path.exists(local):
+            shutil.copyfile(local, shared)
+        return shared
+    except OSError:
+        return local
+
+
+DATA_FILE = _resolve_data_file()
+DATA_POLL_MS = 5000  # cadence for noticing another machine's synced write
 
 PRIORITIES = ["High", "Medium", "Low"]
 DEFAULT_CATEGORIES = ["General", "Work", "Personal", "Errands"]
@@ -16,7 +74,9 @@ DEFAULT_CATEGORIES = ["General", "Work", "Personal", "Errands"]
 class App:
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("Todo List")
+        # The title shows at a glance whether this machine is on the shared file
+        self.root.title("Todo List — synced" if os.path.dirname(DATA_FILE) != _BASE_DIR
+                        else "Todo List")
         self.root.geometry("900x550")
         self.root.minsize(700, 400)
 
@@ -27,12 +87,15 @@ class App:
         self._filter_category = "All"
         self._sort_col = None
         self._sort_reverse = False
+        self._data_mtime = None  # DATA_FILE mtime as of our last load/save
+        self._modal_open = False  # edit dialog open — pause sync auto-reload
 
         self._build_ui()
         self._load_data()
         self._load_state()
         self._refresh_tree()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.root.after(DATA_POLL_MS, self._poll_external_change)
         self.root.mainloop()
 
     # ── UI ────────────────────────────────────────────────────────────
@@ -209,6 +272,10 @@ class App:
         dlg.geometry("420x220")
         dlg.transient(self.root)
         dlg.grab_set()
+        # A synced reload would shift indexes under the open editor — pause it
+        self._modal_open = True
+        dlg.bind("<Destroy>", lambda e: (setattr(self, "_modal_open", False)
+                                         if e.widget is dlg else None))
 
         tk.Label(dlg, text="Task:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
         e_text = tk.Entry(dlg, width=40)
@@ -393,7 +460,17 @@ class App:
         try:
             with open(DATA_FILE, encoding="utf-8") as f:
                 data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+            self._data_mtime = os.path.getmtime(DATA_FILE)
+        except FileNotFoundError:
+            self._data_mtime = None
+            return
+        except (json.JSONDecodeError, OSError):
+            # Possibly a half-synced cloud write: remember the mtime so the
+            # poll stops re-reading it, and reload when the file changes again
+            try:
+                self._data_mtime = os.path.getmtime(DATA_FILE)
+            except OSError:
+                self._data_mtime = None
             return
         self.todos = data.get("todos", [])
         saved_cats = data.get("categories", [])
@@ -402,12 +479,46 @@ class App:
             self._update_category_combos()
 
     def _save_data(self):
-        data = {"todos": self.todos, "categories": self.categories}
+        # Another machine may have synced a newer file since this window last
+        # read it — ask before silently overwriting that work
         try:
-            with open(DATA_FILE, "w", encoding="utf-8") as f:
+            disk_mtime = os.path.getmtime(DATA_FILE)
+        except OSError:
+            disk_mtime = None
+        if disk_mtime != self._data_mtime:
+            keep = messagebox.askyesno(
+                "Sync conflict",
+                "todos.json changed on disk (edited on another computer?) "
+                "since this window loaded it.\n\n"
+                "Yes = save anyway, overwriting the other version\n"
+                "No = discard this change and load the newer file")
+            if not keep:
+                self._load_data()
+                self._refresh_tree()
+                return
+        data = {"todos": self.todos, "categories": self.categories}
+        tmp = DATA_FILE + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
+            os.replace(tmp, DATA_FILE)  # atomic — OneDrive never sees a half-written file
+            self._data_mtime = os.path.getmtime(DATA_FILE)
         except Exception:
             pass
+
+    def _poll_external_change(self):
+        """Adopt another machine's synced write as soon as it lands. Safe
+        because every local action saves immediately (no dirty in-memory
+        state to lose) — except while the edit dialog is open, which pauses
+        this so item indexes can't shift under it."""
+        try:
+            mtime = os.path.getmtime(DATA_FILE)
+        except OSError:
+            mtime = None
+        if mtime != self._data_mtime and not self._modal_open:
+            self._load_data()
+            self._refresh_tree()
+        self.root.after(DATA_POLL_MS, self._poll_external_change)
 
     def _load_state(self):
         try:
