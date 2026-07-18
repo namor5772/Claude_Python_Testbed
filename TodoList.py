@@ -561,7 +561,13 @@ class App:
     # ── Close ─────────────────────────────────────────────────────────
 
     def _on_close(self):
-        self._save_data()
+        # Deliberately NO _save_data() here: every action already saves
+        # immediately, so a close-save can only rewrite todos.json with
+        # in-memory state that is either identical (a no-op upload) or STALE —
+        # another machine's synced write that landed after this window's last
+        # poll got overwritten on close, and OneDrive forked the other
+        # machine's version into a "todos-<Computer>.json" conflict copy
+        # (observed live 2026-07-18, losing a todo from the main file).
         self._save_state()
         self.root.destroy()
 
