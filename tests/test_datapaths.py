@@ -13,6 +13,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from myagent import datapaths as dp
 
@@ -78,6 +79,52 @@ class ResolveTests(DatapathsCase):
         label = dp.machine_label()
         self.assertTrue(label)
         self.assertNotRegex(label, r"[^A-Za-z0-9._-]")
+
+
+class LegacyDirAdoptionTests(DatapathsCase):
+    """The 2026-07-19 MyAgent → MyAppShare rename: _shared_dir adopts a
+    legacy-named dir by renaming it in place, before any makedirs can strand
+    the data behind an empty new-name dir."""
+
+    def setUp(self):
+        super().setUp()
+        os.environ.pop(dp.DATA_DIR_ENV)  # exercise the OneDrive discovery path
+        self.fake_root = self.shared.parent / "FakeOneDrive"
+        self.fake_root.mkdir(parents=True)
+        orig = dp.find_onedrive_root
+        dp.find_onedrive_root = lambda: str(self.fake_root)
+        self.addCleanup(setattr, dp, "find_onedrive_root", orig)
+        self.legacy = self.fake_root / "MyAgent"
+        self.new = self.fake_root / dp.SHARED_SUBDIR
+
+    def test_legacy_dir_adopted_by_rename(self):
+        self.legacy.mkdir()
+        (self.legacy / "skills.json").write_text('{"a": 1}', encoding="utf-8")
+        path = dp.resolve_store("skills.json")
+        self.assertEqual(path, str(self.new / "skills.json"))
+        self.assertFalse(self.legacy.exists())
+        self.assertEqual(json.loads((self.new / "skills.json").read_text(encoding="utf-8")),
+                         {"a": 1})
+
+    def test_new_dir_wins_when_both_exist(self):
+        self.legacy.mkdir()
+        (self.legacy / "skills.json").write_text('{"old": 1}', encoding="utf-8")
+        self.new.mkdir()
+        (self.new / "skills.json").write_text('{"new": 1}', encoding="utf-8")
+        path = dp.resolve_store("skills.json")
+        self.assertEqual(path, str(self.new / "skills.json"))
+        self.assertTrue(self.legacy.exists())  # left for manual cleanup
+
+    def test_failed_rename_falls_back_to_legacy_dir(self):
+        self.legacy.mkdir()
+        (self.legacy / "skills.json").write_text('{"a": 1}', encoding="utf-8")
+        with mock.patch("myagent.datapaths.os.rename", side_effect=OSError("locked")):
+            path = dp.resolve_store("skills.json")
+        # Keeps serving the legacy data rather than an empty new-name store;
+        # the rename is retried at the next launch.
+        self.assertEqual(path, str(self.legacy / "skills.json"))
+        self.assertTrue((self.legacy / "skills.json").exists())
+        self.assertFalse(self.new.exists())
 
 
 class UnionTests(DatapathsCase):

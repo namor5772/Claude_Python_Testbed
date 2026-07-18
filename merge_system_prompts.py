@@ -8,7 +8,7 @@ machine's file was a strict superset of the others. A plain git pull / copy is
 all-or-nothing and loses whichever side it didn't keep. This does a KEY-LEVEL union so
 every prompt from every machine survives.
 
-Since 2026-07-19 the stores live in <OneDrive>/MyAgent/ and the apps run this same
+Since 2026-07-19 the stores live in <OneDrive>/MyAppShare/ and the apps run this same
 union automatically (myagent/datapaths.py: repo-root leftovers are unioned in on
 launch, OneDrive conflict forks are absorbed continuously), so day-to-day sync no
 longer needs this tool. It remains useful for manual imports — merging a store copied

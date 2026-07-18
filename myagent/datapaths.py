@@ -5,9 +5,11 @@ content that should follow the user across machines. Historically they were
 git-tracked, but they are also live runtime files the apps rewrite constantly,
 so every machine accumulated local-only entries between commits and a
 "remote wins" pull discarded them. Mirroring TodoList's todos.json move
-(commit 6097dc5), the stores now live in <OneDrive>/MyAgent/ when a OneDrive
-sync client is present — OneDrive, not git, is the sync channel — falling back
-to the repo root on machines without OneDrive.
+(commit 6097dc5), the stores now live in <OneDrive>/MyAppShare/ when a
+OneDrive sync client is present — OneDrive, not git, is the sync channel —
+falling back to the repo root on machines without OneDrive. (The dir was
+named MyAgent until 2026-07-19; _shared_dir adopts a legacy dir by renaming
+it in place, so machines migrate in any order with no manual step.)
 
 Design invariants:
 - resolve_store(name) decides the path once at import time (mkdir of the
@@ -45,7 +47,12 @@ import tempfile
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DATA_DIR_ENV = "MYAGENT_DATA_DIR"
-SHARED_SUBDIR = "MyAgent"
+SHARED_SUBDIR = "MyAppShare"
+# Previous names of the shared dir. A machine whose OneDrive still holds one
+# (rename not yet made/synced anywhere) adopts it by renaming it in place —
+# OneDrive syncs a rename cheaply (no re-upload) and every other machine
+# receives it as a rename too, so the transition needs no manual step.
+LEGACY_SHARED_SUBDIRS = ("MyAgent",)
 
 # Store basenames whose one-shot local→shared migration already ran (or was
 # deliberately skipped) in this process.
@@ -80,7 +87,26 @@ def _shared_dir():
     if override:
         return override
     onedrive = find_onedrive_root()
-    return os.path.join(onedrive, SHARED_SUBDIR) if onedrive else None
+    if not onedrive:
+        return None
+    shared = os.path.join(onedrive, SHARED_SUBDIR)
+    if not os.path.isdir(shared):
+        # One-time adoption of a pre-rename shared dir (e.g. MyAgent →
+        # MyAppShare, 2026-07-19). Must run BEFORE resolve_store's makedirs:
+        # once an empty new-name dir exists this branch never fires again and
+        # the legacy data would be stranded. If the rename fails (file lock,
+        # OneDrive mid-sync), keep working out of the legacy dir this session
+        # and retry at the next launch — never serve an empty store while the
+        # data sits under the old name.
+        for old in LEGACY_SHARED_SUBDIRS:
+            legacy = os.path.join(onedrive, old)
+            if os.path.isdir(legacy):
+                try:
+                    os.rename(legacy, shared)
+                except OSError:
+                    return legacy
+                break
+    return shared
 
 
 def resolve_store(filename):
