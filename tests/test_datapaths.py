@@ -106,14 +106,27 @@ class LegacyDirAdoptionTests(DatapathsCase):
         self.assertEqual(json.loads((self.new / "skills.json").read_text(encoding="utf-8")),
                          {"a": 1})
 
-    def test_new_dir_wins_when_both_exist(self):
+    def test_both_exist_colliding_file_stays_shared_wins(self):
         self.legacy.mkdir()
         (self.legacy / "skills.json").write_text('{"old": 1}', encoding="utf-8")
         self.new.mkdir()
         (self.new / "skills.json").write_text('{"new": 1}', encoding="utf-8")
         path = dp.resolve_store("skills.json")
         self.assertEqual(path, str(self.new / "skills.json"))
-        self.assertTrue(self.legacy.exists())  # left for manual cleanup
+        self.assertEqual(json.loads((self.new / "skills.json").read_text(encoding="utf-8")),
+                         {"new": 1})  # the live store is untouched
+        # colliding legacy file stays put for manual review (dir survives)
+        self.assertTrue((self.legacy / "skills.json").exists())
+
+    def test_both_exist_noncolliding_files_fold_in_and_legacy_dir_removed(self):
+        self.legacy.mkdir()
+        (self.legacy / "system_prompts.json").write_text('{"p": 1}', encoding="utf-8")
+        self.new.mkdir()
+        (self.new / "skills.json").write_text('{"new": 1}', encoding="utf-8")
+        dp.resolve_store("skills.json")
+        self.assertEqual(json.loads((self.new / "system_prompts.json").read_text(encoding="utf-8")),
+                         {"p": 1})
+        self.assertFalse(self.legacy.exists())  # emptied and removed
 
     def test_failed_rename_falls_back_to_legacy_dir(self):
         self.legacy.mkdir()

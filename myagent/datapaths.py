@@ -90,22 +90,39 @@ def _shared_dir():
     if not onedrive:
         return None
     shared = os.path.join(onedrive, SHARED_SUBDIR)
-    if not os.path.isdir(shared):
-        # One-time adoption of a pre-rename shared dir (e.g. MyAgent →
-        # MyAppShare, 2026-07-19). Must run BEFORE resolve_store's makedirs:
-        # once an empty new-name dir exists this branch never fires again and
-        # the legacy data would be stranded. If the rename fails (file lock,
-        # OneDrive mid-sync), keep working out of the legacy dir this session
-        # and retry at the next launch — never serve an empty store while the
-        # data sits under the old name.
-        for old in LEGACY_SHARED_SUBDIRS:
-            legacy = os.path.join(onedrive, old)
-            if os.path.isdir(legacy):
-                try:
-                    os.rename(legacy, shared)
-                except OSError:
-                    return legacy
-                break
+    # One-time adoption of a pre-rename shared dir (e.g. MyAgent →
+    # MyAppShare, 2026-07-19). Must run BEFORE resolve_store's makedirs:
+    # once an empty new-name dir exists the whole-dir rename can't happen and
+    # the legacy data would be stranded.
+    for old in LEGACY_SHARED_SUBDIRS:
+        legacy = os.path.join(onedrive, old)
+        if not os.path.isdir(legacy):
+            continue
+        if not os.path.isdir(shared):
+            # Cheap whole-dir rename (OneDrive syncs it without re-upload).
+            # If it fails (file lock, mid-sync), keep working out of the
+            # legacy dir this session and retry at the next launch — never
+            # serve an empty store while the data sits under the old name.
+            try:
+                os.rename(legacy, shared)
+            except OSError:
+                return legacy
+        else:
+            # The new dir already exists — e.g. TodoList.py (which shares
+            # this dir) created it first, or an old-code machine recreated
+            # the legacy dir after the rename synced. Move the legacy files
+            # across individually; a colliding name stays put for manual
+            # review (the shared side is the live store). rmdir succeeds
+            # only once the legacy dir is empty.
+            try:
+                for fn in os.listdir(legacy):
+                    src, dst = os.path.join(legacy, fn), os.path.join(shared, fn)
+                    if not os.path.exists(dst):
+                        os.rename(src, dst)
+                os.rmdir(legacy)
+            except OSError:
+                pass
+        break
     return shared
 
 

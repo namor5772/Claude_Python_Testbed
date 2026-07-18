@@ -1,6 +1,8 @@
 """Todo List — Tkinter GUI for managing tasks with priorities, due dates, and categories.
 
-todos.json lives in a OneDrive subfolder (<OneDrive>/TodoList) when a OneDrive
+todos.json lives in the suite's shared OneDrive folder (<OneDrive>/MyAppShare,
+alongside MyAgent/SelfBot's stores; named <OneDrive>/TodoList until
+2026-07-19 — a leftover old folder is folded in automatically) when a OneDrive
 sync client is present, so one list follows the user across machines; without
 OneDrive it falls back to the script directory as before. todo_state.json
 (geometry, filters, sort) is deliberately per-machine and stays local — synced
@@ -41,21 +43,56 @@ def _find_onedrive_root():
     return legacy if os.path.isdir(legacy) else None
 
 
+SHARED_SUBDIR = "MyAppShare"  # one OneDrive dir shared by the whole app suite
+LEGACY_SHARED_SUBDIR = "TodoList"  # todos.json's pre-2026-07-19 home
+
+
+def _migrate_legacy_dir(onedrive, shared_dir):
+    """One-way fold of the old <OneDrive>/TodoList/todos.json into shared_dir.
+    A free new slot means the file simply moves across (a cheap OneDrive
+    rename); if both exist — e.g. an old-code machine recreated the legacy
+    dir after this machine already migrated — the old file moves in under a
+    conflict-fork name and startup's _absorb_conflict_forks merges it with
+    per-todo identity semantics, so nothing is lost whichever machine
+    migrates first. Best-effort: an OSError leaves the old file for the next
+    launch to retry; the rmdir only succeeds once the old dir is empty."""
+    legacy = os.path.join(onedrive, LEGACY_SHARED_SUBDIR, "todos.json")
+    if not os.path.exists(legacy):
+        return
+    try:
+        target = os.path.join(shared_dir, "todos.json")
+        if os.path.exists(target):
+            n = ""
+            while os.path.exists(os.path.join(shared_dir, f"todos-TodoListLegacy{n}.json")):
+                n = 2 if n == "" else n + 1
+            target = os.path.join(shared_dir, f"todos-TodoListLegacy{n}.json")
+        os.rename(legacy, target)
+        os.rmdir(os.path.dirname(legacy))
+    except OSError:
+        pass
+
+
 def _resolve_data_file():
     """Shared todos.json path: TODOLIST_DATA_DIR override, else
-    <OneDrive>/TodoList, else the script directory (solo machine). The first
-    run that finds the shared slot empty seeds it from the local file, so an
-    existing list migrates instead of starting blank — and a second machine
-    joining later adopts the already-synced file rather than overwriting it."""
+    <OneDrive>/MyAppShare (the suite-wide shared dir, alongside
+    MyAgent/SelfBot's stores; a leftover pre-rename <OneDrive>/TodoList is
+    folded in by _migrate_legacy_dir), else the script directory (solo
+    machine). The first run that finds the shared slot empty seeds it from
+    the local file, so an existing list migrates instead of starting blank —
+    and a second machine joining later adopts the already-synced file rather
+    than overwriting it."""
     local = os.path.join(_BASE_DIR, "todos.json")
     shared_dir = os.environ.get("TODOLIST_DATA_DIR")
+    onedrive = None
     if not shared_dir:
         onedrive = _find_onedrive_root()
         if not onedrive:
             return local
-        shared_dir = os.path.join(onedrive, "TodoList")
+        shared_dir = os.path.join(onedrive, SHARED_SUBDIR)
     try:
         os.makedirs(shared_dir, exist_ok=True)
+        if onedrive:  # not under an explicit override — fold in the old home
+            _migrate_legacy_dir(onedrive, shared_dir)
         shared = os.path.join(shared_dir, "todos.json")
         if not os.path.exists(shared) and os.path.exists(local):
             shutil.copyfile(local, shared)

@@ -26,7 +26,7 @@ app_state*.json
 agent_instructions.json
 skills.json
 system_prompts.json
-# TodoList data — lives in <OneDrive>/TodoList/todos.json (synced across
+# TodoList data — lives in <OneDrive>/MyAppShare/todos.json (synced across
 # machines by OneDrive, not git); these repo-root copies are the no-OneDrive
 # fallback / pre-migration leftovers. State (geometry/filters) is per-machine.
 todos.json
