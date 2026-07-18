@@ -92,6 +92,7 @@ class App:
 
         self._build_ui()
         self._load_data()
+        self._absorb_conflict_forks()  # heal any OneDrive conflict fork at startup
         self._load_state()
         self._refresh_tree()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -520,10 +521,53 @@ class App:
             mtime = os.path.getmtime(DATA_FILE)
         except OSError:
             mtime = None
-        if mtime != self._data_mtime and not self._modal_open:
-            self._load_data()
-            self._refresh_tree()
+        if not self._modal_open:
+            if mtime != self._data_mtime:
+                self._load_data()
+                self._refresh_tree()
+            self._absorb_conflict_forks()
         self.root.after(DATA_POLL_MS, self._poll_external_change)
+
+    def _absorb_conflict_forks(self):
+        """OneDrive resolves a concurrent write by keeping the cloud version
+        as todos.json and renaming the losing machine's copy to
+        todos-<ComputerName>.json beside it — from that machine's view, its
+        edits silently stop syncing (observed live on this Desktop
+        2026-07-18). Fold every fork's unique items back into the main list
+        (identity = (text, created); the winner's version is kept for items
+        in both) and delete the fork, so a race costs nobody their todos.
+        Runs on every poll tick on all machines; the union is idempotent, so
+        concurrent absorbers converge."""
+        base = os.path.splitext(os.path.basename(DATA_FILE))[0]
+        forks = glob.glob(os.path.join(os.path.dirname(DATA_FILE), base + "-*.json"))
+        if not forks:
+            return
+        changed = False
+        seen = {(t.get("text"), t.get("created")) for t in self.todos}
+        for fork in forks:
+            try:
+                with open(fork, encoding="utf-8") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                continue  # unreadable / half-synced — retry next poll
+            for todo in data.get("todos", []):
+                key = (todo.get("text"), todo.get("created"))
+                if key not in seen:
+                    self.todos.append(todo)
+                    seen.add(key)
+                    changed = True
+            for cat in data.get("categories", []):
+                if cat not in self.categories:
+                    self.categories.append(cat)
+                    changed = True
+            try:
+                os.remove(fork)  # the delete syncs, clearing the fork everywhere
+            except OSError:
+                pass
+        if changed:
+            self._update_category_combos()
+            self._refresh_tree()
+            self._save_data()
 
     def _load_state(self):
         try:
