@@ -68,6 +68,7 @@ build MyAgent_launcher.applescript   icon_myagent_master.png   "My Agent"
 build SelfBot_launcher.applescript   icon_selfbot_master.png   SelfBot
 build HeartbeatLog.applescript       icon_heartbeat_master.png "Heartbeat Log"
 build CostLog.applescript            icon_costlog_master.png   "API Cost Log"
+build TodoList_launcher.applescript  icon_todolist_master.png  TodoList
 
 # Desktop aliases (only for the real ~/Applications install, not test builds)
 if [ "$DEST" = "$HOME/Applications" ]; then
@@ -111,5 +112,6 @@ My Agent|icon_myagent_master.png
 SelfBot|icon_selfbot_master.png
 Heartbeat Log|icon_heartbeat_master.png
 API Cost Log|icon_costlog_master.png
+TodoList|icon_todolist_master.png
 PAIRS
 fi

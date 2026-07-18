@@ -2,7 +2,7 @@
 
 ## macOS
 
-Sources for the three double-clickable launcher apps; the compiled `.app`
+Sources for the seven double-clickable launcher apps; the compiled `.app`
 bundles themselves are per-machine and are NOT in git — rebuild them with:
 
 ```bash
@@ -25,6 +25,7 @@ affected either way — launchd runs the venv python directly.)
 | `SelfBot.app` | `SelfBot_launcher.applescript` | `icon_selfbot_master.png` (anxious cross-eyed googly robot; its thought bubble holds a smaller copy of itself, and *its* bubble a smaller copy again — a self-referential Droste recursion) | Launches a NEW `SelfBot.py` instance each time (solo). No launch-or-focus: SelfBot is a two-instance app (the second self-chats with the first), so double-click twice for the pair — SelfBot.py cascades the 2nd window so they don't stack. The auto-positioned side-by-side duo layout is `LaunchSelfBot.bat`'s job |
 | `Heartbeat Log.app` | `HeartbeatLog.applescript` (+ `view_heartbeat.command`) | `icon_heartbeat_master.png` (EKG monitor with a googly-eyed heart) | Opens `~/Library/Logs/myagent/heartbeat.log` in a Terminal pager — meaningful events first (idle `nothing found` ticks hidden), then the full log; scrollable & searchable in `less`. A *viewer*, not a runner |
 | `API Cost Log.app` | `CostLog.applescript` (+ `view_costlog.command`) | `icon_costlog_master.png` (gold `$` coin with googly eyes on money-green, rising cost bars) | Opens `APICostLog.txt` (repo root) in a Terminal pager — a spend summary first (grand total, today, this month, by provider, by model), then every run most-recent-first. A *viewer*, not a runner |
+| `TodoList.app` | `TodoList_launcher.applescript` | `icon_todolist_master.png` (clipboard with a googly-eyed pencil ticking the last urgent item) | Launches `TodoList.py` detached; launch-or-focus like CSVEditor — TodoList's `todos.json` is OneDrive-synced, so a second local instance would race the first's 5-second sync poll |
 
 `rebuild.sh` patches the repo path into the AppleScript for whatever clone
 it runs from, renders the iconset from the 1024px master with `sips`
@@ -197,6 +198,10 @@ $lnk.Save()
 
 (The tiny repo-root `todolist.ico` predates this icon and is kept only so
 older shortcuts that referenced it don't lose their image.)
+
+On macOS the same artwork drives `TodoList.app` (built from
+`TodoList_launcher.applescript` + `icon_todolist_master.png` by `rebuild.sh`,
+like the other launcher apps — see the table above).
 
 `MyAgent_Win.ps1` is the Windows twin of `MyAgent_launcher.applescript`: it
 launches `MyAgent.py` with the venv **pythonw** (no console window). Unlike the
