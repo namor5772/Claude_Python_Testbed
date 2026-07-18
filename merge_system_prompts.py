@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """Merge SelfBot / MyAgent name-keyed JSON stores across machines without data loss.
 
-The problem this solves: system_prompts.json (and skills.json / agent_instructions.json)
-are live runtime files that SelfBot/MyAgent rewrite constantly, yet they are ALSO tracked
-in git. Between the rare commits, each machine accumulates its own prompts, so no single
-machine's file is a strict superset of the others. A plain git pull / copy is
+The problem this solved: system_prompts.json (and skills.json / agent_instructions.json)
+are live runtime files that SelfBot/MyAgent rewrite constantly, yet they were ALSO tracked
+in git. Between the rare commits, each machine accumulated its own prompts, so no single
+machine's file was a strict superset of the others. A plain git pull / copy is
 all-or-nothing and loses whichever side it didn't keep. This does a KEY-LEVEL union so
 every prompt from every machine survives.
+
+Since 2026-07-19 the stores live in <OneDrive>/MyAgent/ and the apps run this same
+union automatically (myagent/datapaths.py: repo-root leftovers are unioned in on
+launch, OneDrive conflict forks are absorbed continuously), so day-to-day sync no
+longer needs this tool. It remains useful for manual imports — merging a store copied
+off a backup / another account — and for any other name-keyed JSON dict.
 
 Usage
 -----

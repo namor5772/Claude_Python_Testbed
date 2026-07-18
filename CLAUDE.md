@@ -50,6 +50,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 - `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
   - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING), file paths
   - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock, rotate_log_if_needed (shared one-slot size-cap rotation for the runtime logs: APICostLog.txt here and in SelfBot, heartbeat.log via Heartbeat.py, unread_summary.log via UnreadSummary.py)
+  - `datapaths.py` — Shared-store path resolution + IO for the authored-content stores (agent_instructions.json / skills.json / system_prompts.json): `<OneDrive>/MyAgent/` when OneDrive is present (`MYAGENT_DATA_DIR` override, repo-root fallback), one-shot repo→OneDrive migration (leftover repo copy is key-level-unioned in, then renamed `.migrated.bak`), atomic mkstemp+replace saves, and OneDrive conflict-fork absorption (`<stem>-<Computer>.json` siblings unioned back and deleted; conflicting entries preserved as `name__label`). Used by both apps and Heartbeat.py; SelfBot stubs it when the package is absent
   - `ui_mixin.py` — setup_ui(), model/provider/thinking widget handlers
   - `state_mixin.py` — Instance management, display geometry, state persistence
   - `instructions_mixin.py` — Instruction CRUD, editor Toplevel dialog
@@ -73,9 +74,9 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 - `Account_Activity_WBC.py` — Single-file tkinter GUI browser automation utility (~340 lines); connects to Edge via CDP, clicks "Display more" on the Westpac account activity page, and exports transactions as HTML + CSV
 - `CSVEditor.py` — Single-file tkinter GUI CSV editor (~520 lines); open, edit, filter, and save CSV files with a spreadsheet-style treeview interface
 - `BirdFlying.html` — Self-contained HTML/SVG animation (no dependencies, opens in any browser): two Australian magpies with desynchronized SMIL flap-and-glide wing cycles and a Web Audio synthesized warble (armed by first click, browser autoplay policy), flying over a stylized homestead scene with a gum grove
-- `skills.json` — User-defined skills with content and mode, shared by both apps (created at runtime)
-- `system_prompts.json` — Saved system prompts for SelfBot (created at runtime); each entry now bundles a full main-screen environment (terminal user / chatting-with names, model + thinking params, the tool-row toggles, per-skill modes, and Safety confirm-bypass patterns), analogous to MyAgent's instructions — see `CLAUDE_SELFBOT.md`. Legacy flat `{name: "text"}` files migrate to the dict form on launch
-- `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (created at runtime)
+- `skills.json` — User-defined skills with content and mode, shared by both apps; lives in `<OneDrive>/MyAgent/` when a OneDrive client is present (repo-root fallback otherwise) — OneDrive, not git, syncs it across machines (see `myagent/datapaths.py`)
+- `system_prompts.json` — Saved system prompts for SelfBot (same `<OneDrive>/MyAgent/` home as skills.json); each entry now bundles a full main-screen environment (terminal user / chatting-with names, model + thinking params, the tool-row toggles, per-skill modes, and Safety confirm-bypass patterns), analogous to MyAgent's instructions — see `CLAUDE_SELFBOT.md`. Legacy flat `{name: "text"}` files migrate to the dict form on launch
+- `agent_instructions.json` — Saved agent instructions for MyAgent, with embedded images (same `<OneDrive>/MyAgent/` home as skills.json; `Heartbeat.py` resolves the same path for its marker rewrites)
 - `saved_chats/` — Directory of saved chat conversations, one `.json` file per chat; a matching `.txt` export of the output window is always saved alongside each `.json` file
 - `app_state.json` — Persistent settings for SelfBot instance 1 (created at runtime)
 - `app_state_2.json` — Persistent settings for SelfBot instance 2 (created at runtime)

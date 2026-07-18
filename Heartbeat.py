@@ -43,6 +43,7 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 from myagent.helpers import extract_text_from_html  # noqa: E402
 from myagent.helpers import rotate_log_if_needed as _rotate_log  # noqa: E402
+from myagent.datapaths import resolve_store as _resolve_store  # noqa: E402
 
 ACCOUNT = "namor5772"
 # Per-machine trigger subject: the Windows box and the Mac mini poll the SAME
@@ -52,7 +53,10 @@ SUBJECT = "APW" if platform.system() == "Windows" else "APM"
 MARKER = "*****"
 GOOGLE_CONFIG_DIR = Path.home() / ".config" / "myagent-google"
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-INSTRUCTIONS_FILE = BASE_DIR / "agent_instructions.json"
+# Same resolution as MyAgent itself: <OneDrive>/MyAgent/agent_instructions.json
+# when a OneDrive client is present, repo root otherwise — the marker rewrite
+# below must edit the same store the spawned MyAgent will read.
+INSTRUCTIONS_FILE = Path(_resolve_store("agent_instructions.json"))
 
 if platform.system() == "Darwin":
     LOG_FILE = Path.home() / "Library" / "Logs" / "myagent" / "heartbeat.log"
@@ -137,7 +141,9 @@ def rewrite_instruction(name, prompt_core):
     instructions[name]["text"] = "\n".join(
         lines[: first + 1] + [prompt_core] + lines[second:]
     )
-    fd, tmp = tempfile.mkstemp(dir=str(BASE_DIR), suffix=".json")
+    # Temp file must live beside the store: os.replace across filesystems
+    # (repo volume → OneDrive's File Provider volume) raises EXDEV.
+    fd, tmp = tempfile.mkstemp(dir=str(INSTRUCTIONS_FILE.parent), suffix=".json.tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(instructions, f, indent=2, ensure_ascii=False)
     os.replace(tmp, INSTRUCTIONS_FILE)

@@ -3,7 +3,7 @@ import tkinter as tk
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
-    ADAPTIVE_THINKING_MODELS,
+    ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
     ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
@@ -795,7 +795,10 @@ class UIMixin:
         model_info = f"{self.provider} / {model_display}{param_suffix}"
         inst_num = getattr(self, '_instance_num', 1)
         suffix = f" ({inst_num})" if inst_num > 1 else ""
+        # Same at-a-glance signal as TodoList: instructions/skills live in the
+        # OneDrive-shared dir (not the repo-root solo fallback)
+        synced = " — synced" if STORES_SYNCED else ""
         if self.agent_instruction_name:
-            self.root.title(f"My Agent{suffix} — {self.agent_instruction_name}  [{model_info}]")
+            self.root.title(f"My Agent{suffix} — {self.agent_instruction_name}  [{model_info}]{synced}")
         else:
-            self.root.title(f"My Agent{suffix}  [{model_info}]")
+            self.root.title(f"My Agent{suffix}  [{model_info}]{synced}")

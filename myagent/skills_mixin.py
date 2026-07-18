@@ -2,31 +2,24 @@ import os, sys, json, subprocess, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT)
+from myagent.datapaths import absorb_conflict_forks, load_store, save_store
 
 
 class SkillsMixin:
 
     def _load_skills(self):
-        if os.path.exists(SKILLS_FILE):
-            try:
-                with open(SKILLS_FILE, encoding="utf-8") as f:
-                    data = json.load(f)
-                migrated = False
-                for sdata in data.values():
-                    if "mode" not in sdata:
-                        sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
-                        migrated = True
-                if migrated:
-                    with open(SKILLS_FILE, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2, ensure_ascii=False)
-                return data
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {}
+        data = load_store(SKILLS_FILE)  # tolerant read; runs one-shot repo→OneDrive migration
+        changed = absorb_conflict_forks(SKILLS_FILE, data)
+        for sdata in data.values():
+            if "mode" not in sdata:
+                sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
+                changed = True
+        if changed:
+            save_store(SKILLS_FILE, data)
+        return data
 
     def _save_skills(self):
-        with open(SKILLS_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.skills, f, indent=2, ensure_ascii=False)
+        save_store(SKILLS_FILE, self.skills)
 
     def do_manage_skills(self, params):
         """CRUD operations on the shared skills library."""

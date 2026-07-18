@@ -965,14 +965,47 @@ DEFAULT_SYSTEM_PROMPT = (
     "• If you genuinely don't know something and can't find it, say so honestly."
 )
 
-PROMPTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_prompts.json")
+# The authored-content stores (system prompts + the skills library shared with
+# MyAgent) live in <OneDrive>/MyAgent when a OneDrive client is present — one
+# copy follows the user across machines; OneDrive, not git, is the sync channel
+# (see myagent/datapaths.py). Repo-root fallback on solo machines, and plain
+# repo-root behaviour when the myagent package is absent. State files
+# (app_state*.json etc.) stay per-machine at the repo root either way.
+try:
+    from myagent.datapaths import (
+        resolve_store as _resolve_store,
+        load_store as _load_store,
+        save_store as _save_store,
+        absorb_conflict_forks as _absorb_conflict_forks,
+    )
+except ImportError:
+    def _resolve_store(name):
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+
+    def _load_store(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _save_store(path, data):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _absorb_conflict_forks(path, data):
+        return False
+
+PROMPTS_FILE = _resolve_store("system_prompts.json")
 # Same per-run cost log MyAgent writes (repo root / APICostLog.txt); SelfBot is at the
 # repo root, so this resolves to MyAgent's _BASE_DIR path — one shared file for both apps.
 APICOST_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "APICostLog.txt")
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
-SKILLS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills.json")
+SKILLS_FILE = _resolve_store("skills.json")
+STORES_SYNCED = os.path.dirname(PROMPTS_FILE) != os.path.dirname(os.path.abspath(__file__))
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lock")
 INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_inject.txt")
 AUTO_MSG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_auto_msg.json")
@@ -1773,10 +1806,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return name if name else "Claude"
 
     def _update_title(self):
+        # " — synced" = prompts/skills live in the OneDrive-shared dir (same
+        # at-a-glance signal as TodoList). Appended, so Windows peer detection
+        # (pygetwindow substring match on "Claude SelfBot") is unaffected.
+        synced = " — synced" if STORES_SYNCED else ""
         if self.system_prompt_name:
-            self.root.title(f"Claude SelfBot — {self.system_prompt_name}")
+            self.root.title(f"Claude SelfBot — {self.system_prompt_name}{synced}")
         else:
-            self.root.title("Claude SelfBot")
+            self.root.title(f"Claude SelfBot{synced}")
 
     def _load_last_state(self):
         """Restore the last-used system prompt and window geometry on startup."""
@@ -2075,19 +2112,21 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     # --- System Prompt Editor ---
 
     def _load_saved_prompts(self):
-        if os.path.exists(PROMPTS_FILE):
-            with open(PROMPTS_FILE, encoding="utf-8") as f:
-                prompts = json.load(f)
-        else:
-            prompts = {}
+        # Tolerant read (a half-synced OneDrive write must not crash the app);
+        # also runs the one-shot repo-root→OneDrive migration on first call.
+        prompts = _load_store(PROMPTS_FILE)
+        migrated = _absorb_conflict_forks(PROMPTS_FILE, prompts)
         # Migrate legacy flat {name: "text"} entries → {name: {"text": "..."}} so each
         # prompt can bundle a full environment (names, model, skills, tools, safety).
-        migrated = False
         for pname, entry in list(prompts.items()):
             if not isinstance(entry, dict):
                 prompts[pname] = {"text": entry if isinstance(entry, str) else ""}
                 migrated = True
         if "Default" not in prompts:
+            if not prompts and os.path.exists(PROMPTS_FILE):
+                # Exists but unreadable — serve a session-only Default rather
+                # than overwriting a possibly half-synced store; retry next launch.
+                return {"Default": {"text": DEFAULT_SYSTEM_PROMPT}}
             prompts["Default"] = {"text": DEFAULT_SYSTEM_PROMPT}
             migrated = True
         if migrated:
@@ -2095,8 +2134,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return prompts
 
     def _save_prompts_to_disk(self, prompts):
-        with open(PROMPTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(prompts, f, indent=2, ensure_ascii=False)
+        _save_store(PROMPTS_FILE, prompts)
 
     @staticmethod
     def _prompt_entry_text(entry):
@@ -2344,27 +2382,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     # --- Skills System ---
 
     def _load_skills(self):
-        if os.path.exists(SKILLS_FILE):
-            try:
-                with open(SKILLS_FILE, encoding="utf-8") as f:
-                    data = json.load(f)
-                # Migrate old {enabled: bool} → {mode: "disabled"|"enabled"|"on_demand"}
-                migrated = False
-                for sdata in data.values():
-                    if "mode" not in sdata:
-                        sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
-                        migrated = True
-                if migrated:
-                    with open(SKILLS_FILE, "w", encoding="utf-8") as f:
-                        json.dump(data, f, indent=2, ensure_ascii=False)
-                return data
-            except (json.JSONDecodeError, OSError):
-                pass
-        return {}
+        data = _load_store(SKILLS_FILE)  # tolerant read + one-shot repo→OneDrive migration
+        changed = _absorb_conflict_forks(SKILLS_FILE, data)
+        # Migrate old {enabled: bool} → {mode: "disabled"|"enabled"|"on_demand"}
+        for sdata in data.values():
+            if "mode" not in sdata:
+                sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
+                changed = True
+        if changed:
+            _save_store(SKILLS_FILE, data)
+        return data
 
     def _save_skills(self):
-        with open(SKILLS_FILE, "w", encoding="utf-8") as f:
-            json.dump(self.skills, f, indent=2, ensure_ascii=False)
+        _save_store(SKILLS_FILE, self.skills)
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of the Skills button and the open Skills Manager listbox.

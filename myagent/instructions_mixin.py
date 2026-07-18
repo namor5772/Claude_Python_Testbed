@@ -7,6 +7,7 @@ from myagent.constants import (
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
+from myagent.datapaths import absorb_conflict_forks, load_store, save_store
 
 
 class InstructionsMixin:
@@ -15,32 +16,32 @@ class InstructionsMixin:
 
     def _load_saved_instructions(self):
         """Load instructions from disk. Each entry is {text: str, images: list}.
-        Migrates old string-only entries automatically."""
-        if os.path.exists(INSTRUCTIONS_FILE):
-            try:
-                with open(INSTRUCTIONS_FILE, encoding="utf-8") as f:
-                    data = json.load(f)
-                # Migrate old format: {name: "text"} → {name: {text: "...", images: []}}
-                migrated = False
-                for name, entry in list(data.items()):
-                    if isinstance(entry, str):
-                        data[name] = {"text": entry, "images": []}
-                        migrated = True
-                    elif isinstance(entry, dict) and "images" not in entry:
-                        entry["images"] = []
-                        migrated = True
-                if migrated:
-                    self._save_instructions_to_disk(data)
-                return data
-            except (json.JSONDecodeError, OSError):
-                pass
+        Migrates old string-only entries automatically. load_store also runs
+        the one-shot repo-root→OneDrive migration, so it must be called before
+        any existence check; a file that exists but doesn't parse (possibly a
+        half-synced cloud write) is served as a session-only Default WITHOUT
+        overwriting the store — the next launch retries."""
+        data = load_store(INSTRUCTIONS_FILE)
+        if data:
+            changed = absorb_conflict_forks(INSTRUCTIONS_FILE, data)
+            # Migrate old format: {name: "text"} → {name: {text: "...", images: []}}
+            for name, entry in list(data.items()):
+                if isinstance(entry, str):
+                    data[name] = {"text": entry, "images": []}
+                    changed = True
+                elif isinstance(entry, dict) and "images" not in entry:
+                    entry["images"] = []
+                    changed = True
+            if changed:
+                self._save_instructions_to_disk(data)
+            return data
         instructions = {"Default": {"text": DEFAULT_INSTRUCTION, "images": []}}
-        self._save_instructions_to_disk(instructions)
+        if not os.path.exists(INSTRUCTIONS_FILE):
+            self._save_instructions_to_disk(instructions)
         return instructions
 
     def _save_instructions_to_disk(self, instructions):
-        with open(INSTRUCTIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(instructions, f, indent=2, ensure_ascii=False)
+        save_store(INSTRUCTIONS_FILE, instructions)
 
     def do_manage_instructions(self, params):
         """CRUD operations on the saved instruction library."""

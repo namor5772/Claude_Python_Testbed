@@ -19,6 +19,13 @@ MyAgent_Tools_Report.txt
 # Runtime state files
 agent_state*.json
 app_state*.json
+# Authored-content stores — live in <OneDrive>/MyAgent/ (synced across machines
+# by OneDrive, not git; see myagent/datapaths.py). These repo-root names are the
+# no-OneDrive fallback; a leftover repo-root copy is auto-unioned into the
+# shared store on first launch and renamed *.migrated.bak (covered by *.bak)
+agent_instructions.json
+skills.json
+system_prompts.json
 # TodoList data — lives in <OneDrive>/TodoList/todos.json (synced across
 # machines by OneDrive, not git); these repo-root copies are the no-OneDrive
 # fallback / pre-migration leftovers. State (geometry/filters) is per-machine.

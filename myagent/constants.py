@@ -2418,11 +2418,17 @@ _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS
 
 # _BASE_DIR points to the project root (parent of the myagent/ package)
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-INSTRUCTIONS_FILE = os.path.join(_BASE_DIR, "agent_instructions.json")
+# The two authored-content stores live in <OneDrive>/MyAgent when a OneDrive
+# client is present (one copy follows the user across machines — OneDrive, not
+# git, is the sync channel; see myagent/datapaths.py), falling back to the
+# repo root on solo machines. State files below stay per-machine at the root.
+from myagent.datapaths import resolve_store  # noqa: E402  (needs os already imported)
+INSTRUCTIONS_FILE = resolve_store("agent_instructions.json")
 CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
 AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
-SKILLS_FILE = os.path.join(_BASE_DIR, "skills.json")
+SKILLS_FILE = resolve_store("skills.json")
+STORES_SYNCED = os.path.dirname(INSTRUCTIONS_FILE) != _BASE_DIR  # shared dir in use
 APICOST_LOG_FILE = os.path.join(_BASE_DIR, "APICostLog.txt")  # per-run cost log (repo root, gitignored)
 APICOST_LOG_MAX_BYTES = 100_000  # one-slot rotation cap (helpers.rotate_log_if_needed), same as heartbeat.log's
 
