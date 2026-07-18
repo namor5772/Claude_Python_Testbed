@@ -499,6 +499,11 @@ class App:
         data = {"todos": self.todos, "categories": self.categories}
         tmp = DATA_FILE + ".tmp"
         try:
+            # OneDrive garbage-collects a still-EMPTY shared dir within seconds
+            # of _resolve_data_file creating it (observed on macOS 2026-07-18),
+            # so the first save on a fresh machine may find its parent gone —
+            # recreate it rather than silently losing the write below
+            os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
             os.replace(tmp, DATA_FILE)  # atomic — OneDrive never sees a half-written file
