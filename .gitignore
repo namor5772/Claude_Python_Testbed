@@ -35,6 +35,10 @@ todo_state.json
 # run; kept ignored so stale copies on other machines stay invisible
 csv_editor_state.json
 
+# Native TodoList build artifact (arm64 Mach-O, per-machine — rebuild with
+# ./build_todolist_native.sh; the source TodoList.mm IS tracked)
+TodoList.exe
+
 # Lock files
 selfbot.lock
 agent_lock_*.lock

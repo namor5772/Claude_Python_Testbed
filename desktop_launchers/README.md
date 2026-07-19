@@ -26,6 +26,7 @@ affected either way — launchd runs the venv python directly.)
 | `Heartbeat Log.app` | `HeartbeatLog.applescript` (+ `view_heartbeat.command`) | `icon_heartbeat_master.png` (EKG monitor with a googly-eyed heart) | Opens `~/Library/Logs/myagent/heartbeat.log` in a Terminal pager — meaningful events first (idle `nothing found` ticks hidden), then the full log; scrollable & searchable in `less`. A *viewer*, not a runner |
 | `API Cost Log.app` | `CostLog.applescript` (+ `view_costlog.command`) | `icon_costlog_master.png` (gold `$` coin with googly eyes on money-green, rising cost bars) | Opens `APICostLog.txt` (repo root) in a Terminal pager — a spend summary first (grand total, today, this month, by provider, by model), then every run most-recent-first. A *viewer*, not a runner |
 | `TodoList.app` | `TodoList_launcher.applescript` | `icon_todolist_master.png` (clipboard with a googly-eyed pencil ticking the last urgent item) | Launches `TodoList.py` detached; launch-or-focus like CSVEditor — TodoList's `todos.json` is OneDrive-synced, so a second local instance would race the first's 5-second sync poll |
+| `TodoList (Native).app` | `TodoListNative_launcher.applescript` | `icon_todolist_native_master.png` (the same clipboard with a deep-blue `C++` badge top-left, derived by `make_todolist_native_icon.py`) | Launches `TodoList.exe` — the native C++/Cocoa port built from `TodoList.mm` by `./build_todolist_native.sh` (repo root; run it once per machine, the binary is gitignored). Launch-or-focus across BOTH implementations: it focuses a running `TodoList.exe` *or* `TodoList.py` before launching, since either pair would race the shared 5-second sync poll. Shows a "build it first" dialog if the exe is missing |
 
 `rebuild.sh` patches the repo path into the AppleScript for whatever clone
 it runs from, renders the iconset from the 1024px master with `sips`
@@ -201,7 +202,10 @@ older shortcuts that referenced it don't lose their image.)
 
 On macOS the same artwork drives `TodoList.app` (built from
 `TodoList_launcher.applescript` + `icon_todolist_master.png` by `rebuild.sh`,
-like the other launcher apps — see the table above).
+like the other launcher apps — see the table above). The `TodoList (Native)`
+variant's `icon_todolist_native_master.png` is *derived* from this master by
+`make_todolist_native_icon.py` (imports the base renderer and stamps a `C++`
+badge), so a redesign of the base icon regenerates both.
 
 `MyAgent_Win.ps1` is the Windows twin of `MyAgent_launcher.applescript`: it
 launches `MyAgent.py` with the venv **pythonw** (no console window). Unlike the
