@@ -207,6 +207,47 @@ variant's `icon_todolist_native_master.png` is *derived* from this master by
 `make_todolist_native_icon.py` (imports the base renderer and stamps a `C++`
 badge), so a redesign of the base icon regenerates both.
 
+### TodoList (Native) — Windows
+
+`TodoListNative_Win.ps1` is the Windows twin of
+`TodoListNative_launcher.applescript`: it launches the repo-root `TodoList.exe`
+(the native C++/Win32 port compiled from `TodoList.cpp` by
+`.\build_todolist_native.ps1` — gitignored, rebuilt per machine), with
+launch-or-focus across **both** TodoList implementations for the same reason as
+the AppleScript: a running `TodoList.exe` is focused first, then a running
+`TodoList.py`, before anything is launched, since either pair would race the
+shared 5-second sync poll on the OneDrive-synced `todos.json`. If the exe has
+not been built on this machine yet it shows a "build it first" dialog naming
+the build script. Unlike the macOS launcher there is no dotfile sourcing —
+Windows env vars (including an optional `TODOLIST_DATA_DIR` override) are
+system-wide and inherited by GUI processes. The repo is resolved from the
+script's own location; only the `.lnk` is per-machine.
+
+`icon_todolist_native.ico` is rendered from the committed 1024px
+`icon_todolist_native_master.png` (the TodoList clipboard with a deep-blue
+`C++` badge, derived by `make_todolist_native_icon.py`). The same `.ico` is
+also **embedded into `TodoList.exe`** by `TodoList.rc` at build time, so
+Explorer, the taskbar, and Alt-Tab show it even without the shortcut.
+Regenerate with:
+
+```powershell
+.venv\Scripts\python.exe -c "from PIL import Image; Image.open(r'desktop_launchers\icon_todolist_native_master.png').convert('RGBA').save(r'desktop_launchers\icon_todolist_native.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+```
+
+Recreate the Desktop shortcut on a new machine (run from the repo root):
+
+```powershell
+$repo = (Get-Location).Path
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'TodoList (Native).lnk'))
+$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\TodoListNative_Win.ps1`""
+$lnk.WorkingDirectory = $repo
+$lnk.IconLocation = "$repo\desktop_launchers\icon_todolist_native.ico,0"
+$lnk.WindowStyle = 7
+$lnk.Save()
+```
+
 `MyAgent_Win.ps1` is the Windows twin of `MyAgent_launcher.applescript`: it
 launches `MyAgent.py` with the venv **pythonw** (no console window). Unlike the
 CSVEditor twin there is **no** launch-or-focus — MyAgent is multi-instance by

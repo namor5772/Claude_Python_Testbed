@@ -1,0 +1,6 @@
+// TodoList.rc — resources embedded into the Windows TodoList.exe by
+// build_todolist_native.ps1: the app icon (id 1, loaded by wWinMain and
+// shown by Explorer/taskbar) and the side-by-side manifest (comctl32 v6 +
+// Per-Monitor-V2 DPI awareness).
+1 ICON "desktop_launchers\\icon_todolist_native.ico"
+1 24 "TodoList.exe.manifest"
