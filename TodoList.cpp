@@ -1075,10 +1075,13 @@ struct App {
     bool stateSaved = false;  // close/quit both save; only the first wins
     bool geometryApplied = false;
     bool inGeometryApply = false;
-    Geometry pendingGeometry{0, 0, 0, 0};
+    Geometry pendingGeometry{0, 0, 0, 0};  // in Tk-virtual (96-dpi logical) units
+    int statusY = 0, statusMinX = 0;       // status-label row from layout()
     EditDialogState edit;
 };
 static App gApp;
+
+static const UINT MSG_FIT_COLUMNS = WM_APP + 1;  // posted after a header drag
 
 static int S(int v) { return MulDiv(v, (int)gApp.dpi, 96); }
 
@@ -1156,17 +1159,105 @@ static bool comboSelectExact(HWND combo, const std::string &s) {
     return true;
 }
 
+// WM_SETTEXT into an editable combo select-alls its edit field — and so does
+// MoveWindow (the combo re-runs its internal layout on resize; verified live
+// 2026-07-20) — which paints as a persistent blue highlight the Tk original
+// doesn't have. Clear it, but never while the user is editing the combo.
+static void comboClearSelection(HWND combo) {
+    SendMessageW(combo, CB_SETEDITSEL, 0, MAKELPARAM(-1, 0));
+}
+
+static void comboClearSelectionUnlessFocused(HWND combo) {
+    HWND focus = GetFocus();
+    if (focus == combo || IsChild(combo, focus)) return;
+    comboClearSelection(combo);
+}
+
 static void updateCategoryCombos() {
     std::wstring current = getTextW(gApp.entryCategory);  // editable — preserve typed text
     SendMessageW(gApp.entryCategory, CB_RESETCONTENT, 0, 0);
     for (const auto &c : gApp.categories) comboAdd(gApp.entryCategory, c);
     SetWindowTextW(gApp.entryCategory, current.c_str());
+    comboClearSelection(gApp.entryCategory);
 
     std::string sel = comboSelectedText(gApp.filterCat, "All");
     SendMessageW(gApp.filterCat, CB_RESETCONTENT, 0, 0);
     comboAdd(gApp.filterCat, "All");
     for (const auto &c : gApp.categories) comboAdd(gApp.filterCat, c);
     if (!comboSelectExact(gApp.filterCat, sel)) SendMessageW(gApp.filterCat, CB_SETCURSEL, 0, 0);
+}
+
+// ── Column stretch (Tk Treeview parity) ──
+// Tk stretches every column proportionally to fill the widget width, both at
+// startup and on every resize; a user-dragged column becomes the new basis.
+// keepCol >= 0 preserves a just-dragged column's width and redistributes only
+// the others (so a manual drag never bounces back).
+
+static bool gFittingColumns = false;
+
+static void fitColumns(int keepCol) {
+    if (!gApp.list || gFittingColumns) return;
+    gFittingColumns = true;
+    RECT rc;
+    GetClientRect(gApp.list, &rc);  // client already excludes a visible v-scrollbar
+    int avail = rc.right;
+    int w[6], sum = 0;
+    for (int i = 0; i < 6; i++) {
+        w[i] = ListView_GetColumnWidth(gApp.list, i);
+        sum += w[i];
+    }
+    int minW = S(40);  // Tk column minwidth=40
+    int target = avail, base = sum;
+    if (keepCol >= 0 && keepCol < 6) {
+        target -= w[keepCol];
+        base -= w[keepCol];
+    }
+    int scaledCols = (keepCol >= 0 && keepCol < 6) ? 5 : 6;
+    if (base > 0 && target >= minW * scaledCols) {
+        int accOld = 0, accNew = 0, lastIdx = -1;
+        for (int i = 0; i < 6; i++) {
+            if (i == keepCol) continue;
+            accOld += w[i];
+            int nw = MulDiv(accOld, target, base) - accNew;  // cumulative → exact total
+            if (nw < minW) nw = minW;
+            accNew += nw;
+            w[i] = nw;
+            lastIdx = i;
+        }
+        if (lastIdx >= 0) {  // absorb rounding/min-clamp residue in the last column
+            w[lastIdx] += target - accNew;
+            if (w[lastIdx] < minW) w[lastIdx] = minW;
+        }
+        for (int i = 0; i < 6; i++)
+            if (i != keepCol && ListView_GetColumnWidth(gApp.list, i) != w[i])
+                ListView_SetColumnWidth(gApp.list, i, w[i]);
+    }
+    gFittingColumns = false;
+}
+
+// ── Status label (Tk pack side=RIGHT parity) ──
+// Sized to its text and anchored at the window's right edge, like the Tk
+// label; a STATIC spanning leftover space instead word-wraps overflow into
+// stacked clipped lines (the "gobbledygook" of 2026-07-20). When the window
+// is too narrow the SS_ENDELLIPSIS style clips with "..." on one line.
+
+static void positionStatusLabel() {
+    if (!gApp.statusLabel || !gApp.win) return;
+    std::wstring text = getTextW(gApp.statusLabel);
+    SIZE sz{0, 0};
+    HDC dc = GetDC(gApp.statusLabel);
+    HFONT old = (HFONT)SelectObject(dc, gApp.font);
+    GetTextExtentPoint32W(dc, text.c_str(), (int)text.size(), &sz);
+    SelectObject(dc, old);
+    ReleaseDC(gApp.statusLabel, dc);
+    RECT rc;
+    GetClientRect(gApp.win, &rc);
+    int right = rc.right - S(8);
+    int left = right - (sz.cx + S(4));
+    if (left < gApp.statusMinX) left = gApp.statusMinX;  // never cover Move Down
+    int w = right - left;
+    if (w < 0) w = 0;
+    MoveWindow(gApp.statusLabel, left, gApp.statusY, w, S(18), TRUE);
 }
 
 // ── Refresh (mirrors _refresh_tree: rebuild + selection cleared) ──
@@ -1194,13 +1285,15 @@ static void refreshTree() {
     }
     SendMessageW(gApp.list, WM_SETREDRAW, TRUE, 0);
     InvalidateRect(gApp.list, nullptr, TRUE);
+    fitColumns(-1);  // item churn can toggle the v-scrollbar, changing client width
 
     size_t total = gApp.todos.size(), done = 0;
     for (const auto &t : gApp.todos)
         if (todoDone(t)) done++;
-    wchar_t buf[128];
-    swprintf(buf, 128, L"%zu active, %zu done, %zu total", total - done, done, total);
-    SetWindowTextW(gApp.statusLabel, buf);
+    std::wstring status = std::to_wstring(total - done) + L" active, " + std::to_wstring(done) +
+                          L" done, " + std::to_wstring(total) + L" total";
+    SetWindowTextW(gApp.statusLabel, status.c_str());
+    positionStatusLabel();  // text length changed — re-anchor at the right edge
 }
 
 // ── Selection helpers ──
@@ -1439,6 +1532,7 @@ static void editTodo() {
     CreateWindowExW(0, L"BUTTON", L"Save", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                     S(165), S(172), S(90), S(28), dlg, (HMENU)IDC_E_SAVE, inst, nullptr);
     setFonts(dlg);
+    comboClearSelection(gApp.edit.eCat);  // after setFonts — WM_SETFONT can re-select too
 
     gApp.modalOpen = true;  // a synced reload would shift indexes under the editor
     EnableWindow(gApp.win, FALSE);
@@ -1490,26 +1584,41 @@ static void editTodo() {
 
 // ── Window state ──
 
+// todo_state.json is SHARED with TodoList.py, and Tk on Windows is
+// DPI-unaware — its geometry string is in virtualized 96-dpi units, not
+// physical pixels. This (DPI-aware) exe converts at the boundary: multiply
+// by dpi/96 on apply, divide on save, so the restored window matches the
+// Python one visually in both directions. The single scale factor is exact
+// on any monitor at the primary's scale; on a mixed-DPI secondary it is the
+// same approximation Tk itself lives with.
+
+static void applyGeometryPhysical(const Geometry &g, UINT dpi) {
+    RECT r{0, 0, MulDiv((int)g.w, (int)dpi, 96), MulDiv((int)g.h, (int)dpi, 96)};
+    AdjustWindowRectExForDpi(&r, (DWORD)GetWindowLongW(gApp.win, GWL_STYLE), FALSE,
+                             (DWORD)GetWindowLongW(gApp.win, GWL_EXSTYLE), dpi);
+    SetWindowPos(gApp.win, nullptr, MulDiv((int)g.x, (int)dpi, 96),
+                 MulDiv((int)g.y, (int)dpi, 96), r.right - r.left, r.bottom - r.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 static void applyGeometry(const std::string &geo) {
     auto g = parseGeometry(geo);
     if (!g) return;
     gApp.geometryApplied = true;
-    gApp.pendingGeometry = *g;
+    gApp.pendingGeometry = *g;    // kept in Tk units for the DPI-change re-assert
     gApp.inGeometryApply = true;  // WM_DPICHANGED during the move re-asserts our rect
-    RECT r{0, 0, (LONG)g->w, (LONG)g->h};
-    AdjustWindowRectExForDpi(&r, (DWORD)GetWindowLongW(gApp.win, GWL_STYLE), FALSE,
-                             (DWORD)GetWindowLongW(gApp.win, GWL_EXSTYLE), gApp.dpi);
-    SetWindowPos(gApp.win, nullptr, (int)g->x, (int)g->y, r.right - r.left, r.bottom - r.top,
-                 SWP_NOZORDER | SWP_NOACTIVATE);
+    applyGeometryPhysical(*g, GetDpiForSystem());  // primary scale = Tk's virtual desktop
     gApp.inGeometryApply = false;
 }
 
-// Tk-style geometry: WxH = client (content) size, +X+Y = outer top-left.
+// Tk-style geometry: WxH = client (content) size, +X+Y = outer top-left —
+// converted back to Tk-virtual units (see above).
 static std::string currentGeometry() {
     RECT wr, cr;
     GetWindowRect(gApp.win, &wr);
     GetClientRect(gApp.win, &cr);
-    return formatGeometry(cr.right, cr.bottom, wr.left, wr.top);
+    return formatGeometry(MulDiv(cr.right, 96, (int)gApp.dpi), MulDiv(cr.bottom, 96, (int)gApp.dpi),
+                          MulDiv(wr.left, 96, (int)gApp.dpi), MulDiv(wr.top, 96, (int)gApp.dpi));
 }
 
 static void loadUiState() {
@@ -1584,13 +1693,16 @@ static void layout() {
     moveCtl(gApp.btnDelete, x, y2, S(50), hB);                x += S(54);
     moveCtl(gApp.btnUp, x, y2, S(62), hB);                    x += S(66);
     moveCtl(gApp.btnDown, x, y2, S(78), hB);                  x += S(82);
-    int statusW = W - m - x;
-    if (statusW < 0) statusW = 0;
-    moveCtl(gApp.statusLabel, x, y2 + S(4), statusW, hL);
+    gApp.statusMinX = x;
+    gApp.statusY = y2 + S(4);
+    positionStatusLabel();
 
-    // Table fills the rest
+    // Table fills the rest; columns stretch with it, like the Tk Treeview
     int listY = S(92);
     moveCtl(gApp.list, m, listY, W - 2 * m, H - listY - m);
+    fitColumns(-1);
+
+    comboClearSelectionUnlessFocused(gApp.entryCategory);  // MoveWindow re-selected it
 }
 
 // ── ListView subclass: yellow header via custom draw (the header sends its
@@ -1600,6 +1712,14 @@ static LRESULT CALLBACK listSubclassProc(HWND h, UINT msg, WPARAM wp, LPARAM lp,
                                          DWORD_PTR) {
     if (msg == WM_NOTIFY) {
         NMHDR *nm = (NMHDR *)lp;
+        // A finished column drag re-fits the OTHER columns to the widget
+        // width (posted, so the header has applied the new width first) —
+        // Tk keeps the total equal to the widget width through drags too.
+        if (nm->hwndFrom == gApp.header &&
+            (nm->code == HDN_ENDTRACKW || nm->code == HDN_ENDTRACKA ||
+             nm->code == HDN_DIVIDERDBLCLICKW || nm->code == HDN_DIVIDERDBLCLICKA)) {
+            PostMessageW(gApp.win, MSG_FIT_COLUMNS, (WPARAM)((NMHEADERW *)nm)->iItem, 0);
+        }
         if (nm->hwndFrom == gApp.header && nm->code == NM_CUSTOMDRAW) {
             NMCUSTOMDRAW *cd = (NMCUSTOMDRAW *)lp;
             if (cd->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
@@ -1659,6 +1779,7 @@ static void buildUI() {
                                  IDC_ENTRY_CATEGORY);
     for (const auto &c : gApp.categories) comboAdd(gApp.entryCategory, c);
     SetWindowTextW(gApp.entryCategory, L"General");
+    comboClearSelection(gApp.entryCategory);
     gApp.lblDue = mkChild(L"STATIC", L"Due:", SS_LEFT, 0, 0);
     gApp.entryDue = mkChild(L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, WS_EX_CLIENTEDGE,
                             IDC_ENTRY_DUE);
@@ -1691,7 +1812,7 @@ static void buildUI() {
     gApp.btnDelete = mkChild(L"BUTTON", L"Delete", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_DELETE);
     gApp.btnUp = mkChild(L"BUTTON", L"Move Up", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_UP);
     gApp.btnDown = mkChild(L"BUTTON", L"Move Down", WS_TABSTOP | BS_PUSHBUTTON, 0, IDC_BTN_DOWN);
-    gApp.statusLabel = mkChild(L"STATIC", L"", SS_RIGHT, 0, 0);
+    gApp.statusLabel = mkChild(L"STATIC", L"", SS_RIGHT | SS_ENDELLIPSIS | SS_NOPREFIX, 0, 0);
 
     gApp.list = mkChild(WC_LISTVIEWW, L"",
                         WS_TABSTOP | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
@@ -1754,12 +1875,7 @@ static LRESULT CALLBACK mainWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 // Re-assert the saved rect at the new DPI: the system's
                 // suggested rect would rescale the restored size and make
                 // the geometry round-trip drift on every launch.
-                const Geometry &g = gApp.pendingGeometry;
-                RECT r{0, 0, (LONG)g.w, (LONG)g.h};
-                AdjustWindowRectExForDpi(&r, (DWORD)GetWindowLongW(h, GWL_STYLE), FALSE,
-                                         (DWORD)GetWindowLongW(h, GWL_EXSTYLE), gApp.dpi);
-                SetWindowPos(h, nullptr, (int)g.x, (int)g.y, r.right - r.left, r.bottom - r.top,
-                             SWP_NOZORDER | SWP_NOACTIVATE);
+                applyGeometryPhysical(gApp.pendingGeometry, gApp.dpi);
             } else {
                 RECT *sug = (RECT *)lp;
                 SetWindowPos(h, nullptr, sug->left, sug->top, sug->right - sug->left,
@@ -1843,6 +1959,10 @@ static LRESULT CALLBACK mainWndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             break;
+
+        case MSG_FIT_COLUMNS:  // header drag finished — keep that column, refit the rest
+            fitColumns((int)wp);
+            return 0;
 
         // Deliberately NO data save on close: every action already saves
         // immediately, so a close-save could only rewrite todos.json with
