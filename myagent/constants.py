@@ -550,7 +550,10 @@ META_TOOLS = [
         "name": "run_instruction",
         "description": (
             "Launch a saved agent instruction as a separate MyAgent process. "
-            "The child process runs independently and returns immediately. "
+            "By default the child runs independently (fire-and-forget) and this "
+            "returns immediately. Set wait=true to BLOCK until the child agent "
+            "finishes and get its final report text back as this tool's result — "
+            "use that when you need the child's answer to continue your own task. "
             "Use manage_instructions(action='list') first to see available names."
         ),
         "input_schema": {
@@ -563,6 +566,14 @@ META_TOOLS = [
                 "headless": {
                     "type": "boolean",
                     "description": "Run without a GUI window (default true). Set false to show the agent window.",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Wait for the child to finish and return its final report (default false = fire-and-forget).",
+                },
+                "timeout_seconds": {
+                    "type": "integer",
+                    "description": "Max seconds to wait when wait=true (default 600). On timeout the child is terminated and an error is returned.",
                 },
             },
             "required": ["name"],

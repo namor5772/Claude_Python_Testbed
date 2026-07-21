@@ -1,4 +1,4 @@
-import os, sys, json, subprocess, tkinter as tk
+import os, sys, json, subprocess, tempfile, time, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT)
@@ -87,9 +87,20 @@ class SkillsMixin:
         return f"Error: Unknown action '{action}'."
 
     def do_run_instruction(self, params):
-        """Launch a saved instruction as a separate MyAgent process."""
+        """Launch a saved instruction as a separate MyAgent process.
+
+        Fire-and-forget by default; with wait=true this blocks the streaming
+        thread until the child exits, then returns the child's final report
+        (read from a --result-file the child writes when its loop ends) —
+        the subagent-result pattern, so a parent agent can consume a child's
+        answer instead of merely spawning it."""
         name = params.get("name", "")
         headless = params.get("headless", True)
+        wait = bool(params.get("wait", False))
+        try:
+            timeout_s = int(params.get("timeout_seconds") or 600)
+        except (TypeError, ValueError):
+            timeout_s = 600
 
         if not name:
             return "Error: 'name' is required."
@@ -106,6 +117,12 @@ class SkillsMixin:
         if headless:
             cmd.append("--headless")
 
+        result_path = None
+        if wait:
+            fd, result_path = tempfile.mkstemp(prefix="myagent_result_", suffix=".json")
+            os.close(fd)
+            cmd += ["--result-file", result_path]
+
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -113,10 +130,58 @@ class SkillsMixin:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+        except Exception as e:
+            if result_path:
+                try:
+                    os.remove(result_path)
+                except OSError:
+                    pass
+            return f"Error launching instruction '{name}': {e}"
+
+        if not wait:
             mode = "headless" if headless else "GUI"
             return f"Launched instruction '{name}' in {mode} mode (PID {proc.pid})."
-        except Exception as e:
-            return f"Error launching instruction '{name}': {e}"
+
+        # Blocking wait: poll so STOP stays responsive and the timeout is
+        # enforced. Child-process exit is the synchronization point — the
+        # result file is fully written before the headless close runs.
+        start = time.time()
+        try:
+            while proc.poll() is None:
+                if self.stop_requested:
+                    proc.terminate()
+                    return (f"run_instruction '{name}' cancelled: STOP pressed "
+                            "while waiting; child process terminated.")
+                if time.time() - start > timeout_s:
+                    proc.terminate()
+                    return (f"Error: instruction '{name}' did not finish within "
+                            f"{timeout_s}s; child process terminated. Its partial "
+                            "transcript (if the instruction names a chat) is in "
+                            "saved_chats/.")
+                time.sleep(1)
+            elapsed = int(time.time() - start)
+            try:
+                with open(result_path, encoding="utf-8") as f:
+                    result = json.load(f)
+            except (OSError, ValueError):
+                return (f"Error: instruction '{name}' exited (code {proc.returncode}, "
+                        f"{elapsed}s) but wrote no readable result — it may have "
+                        "failed before its agent loop started.")
+            status = result.get("status", "unknown")
+            final_text = (result.get("final_text") or "").strip()
+            if len(final_text) > 20000:
+                final_text = final_text[:20000] + "\n…[report truncated at 20000 chars]"
+            out = f"Instruction '{name}' finished (status={status}, {elapsed}s)."
+            if result.get("error"):
+                out += f"\nChild error: {result['error']}"
+            out += f"\nFinal report:\n{final_text}" if final_text else "\n(No final text.)"
+            return out
+        finally:
+            if result_path:
+                try:
+                    os.remove(result_path)
+                except OSError:
+                    pass
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of Skills button and Skills Manager listbox."""

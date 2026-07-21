@@ -74,9 +74,13 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           OutlookMixin, DocumentMixin, FileMixin, DesktopMixin, BrowserMixin,
           SafetyMixin, ChatMixin, EventLoopMixin):
 
-    def __init__(self, root, launch_instruction=None, headless=False):
+    def __init__(self, root, launch_instruction=None, headless=False, result_file=None):
         self.root = root
         self._headless = headless
+        # Optional path (from --result-file) where stream_worker writes a JSON
+        # summary of the run's outcome on completion — the return channel for a
+        # parent agent's blocking run_instruction(wait=true).
+        self._result_file = result_file
         self.root.title("My Agent")
         self.root.geometry(DEFAULT_GEOMETRY)
 
@@ -280,7 +284,12 @@ if __name__ == "__main__":
                         help="Load an instruction by name and auto-start the agent")
     parser.add_argument("--headless", action="store_true",
                         help="Run without main window (dialogs still shown when needed)")
+    parser.add_argument("--result-file", metavar="PATH",
+                        help="Write a JSON result summary (status + final assistant text) "
+                             "to PATH when the agentic loop ends — used by a parent "
+                             "agent's run_instruction(wait=true)")
     args = parser.parse_args()
     root = tk.Tk()
-    app = App(root, launch_instruction=args.load, headless=args.headless)
+    app = App(root, launch_instruction=args.load, headless=args.headless,
+              result_file=args.result_file)
     root.mainloop()

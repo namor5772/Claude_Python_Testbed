@@ -804,6 +804,54 @@ class StreamingMixin:
             self.queue.put({"type": "warning",
                             "content": f"⚠ Could not write APICostLog.txt: {e}\n"})
 
+    @staticmethod
+    def _final_assistant_text(messages):
+        """The last assistant message's text — the run's 'final report'.
+
+        Content may be a plain string, a list of dicts, or Anthropic SDK block
+        objects (with .type/.text attributes); text blocks are joined."""
+        for m in reversed(messages):
+            if m.get("role") != "assistant":
+                continue
+            c = m.get("content")
+            if isinstance(c, str):
+                if c.strip():
+                    return c
+                continue
+            if isinstance(c, list):
+                parts = []
+                for b in c:
+                    if isinstance(b, dict):
+                        if b.get("type") == "text" and b.get("text"):
+                            parts.append(b["text"])
+                    elif getattr(b, "type", None) == "text" and getattr(b, "text", ""):
+                        parts.append(b.text)
+                if parts:
+                    return "\n".join(parts)
+        return ""
+
+    def _write_result_file(self, status, messages, error=""):
+        """Persist the run outcome for a waiting parent (run_instruction wait=true).
+
+        No-op unless launched with --result-file. Written on BOTH loop-end paths
+        before the headless close is scheduled; the parent's synchronization
+        point is child-process exit, so a plain write is race-free. Best-effort:
+        a write failure must never break the run itself."""
+        path = getattr(self, "_result_file", None)
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "instruction": getattr(self, "agent_instruction_name", ""),
+                    "status": status,
+                    "error": error,
+                    "final_text": self._final_assistant_text(messages),
+                }, f, ensure_ascii=False, indent=1)
+        except Exception as e:
+            self.queue.put({"type": "warning",
+                            "content": f"⚠ Could not write result file: {e}\n"})
+
     def stream_worker(self, messages):
         # Initialized before the try so the except path can log whatever cost
         # accumulated before the failure.
@@ -1033,6 +1081,8 @@ class StreamingMixin:
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
             self._log_api_cost(total_cost)
+            self._write_result_file(
+                "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
             if self._headless:
                 self.root.after(500, self._on_close)
@@ -1043,5 +1093,6 @@ class StreamingMixin:
             # failure, and never leave a headless run as a zombie process — an
             # unattended error should exit (the auto-saved transcript records it).
             self._log_api_cost(total_cost)
+            self._write_result_file("error", messages, error=str(e))
             if self._headless:
                 self.root.after(500, self._on_close)
