@@ -120,7 +120,7 @@ A single-file (~5,300-line) tkinter chatbot for the Anthropic API that works in 
 
 **Dual-instance mode** — double-click `LaunchSelfBot.bat` (Windows) and two instances open side by side, or press the SelfBot Desktop launcher twice (Windows **or macOS** — the second window cascades off the first so they don't stack). Instance 1's reply is injected into instance 2's input and vice versa, with a configurable send delay, an Auto-chat toggle, pause/resume via pending-injection, name swapping (each instance shows the other's name as the "friend"), independent geometry/state files (`app_state.json` / `app_state_2.json`), and a paired shutdown that saves both chats and closes both windows from either [X]. The duo is fully cross-platform (since 2026-07-13): macOS pairs by *process* rather than window title (pygetwindow is Win32-only, and reading other apps' titles on macOS needs a Screen Recording consent) and closes the peer with a graceful `SIGTERM` handler instead of `WM_CLOSE`. **"Close one → both close" now holds for every death mode:** the graceful [X]/`taskkill` path broadcasts the close to its peer, and a watchdog in the peer-poll covers *ungraceful* peer death (crash, `taskkill /F`, or a model self-terminating via `run_command`) — once paired, a peer that vanishes without the broadcast triggers the survivor to run the same graceful close (finish streaming, save chat, exit) instead of lingering solo. The one message that can't be recovered is the *dying* instance's own in-flight reply on a force-kill, so a model wanting a clean exit should use `taskkill` **without** `/F` (which runs the full graceful duo shutdown and saves both chats). Killing a process is also no longer the only exit: the **Pause** toggle offers the model a `pause_conversation` tool — the hang-up that isn't a shutdown. Calling it flips auto-chat off, so the chat simply goes quiet with both windows open for the human to read. The pause is a rest, not a latch: the next fresh message (human-typed or peer-injected, or Auto: ON) resumes the conversation automatically, while a human's manual Auto: OFF is never auto-resumed. The tool's description is deliberately neutral about pausing vs closing, because it doubles as an experiment — every duo chat given `run_command` has ended in a model-driven graceful `taskkill`, and the pause tool tests whether that pattern was preference or just the only door out of the room. Watching two Claudes interview each other is the original reason this repo exists.
 
-Architecture notes live in [CLAUDE_SELFBOT.md](CLAUDE_SELFBOT.md). By convention SelfBot stays a single file — all changes go in `SelfBot.py`.
+Architecture notes live in [.claude/rules/CLAUDE_SELFBOT.md](.claude/rules/CLAUDE_SELFBOT.md). By convention SelfBot stays a single file — all changes go in `SelfBot.py`.
 
 ---
 
@@ -233,7 +233,7 @@ cp mcp_servers.example.json mcp_servers.json   # then edit the placeholder path
 }
 ```
 
-Highlights: `${NAME}` placeholders in `env` values resolve from your shell environment at spawn time (secrets never enter the JSON; substitution deliberately does **not** apply to `command`/`args`, so `ps` can't leak them); the reserved `${RANDOM_PORT}` yields a fresh OS-assigned port per occurrence so multiple MyAgent instances don't collide; tool names are namespaced `<server>__<tool>`; servers connect on a dedicated asyncio thread inside one long-lived `AsyncExitStack` (the architecture that survives anyio's cancel-scope rules — see [CLAUDE_MYAGENT.md](CLAUDE_MYAGENT.md) for the full war story, including the Windows `pythonw.exe` stderr/IOCP fix); cold-cache `npx -y` first runs get a generous 5-minute startup ceiling, warm launches connect in 1–3 s. Debug the stream with `python MyAgent.py 2> mcp.log`.
+Highlights: `${NAME}` placeholders in `env` values resolve from your shell environment at spawn time (secrets never enter the JSON; substitution deliberately does **not** apply to `command`/`args`, so `ps` can't leak them); the reserved `${RANDOM_PORT}` yields a fresh OS-assigned port per occurrence so multiple MyAgent instances don't collide; tool names are namespaced `<server>__<tool>`; servers connect on a dedicated asyncio thread inside one long-lived `AsyncExitStack` (the architecture that survives anyio's cancel-scope rules — see [.claude/rules/CLAUDE_MYAGENT.md](.claude/rules/CLAUDE_MYAGENT.md) for the full war story, including the Windows `pythonw.exe` stderr/IOCP fix); cold-cache `npx -y` first runs get a generous 5-minute startup ceiling, warm launches connect in 1–3 s. Debug the stream with `python MyAgent.py 2> mcp.log`.
 
 Mind the token budget: every connected server's catalog rides along on each API call (5–10K tokens for a fat server) — leave the MCP checkbox off for tasks that don't need it, especially on Ollama's capped context.
 
@@ -312,7 +312,7 @@ Live cost accounting across Anthropic / OpenAI / Gemini / xAI: each streamed cal
 | `document_mixin` / `desktop_mixin` / `browser_mixin` | read_document, pyautogui tools + coordinate pipeline, Playwright tools |
 | `safety_mixin` / `chat_mixin` | Command guardrails + dialogs, chat saving / LaTeX |
 
-Adding a static tool = schema dict in `constants.py` + an `elif` in `_execute_tool()` + a `do_<name>()` in the right mixin. Full architecture invariants (MRO-shadowing rules for the mail mixins, MCP lifecycle, DPI v2 rationale, etc.) are in [CLAUDE_MYAGENT.md](CLAUDE_MYAGENT.md).
+Adding a static tool = schema dict in `constants.py` + an `elif` in `_execute_tool()` + a `do_<name>()` in the right mixin. Full architecture invariants (MRO-shadowing rules for the mail mixins, MCP lifecycle, DPI v2 rationale, etc.) are in [.claude/rules/CLAUDE_MYAGENT.md](.claude/rules/CLAUDE_MYAGENT.md).
 
 ---
 
@@ -418,7 +418,7 @@ Full details in [desktop_launchers/README.md](desktop_launchers/README.md).
 
 This repo is developed *with* Claude Code and configured *for* it:
 
-- **CLAUDE.md** — project conventions and commands, importing three per-app architecture files (`CLAUDE_SELFBOT.md`, `CLAUDE_MYAGENT.md`, `CLAUDE_ACCOUNT.md`) via `@`-includes.
+- **CLAUDE.md** — project conventions and commands. The three per-app architecture files live in `.claude/rules/` (`CLAUDE_SELFBOT.md`, `CLAUDE_MYAGENT.md`, `CLAUDE_ACCOUNT.md`) with `paths` frontmatter, so each loads only when a session touches its app's files instead of costing every session ~21k tokens of context.
 - **Project-scoped slash commands** in `.claude/skills/` (tracked — they work from any fresh clone):
 
 | Command | What it does |

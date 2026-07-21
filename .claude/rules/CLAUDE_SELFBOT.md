@@ -1,3 +1,10 @@
+---
+paths:
+  - "SelfBot.py"
+  - "LaunchSelfBot.bat"
+  - "selfbot_position.ps1"
+---
+
 ## Architecture (SelfBot.py)
 
 **Single class design** — The `App` class contains all UI, API, tool execution, and persistence logic. No separate modules.

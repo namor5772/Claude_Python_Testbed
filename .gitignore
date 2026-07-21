@@ -66,6 +66,7 @@ unread_summary.log*
 .claude/*
 !.claude/skills/
 !.claude/commands/
+!.claude/rules/
 
 # macOS Finder metadata
 .DS_Store

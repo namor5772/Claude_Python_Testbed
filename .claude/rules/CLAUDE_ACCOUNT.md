@@ -1,3 +1,8 @@
+---
+paths:
+  - "Account_Activity_WBC.py"
+---
+
 ## Architecture (Account_Activity_WBC.py)
 
 **Single class design** — Same as the other apps: the `App` class contains all UI, browser automation, HTML parsing, and CSV export logic.

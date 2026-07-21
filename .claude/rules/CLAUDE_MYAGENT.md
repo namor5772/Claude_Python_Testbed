@@ -1,3 +1,12 @@
+---
+paths:
+  - "MyAgent.py"
+  - "myagent/**"
+  - "tests/**"
+  - "Heartbeat.py"
+  - "UnreadSummary.py"
+---
+
 ## Architecture (MyAgent.py)
 
 **Mixin-based modular design** — The `App` class in `MyAgent.py` inherits from 20 mixin classes in the `myagent/` package, each grouping related methods by concern (UI, streaming, tools, persistence, etc.). Constants and tool schemas live in `myagent/constants.py`; helper classes in `myagent/helpers.py`. Only `__init__` and the entry point remain in `MyAgent.py`. All mixins share state through `self.*` — no inter-mixin imports.
