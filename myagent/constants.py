@@ -242,6 +242,170 @@ TOOLS = [
     },
 ]
 
+# Native file tools (file_mixin.py) — Claude-Code-style contracts for reliable
+# code editing: exact-unique-match edits that fail loudly, read-before-edit
+# tracking, CRLF/BOM round-trip preservation. Always included by _get_tools()
+# (no checkbox), like read_document.
+FILE_TOOLS = [
+    {
+        "name": "read_file",
+        "description": (
+            "Read a UTF-8 text file and return its contents with line numbers "
+            "(cat -n style). Reads up to 1000 lines by default; use offset/limit "
+            "to page through large files. You MUST read a file with this tool "
+            "before editing it with edit_file or overwriting it with write_file. "
+            "Prefer this over run_command cat/Get-Content — cheaper, numbered, "
+            "and it unlocks editing."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the text file (absolute preferred)",
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "1-based line number to start from (default 1)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum lines to return (default 1000)",
+                },
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "edit_file",
+        "description": (
+            "Make a surgical edit to a text file by exact string replacement. "
+            "old_string must match the current file content EXACTLY (including "
+            "whitespace and indentation) and must be unique in the file — include "
+            "a few surrounding lines to make it unique. Zero matches, or several "
+            "matches without replace_all=true, fails with a clear error instead of "
+            "guessing — fix old_string and retry. The file must have been read "
+            "with read_file first. CRLF line endings and BOM are preserved. "
+            "ALWAYS prefer this over rewriting files with write_file or editing "
+            "via shell commands."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path to the file to edit",
+                },
+                "old_string": {
+                    "type": "string",
+                    "description": "Exact text to replace (must be unique in the file unless replace_all)",
+                },
+                "new_string": {
+                    "type": "string",
+                    "description": "Replacement text (must differ from old_string)",
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence instead of requiring uniqueness (default false)",
+                },
+            },
+            "required": ["path", "old_string", "new_string"],
+        },
+    },
+    {
+        "name": "write_file",
+        "description": (
+            "Create a new file or fully overwrite an existing one with UTF-8 "
+            "content. Overwriting requires the file to have been read with "
+            "read_file first this session. Parent directories are created "
+            "automatically. For partial changes to an existing file use "
+            "edit_file instead — do not rewrite a whole file to change a few "
+            "lines."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path for the file (absolute preferred)",
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Full file content to write",
+                },
+            },
+            "required": ["path", "content"],
+        },
+    },
+    {
+        "name": "glob_files",
+        "description": (
+            "Find files by glob pattern, newest first. Examples: '*.py', "
+            "'src/**/*.ts', '**/test_*.py'. Pass 'path' to set the base "
+            "directory (default: current working directory). Skips .git, "
+            ".venv, node_modules, __pycache__ and similar. Returns absolute "
+            "paths ready for read_file."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Glob pattern; ** matches directories recursively",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Base directory to search under (default: cwd)",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "grep_files",
+        "description": (
+            "Search file CONTENTS with a Python regular expression. Returns "
+            "matching file paths by default; output_mode='content' returns the "
+            "matching lines with line numbers, 'count' returns per-file match "
+            "counts. Filter candidate files by filename with 'glob' (e.g. "
+            "'*.py'). Searches recursively under 'path' (default: cwd; may also "
+            "be a single file), skipping .git/.venv/node_modules and binary "
+            "files. Prefer this over run_command findstr/Select-String."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pattern": {
+                    "type": "string",
+                    "description": "Python regex to search for (line-by-line)",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory (or single file) to search (default: cwd)",
+                },
+                "glob": {
+                    "type": "string",
+                    "description": "Filename filter, e.g. '*.py' or 'test_*.json'",
+                },
+                "output_mode": {
+                    "type": "string",
+                    "enum": ["files_with_matches", "content", "count"],
+                    "description": "What to return (default files_with_matches)",
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Case-insensitive matching (default false)",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Result cap (default 50 files / 100 content lines)",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+]
+
 # Meta-agent tools (manage instructions and skills on disk)
 META_TOOLS = [
     {
@@ -1143,7 +1307,8 @@ XAI_REASONING_EFFORT = {
 # "grok-build": grok-build-latest re-aliased to grok-4.5 (vision) in the
 # 2026-07 catalog, so the shorter prefix would false-flag it.
 XAI_NON_VISION_PREFIXES = ("grok-build-0", "grok-code")
-PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document"}
+PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document",
+                       "read_file", "glob_files", "grep_files"}
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
 # MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the

@@ -309,7 +309,8 @@ Live cost accounting across Anthropic / OpenAI / Gemini / xAI: each streamed cal
 | `anthropic_mixin` / `openai_mixin` / `gemini_mixin` / `xai_mixin` / `ollama_mixin` | One streaming caller per provider |
 | `mcp_mixin` | Async MCP client on a background event loop |
 | `gmail_mixin` / `protonmail_mixin` / `outlook_mixin` | The three 16-tool mail families |
-| `document_mixin` / `desktop_mixin` / `browser_mixin` | read_document, pyautogui tools + coordinate pipeline, Playwright tools |
+| `document_mixin` / `file_mixin` | read_document; native read/edit/write/glob/grep file tools (Claude-Code-style exact-match editing) |
+| `desktop_mixin` / `browser_mixin` | pyautogui tools + coordinate pipeline, Playwright tools |
 | `safety_mixin` / `chat_mixin` | Command guardrails + dialogs, chat saving / LaTeX |
 
 Adding a static tool = schema dict in `constants.py` + an `elif` in `_execute_tool()` + a `do_<name>()` in the right mixin. Full architecture invariants (MRO-shadowing rules for the mail mixins, MCP lifecycle, DPI v2 rationale, etc.) are in [.claude/rules/CLAUDE_MYAGENT.md](.claude/rules/CLAUDE_MYAGENT.md).

@@ -66,6 +66,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
   - `protonmail_mixin.py` — Native multi-account IMAP/SMTP mail tools (Proton Bridge + any IMAP account)
   - `outlook_mixin.py` — Native multi-account Outlook / Microsoft 365 tools (Microsoft Graph + MSAL OAuth)
   - `document_mixin.py` — Local document text extraction (`read_document`: PDF/DOCX/HTML/text)
+  - `file_mixin.py` — Native file tools (`read_file`/`edit_file`/`write_file`/`glob_files`/`grep_files`): Claude-Code-style exact-unique-match editing that fails loudly, read-before-edit tracking, CRLF/BOM-preserving round-trips
   - `desktop_mixin.py` — Desktop automation tools (pyautogui): screenshot, mouse, keyboard, clipboard, OCR
   - `browser_mixin.py` — Browser automation tools (Playwright): open, navigate, click, fill, screenshot
   - `safety_mixin.py` — Command safety, confirmation dialog, user_prompt, run_powershell, agent control
@@ -109,5 +110,5 @@ Per-app architecture deep-dives live in `.claude/rules/` and load automatically 
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
 - SelfBot uses single-file architecture: all changes go in `SelfBot.py`
-- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 20 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 21 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
 - Bank extractor changes go in `Account_Activity_WBC.py`

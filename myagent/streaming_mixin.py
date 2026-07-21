@@ -7,7 +7,7 @@ import tkinter as tk
 from datetime import datetime
 
 from myagent.constants import (
-    TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
+    TOOLS, FILE_TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
     GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
     _HAS_PROTONMAIL, _HAS_OUTLOOK,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
@@ -312,6 +312,9 @@ class StreamingMixin:
         # calling, so it keeps local tools.
         if self.provider in ("OpenAI", "Anthropic", "xAI"):
             tools = [t for t in tools if t["name"] not in ("web_search", "fetch_webpage")]
+        # Native file tools ride along unconditionally, like read_document —
+        # no checkbox; they are the reliable-editing surface for coding tasks.
+        tools.extend(copy.deepcopy(FILE_TOOLS))
         if self.desktop_enabled.get() and _HAS_DESKTOP:
             desktop = copy.deepcopy(DESKTOP_TOOLS)
             # Build display info for tool description (API order: 0=primary)
@@ -423,8 +426,9 @@ class StreamingMixin:
         """Execute a single tool_use block and return the result.
 
         Thread-safe for parallel-safe tools (web_search, fetch_webpage,
-        csv_search, get_skill). Sequential tools (desktop, browser,
-        run_powershell, user_prompt) must only be called from one thread.
+        csv_search, get_skill, read_document, read_file, glob_files,
+        grep_files). Sequential tools (desktop, browser, run_powershell,
+        write_file/edit_file, user_prompt) must only be called from one thread.
         """
         # MCP tools are namespaced "<server>__<tool>" — route them to the
         # MCP mixin before the static tool dispatch chain. The lookup table
@@ -492,6 +496,14 @@ class StreamingMixin:
             fp = inp.get("path", "")
             self._tool_info(f"Reading document: {os.path.basename(fp)}\n")
             return self.do_read_document(inp)
+        if block.name in ("read_file", "write_file", "edit_file",
+                          "glob_files", "grep_files"):
+            # Native file tools (FileMixin) — dynamic dispatch like the mail
+            # mixins; the label shows the path or pattern being operated on.
+            inp = block.input or {}
+            label = inp.get("path") or inp.get("pattern") or ""
+            self._tool_info(f"{block.name}: {label}\n")
+            return getattr(self, f"do_{block.name}")(inp)
         if block.name == "user_prompt":
             prompt_msg = block.input.get("message", "")
             self._tool_info("Requesting user input...\n")
