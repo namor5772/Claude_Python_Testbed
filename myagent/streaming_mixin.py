@@ -403,6 +403,11 @@ class StreamingMixin:
                 if "account" in props:
                     props["account"]["enum"] = account_names
             tools.extend(outlook_tools)
+        # Per-instruction hard blocklist: blocked tools are not even OFFERED to
+        # the model (the dispatch gate in _execute_tool is the second, load-
+        # bearing layer for anything that slips through). Applied to the fully
+        # assembled list so MCP/mail tools are coverable by name too.
+        tools = self._filter_blocked_tools(tools, getattr(self, "_blocked_tools", None))
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
             tools.append({
@@ -430,6 +435,20 @@ class StreamingMixin:
         grep_files). Sequential tools (desktop, browser, run_powershell,
         write_file/edit_file, user_prompt) must only be called from one thread.
         """
+        # Per-instruction hard blocklist — FIRST gate, before any routing, so
+        # it covers native, MCP, and mail tools alike. This is the deterministic
+        # guarantee for unattended runs: unlike a prompt directive or a confirm
+        # dialog (unanswerable when nobody is watching), a blocked tool call is
+        # refused regardless of model compliance. The refusal is firm so the
+        # model moves on instead of retry-looping.
+        if block.name in getattr(self, "_blocked_tools", ()):
+            self.queue.put({"type": "warning", "content":
+                f"⚠ Blocked tool call refused: {block.name} "
+                f"(per-instruction blocked_tools)\n"})
+            return (f"Tool '{block.name}' is HARD-BLOCKED for this instruction "
+                    "(blocked_tools). This action is not permitted under any "
+                    "circumstances — do not attempt it again; continue the task "
+                    "without it.")
         # MCP tools are namespaced "<server>__<tool>" — route them to the
         # MCP mixin before the static tool dispatch chain. The lookup table
         # keyed by full name is the authoritative test (substring on "__"
@@ -803,6 +822,14 @@ class StreamingMixin:
         except Exception as e:
             self.queue.put({"type": "warning",
                             "content": f"⚠ Could not write APICostLog.txt: {e}\n"})
+
+    @staticmethod
+    def _filter_blocked_tools(tools, blocked):
+        """Strip per-instruction blocked tools from an assembled tool list.
+        Pure — unit-tested directly; None/empty blocklist is a no-op."""
+        if not blocked:
+            return tools
+        return [t for t in tools if t.get("name") not in blocked]
 
     @staticmethod
     def _final_assistant_text(messages):

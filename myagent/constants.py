@@ -498,6 +498,17 @@ META_TOOLS = [
                         "match the stored value."
                     ),
                 },
+                "blocked_tools": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Hard per-instruction tool blocklist: these tool names are stripped "
+                        "from the tools offered to the model AND refused at dispatch if "
+                        "called anyway — a deterministic guarantee for unattended runs "
+                        "(e.g. [\"gmail_trash\", \"proton_trash\"]). On update the whole "
+                        "list is replaced. Empty list clears it."
+                    ),
+                },
                 "skill_modes": {
                     "type": "object",
                     "description": (

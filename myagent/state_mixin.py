@@ -318,6 +318,7 @@ class StateMixin:
                 # duplicating them in this snapshot caused launch to overwrite the user's
                 # global modes via _restore_skill_modes. See SkillsMixin._restore_skill_modes.
                 "disabled_confirm_patterns": sorted(getattr(self, "_disabled_confirm_patterns", [])),
+                "blocked_tools": sorted(getattr(self, "_blocked_tools", [])),
             },
         }
         # Build geometry dict for current monitor configuration
@@ -464,6 +465,7 @@ class StateMixin:
             self._restore_model_params(entry)
         self._restore_skill_modes(entry)
         self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
+        self._blocked_tools = set(entry.get("blocked_tools", []))
         self._update_title()
         return model_restored
 

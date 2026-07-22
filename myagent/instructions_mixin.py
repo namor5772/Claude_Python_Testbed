@@ -95,6 +95,7 @@ class InstructionsMixin:
                 "text_verbosity": entry.get("text_verbosity", "medium"),
                 "image_count": len(entry.get("images", [])),
                 "skill_modes": entry.get("skill_modes", {}),
+                "blocked_tools": entry.get("blocked_tools", []),
             }
             return json.dumps(info, indent=2)
 
@@ -125,6 +126,9 @@ class InstructionsMixin:
                 "skill_modes": params.get("skill_modes",
                                {sn: sd["mode"] for sn, sd in self.skills.items()}),
                 "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
+                "blocked_tools": sorted(params["blocked_tools"])
+                                 if params.get("blocked_tools") is not None
+                                 else sorted(getattr(self, "_blocked_tools", [])),
             }
             instructions[name] = entry
             self._save_instructions_to_disk(instructions)
@@ -136,7 +140,8 @@ class InstructionsMixin:
             updatable = ("text", "desktop", "browser", "meta", "mcp", "google",
                          "outlook", "conversational", "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
-                         "thinking_budget", "thinking_mode", "text_verbosity")
+                         "thinking_budget", "thinking_mode", "text_verbosity",
+                         "blocked_tools")
             if all(params.get(k) is None for k in updatable):
                 return (
                     "Error: At least one of 'text', 'desktop', 'browser', 'meta', "
@@ -148,10 +153,11 @@ class InstructionsMixin:
             for key in ("text", "desktop", "browser", "meta", "mcp", "google",
                         "outlook", "conversational", "provider", "model", "temperature",
                         "thinking_enabled", "thinking_effort",
-                        "thinking_budget", "thinking_mode", "text_verbosity"):
+                        "thinking_budget", "thinking_mode", "text_verbosity",
+                        "blocked_tools"):
                 val = params.get(key)
                 if val is not None:
-                    entry[key] = val
+                    entry[key] = sorted(val) if key == "blocked_tools" else val
             skill_modes = params.get("skill_modes")
             if skill_modes is not None:
                 existing = entry.get("skill_modes", {})
@@ -536,6 +542,7 @@ class InstructionsMixin:
             "text_verbosity": self.text_verbosity,
             "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
+            "blocked_tools": sorted(getattr(self, "_blocked_tools", [])),
         }
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
@@ -574,6 +581,7 @@ class InstructionsMixin:
         self._editor_outlook.set(False)
         self._editor_conversational.set(False)
         self._disabled_confirm_patterns = set()
+        self._blocked_tools = set()
         self._update_ps_safety_button()
         # Reset model controls to defaults
         if self._has_anthropic:
@@ -632,6 +640,7 @@ class InstructionsMixin:
             self._restore_model_params(entry)
             self._restore_skill_modes(entry)
             self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
+            self._blocked_tools = set(entry.get("blocked_tools", []))
             self._update_ps_safety_button()
             self._refresh_image_listbox()
 

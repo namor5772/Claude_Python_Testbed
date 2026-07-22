@@ -216,6 +216,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # don't reliably follow "always call user_prompt" meta-rules.
         self.conversational_enabled = tk.BooleanVar(value=False)
         self._disabled_confirm_patterns = set()
+        # Per-instruction hard tool blocklist: names here are stripped from the
+        # offered tools AND refused at _execute_tool dispatch — a deterministic
+        # guarantee for unattended runs, independent of model compliance.
+        self._blocked_tools = set()
         self._playwright = None
         self._browser = None
         self._page = None
