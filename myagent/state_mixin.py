@@ -469,6 +469,18 @@ class StateMixin:
         self._update_title()
         return model_restored
 
+    @staticmethod
+    def _merge_extra_text(instruction_text, extra_text):
+        """Append a per-run task addendum (--extra-file / run_instruction's
+        extra_text) to the instruction text under a labeled separator. The saved
+        instruction on disk is untouched — this parameterizes one run only."""
+        if not extra_text:
+            return instruction_text
+        return (f"{instruction_text}\n\n"
+                "--- ADDITIONAL TASK CONTEXT (for this run only, from the "
+                "launching process) ---\n"
+                f"{extra_text}")
+
     def _auto_launch(self):
         """Auto-load an instruction by name and start the agent (from -l arg)."""
         name = self._launch_instruction
@@ -481,6 +493,8 @@ class StateMixin:
             )
             return
         self._apply_instruction_entry(name, instructions[name])
+        self.agent_instruction = self._merge_extra_text(
+            self.agent_instruction, getattr(self, "_extra_text", ""))
         auto_name = f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}"
         self.chat_name_entry.delete(0, tk.END)
         self.chat_name_entry.insert(0, auto_name)

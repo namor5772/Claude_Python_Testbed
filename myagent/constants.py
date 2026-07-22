@@ -586,6 +586,16 @@ META_TOOLS = [
                     "type": "integer",
                     "description": "Max seconds to wait when wait=true (default 600). On timeout the child is terminated and an error is returned.",
                 },
+                "extra_text": {
+                    "type": "string",
+                    "description": (
+                        "Optional task text appended to the child's saved instruction as an "
+                        "ADDITIONAL TASK CONTEXT block, for this run only — use it to "
+                        "parameterize a generic saved instruction per spawn (the specific "
+                        "question, target, or data for THIS child). The saved instruction "
+                        "on disk is unchanged."
+                    ),
+                },
             },
             "required": ["name"],
         },

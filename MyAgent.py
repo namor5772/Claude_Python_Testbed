@@ -74,13 +74,25 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           OutlookMixin, DocumentMixin, FileMixin, DesktopMixin, BrowserMixin,
           SafetyMixin, ChatMixin, EventLoopMixin):
 
-    def __init__(self, root, launch_instruction=None, headless=False, result_file=None):
+    def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
+                 extra_file=None):
         self.root = root
         self._headless = headless
         # Optional path (from --result-file) where stream_worker writes a JSON
         # summary of the run's outcome on completion — the return channel for a
         # parent agent's blocking run_instruction(wait=true).
         self._result_file = result_file
+        # Optional per-run task addendum (from --extra-file): UTF-8 text appended
+        # to the -l instruction as an ADDITIONAL TASK CONTEXT block, so a generic
+        # saved instruction can be parameterized per spawn (run_instruction's
+        # extra_text). The file is read once here and never deleted by the child.
+        self._extra_text = ""
+        if extra_file:
+            try:
+                with open(extra_file, encoding="utf-8") as f:
+                    self._extra_text = f.read()
+            except OSError:
+                pass  # missing/unreadable → run the instruction unmodified
         self.root.title("My Agent")
         self.root.geometry(DEFAULT_GEOMETRY)
 
@@ -292,8 +304,13 @@ if __name__ == "__main__":
                         help="Write a JSON result summary (status + final assistant text) "
                              "to PATH when the agentic loop ends — used by a parent "
                              "agent's run_instruction(wait=true)")
+    parser.add_argument("--extra-file", metavar="PATH",
+                        help="UTF-8 text file appended to the -l instruction as an "
+                             "ADDITIONAL TASK CONTEXT block for this run only — used by "
+                             "run_instruction's extra_text to parameterize a saved "
+                             "instruction per spawn")
     args = parser.parse_args()
     root = tk.Tk()
     app = App(root, launch_instruction=args.load, headless=args.headless,
-              result_file=args.result_file)
+              result_file=args.result_file, extra_file=args.extra_file)
     root.mainloop()

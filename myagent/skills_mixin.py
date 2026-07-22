@@ -97,6 +97,7 @@ class SkillsMixin:
         name = params.get("name", "")
         headless = params.get("headless", True)
         wait = bool(params.get("wait", False))
+        extra_text = params.get("extra_text") or ""
         try:
             timeout_s = int(params.get("timeout_seconds") or 600)
         except (TypeError, ValueError):
@@ -123,6 +124,18 @@ class SkillsMixin:
             os.close(fd)
             cmd += ["--result-file", result_path]
 
+        # Per-spawn task addendum travels by temp FILE, not argv or env: argv
+        # chokes on newlines/length on Windows, and an inherited env var would
+        # leak this parent's extra_text into any grandchild the child spawns.
+        # The parent deletes it after a waited child exits; a fire-and-forget
+        # child's file stays in %TEMP% (the child must still be able to read it).
+        extra_path = None
+        if extra_text:
+            fd, extra_path = tempfile.mkstemp(prefix="myagent_extra_", suffix=".txt")
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(extra_text)
+            cmd += ["--extra-file", extra_path]
+
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -131,16 +144,18 @@ class SkillsMixin:
                 stderr=subprocess.DEVNULL,
             )
         except Exception as e:
-            if result_path:
-                try:
-                    os.remove(result_path)
-                except OSError:
-                    pass
+            for p in (result_path, extra_path):
+                if p:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
             return f"Error launching instruction '{name}': {e}"
 
         if not wait:
             mode = "headless" if headless else "GUI"
-            return f"Launched instruction '{name}' in {mode} mode (PID {proc.pid})."
+            noted = " with extra task context" if extra_text else ""
+            return f"Launched instruction '{name}' in {mode} mode{noted} (PID {proc.pid})."
 
         # Blocking wait: poll so STOP stays responsive and the timeout is
         # enforced. Child-process exit is the synchronization point — the
@@ -177,11 +192,12 @@ class SkillsMixin:
             out += f"\nFinal report:\n{final_text}" if final_text else "\n(No final text.)"
             return out
         finally:
-            if result_path:
-                try:
-                    os.remove(result_path)
-                except OSError:
-                    pass
+            for p in (result_path, extra_path):
+                if p:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of Skills button and Skills Manager listbox."""
