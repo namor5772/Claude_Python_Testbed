@@ -67,26 +67,69 @@ class StateMixin:
     def _claim_instance_number(self):
         """Claim the lowest available instance number via lock files.
         Each instance writes a lock file containing its PID. Stale locks
-        (where the PID no longer exists) are cleaned up automatically."""
+        (where the PID no longer exists) are cleaned up automatically.
+
+        The claim itself is ATOMIC (O_CREAT|O_EXCL): siblings launched in the
+        same instant — parallel run_instruction fan-out spawns children
+        simultaneously — must not both claim slot N and then share
+        agent_state_N.json / delete each other's lock. The loser of the
+        exclusive create gets FileExistsError and moves to the next slot."""
+        me = str(os.getpid())
         for num in range(1, 100):
             lock_path = f"{AGENT_LOCK_PREFIX}{num}.lock"
             if os.path.exists(lock_path):
-                # Check if the owning process is still alive
+                claimed_by_live = False
+                stale_content = None
                 try:
                     with open(lock_path) as f:
-                        pid = int(f.read().strip())
-                    if self._is_pid_alive(pid):
-                        continue  # process alive, slot taken
+                        stale_content = f.read().strip()
+                    claimed_by_live = self._is_pid_alive(int(stale_content))
                 except (ValueError, OSError):
-                    pass  # stale lock, reclaim it
-            # Claim this slot
+                    # Unreadable PID: a sibling may be mid-claim (its O_EXCL
+                    # create landed, its PID write hasn't yet). A FRESH lock is
+                    # therefore assumed live; only an old unreadable lock is
+                    # stale (crash leftovers don't get younger).
+                    try:
+                        claimed_by_live = (
+                            time.time() - os.path.getmtime(lock_path)) < 5
+                    except OSError:
+                        pass  # vanished — race for the empty slot below
+                if claimed_by_live:
+                    continue  # slot taken
+                # Judged stale — clear it, but ONLY if it still holds the
+                # content we judged: if it changed hands, a sibling claimed
+                # the slot in the meantime and the lock is now valid.
+                try:
+                    with open(lock_path) as f:
+                        if (stale_content is not None
+                                and f.read().strip() != stale_content):
+                            continue  # a sibling owns it now
+                    os.remove(lock_path)
+                except FileNotFoundError:
+                    pass  # a sibling already cleared it
+                except OSError:
+                    continue  # can't clear it — try the next slot
+            # Claim this slot atomically; write the PID on the raw fd right
+            # away so the unreadable-lock window above stays microscopic.
             try:
-                with open(lock_path, "w") as f:
-                    f.write(str(os.getpid()))
-                self._lock_path = lock_path
-                return num
-            except OSError:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                try:
+                    os.write(fd, me.encode("ascii"))
+                finally:
+                    os.close(fd)
+            except OSError:  # FileExistsError: a sibling won this slot
                 continue
+            # Verify ownership: a sibling that judged the PREVIOUS occupant
+            # stale can have removed our fresh lock inside its judge→remove
+            # window. If the file no longer says "us", the slot is theirs.
+            try:
+                with open(lock_path) as f:
+                    if f.read().strip() != me:
+                        continue  # clobbered — move on to the next slot
+            except OSError:
+                continue  # our lock vanished — move on
+            self._lock_path = lock_path
+            return num
         # Fallback — shouldn't happen
         self._lock_path = None
         return 1

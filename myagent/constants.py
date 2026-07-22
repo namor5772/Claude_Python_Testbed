@@ -565,7 +565,13 @@ META_TOOLS = [
             "returns immediately. Set wait=true to BLOCK until the child agent "
             "finishes and get its final report text back as this tool's result — "
             "use that when you need the child's answer to continue your own task. "
-            "Use manage_instructions(action='list') first to see available names."
+            "PARALLEL FAN-OUT: several run_instruction calls issued in the SAME "
+            "assistant turn run concurrently — even waited ones — and all their "
+            "reports come back together. To work independent subtasks in "
+            "parallel, issue all the spawns in one turn (each with its own "
+            "extra_text and timeout) instead of one per turn; total wait is the "
+            "slowest child, not the sum. Use manage_instructions(action='list') "
+            "first to see available names."
         ),
         "input_schema": {
             "type": "object",
@@ -1340,7 +1346,15 @@ XAI_REASONING_EFFORT = {
 # 2026-07 catalog, so the shorter prefix would false-flag it.
 XAI_NON_VISION_PREFIXES = ("grok-build-0", "grok-code")
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document",
-                       "read_file", "glob_files", "grep_files"}
+                       "read_file", "glob_files", "grep_files",
+                       # run_instruction: each spawn is an independent child PROCESS, and a
+                       # waited call blocks only its own executor thread — so several
+                       # run_instruction calls in ONE assistant turn become concurrent
+                       # waited children (parallel fan-out). The shared-state prologue is
+                       # serialized by skills_mixin._SPAWN_LOCK, and simultaneous children
+                       # can't collide on an instance slot (O_EXCL claim in state_mixin).
+                       # manage_instructions/manage_skills stay sequential.
+                       "run_instruction"}
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
 # MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the

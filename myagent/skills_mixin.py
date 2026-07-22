@@ -1,8 +1,15 @@
-import os, sys, json, subprocess, tempfile, time, tkinter as tk
+import os, sys, json, subprocess, tempfile, threading, time, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT)
 from myagent.datapaths import absorb_conflict_forks, load_store, save_store
+
+# Serializes do_run_instruction's shared-state prologue (store load, which may
+# absorb OneDrive conflict forks on disk, + the spawn itself) so several
+# run_instruction calls in one assistant turn — the parallel fan-out pattern —
+# can't interleave those mutations. The waited poll loop runs OUTSIDE the lock,
+# so concurrent waited children genuinely overlap.
+_SPAWN_LOCK = threading.Lock()
 
 
 class SkillsMixin:
@@ -89,11 +96,16 @@ class SkillsMixin:
     def do_run_instruction(self, params):
         """Launch a saved instruction as a separate MyAgent process.
 
-        Fire-and-forget by default; with wait=true this blocks the streaming
-        thread until the child exits, then returns the child's final report
-        (read from a --result-file the child writes when its loop ends) —
-        the subagent-result pattern, so a parent agent can consume a child's
-        answer instead of merely spawning it."""
+        Fire-and-forget by default; with wait=true this blocks until the child
+        exits, then returns the child's final report (read from a --result-file
+        the child writes when its loop ends) — the subagent-result pattern, so
+        a parent agent can consume a child's answer instead of merely spawning
+        it. PARALLEL_SAFE: when the model issues several run_instruction calls
+        in one assistant turn, stream_worker's executor runs them concurrently,
+        so waited children overlap (parallel fan-out) — each blocks only its
+        own worker thread. Only the prologue below is serialized (_SPAWN_LOCK);
+        children can't collide on instance slots because the lock-file claim is
+        O_EXCL-atomic (state_mixin._claim_instance_number)."""
         name = params.get("name", "")
         headless = params.get("headless", True)
         wait = bool(params.get("wait", False))
@@ -106,51 +118,54 @@ class SkillsMixin:
         if not name:
             return "Error: 'name' is required."
 
-        # Verify instruction exists
-        instructions = self._load_saved_instructions()
-        if name not in instructions:
-            available = ", ".join(sorted(instructions.keys())) if instructions else "(none)"
-            return f"Error: Instruction '{name}' not found. Available: {available}"
+        # Prologue under _SPAWN_LOCK: concurrent fan-out calls must not
+        # interleave the store load (fork absorption mutates disk) or spawn.
+        with _SPAWN_LOCK:
+            # Verify instruction exists
+            instructions = self._load_saved_instructions()
+            if name not in instructions:
+                available = ", ".join(sorted(instructions.keys())) if instructions else "(none)"
+                return f"Error: Instruction '{name}' not found. Available: {available}"
 
-        # Build command to launch a new MyAgent process
-        script_path = os.path.join(_BASE_DIR, "MyAgent.py")
-        cmd = [sys.executable, script_path, "-l", name]
-        if headless:
-            cmd.append("--headless")
+            # Build command to launch a new MyAgent process
+            script_path = os.path.join(_BASE_DIR, "MyAgent.py")
+            cmd = [sys.executable, script_path, "-l", name]
+            if headless:
+                cmd.append("--headless")
 
-        result_path = None
-        if wait:
-            fd, result_path = tempfile.mkstemp(prefix="myagent_result_", suffix=".json")
-            os.close(fd)
-            cmd += ["--result-file", result_path]
+            result_path = None
+            if wait:
+                fd, result_path = tempfile.mkstemp(prefix="myagent_result_", suffix=".json")
+                os.close(fd)
+                cmd += ["--result-file", result_path]
 
-        # Per-spawn task addendum travels by temp FILE, not argv or env: argv
-        # chokes on newlines/length on Windows, and an inherited env var would
-        # leak this parent's extra_text into any grandchild the child spawns.
-        # The parent deletes it after a waited child exits; a fire-and-forget
-        # child's file stays in %TEMP% (the child must still be able to read it).
-        extra_path = None
-        if extra_text:
-            fd, extra_path = tempfile.mkstemp(prefix="myagent_extra_", suffix=".txt")
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(extra_text)
-            cmd += ["--extra-file", extra_path]
+            # Per-spawn task addendum travels by temp FILE, not argv or env: argv
+            # chokes on newlines/length on Windows, and an inherited env var would
+            # leak this parent's extra_text into any grandchild the child spawns.
+            # The parent deletes it after a waited child exits; a fire-and-forget
+            # child's file stays in %TEMP% (the child must still be able to read it).
+            extra_path = None
+            if extra_text:
+                fd, extra_path = tempfile.mkstemp(prefix="myagent_extra_", suffix=".txt")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(extra_text)
+                cmd += ["--extra-file", extra_path]
 
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=_BASE_DIR,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except Exception as e:
-            for p in (result_path, extra_path):
-                if p:
-                    try:
-                        os.remove(p)
-                    except OSError:
-                        pass
-            return f"Error launching instruction '{name}': {e}"
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=_BASE_DIR,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                for p in (result_path, extra_path):
+                    if p:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+                return f"Error launching instruction '{name}': {e}"
 
         if not wait:
             mode = "headless" if headless else "GUI"
