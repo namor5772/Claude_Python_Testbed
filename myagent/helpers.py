@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime
 from html.parser import HTMLParser
@@ -155,3 +156,31 @@ class _ToolBlock:
         self.id = id
         self.input = input
         self.type = "tool_use"
+
+
+_DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
+
+
+def normalize_save_path(path, home=None):
+    """Make a model-supplied save path usable on this machine.
+
+    Models sometimes hallucinate a path from the wrong OS — e.g. grok wrote
+    an email attachment to C:\\Users\\...\\Temp\\INV.pdf on macOS (2026-07-23),
+    which created a literal ``C:/`` directory tree inside the repo. Expands
+    ``~``; on POSIX, a drive-letter path is redirected to ``~/Temp/<basename>``.
+
+    Returns ``(usable_path, note)`` — ``note`` is "" when nothing was
+    redirected, else a sentence for the tool result so the model learns where
+    the file actually went. ``home`` overrides ``~`` for tests.
+    """
+    home = home or os.path.expanduser("~")
+    expanded = os.path.expanduser(path)
+    if os.name != "nt" and _DRIVE_LETTER_RE.match(expanded):
+        rest = _DRIVE_LETTER_RE.sub("", expanded).replace("\\", "/").rstrip("/")
+        basename = rest.rsplit("/", 1)[-1]
+        redirected = os.path.join(home, "Temp", basename or "attachment.bin")
+        return redirected, (
+            f"note: save_to {path!r} is a Windows path, invalid on this "
+            f"machine — saved to {redirected} instead"
+        )
+    return expanded, ""

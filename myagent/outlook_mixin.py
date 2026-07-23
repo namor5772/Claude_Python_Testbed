@@ -57,7 +57,7 @@ import mimetypes
 import os
 from myagent.mail_common import confirm_action
 
-from myagent.helpers import extract_text_from_html
+from myagent.helpers import extract_text_from_html, normalize_save_path
 
 _HAS_OUTLOOK = True
 try:
@@ -475,7 +475,7 @@ class OutlookMixin:
             account = params["account"]
             message_id = params["message_id"]
             attachment_id = params.get("attachment_id", "")
-            save_to = params["save_to"]
+            save_to, path_note = normalize_save_path(params["save_to"])
             overwrite = bool(params.get("overwrite", False))
 
             if not attachment_id:
@@ -506,6 +506,7 @@ class OutlookMixin:
                 "message_id": message_id,
                 "attachment_id": attachment_id,
                 "saved_to": os.path.abspath(save_to),
+                **({"note": path_note} if path_note else {}),
                 "bytes_written": len(decoded),
             }, indent=2)
         except Exception as e:

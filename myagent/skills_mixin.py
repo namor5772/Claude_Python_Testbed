@@ -1,7 +1,9 @@
 import os, sys, json, subprocess, tempfile, threading, time, tkinter as tk
 from tkinter import messagebox
 
-from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT)
+from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT,
+                               COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
+                               PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
 from myagent.datapaths import absorb_conflict_forks, load_store, save_store
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
@@ -260,9 +262,24 @@ class SkillsMixin:
             pass  # Button doesn't exist yet or editor is closed
 
     def _update_ps_safety_button(self):
-        n = len(self._disabled_confirm_patterns)
+        # Cross-platform instructions carry a UNION of bypass patterns (e.g.
+        # \bRemove-Item\b alongside \brm\b); only those in this OS's
+        # COMMAND_CONFIRM (or the OS-independent mail tool names) have any
+        # effect — or a checkbox in the Safety dialog. Count the rest
+        # separately so the label matches what the dialog shows.
+        relevant = (set(COMMAND_CONFIRM) | set(GMAIL_CONFIRM_TOOLS)
+                    | set(PROTON_CONFIRM_TOOLS) | set(OUTLOOK_CONFIRM_TOOLS))
+        n = len(self._disabled_confirm_patterns & relevant)
+        foreign = len(self._disabled_confirm_patterns) - n
         base = "Safety"
-        label = f"{base} ({n} bypassed)" if n else base
+        if n and foreign:
+            label = f"{base} ({n} bypassed, {foreign} other-OS)"
+        elif n:
+            label = f"{base} ({n} bypassed)"
+        elif foreign:
+            label = f"{base} ({foreign} other-OS)"
+        else:
+            label = base
         try:
             self.ps_safety_button.config(text=label)
         except (AttributeError, tk.TclError):

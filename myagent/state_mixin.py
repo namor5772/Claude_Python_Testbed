@@ -96,19 +96,16 @@ class StateMixin:
                         pass  # vanished — race for the empty slot below
                 if claimed_by_live:
                     continue  # slot taken
-                # Judged stale — clear it, but ONLY if it still holds the
-                # content we judged: if it changed hands, a sibling claimed
-                # the slot in the meantime and the lock is now valid.
-                try:
-                    with open(lock_path) as f:
-                        if (stale_content is not None
-                                and f.read().strip() != stale_content):
-                            continue  # a sibling owns it now
-                    os.remove(lock_path)
-                except FileNotFoundError:
-                    pass  # a sibling already cleared it
-                except OSError:
-                    continue  # can't clear it — try the next slot
+                # Judged stale — remove it under a per-slot mutex dir.
+                # A bare check-then-remove is itself a TOCTOU: os.remove is
+                # path-based and can't tell inode generations apart, so a
+                # reclaimer descheduled between its re-read and its remove
+                # would delete a sibling's FRESH replacement lock and both
+                # would own the slot (the storm test hits this reliably on
+                # macOS). The mutex serializes judge→remove; creation stays
+                # arbitrated by O_EXCL below.
+                if not self._reclaim_stale_lock(lock_path, stale_content):
+                    continue  # a sibling owns or is reclaiming it
             # Claim this slot atomically; write the PID on the raw fd right
             # away so the unreadable-lock window above stays microscopic.
             try:
@@ -133,6 +130,55 @@ class StateMixin:
         # Fallback — shouldn't happen
         self._lock_path = None
         return 1
+
+    @staticmethod
+    def _reclaim_stale_lock(lock_path, judged_content):
+        """Remove a judged-stale lock atomically w.r.t. sibling reclaimers.
+
+        Returns True when the slot is free to O_EXCL-create (we removed the
+        stale lock, or it was already gone), False when the slot should be
+        skipped (a sibling owns it, is mid-reclaim, or the state is unclear).
+
+        The mutex is a directory (os.mkdir is atomic on POSIX and Windows);
+        the lock content is re-validated INSIDE the mutex so only the exact
+        file generation that was judged stale can be removed. A crashed
+        reclaimer's leftover mutex (the mkdir→rmdir window is a few
+        syscalls) is cleared once it is older than 10s; this claimant still
+        skips the slot and retries on a later pass/launch."""
+        mutex = lock_path + ".reclaim"
+        try:
+            os.mkdir(mutex)
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(mutex) > 10:
+                    os.rmdir(mutex)
+            except OSError:
+                pass
+            return False
+        except OSError:
+            return False
+        try:
+            try:
+                with open(lock_path) as f:
+                    current = f.read().strip()
+            except FileNotFoundError:
+                return True  # already cleared — race for the empty slot
+            except OSError:
+                return False  # unreadable now — leave it for a later pass
+            if judged_content is None or current != judged_content:
+                return False  # changed hands — a sibling owns it now
+            try:
+                os.remove(lock_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                return False
+            return True
+        finally:
+            try:
+                os.rmdir(mutex)
+            except OSError:
+                pass
 
     def _release_instance_lock(self):
         """Remove this instance's lock file."""

@@ -79,7 +79,7 @@ from email.message import EmailMessage
 from email.utils import formatdate, make_msgid, parseaddr
 from myagent.mail_common import confirm_action
 
-from myagent.helpers import extract_text_from_html
+from myagent.helpers import extract_text_from_html, normalize_save_path
 
 # Bridge accepts up to 25 MB per message (same hard ceiling as most SMTP
 # servers). Cap raw attachment bytes at 20 MB combined to leave headroom
@@ -773,6 +773,7 @@ class ProtonMailMixin:
         overwrite = bool(params.get("overwrite", False))
         if not all([account, uid, att_id, save_to]):
             return "error: account, uid, attachment_id, and save_to are required"
+        save_to, path_note = normalize_save_path(save_to)
         if os.path.exists(save_to) and not overwrite:
             return f"error: file already exists at {save_to} (pass overwrite=true to replace)"
         m = re.match(r"^part:(\d+)$", att_id)
@@ -795,6 +796,7 @@ class ProtonMailMixin:
                     f.write(payload)
                 return json.dumps({
                     "saved_to": save_to,
+                    **({"note": path_note} if path_note else {}),
                     "bytes": len(payload),
                     "filename": self._decode_header(filename),
                     "mime_type": part.get_content_type(),
