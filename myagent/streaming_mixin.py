@@ -1111,7 +1111,11 @@ class StreamingMixin:
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
-            if self._headless:
+            # A result file means this run IS a subagent (run_instruction spawn):
+            # auto-close even with a GUI (headless=false watch mode), so the
+            # waiting parent gets the report at loop end instead of only after
+            # the user closes the child window (or the wait times out).
+            if self._headless or self._result_file:
                 self.root.after(500, self._on_close)
 
         except Exception as e:
@@ -1121,5 +1125,5 @@ class StreamingMixin:
             # unattended error should exit (the auto-saved transcript records it).
             self._log_api_cost(total_cost)
             self._write_result_file("error", messages, error=str(e))
-            if self._headless:
+            if self._headless or self._result_file:
                 self.root.after(500, self._on_close)

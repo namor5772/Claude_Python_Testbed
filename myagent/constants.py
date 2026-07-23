@@ -582,7 +582,7 @@ META_TOOLS = [
                 },
                 "headless": {
                     "type": "boolean",
-                    "description": "Run without a GUI window (default true). Set false to show the agent window.",
+                    "description": "Run without a GUI window (default true). Set false to show the agent window while it works; a waited child (wait=true) still auto-closes when its run completes, so watching is safe.",
                 },
                 "wait": {
                     "type": "boolean",
