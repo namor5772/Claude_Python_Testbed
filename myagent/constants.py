@@ -112,6 +112,8 @@ TOOLS = [
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
             "getting system info, running scripts, installing software, or any other local operation. "
             "Commands run with the current user's permissions. On Windows this runs PowerShell; on macOS this runs bash. "
+            "The command is killed after 'timeout' seconds (default 30) — pass a larger timeout for slow "
+            "commands like compiles, installers, or test suites. "
             "IMPORTANT: When launching GUI applications, use Start-Process (Windows) or 'open -a' (macOS) "
             "so the command returns immediately instead of blocking."
         ),
@@ -121,7 +123,14 @@ TOOLS = [
                 "command": {
                     "type": "string",
                     "description": "The command to execute",
-                }
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": (
+                        "Seconds to wait before the command and its whole process tree are killed "
+                        "(default 30, min 5, max 600). Use a larger value for builds, installs, or test runs."
+                    ),
+                },
             },
             "required": ["command"],
         },

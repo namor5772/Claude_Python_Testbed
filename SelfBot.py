@@ -113,6 +113,8 @@ TOOLS = [
             "Use this for system tasks like listing files, checking processes, reading/writing files, "
             "getting system info, running scripts, installing software, or any other local operation. "
             "Commands run with the current user's permissions. On Windows this runs PowerShell; on macOS this runs bash. "
+            "The command is killed after 'timeout' seconds (default 30) — pass a larger timeout for slow "
+            "commands like compiles, installers, or test suites. "
             "IMPORTANT: When launching GUI applications, use Start-Process (Windows) or 'open -a' (macOS) "
             "so the command returns immediately instead of blocking."
         ),
@@ -122,7 +124,14 @@ TOOLS = [
                 "command": {
                     "type": "string",
                     "description": "The command to execute",
-                }
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": (
+                        "Seconds to wait before the command and its whole process tree are killed "
+                        "(default 30, min 5, max 600). Use a larger value for builds, installs, or test runs."
+                    ),
+                },
             },
             "required": ["command"],
         },
@@ -3259,7 +3268,27 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return text[:limit] + suffix
         return text
 
-    def run_powershell(self, command):
+    @staticmethod
+    def _kill_process_tree(proc):
+        """Kill proc and every descendant. A plain proc.kill() leaves
+        grandchildren alive holding the inherited stdout/stderr pipes, which
+        keeps communicate() blocked forever (a nested 'powershell -File'
+        spawning cmd -> cl.exe reproduced this as an indefinite agent hang)."""
+        try:
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=15, **_SUBPROCESS_NOWND,
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def run_powershell(self, command, timeout=30):
         """Execute a command with safety checks (PowerShell on Windows, bash on macOS)."""
         # Tier 1 & 2 safety checks
         safety, info = self._check_command_safety(command)
@@ -3275,23 +3304,45 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         try:
             shell_cmd = (["powershell", "-NoProfile", "-Command", command]
                          if IS_WINDOWS else ["/bin/bash", "-c", command])
-            result = subprocess.run(
+            # Popen, not subprocess.run: on timeout the whole process TREE must
+            # die before the final pipe read, and POSIX needs its own session
+            # (start_new_session) for killpg to reach every descendant.
+            popen_kwargs = {} if IS_WINDOWS else {"start_new_session": True}
+            proc = subprocess.Popen(
                 shell_cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=30,
+                **popen_kwargs,
             )
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self._kill_process_tree(proc)
+                try:
+                    stdout, stderr = proc.communicate(timeout=10)
+                except Exception:
+                    stdout, stderr = "", ""
+                partial = ""
+                if (stdout or "").strip() or (stderr or "").strip():
+                    partial = f"\nPartial output before timeout:\n{stdout or ''}"
+                    if stderr:
+                        partial += f"\nSTDERR:\n{stderr}"
+                    partial = self._truncate_output(partial)
+                return (
+                    f"Error: Command timed out after {timeout} seconds and its "
+                    f"process tree was killed. If the command legitimately needs "
+                    f"longer, re-run it with a larger 'timeout' (max 600)." + partial
+                )
             output = ""
-            if result.stdout:
-                output += result.stdout
-            if result.stderr:
-                output += f"\nSTDERR:\n{result.stderr}"
-            if result.returncode != 0:
-                output += f"\n[Exit code: {result.returncode}]"
+            if stdout:
+                output += stdout
+            if stderr:
+                output += f"\nSTDERR:\n{stderr}"
+            if proc.returncode != 0:
+                output += f"\n[Exit code: {proc.returncode}]"
             output = self._truncate_output(output)
             return output.strip() if output.strip() else "[No output]"
-        except subprocess.TimeoutExpired:
-            return "Error: Command timed out after 30 seconds."
         except Exception as e:
             return f"Error running command: {e}"
 
@@ -4816,8 +4867,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return self.do_pause_conversation((inp or {}).get("reason", ""))
         if block.name == "run_command":
             cmd = inp.get("command", "")
+            try:
+                cmd_timeout = int(inp.get("timeout") or 30)
+            except (TypeError, ValueError):
+                cmd_timeout = 30
+            cmd_timeout = max(5, min(600, cmd_timeout))
             self._tool_info(f"Running: {cmd}\n")
-            return self.run_powershell(cmd)
+            return self.run_powershell(cmd, timeout=cmd_timeout)
         if block.name == "csv_search":
             fp = inp.get("file_path", "")
             sv = inp.get("search_value", "")

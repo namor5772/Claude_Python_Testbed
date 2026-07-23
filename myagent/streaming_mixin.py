@@ -496,8 +496,13 @@ class StreamingMixin:
             return self.fetch_url(url)
         if block.name == "run_command":
             cmd = block.input.get("command", "")
+            try:
+                cmd_timeout = int(block.input.get("timeout") or 30)
+            except (TypeError, ValueError):
+                cmd_timeout = 30
+            cmd_timeout = max(5, min(600, cmd_timeout))
             self._tool_info(f"Running: {cmd}\n")
-            return self.run_powershell(cmd)
+            return self.run_powershell(cmd, timeout=cmd_timeout)
         if block.name == "csv_search":
             inp = block.input
             fp = inp.get("file_path", "")

@@ -1,4 +1,4 @@
-import re, subprocess, threading, tkinter as tk
+import os, re, signal, subprocess, threading, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (
@@ -471,7 +471,27 @@ class SafetyMixin:
             self.queue.put({"type": "user_prompt_echo", "content": response})
         return response
 
-    def run_powershell(self, command):
+    @staticmethod
+    def _kill_process_tree(proc):
+        """Kill proc and every descendant. A plain proc.kill() leaves
+        grandchildren alive holding the inherited stdout/stderr pipes, which
+        keeps communicate() blocked forever (a nested 'powershell -File'
+        spawning cmd -> cl.exe reproduced this as an indefinite agent hang)."""
+        try:
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                    capture_output=True, timeout=15, **_SUBPROCESS_NOWND,
+                )
+            else:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    def run_powershell(self, command, timeout=30):
         safety, info = self._check_command_safety(command)
         if safety == "blocked":
             return info
@@ -482,24 +502,48 @@ class SafetyMixin:
         try:
             shell_cmd = (["powershell", "-NoProfile", "-Command", command]
                          if IS_WINDOWS else ["/bin/bash", "-c", command])
-            result = subprocess.run(
+            # Popen, not subprocess.run: on timeout the whole process TREE must
+            # die before the final pipe read, and POSIX needs its own session
+            # (start_new_session) for killpg to reach every descendant.
+            popen_kwargs = dict(_SUBPROCESS_NOWND)
+            if not IS_WINDOWS:
+                popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen(
                 shell_cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=30,
-                **_SUBPROCESS_NOWND,
+                **popen_kwargs,
             )
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                self._kill_process_tree(proc)
+                try:
+                    stdout, stderr = proc.communicate(timeout=10)
+                except Exception:
+                    stdout, stderr = "", ""
+                partial = ""
+                if (stdout or "").strip() or (stderr or "").strip():
+                    partial = f"\nPartial output before timeout:\n{stdout or ''}"
+                    if stderr:
+                        partial += f"\nSTDERR:\n{stderr}"
+                    if len(partial) > 20000:
+                        partial = partial[:20000] + "\n\n[Output truncated...]"
+                return (
+                    f"Error: Command timed out after {timeout} seconds and its "
+                    f"process tree was killed. If the command legitimately needs "
+                    f"longer, re-run it with a larger 'timeout' (max 600)." + partial
+                )
             output = ""
-            if result.stdout:
-                output += result.stdout
-            if result.stderr:
-                output += f"\nSTDERR:\n{result.stderr}"
-            if result.returncode != 0:
-                output += f"\n[Exit code: {result.returncode}]"
+            if stdout:
+                output += stdout
+            if stderr:
+                output += f"\nSTDERR:\n{stderr}"
+            if proc.returncode != 0:
+                output += f"\n[Exit code: {proc.returncode}]"
             if len(output) > 20000:
                 output = output[:20000] + "\n\n[Output truncated...]"
             return output.strip() if output.strip() else "[No output]"
-        except subprocess.TimeoutExpired:
-            return "Error: Command timed out after 30 seconds."
         except Exception as e:
             return f"Error running command: {e}"
