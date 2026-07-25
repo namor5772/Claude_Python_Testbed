@@ -34,12 +34,12 @@ class TestGetPricing(unittest.TestCase):
         # gpt-5.5 must NOT prefix-match down to the cheap bare "gpt-5" entry
         ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05},
         ("OpenAI", "gpt-5.5-pro"): {"input": 3e-05, "output": 0.00018},
-        ("Gemini", "gemini-2.5-pro"): {"input": 1.25e-06, "output": 1e-05},
-        ("Gemini", "gemini-3-pro"): {"input": 2e-06, "output": 1.2e-05},
+        ("Google", "gemini-2.5-pro"): {"input": 1.25e-06, "output": 1e-05},
+        ("Google", "gemini-3-pro"): {"input": 2e-06, "output": 1.2e-05},
         # gemini-3.5-flash must NOT prefix-match down to the cheaper
         # "gemini-3" fallback entry; the -latest alias resolves to it too.
-        ("Gemini", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06},
-        ("Gemini", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06},
+        ("Google", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06},
+        ("Google", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06},
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.20-multi-agent-0309"): {"input": 1.25e-06, "output": 2.5e-06},
@@ -54,6 +54,24 @@ class TestGetPricing(unittest.TestCase):
         # Retired families are no longer priced (the API rejects their ids)
         ("xAI", "grok-3-mini"): None,
         ("xAI", "totally-unknown-xyz"): None,
+        # Kimi (Moonshot) — cache-MISS input rates; the mixin's cost_usd
+        # applies the cache-hit discount separately. Expressed as arithmetic
+        # (rate / 1e6) to match the live float conversion exactly.
+        ("Moonshot", "kimi-k3"): {"input": 3.00 / 1_000_000,
+                              "output": 15.00 / 1_000_000},
+        ("Moonshot", "kimi-k2.6"): {"input": 0.95 / 1_000_000,
+                                "output": 4.00 / 1_000_000},
+        ("Moonshot", "kimi-k2.5"): {"input": 0.60 / 1_000_000,
+                                "output": 3.00 / 1_000_000},
+        # -highspeed (2x rates) must NOT prefix-match down to kimi-k2.7-code
+        ("Moonshot", "kimi-k2.7-code-highspeed"): {"input": 1.90 / 1_000_000,
+                                               "output": 8.00 / 1_000_000},
+        ("Moonshot", "kimi-k2.7-code"): {"input": 0.95 / 1_000_000,
+                                     "output": 4.00 / 1_000_000},
+        # The discontinued DASH family (kimi-k2-thinking etc.) is filtered out
+        # of the picker and deliberately unpriced
+        ("Moonshot", "kimi-k2-thinking"): None,
+        ("Moonshot", "totally-unknown-xyz"): None,
         ("Ollama", "qwen3"): None,
         ("Bogus", "x"): None,
     }

@@ -2,8 +2,8 @@ import tkinter as tk
 
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
-    GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
-    ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
+    GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL,
+    OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
     ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
@@ -204,10 +204,12 @@ class UIMixin:
         # Select default model for new provider
         if new_provider == "OpenAI":
             default = OPENAI_DEFAULT_MODEL
-        elif new_provider == "Gemini":
+        elif new_provider == "Google":
             default = GEMINI_DEFAULT_MODEL
         elif new_provider == "xAI":
             default = XAI_DEFAULT_MODEL
+        elif new_provider == "Moonshot":
+            default = KIMI_DEFAULT_MODEL
         elif new_provider == "Ollama":
             default = OLLAMA_DEFAULT_MODEL
         else:
@@ -299,22 +301,44 @@ class UIMixin:
                     # grok-4.3, and the floor where "None" doesn't exist.
                     self._thinking_mode_var.set("Low" if "Low" in values else values[0])
                 self._on_thinking_mode_changed()
+            elif support == "extended" and self.provider == "Moonshot":
+                # kimi-k3: always-reasoning, sparse Low/High/Max ladder (no
+                # medium, no off — reasoning_effort's default is max). No
+                # temperature widgets: Kimi fixes sampling server-side, and
+                # _on_thinking_mode_changed leaves temp hidden for non-xAI
+                # extended providers.
+                self._thinking_mode_label.config(text="Reasoning")
+                self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
+                self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+                values = [v.capitalize() for v in self._kimi_reasoning_values()]
+                self._thinking_mode_combo["values"] = values
+                current = self._thinking_mode_var.get()
+                if current not in values:
+                    # A stale saved mode coerces to Max — the API's own default.
+                    self._thinking_mode_var.set("Max" if "Max" in values else values[-1])
+                self._on_thinking_mode_changed()
             elif support is not None:
                 # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength.
-                # Ollama is an exception — its `think` flag is boolean-only today,
-                # so we hide the strength combo and show only the checkbox.
+                # Ollama and Kimi are exceptions — Ollama's `think` flag is
+                # boolean-only today, and Kimi's k2.6/k2.5 thinking toggle is
+                # enabled/disabled with no strength knob — so both hide the
+                # strength combo and show only the checkbox.
                 self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
                 self._thinking_check.config(state="normal")
                 self._update_thinking_strength_options()
                 if self.thinking_enabled:
-                    if self.provider != "Ollama":
+                    if self.provider not in ("Ollama", "Moonshot"):
                         self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
                         self._thinking_strength_combo.config(state="readonly")
-                    if self.provider in ("Gemini", "Ollama"):
+                    if self.provider in ("Google", "Ollama"):
                         self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
                 else:
-                    if not (self.provider == "OpenAI" and self._is_openai_reasoning_model()):
+                    # Kimi never shows temperature (fixed server-side, 400-risk
+                    # to send); OpenAI reasoning models hide it too.
+                    if (self.provider != "Moonshot"
+                            and not (self.provider == "OpenAI"
+                                     and self._is_openai_reasoning_model())):
                         self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                         self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
                 # Show verbosity for gpt-5.0 family
@@ -322,12 +346,15 @@ class UIMixin:
                     self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
                     self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
             else:
-                # No thinking support
+                # No thinking support (for Kimi this is k2.7-code: thinking is
+                # always ON server-side with no client knob — reasoning still
+                # streams to the Show Thinking pane; there is just nothing to
+                # configure, and temperature stays hidden like all Kimi models)
                 self._thinking_var.set(False)
                 self.thinking_enabled = False
                 self.thinking_mode = "off"
                 # gpt-5.x-chat Instant models don't support temperature
-                if not self._is_gpt5_chat_model():
+                if not self._is_gpt5_chat_model() and self.provider != "Moonshot":
                     self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                     self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
                 # gpt-5.x-chat Instant models support verbosity
@@ -361,7 +388,7 @@ class UIMixin:
                     return "extended"
                 return "adaptive"
             return None
-        if self.provider == "Gemini":
+        if self.provider == "Google":
             return "adaptive" if self._is_gemini_thinking_model(mid) else None
         if self.provider == "xAI":
             # Grok families with a reasoning_effort knob get the OpenAI-style
@@ -369,6 +396,14 @@ class UIMixin:
             # -non-reasoning variants, legacy grok-4 / grok-2) have no
             # client-side knob — reasoning behaviour is baked into the id.
             return "extended" if self._xai_reasoning_values(mid) else None
+        if self.provider == "Moonshot":
+            # kimi-k3 has the reasoning_effort knob (low/high/max) → the
+            # extended mode combobox; k2.6/k2.5 take a plain enabled/disabled
+            # thinking toggle → the checkbox (strength hidden, Ollama-style);
+            # k2.7-code always thinks with no client knob at all → None.
+            if self._kimi_reasoning_values(mid):
+                return "extended"
+            return "manual" if self._kimi_thinking_toggleable(mid) else None
         if self.provider == "Ollama":
             # Qwen3 / DeepSeek-R1 / gpt-oss get the manual checkbox+strength UI.
             # Strength is display-only for now — Ollama's `think` flag is
@@ -548,11 +583,17 @@ class UIMixin:
         # Restore provider first (model list depends on it)
         provider_key = "provider"
         saved_provider = entry.get(provider_key, "Anthropic")
+        # Legacy provider labels, renamed 2026-07-25 to company names (matching
+        # the Anthropic/OpenAI/xAI convention; the MODEL ids are unchanged) —
+        # instructions/state saved under the old names keep working.
+        saved_provider = {"Kimi": "Moonshot", "Gemini": "Google"}.get(
+            saved_provider, saved_provider)
         if saved_provider != self.provider:
             can_switch = (saved_provider == "Anthropic" and self._has_anthropic) or \
                          (saved_provider == "OpenAI" and self._has_openai) or \
-                         (saved_provider == "Gemini" and self._has_gemini) or \
+                         (saved_provider == "Google" and self._has_gemini) or \
                          (saved_provider == "xAI" and self._has_xai) or \
+                         (saved_provider == "Moonshot" and self._has_kimi) or \
                          (saved_provider == "Ollama" and self._has_ollama)
             if can_switch:
                 self.provider = saved_provider
@@ -653,7 +694,7 @@ class UIMixin:
         if support == "adaptive":
             if self.provider == "OpenAI" and self._is_gpt5_family() and self._parse_gpt5_minor() == 0:
                 values = ["minimal", "low", "medium", "high"]
-            elif self.provider in ("OpenAI", "Gemini"):
+            elif self.provider in ("OpenAI", "Google"):
                 values = ["low", "medium", "high"]
             else:
                 values = list(EFFORT_LEVELS)
@@ -755,10 +796,14 @@ class UIMixin:
             # Mirror _stream_xai_call: reasoning knob + temperature always sent.
             parts.append(f"reasoning={mode.capitalize() or 'Low'}")
             parts.append(f"temp={self.temperature:g}")
+        elif support == "extended" and self.provider == "Moonshot":
+            # kimi-k3: reasoning_effort only — Kimi never takes temperature.
+            parts.append(f"reasoning={mode.capitalize() or 'Max'}")
         elif support is not None:
             if self.thinking_enabled:
-                if self.provider == "Ollama":
-                    # Ollama's `think` flag is boolean-only — no strength knob.
+                if self.provider in ("Ollama", "Moonshot"):
+                    # Boolean thinking toggles — no strength knob (Ollama's
+                    # `think` flag; Kimi k2.6/k2.5's enabled/disabled).
                     parts.append("thinking=on")
                 elif support == "manual" and self.provider == "Anthropic":
                     # Anthropic manual (Haiku 4.5 / Sonnet 4.5 / older) uses a
@@ -772,16 +817,22 @@ class UIMixin:
                 else:
                     # Gemini / OpenAI adaptive (gpt-5 reasoning pre-5.1) — effort string
                     parts.append(f"thinking={self.thinking_effort}")
-                if self.provider in ("Gemini", "Ollama"):
+                if self.provider in ("Google", "Ollama"):
                     parts.append(f"temp={self.temperature:g}")
             else:
                 parts.append("thinking=off")
-                if not (self.provider == "OpenAI" and self._is_openai_reasoning_model()):
+                if (self.provider != "Moonshot"
+                        and not (self.provider == "OpenAI"
+                                 and self._is_openai_reasoning_model())):
                     parts.append(f"temp={self.temperature:g}")
             if self._has_openai_verbosity():
                 parts.append(f"verbosity={self.text_verbosity}")
         else:
-            if not self._is_gpt5_chat_model():
+            if self.provider == "Moonshot":
+                # k2.7-code: thinking is always on server-side, no knob, and
+                # temperature is never sent for any Kimi model.
+                parts.append("thinking=always-on")
+            elif not self._is_gpt5_chat_model():
                 parts.append(f"temp={self.temperature:g}")
             if self._has_openai_verbosity():
                 parts.append(f"verbosity={self.text_verbosity}")

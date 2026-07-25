@@ -45,7 +45,7 @@ except Exception:
     _HAS_MCP = False
 
 # Google API Python client for native Gmail (and future Calendar/Drive) tools.
-# Optional — absence hides the Google checkbox and disables the gmail_* tools.
+# Optional — absence hides the Gmail checkbox and disables the gmail_* tools.
 # Install via:
 #   pip install google-api-python-client google-auth-oauthlib google-auth-httplib2
 _HAS_GOOGLE = True
@@ -471,7 +471,7 @@ META_TOOLS = [
                 },
                 "provider": {
                     "type": "string",
-                    "enum": ["Anthropic", "OpenAI", "Gemini", "xAI", "Ollama"],
+                    "enum": ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"],
                     "description": "API provider (optional for update; create inherits current)",
                 },
                 "model": {
@@ -899,7 +899,7 @@ DESKTOP_TOOLS = [
             "and return its image coordinates. Use this BEFORE mouse_click for any non-trivial "
             "target — it leverages Gemini's native spatial reasoning for higher accuracy than "
             "guessing coordinates by eye. Returns coordinates in the same image space mouse_click "
-            "expects, ready to pass directly. Only available with the Gemini provider. "
+            "expects, ready to pass directly. Only available with the Google provider (Gemini models). "
             "CRITICAL for multi-display setups: ALWAYS pass the 'display' parameter to specify "
             "which display's screenshot to search — without it, find_element falls back to whichever "
             "display was captured most recently, which is often NOT where your target is. "
@@ -1354,6 +1354,49 @@ XAI_REASONING_EFFORT = {
 # "grok-build": grok-build-latest re-aliased to grok-4.5 (vision) in the
 # 2026-07 catalog, so the shorter prefix would false-flag it.
 XAI_NON_VISION_PREFIXES = ("grok-build-0", "grok-code")
+# ── Moonshot AI (Kimi models) ─────────────────────────────────────────────────
+# Provider label in the UI/state: "Moonshot" (the company, matching the
+# Anthropic/OpenAI/xAI convention) — the constants and mixin keep the KIMI_*/
+# _kimi_* names because the MODELS are branded kimi-*. A legacy saved provider
+# value "Kimi" (2026-07-25 initial wiring) normalizes to "Moonshot" in
+# _restore_model_params.
+# Reached with the openai SDK pointed at KIMI_DEFAULT_BASE_URL. Kimi's API is
+# OpenAI-compatible but Chat-Completions-ONLY (no Responses endpoint), so the
+# provider does NOT reuse _messages_to_responses / _tools_to_responses — it has
+# its own translators in myagent/kimi_mixin.py. Requires MOONSHOT_API_KEY
+# (KIMI_API_KEY also accepted). Catalog, parameters, and the reasoning_content
+# round-trip contract verified against platform.kimi.ai docs 2026-07-25.
+KIMI_DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
+# Matches the LIVE /v1/models catalog 1:1 (verified 2026-07-25 with a real
+# key): kimi-k2.5 is documented/priced but NOT served (at least to new
+# accounts), so it is omitted here — its pricing and no-round-trip policy
+# entries below are retained in case it reappears in the listing.
+KIMI_FALLBACK_MODELS = ["kimi-k2.6", "kimi-k3",
+                        "kimi-k2.7-code", "kimi-k2.7-code-highspeed"]
+KIMI_DEFAULT_MODEL = KIMI_FALLBACK_MODELS[0]
+# reasoning_effort support by family (longest prefix wins) — kimi-k3 only.
+# NOTE the sparse ladder: low/high/max, NO medium (the API default is max);
+# _kimi_reasoning_effort() coerces stale saved efforts from other providers.
+# k2.6/k2.5 use the thinking on/off checkbox instead; k2.7-code has no knob.
+KIMI_REASONING_EFFORT = {
+    "kimi-k3": ["low", "high", "max"],
+}
+# Models whose thinking can be toggled via {"thinking": {"type": "enabled" |
+# "disabled"}} (thinking is ON by default server-side for both).
+KIMI_THINKING_TOGGLE_PREFIXES = ("kimi-k2.6", "kimi-k2.5")
+# Models that ALWAYS think — no thinking param accepted (k2.7-code errors on
+# any value but its baked-in one; k3 uses reasoning_effort instead).
+KIMI_ALWAYS_THINKING_PREFIXES = ("kimi-k3", "kimi-k2.7-code")
+# Models that do NOT support Preserved Thinking: reasoning_content must NOT be
+# sent back on assistant messages (kimi-k2.5 is documented as unsupported).
+# Every other kimi model REQUIRES the round-trip during tool-call loops —
+# see _messages_to_kimi. Future unknown models default to round-tripping
+# (the docs' direction of travel), backstopped by the 400 ladder.
+KIMI_NO_REASONING_ROUNDTRIP_PREFIXES = ("kimi-k2.5",)
+# Text-only Kimi families (no image input) — the weak-desktop-combo warning
+# fires for these. k3 / k2.6 / k2.5 are all vision-capable; the k2.7-code
+# coding line (incl. -highspeed) is text-only per the models doc.
+KIMI_NON_VISION_PREFIXES = ("kimi-k2.7-code",)
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document",
                        "read_file", "glob_files", "grep_files",
                        # run_instruction: each spawn is an independent child PROCESS, and a
@@ -2628,10 +2671,37 @@ XAI_PRICING = {
     "grok-code-fast":    (1.00, 2.00),   # alias of grok-build-0.1
     "grok-latest":       (1.25, 2.50),   # alias of grok-4.3
 }
+# Moonshot AI (Kimi) pricing (USD per million tokens)
+# Each entry: (input_price, output_price) — reasoning tokens bill as output,
+# and re-sent reasoning_content (the required round-trip on thinking models)
+# bills again as input. Verified against platform.kimi.ai/docs/pricing
+# 2026-07-25. The 2-tuple treats all input at the cache-MISS rate; the mixin
+# computes an exact cost_usd from the reported cached tokens using
+# KIMI_CACHE_HIT_PRICING below (stream_worker prefers cost_usd when present).
+# The legacy dash-family (kimi-k2-thinking / -0905 / -0711 / -turbo) was
+# discontinued 2026-05-25 and moonshot-v1 dies 2026-08-31 — neither is priced
+# because _fetch_kimi_models filters them out.
+KIMI_PRICING = {
+    "kimi-k3":                    (3.00, 15.00),
+    "kimi-k2.7-code-highspeed":   (1.90, 8.00),
+    "kimi-k2.7-code":             (0.95, 4.00),
+    "kimi-k2.6":                  (0.95, 4.00),
+    "kimi-k2.5":                  (0.60, 3.00),
+}
+# Cache-HIT input rate (USD per million tokens), used only by kimi_mixin's
+# exact-cost computation. Longest prefix wins (so -highspeed outranks
+# kimi-k2.7-code, same convention as every other table).
+KIMI_CACHE_HIT_PRICING = {
+    "kimi-k3":                    0.30,
+    "kimi-k2.7-code-highspeed":   0.38,
+    "kimi-k2.7-code":             0.19,
+    "kimi-k2.6":                  0.16,
+    "kimi-k2.5":                  0.10,
+}
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.
 OLLAMA_PRICING = {}
-PROVIDERS = ["Anthropic", "OpenAI", "Gemini", "xAI", "Ollama"]
+PROVIDERS = ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}

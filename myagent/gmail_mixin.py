@@ -25,7 +25,7 @@ Architecture notes:
   dialog as a free-floating window (same pattern as PS Safety / user_prompt).
 
 * When ``google`` is not installed (``_HAS_GOOGLE = False``), every method
-  here is a graceful no-op and the Google checkbox in the editor is disabled.
+  here is a graceful no-op and the Gmail checkbox in the editor is disabled.
   Same opt-in degradation pattern as MCP and Ollama.
 """
 

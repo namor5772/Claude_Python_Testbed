@@ -265,7 +265,7 @@ class DesktopMixin:
                 img = img.resize((log_w, log_h))
         logical_w, logical_h = img.size
         # Resize to API image limit (provider-specific)
-        if self.provider == "Gemini":
+        if self.provider == "Google":
             # Gemini supports much higher resolution than Anthropic via its tile system
             # (each image broken into 768x768 tiles, up to many tiles per request).
             # Bumping above the previous Anthropic-matched 1568/1.15MP cap gives older

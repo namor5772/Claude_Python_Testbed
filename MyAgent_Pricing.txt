@@ -174,8 +174,9 @@
   GEMINI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  Gemini has a free tier (under rate limits). Prices below are paid tier.
-  Thinking tokens are included in output token count.
+  Provider "Google" in MyAgent's picker (the company; the models are branded
+  gemini-*). Gemini has a free tier (under rate limits). Prices below are
+  paid tier. Thinking tokens are included in output token count.
 
   Floating "-latest" Aliases
   ──────────────────────────────────────────────────────────────────────────
@@ -276,6 +277,53 @@
     Live GET https://api.x.ai/v1/models (2026-07-17)
 
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  KIMI (MOONSHOT AI)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Provider "Moonshot" in MyAgent's picker (the company; the models are
+  branded kimi-*). Reasoning tokens bill at the output rate — and the
+  reasoning_content that thinking models REQUIRE to be sent back during tool
+  loops bills again as input on the next call (mostly at the cheap cache-hit
+  rate; Kimi's context caching is automatic). Reached via the OpenAI SDK at
+  https://api.moonshot.ai/v1 with MOONSHOT_API_KEY (or KIMI_API_KEY).
+
+  Current Catalog — verified against platform.kimi.ai/docs/pricing 2026-07-25
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix              Input    Output   Cache-Hit Input
+  ──────────────────────────────────────────────────────────────────────────
+  kimi-k3                   $3.00    $15.00   $0.30   (1M context, vision,
+                                              always-reasoning,
+                                              reasoning_effort low/high/max)
+  kimi-k2.7-code-highspeed  $1.90    $8.00    $0.38   (~180 tok/s variant)
+  kimi-k2.7-code            $0.95    $4.00    $0.19   (coding line, text-only,
+                                              always-thinking, no knobs)
+  kimi-k2.6                 $0.95    $4.00    $0.16   (256K, vision, thinking
+                                              toggle + Preserved Thinking)
+  kimi-k2.5                 $0.60    $3.00    $0.10   (256K, vision, thinking
+                                              toggle, NO reasoning round-trip;
+                                              still documented+priced but NOT
+                                              in the live /v1/models catalog
+                                              as of 2026-07-25 — entry kept in
+                                              case it returns)
+
+  Notes:
+  - MyAgent's Kimi cost line is computed exactly: usage reports cached input
+    tokens, and kimi_mixin folds the cache-hit discount into cost_usd
+    ((input − cached) × miss + cached × hit + output × out). The KIMI_PRICING
+    2-tuple is the all-miss fallback estimate only.
+  - The legacy DASH family (kimi-k2-thinking, kimi-k2-thinking-turbo,
+    kimi-k2-0905-preview, kimi-k2-0711-preview, kimi-k2-turbo-preview) was
+    discontinued 2026-05-25; kimi-latest and kimi-thinking-preview are gone
+    too, and moonshot-v1* dies 2026-08-31. _fetch_kimi_models filters them
+    all out, so none are priced.
+  - No server-side tools (Kimi keeps MyAgent's local DuckDuckGo search), so
+    tokens are the only cost.
+
+  Sources:
+    https://platform.kimi.ai/docs/pricing/chat  (per-model subpages)
+
+
 ================================================================================
   NOTES
 ================================================================================
@@ -293,10 +341,11 @@
     in token-based cost display).
 
   - This file is auto-generated from the ANTHROPIC_PRICING, OPENAI_PRICING,
-    GEMINI_PRICING, and XAI_PRICING tables in myagent/constants.py.
+    GEMINI_PRICING, XAI_PRICING, and KIMI_PRICING (+ KIMI_CACHE_HIT_PRICING)
+    tables in myagent/constants.py.
 
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: July 17, 2026 (added grok-4.5)
+  Last updated: July 25, 2026 (added the Kimi / Moonshot AI provider)
 ================================================================================

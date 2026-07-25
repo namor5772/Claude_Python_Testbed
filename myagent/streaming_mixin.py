@@ -12,7 +12,7 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
-    OLLAMA_PRICING, APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
+    KIMI_PRICING, OLLAMA_PRICING, APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
 )
 from myagent.helpers import _ToolBlock, rotate_log_if_needed
 
@@ -267,6 +267,35 @@ class StreamingMixin:
                     effort = (self.thinking_effort if self.thinking_effort in values
                               else ("low" if "low" in values else values[0]))
                     payload["reasoning"] = {"effort": effort, "summary": "auto"}
+        elif self.provider == "Moonshot":
+            # Chat Completions format (Kimi has no Responses endpoint) — mirror
+            # _stream_kimi_call: system message first, tool results as role:
+            # "tool" messages, reasoning_content round-tripped per policy, and
+            # the flat wire params (never temperature). Local web_search /
+            # fetch_webpage stay in (no Kimi server-side tools).
+            tools = self._get_tools()
+            kimi_messages = ([{"role": "system", "content": self._build_system_prompt()}]
+                             + self._messages_to_kimi(
+                                 display_msgs,
+                                 include_reasoning=self._kimi_include_reasoning()))
+            # Truncate image data URLs in user-message parts
+            for m in kimi_messages:
+                c = m.get("content")
+                if isinstance(c, list):
+                    for part in c:
+                        if isinstance(part, dict) and part.get("type") == "image_url":
+                            url = part.get("image_url", {}).get("url", "")
+                            if isinstance(url, str) and url.startswith("data:"):
+                                part["image_url"]["url"] = url[:60] + "...[truncated]"
+            payload = {
+                "model": self.model,
+                "messages": kimi_messages,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+            if tools:
+                payload["tools"] = self._tools_to_kimi(tools)
+            payload.update(self._kimi_model_params())
         else:
             tools = self._get_tools()
             if self.provider == "Anthropic":
@@ -352,7 +381,7 @@ class StreamingMixin:
                         )
                     break
             # find_element is Gemini-only — strip it out for other providers so they don't see a tool they can't use
-            if self.provider != "Gemini":
+            if self.provider != "Google":
                 desktop = [t for t in desktop if t["name"] != "find_element"]
             tools.extend(desktop)
         if self.browser_enabled.get():
@@ -462,7 +491,7 @@ class StreamingMixin:
         # than enumerating every tool name; the GmailMixin owns the namespace.
         if _HAS_GOOGLE and block.name.startswith("gmail_"):
             if not getattr(self, "google_enabled", None) or not self.google_enabled.get():
-                return f"Google/Gmail is disabled. Enable the Google checkbox to use '{block.name}'."
+                return f"Gmail is disabled. Enable the Gmail checkbox to use '{block.name}'."
             method = getattr(self, f"do_{block.name}", None)
             if method is None:
                 return f"Unknown Gmail tool: {block.name}"
@@ -629,8 +658,8 @@ class StreamingMixin:
                     display=click_display,
                 )
             if block.name == "find_element":
-                if self.provider != "Gemini":
-                    return "find_element is only available for the Gemini provider. Use a region screenshot or grid=true overlay instead."
+                if self.provider != "Google":
+                    return "find_element is only available for the Google provider (Gemini models). Use a region screenshot or grid=true overlay instead."
                 description = inp.get("description", "")
                 if not description:
                     return "find_element error: missing 'description' parameter."
@@ -742,7 +771,7 @@ class StreamingMixin:
                     "to miss small UI targets. Consider a non-chat gpt-5 model with "
                     "reasoning enabled for desktop work."
                 )
-        elif self.provider == "Gemini":
+        elif self.provider == "Google":
             # Gemini 2.x has noticeably weaker UI spatial reasoning than 3.x —
             # verified empirically on Notepad++ close-button tests where 2.5 Pro
             # consistently misidentified targets while 3.1 Pro Preview hit them.
@@ -760,6 +789,16 @@ class StreamingMixin:
                     f"{self.model} is a text-only model — it cannot see screenshots. "
                     "Desktop/browser tools will not work with this model. "
                     "Switch to grok-4.3 (or any grok-4.x chat tier) for desktop work."
+                )
+        elif self.provider == "Moonshot":
+            # The k2.7-code coding line (incl. -highspeed) is text-only —
+            # it cannot see screenshots at all.
+            if not self._is_kimi_vision_model():
+                return (
+                    f"{self.model} is a text-only model — it cannot see screenshots. "
+                    "Desktop/browser tools will not work with this model. "
+                    "Switch to kimi-k2.6 / kimi-k2.5 / kimi-k3 (all vision-capable) "
+                    "for desktop work."
                 )
         elif self.provider == "Ollama":
             # Text-only local models cannot see screenshots — Ollama accepts
@@ -780,8 +819,9 @@ class StreamingMixin:
         OpenAI/Gemini: {input, output}"""
         table = {"Anthropic": ANTHROPIC_PRICING,
                  "OpenAI": OPENAI_PRICING,
-                 "Gemini": GEMINI_PRICING,
+                 "Google": GEMINI_PRICING,
                  "xAI": XAI_PRICING,
+                 "Moonshot": KIMI_PRICING,
                  "Ollama": OLLAMA_PRICING}.get(provider)
         if not table:
             return None
@@ -937,12 +977,15 @@ class StreamingMixin:
                 if self.provider == "OpenAI":
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_responses_call(messages, max_retries, label_emitted)
-                elif self.provider == "Gemini":
+                elif self.provider == "Google":
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_gemini_call(messages, max_retries, label_emitted)
                 elif self.provider == "xAI":
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_xai_call(messages, max_retries, label_emitted)
+                elif self.provider == "Moonshot":
+                    stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
+                        self._stream_kimi_call(messages, max_retries, label_emitted)
                 elif self.provider == "Ollama":
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_ollama_call(messages, max_retries, label_emitted)
@@ -1000,8 +1043,8 @@ class StreamingMixin:
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})
 
-                    # Wrap dict-based blocks (OpenAI/Gemini/xAI/Ollama) in _ToolBlock for uniform attribute access
-                    if self.provider in ("OpenAI", "Gemini", "xAI", "Ollama"):
+                    # Wrap dict-based blocks (OpenAI/Gemini/xAI/Kimi/Ollama) in _ToolBlock for uniform attribute access
+                    if self.provider in ("OpenAI", "Google", "xAI", "Moonshot", "Ollama"):
                         tool_blocks = [
                             _ToolBlock(b["name"], b["id"], b["input"])
                             for b in content_blocks if isinstance(b, dict) and b.get("type") == "tool_use"

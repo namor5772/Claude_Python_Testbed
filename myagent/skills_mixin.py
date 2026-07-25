@@ -306,10 +306,12 @@ class SkillsMixin:
         """Get display name for a model, provider-aware."""
         if self.provider == "OpenAI":
             return self._openai_model_display_names.get(model_id, model_id)
-        if self.provider == "Gemini":
+        if self.provider == "Google":
             return self._gemini_model_display_names.get(model_id, model_id)
         if self.provider == "xAI":
             return getattr(self, "_xai_model_display_names", {}).get(model_id, model_id)
+        if self.provider == "Moonshot":
+            return getattr(self, "_kimi_model_display_names", {}).get(model_id, model_id)
         if self.provider == "Ollama":
             return getattr(self, "_ollama_model_display_names", {}).get(model_id, model_id)
         return self._model_display_names.get(model_id, model_id)

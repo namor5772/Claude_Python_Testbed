@@ -5,7 +5,7 @@ from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
     ADAPTIVE_MODE_VALUES, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
-    GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
+    GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
 from myagent.datapaths import absorb_conflict_forks, load_store, save_store
 
@@ -247,8 +247,9 @@ class InstructionsMixin:
         available_providers = [p for p in PROVIDERS
                                if (p == "Anthropic" and self._has_anthropic)
                                or (p == "OpenAI" and self._has_openai)
-                               or (p == "Gemini" and self._has_gemini)
+                               or (p == "Google" and self._has_gemini)
                                or (p == "xAI" and self._has_xai)
+                               or (p == "Moonshot" and self._has_kimi)
                                or (p == "Ollama" and self._has_ollama)]
         self._provider_combo = ttk.Combobox(
             model_frame, textvariable=self._provider_var, state="readonly",
@@ -359,7 +360,7 @@ class InstructionsMixin:
         if not _HAS_MCP:
             _mcp_cb.config(state=tk.DISABLED)
         _google_cb = tk.Checkbutton(
-            checks_frame, text="Google", variable=self._editor_google,
+            checks_frame, text="Gmail", variable=self._editor_google,
             font=("Arial", 9),
         )
         _google_cb.pack(side=tk.LEFT, padx=(5, 0))
@@ -591,11 +592,14 @@ class InstructionsMixin:
             default_provider = "OpenAI"
             default_model = OPENAI_DEFAULT_MODEL
         elif self._has_gemini:
-            default_provider = "Gemini"
+            default_provider = "Google"
             default_model = GEMINI_DEFAULT_MODEL
         elif self._has_xai:
             default_provider = "xAI"
             default_model = XAI_DEFAULT_MODEL
+        elif self._has_kimi:
+            default_provider = "Moonshot"
+            default_model = KIMI_DEFAULT_MODEL
         else:
             default_provider = "Ollama"
             default_model = OLLAMA_DEFAULT_MODEL

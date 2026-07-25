@@ -58,7 +58,7 @@ OLLAMA = {
 
 class TestGeminiDetect(unittest.TestCase):
     def setUp(self):
-        self.u = stub(UIMixin, provider="Gemini", model="gemini-2.5-pro")
+        self.u = stub(UIMixin, provider="Google", model="gemini-2.5-pro")
 
     def test_thinking(self):
         for model, expected in GEMINI.items():

@@ -46,7 +46,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
 
 ## Project Structure
 - `SelfBot.py` — Single-file tkinter GUI chatbot (~5300 lines); works as a solo chatbot or as a dual-instance self-chatting bot via file-based message passing. Anthropic-only; besides its own desktop/browser tools it reuses MyAgent's MCP / Gmail / Proton(IMAP) / Outlook mixins by inheritance plus SelfBot-native Meta (`manage_skills` + `manage_prompts`) and Pause (`pause_conversation` — rest the self-chat instead of closing it) tools, toggled from a second checkbox row (see `.claude/rules/CLAUDE_SELFBOT.md`)
-- `MyAgent.py` — Entry point (~180 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, Gemini, and xAI providers, supports `-l` argument for command-line auto-launch of saved instructions
+- `MyAgent.py` — Entry point (~180 lines) for the modular tkinter GUI autonomous agent; fire-and-forget task runner with an agentic tool-use loop, supports Anthropic, OpenAI, Google (Gemini models), xAI, and Moonshot (Kimi models) providers, supports `-l` argument for command-line auto-launch of saved instructions
 - `myagent/` — Package containing MyAgent's mixin modules (split from the original single-file architecture):
   - `constants.py` — Tool schemas (TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS), safety patterns, model constants, API pricing tables (ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING), file paths
   - `helpers.py` — HTMLTextExtractor, extract_text_from_html, _ToolBlock, rotate_log_if_needed (shared one-slot size-cap rotation for the runtime logs: APICostLog.txt here and in SelfBot, heartbeat.log via Heartbeat.py, unread_summary.log via UnreadSummary.py)
@@ -60,6 +60,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
   - `openai_mixin.py` — OpenAI helpers, _stream_responses, _stream_responses_call
   - `gemini_mixin.py` — Gemini helpers, _tools_to_gemini, _messages_to_gemini, _stream_gemini_call
   - `xai_mixin.py` — xAI (Grok) provider via the OpenAI SDK against https://api.x.ai/v1 (Responses API), _stream_xai_call, reasoning-effort matrix, model fetch
+  - `kimi_mixin.py` — Moonshot AI (Kimi) provider via the OpenAI SDK against https://api.moonshot.ai/v1 (Chat Completions only — own translators, not the Responses ones), _stream_kimi_call, per-model reasoning_content round-trip policy (required for k3/k2.7-code/k2.6, forbidden for k2.5), thinking/reasoning_effort matrices, exact cache-hit cost, model fetch
   - `ollama_mixin.py` — Ollama local-inference provider, per-model capability auto-detection
   - `mcp_mixin.py` — Model Context Protocol client (async stdio servers from `mcp_servers.json`)
   - `gmail_mixin.py` — Native multi-account Gmail tools (Google API client, per-account OAuth)
@@ -110,5 +111,5 @@ Per-app architecture deep-dives live in `.claude/rules/` and load automatically 
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
 - SelfBot uses single-file architecture: all changes go in `SelfBot.py`
-- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 21 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 22 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
 - Bank extractor changes go in `Account_Activity_WBC.py`
