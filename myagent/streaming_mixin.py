@@ -945,6 +945,14 @@ class StreamingMixin:
                     "content": f"⚠ {weak_warning}\n",
                 })
 
+            # Re-post provider/model drift warnings from the last instruction
+            # restore: _start_agent wipes the output window, so anything queued
+            # during an -l auto-launch restore has already been erased by now.
+            # Without this, an unattended run that silently substituted its
+            # model leaves no trace in the window or the saved transcript.
+            for drift in getattr(self, "_model_drift_warnings", []):
+                self.queue.put({"type": "warning", "content": drift})
+
             label_emitted = False
             if not self.thinking_enabled:
                 self.queue.put({"type": "label"})

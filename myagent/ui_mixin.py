@@ -189,6 +189,16 @@ class UIMixin:
         """Return True if the editor model widgets currently exist."""
         return self._model_combo is not None
 
+    @staticmethod
+    def _default_model_for_provider(provider):
+        """The curated default model for a provider — the deliberate choice a
+        fallback should land on, never a lexicographic accident."""
+        return {"OpenAI": OPENAI_DEFAULT_MODEL,
+                "Google": GEMINI_DEFAULT_MODEL,
+                "xAI": XAI_DEFAULT_MODEL,
+                "Moonshot": KIMI_DEFAULT_MODEL,
+                "Ollama": OLLAMA_DEFAULT_MODEL}.get(provider, DEFAULT_MODEL)
+
     def _on_provider_changed(self, event=None):
         """Handle provider combobox selection change."""
         new_provider = self._provider_var.get()
@@ -202,18 +212,7 @@ class UIMixin:
         if self._has_model_widgets():
             self._model_combo["values"] = display_names
         # Select default model for new provider
-        if new_provider == "OpenAI":
-            default = OPENAI_DEFAULT_MODEL
-        elif new_provider == "Google":
-            default = GEMINI_DEFAULT_MODEL
-        elif new_provider == "xAI":
-            default = XAI_DEFAULT_MODEL
-        elif new_provider == "Moonshot":
-            default = KIMI_DEFAULT_MODEL
-        elif new_provider == "Ollama":
-            default = OLLAMA_DEFAULT_MODEL
-        else:
-            default = DEFAULT_MODEL
+        default = self._default_model_for_provider(new_provider)
         if default in self.available_models:
             self.model = default
         elif self.available_models:
@@ -580,6 +579,12 @@ class UIMixin:
     def _restore_model_params(self, entry, state_file=False):
         """Restore provider, model, temperature, and thinking settings from an instruction entry or state file."""
         has_widgets = self._has_model_widgets()
+        # Provider/model drift warnings are queued immediately AND stashed here:
+        # _start_agent clears the whole output window right after -l auto-launch,
+        # erasing anything queued during restore, so stream_worker re-posts these
+        # at run start (the 2026-07-25 FNE incident: a Heartbeat-launched run
+        # silently substituted grok for kimi-k3 with no visible trace).
+        self._model_drift_warnings = []
         # Restore provider first (model list depends on it)
         provider_key = "provider"
         saved_provider = entry.get(provider_key, "Anthropic")
@@ -606,10 +611,11 @@ class UIMixin:
             else:
                 # Silent provider drift is dangerous for unattended -l runs (the
                 # instruction's model is quietly ignored) — say why it happened.
-                self.queue.put({"type": "warning", "content": (
-                    f"⚠ Instruction wants provider {saved_provider} but it is "
-                    f"unavailable (API key not set in this environment?) — "
-                    f"staying on {self.provider}\n")})
+                drift = (f"⚠ Instruction wants provider {saved_provider} but it is "
+                         f"unavailable (API key not set in this environment?) — "
+                         f"staying on {self.provider}\n")
+                self._model_drift_warnings.append(drift)
+                self.queue.put({"type": "warning", "content": drift})
         # Restore model (fall back to first available if saved model doesn't match provider)
         model_key = "last_model" if state_file else "model"
         model = entry.get(model_key, "")
@@ -617,11 +623,19 @@ class UIMixin:
             self.model = model
             self._model_var.set(self._get_display_name(model))
         elif self.available_models:
+            # Fall back to the provider's curated default, not available_models[0]:
+            # fetched lists are sorted, and lexicographic-first can be a terrible
+            # pick (xAI's sorts to grok-4.20-0309-non-reasoning, which is how the
+            # 2026-07-25 FNE run ended up on a pinned non-reasoning variant).
+            fallback = self._default_model_for_provider(self.provider)
+            if fallback not in self.available_models:
+                fallback = self.available_models[0]
             if model and not state_file:
-                self.queue.put({"type": "warning", "content": (
-                    f"⚠ Saved model {model} not available for {self.provider} — "
-                    f"falling back to {self.available_models[0]}\n")})
-            self.model = self.available_models[0]
+                drift = (f"⚠ Saved model {model} not available for {self.provider} — "
+                         f"falling back to {fallback}\n")
+                self._model_drift_warnings.append(drift)
+                self.queue.put({"type": "warning", "content": drift})
+            self.model = fallback
             self._model_var.set(self._get_display_name(self.model))
         # Restore temperature
         temp = entry.get("temperature")
