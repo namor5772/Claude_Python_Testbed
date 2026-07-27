@@ -667,7 +667,8 @@ class StreamingMixin:
                 self._tool_info(f"Locating: {description}{disp_str}\n")
                 return self.do_gemini_find_element(description, display=click_display)
         elif block.name in ("browser_open", "browser_navigate",
-                              "browser_click", "browser_fill",
+                              "browser_click", "browser_download",
+                              "browser_fill",
                               "browser_get_text", "browser_run_js",
                               "browser_screenshot", "browser_close",
                               "browser_wait_for", "browser_select",
@@ -689,6 +690,15 @@ class StreamingMixin:
                 target = sel or f"text='{txt}'"
                 self._tool_info(f"Browser: clicking {target}\n")
                 return self.do_browser_click(selector=sel or None, text=txt or None)
+            if block.name == "browser_download":
+                sel = inp.get("selector", "")
+                txt = inp.get("text", "")
+                target = sel or f"text='{txt}'"
+                path = inp.get("save_path", "")
+                self._tool_info(f"Browser: downloading via {target} -> {path}\n")
+                return self.do_browser_download(
+                    save_path=path, selector=sel or None, text=txt or None,
+                    timeout_s=inp.get("timeout_s", 60))
             if block.name == "browser_fill":
                 sel = inp.get("selector", "")
                 val = inp.get("value", "")

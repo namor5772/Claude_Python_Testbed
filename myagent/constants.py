@@ -979,6 +979,43 @@ BROWSER_TOOLS = [
         },
     },
     {
+        "name": "browser_download",
+        "description": (
+            "Click an element that triggers a file download and save the file to a local "
+            "path. REQUIRED for any in-page download (CSV/statement/PDF exports): a plain "
+            "browser_click loses the file — the CDP-attached browser renames downloads to "
+            "a random GUID in a temp folder and the download shows as failed unless it is "
+            "captured with this tool. Identify the trigger element by CSS selector or "
+            "visible text, like browser_click."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "save_path": {
+                    "type": "string",
+                    "description": (
+                        "Where to save the file. A file path saves under that exact name "
+                        "(overwriting); an existing directory keeps the server-suggested "
+                        "filename inside it. Relative paths resolve against the app folder."
+                    ),
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector of the element that starts the download",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Visible text of the element (used if selector is not provided)",
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "description": "Seconds to wait for the download to start and finish (default 60)",
+                },
+            },
+            "required": ["save_path"],
+        },
+    },
+    {
         "name": "browser_fill",
         "description": (
             "Fill a form field with text. This clears any existing value and types instantly "

@@ -69,7 +69,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
   - `document_mixin.py` — Local document text extraction (`read_document`: PDF/DOCX/HTML/text)
   - `file_mixin.py` — Native file tools (`read_file`/`edit_file`/`write_file`/`glob_files`/`grep_files`): Claude-Code-style exact-unique-match editing that fails loudly, read-before-edit tracking, CRLF/BOM-preserving round-trips
   - `desktop_mixin.py` — Desktop automation tools (pyautogui): screenshot, mouse, keyboard, clipboard, OCR
-  - `browser_mixin.py` — Browser automation tools (Playwright): open, navigate, click, fill, screenshot
+  - `browser_mixin.py` — Browser automation tools (Playwright): open, navigate, click, fill, screenshot, download (`browser_download` wraps the click in `expect_download()` + `save_as()` — required because the CDP attach GUID-renames unmanaged downloads)
   - `safety_mixin.py` — Command safety, confirmation dialog, user_prompt, run_powershell, agent control
   - `chat_mixin.py` — Chat save/serialize, image attachment, LaTeX processing
   - `event_loop_mixin.py` — check_queue, _on_close, _finish_close

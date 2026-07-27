@@ -147,6 +147,44 @@ class BrowserMixin:
         except Exception as e:
             return f"Browser click error: {e}"
 
+    def do_browser_download(self, save_path, selector=None, text=None, timeout_s=60):
+        """Click a download trigger inside page.expect_download() and persist
+        the file. Required because Playwright's CDP attach sets the browser-wide
+        download behavior to allowAndName: every download lands as a random
+        GUID in Playwright's temp dir and shows as failed in the browser UI
+        unless the Download object is claimed and save_as()'d like this. The
+        expect_download() context must be armed BEFORE the click — the event
+        fires during the click, so click-then-wait always misses it."""
+        try:
+            if not self._page:
+                return "No browser connected. Call browser_open first."
+            if not selector and not text:
+                return "Provide either 'selector' or 'text' for the download trigger."
+            try:
+                timeout_ms = max(5, min(int(timeout_s), 600)) * 1000
+            except (TypeError, ValueError):
+                timeout_ms = 60_000
+            with self._page.expect_download(timeout=timeout_ms) as dl_info:
+                if selector:
+                    self._page.click(selector, timeout=5000)
+                else:
+                    self._page.get_by_text(text, exact=False).first.click(timeout=5000)
+            download = dl_info.value
+            suggested = download.suggested_filename or "download.bin"
+            target = os.path.abspath(os.path.expanduser(save_path))
+            if os.path.isdir(target):
+                target = os.path.join(target, suggested)
+            parent = os.path.dirname(target)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            # save_as() waits for the download to complete and raises with the
+            # failure reason if it doesn't — no separate failure() poll needed.
+            download.save_as(target)
+            size = os.path.getsize(target)
+            return f"Downloaded '{suggested}' -> {target} ({size:,} bytes)"
+        except Exception as e:
+            return f"Browser download error: {e}"
+
     def do_browser_fill(self, selector, value):
         try:
             if not self._page:

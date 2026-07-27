@@ -31,6 +31,7 @@ TOOL_NAMES = {
                       "read_screen_text", "find_image_on_screen", "mouse_drag",
                       "find_element"],
     "BROWSER_TOOLS": ["browser_open", "browser_navigate", "browser_click",
+                      "browser_download",
                       "browser_fill", "browser_get_text", "browser_run_js",
                       "browser_screenshot", "browser_close", "browser_wait_for",
                       "browser_select", "browser_get_elements"],
