@@ -5,6 +5,8 @@ import threading
 import openai
 
 from myagent.constants import (
+    OPENAI_DEPRECATED_MODEL_IDS,
+    OPENAI_DEPRECATED_MODEL_PREFIXES,
     OPENAI_REASONING_PREFIXES,
     OPENAI_RESPONSES_PREFIXES,
     OPENAI_FALLBACK_MODELS,
@@ -189,8 +191,15 @@ class OpenAIMixin:
                                                 "transcribe", "tts")):
                     continue
                 # Include only Responses API compatible models
-                if mid.startswith(OPENAI_RESPONSES_PREFIXES):
-                    model_ids.append(mid)
+                if not mid.startswith(OPENAI_RESPONSES_PREFIXES):
+                    continue
+                # Drop scheduled-retirement ids that still pass the family
+                # prefixes (GPT-5.0 base tiers, -chat/-codex ids — 2026-07
+                # audit: retiring models are removed ahead of shutdown)
+                if (mid.startswith(OPENAI_DEPRECATED_MODEL_PREFIXES)
+                        or mid in OPENAI_DEPRECATED_MODEL_IDS):
+                    continue
+                model_ids.append(mid)
             model_ids.sort()
             self._openai_model_display_names = {mid: mid for mid in model_ids}
             return model_ids if model_ids else list(OPENAI_FALLBACK_MODELS)

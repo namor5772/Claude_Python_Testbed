@@ -42,12 +42,21 @@ class TestGetPricing(unittest.TestCase):
         ("OpenAI", "gpt-5.6-terra"): {"input": 2.5e-06, "output": 1.5e-05},
         ("OpenAI", "gpt-5.6-luna"): {"input": 1e-06, "output": 6e-06},
         ("OpenAI", "gpt-5.2"): {"input": 8.75e-07, "output": 7e-06},
-        # gpt-4o retired from the API 2026-02-16 — unpriced since the audit
-        ("OpenAI", "gpt-4o"): None,
-        # gpt-5.5 must NOT prefix-match down to the cheap bare "gpt-5" entry
         ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05},
         ("OpenAI", "gpt-5.5-pro"): {"input": 3e-05, "output": 0.00018},
-        ("Google", "gemini-2.5-pro"): {"input": 1.25e-06, "output": 1e-05},
+        # gpt-5-pro survives (no announced retirement) and must not fall to
+        # None now that the bare "gpt-5" fallback entry is gone
+        ("OpenAI", "gpt-5-pro"): {"input": 1.5e-05, "output": 0.00012},
+        # Retired / scheduled-retirement ids are unpriced (2026-07 audit):
+        # gpt-4o retired 2026-02-16; the gpt-5.0 base tiers retire 2026-12-11;
+        # the o-series retires 2026-10-23 / 2026-12-11 → gpt-5.6
+        ("OpenAI", "gpt-4o"): None,
+        ("OpenAI", "gpt-5"): None,
+        ("OpenAI", "gpt-5-mini"): None,
+        ("OpenAI", "o3"): None,
+        ("OpenAI", "o4-mini"): None,
+        # Gemini 2.5 (sunset ≥ 2026-10-16) unpriced under the same policy
+        ("Google", "gemini-2.5-pro"): None,
         ("Google", "gemini-3-pro"): {"input": 2e-06, "output": 1.2e-05},
         # gemini-3.5-flash must NOT prefix-match down to the cheaper
         # "gemini-3" fallback entry; the -latest alias resolves to it too.

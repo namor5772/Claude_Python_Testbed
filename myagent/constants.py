@@ -1296,11 +1296,25 @@ OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 # dropped from the picker. gpt-3.5 / gpt-4 base / gpt-4-turbo never supported
 # the Responses API and retire 2026-10-23 anyway.
 OPENAI_RESPONSES_PREFIXES = ("gpt-4.1", "gpt-5")
+# Scheduled-retirement ids that still pass the family prefixes above —
+# _fetch_openai_models drops them from the picker even though the API still
+# serves some of them (policy: retiring models are removed ahead of their
+# shutdown date). The GPT-5.0 base/mini/nano tiers retire 2026-12-11 →
+# gpt-5.6; the -chat / -codex ids already retired 2026-07-23. Two ids must be
+# EXACT matches (OPENAI_DEPRECATED_MODEL_IDS) because as prefixes they would
+# also kill surviving longer ids: bare "gpt-5" (would match everything) and
+# bare "gpt-5.1-codex" (would match the still-served -codex-max / -codex-mini).
+# gpt-5-pro and gpt-4.1 have no announced retirement and stay.
+OPENAI_DEPRECATED_MODEL_PREFIXES = ("gpt-5-mini", "gpt-5-nano", "gpt-5-chat",
+                                    "gpt-5-codex", "gpt-5-2025", "gpt-5.1-chat")
+OPENAI_DEPRECATED_MODEL_IDS = {"gpt-5", "gpt-5.1-codex"}
 # Gemini 2.5 is scheduled for shutdown (no earlier than 2026-10-16; Google
 # will give 6 months' notice once Gemini 3 is GA) and is replaced by the 3.x
-# tiers, so the fallback list carries only current 3.x models. The live fetch
-# still serves 2.5 ids until Google pulls them, and the 2.5 thinking_budget
-# wiring + pricing stay for pinned instructions.
+# tiers — per the retiring-models-removed-early policy it is dropped from the
+# picker (_fetch_gemini_models) and unpriced, and the fallback list carries
+# only current 3.x models. The 2.5 thinking_budget PARAM wiring stays
+# (GEMINI_THINKING_PREFIXES + _gemini_uses_thinking_level) so a pinned
+# instruction that still names a 2.5 id keeps working until Google pulls it.
 GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-pro-preview",
                           "gemini-3.1-flash-lite"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
@@ -2629,27 +2643,19 @@ OPENAI_PRICING = {
     "gpt-5.1-codex-mini":  (0.25, 2.00),
     "gpt-5.1-codex-max":   (1.25, 10.00),
     "gpt-5.1":             (0.625, 5.00),
-    # GPT-5.0 family (gpt-5-chat-latest / gpt-5-codex retired 2026-07-23;
-    # the dated base/mini/nano ids retire 2026-12-11 → gpt-5.6)
+    # GPT-5.0 family — only gpt-5-pro survives (no announced retirement).
+    # The bare gpt-5 / -mini / -nano tiers (retire 2026-12-11), the -chat /
+    # -codex ids (retired 2026-07-23), the whole o-series (o1 / o1-pro /
+    # o3-mini / o4-mini shut down 2026-10-23, o3 / o3-pro 2026-12-11), plus
+    # the already-retired gpt-4o / gpt-4.5 / o1-mini were all unpriced in the
+    # 2026-07 audit — retiring models are removed ahead of their shutdown
+    # date, so a pinned instruction running one gets no cost line.
     "gpt-5-pro":           (15.00, 120.00),
-    "gpt-5-mini":          (0.125, 1.00),
-    "gpt-5-nano":          (0.05, 0.40),
-    "gpt-5":               (0.625, 5.00),
     # GPT-4.1 family — still served (no announced API shutdown)
     "gpt-4.1-mini":        (0.20, 0.80),
     "gpt-4.1-nano":        (0.05, 0.20),
     "gpt-4.1":             (2.00, 8.00),
-    # o-series reasoning — hidden from the picker (all scheduled out:
-    # o1/o1-pro/o3-mini/o4-mini shut down 2026-10-23, o3/o3-pro 2026-12-11)
-    # but still billable for pinned instructions until then. gpt-4o, gpt-4.5,
-    # and o1-mini were dropped in the 2026-07 audit — already retired.
-    "o4-mini":             (1.10, 4.40),
-    "o3-pro":              (20.00, 80.00),
-    "o3-mini":             (1.10, 4.40),
-    "o3":                  (2.00, 8.00),
-    "o1-pro":              (150.00, 600.00),
-    "o1":                  (15.00, 60.00),
-    # Codex
+    # Codex (no announced retirement)
     "codex-mini":          (0.75, 3.00),
 }
 
@@ -2677,10 +2683,8 @@ GEMINI_PRICING = {
     "gemini-3-pro":        (2.00, 12.00),
     "gemini-3-flash":      (0.50, 3.00),
     "gemini-3":            (0.50, 3.00),
-    # Gemini 2.5 family
-    "gemini-2.5-flash-lite": (0.10, 0.40),
-    "gemini-2.5-flash":    (0.30, 2.50),
-    "gemini-2.5-pro":      (1.25, 10.00),
+    # Gemini 2.5 (sunset ≥ 2026-10-16) was unpriced in the 2026-07 audit —
+    # retiring models are removed ahead of their shutdown date.
 }
 # xAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output.

@@ -659,7 +659,9 @@ class GeminiMixin:
                     continue
                 if any(skip in mid for skip in GEMINI_NON_AGENTIC_SUBSTRINGS):
                     continue
-                if mid.startswith(("gemini-2.0-", "gemini-1.")):
+                # 2.0/1.x are shut down; 2.5 is scheduled for sunset
+                # (≥ 2026-10-16) and picker-hidden ahead of it (2026-07 audit)
+                if mid.startswith(("gemini-2.5", "gemini-2.0-", "gemini-1.")):
                     continue
                 model_ids.append(mid)
             model_ids.sort()
