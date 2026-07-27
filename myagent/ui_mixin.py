@@ -2,6 +2,7 @@ import tkinter as tk
 
 from myagent.constants import (
     MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
+    ANTHROPIC_DEPRECATED_MODEL_PREFIXES,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
     ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
@@ -178,6 +179,10 @@ class UIMixin:
             self._model_display_names = {}
             model_ids = []
             for m in response.data:
+                # Hide deprecated / retiring ids (2026-07 audit) — a pinned
+                # instruction can still run one; this only prunes the picker.
+                if m.id.startswith(ANTHROPIC_DEPRECATED_MODEL_PREFIXES):
+                    continue
                 self._model_display_names[m.id] = m.display_name
                 model_ids.append(m.id)
             return model_ids if model_ids else FALLBACK_MODELS
@@ -433,20 +438,21 @@ class UIMixin:
 
     def _anthropic_thinking_on_by_default(self, model_id=None):
         """True for Anthropic models that run ADAPTIVE thinking when the
-        `thinking` parameter is omitted — Sonnet 5+ (a silent change from
-        Sonnet 4.6, which ran thinking-off on omission) and the always-on
-        Mythos class. For these, "Off" must be sent as an explicit
-        thinking={"type": "disabled"} or the model silently thinks (and
-        bills thinking tokens) against the non-thinking max_tokens cap.
-        The always-on models never reach the off branch (their disable is
-        HTTP 400 and the UI drops "Off"), so in practice this steers the
-        Sonnet 5 family."""
+        `thinking` parameter is omitted — Opus 5+ and Sonnet 5+ (a silent
+        change from the 4.x generation, which ran thinking-off on omission)
+        and the always-on Mythos class. For these, "Off" must be sent as an
+        explicit thinking={"type": "disabled"} or the model silently thinks
+        (and bills thinking tokens) against the non-thinking max_tokens cap
+        with the Show Thinking pane dark. (Opus 5 accepts the explicit
+        disable only at effort high or below — satisfied here, since "Off"
+        never sends an effort.) The always-on models never reach the off
+        branch (their disable is HTTP 400 and the UI drops "Off")."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
-        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (5, 0)
 
     @staticmethod

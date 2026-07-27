@@ -866,6 +866,7 @@ else:
     ]
 
 FALLBACK_MODELS = [
+    "claude-opus-5",
     "claude-opus-4-8",
     "claude-fable-5",
     "claude-sonnet-5",
@@ -875,12 +876,10 @@ FALLBACK_MODELS = [
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
-# Models with lower max output token limits than MAX_TOKENS
-MODEL_MAX_OUTPUT_TOKENS = {
-    "claude-3-haiku-20240307": 4096,
-    "claude-3-opus-20240229": 4096,
-    "claude-3-sonnet-20240229": 4096,
-}
+# Models with lower max output token limits than MAX_TOKENS. Empty since the
+# 2026 retirements: the Claude 3 generation (the only 4K-cap models) is fully
+# retired. Kept as a dict because stream_worker .get()s it per call.
+MODEL_MAX_OUTPUT_TOKENS = {}
 # Deprecated / soon-to-be-retired model id prefixes hidden from the picker.
 # _fetch_available_models filters the live models.list() against these, so newer
 # models appear automatically and only the retiring ones drop out. Opus 4.5 /
@@ -899,6 +898,7 @@ DEPRECATED_MODEL_PREFIXES = (
 # Exact-match aliases for adaptive-thinking models; the version-parsed
 # _is_adaptive_model backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
 ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
+                            "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5", "claude-sonnet-4-6"}
 # Claude 5 Mythos-class (Fable 5 / Mythos 5): thinking is ALWAYS ON — the API
@@ -1673,14 +1673,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return version is not None and version >= (4, 6)
 
     def _thinking_on_by_default(self, model_id=None):
-        """Models that run ADAPTIVE thinking when `thinking` is omitted — Sonnet
-        5+ and the always-on class. For these, "Off" must be sent as an explicit
-        thinking={"type": "disabled"} or the model silently thinks against the
-        non-thinking max_tokens cap."""
+        """Models that run ADAPTIVE thinking when `thinking` is omitted — Opus
+        5+, Sonnet 5+, and the always-on class. For these, "Off" must be sent as
+        an explicit thinking={"type": "disabled"} or the model silently thinks
+        against the non-thinking max_tokens cap. (Opus 5 accepts the explicit
+        disable only at effort high or below — satisfied, "Off" sends no
+        effort.)"""
         mid = model_id or self.model or ""
         if self._is_always_on_thinking(mid):
             return True
-        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (5, 0)
 
     def _rejects_temperature(self, model_id=None):

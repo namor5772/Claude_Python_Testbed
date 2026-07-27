@@ -1225,6 +1225,7 @@ else:
 # ── Constants ─────────────��─────────────────────────────────────────────────
 
 FALLBACK_MODELS = [
+    "claude-opus-5",
     "claude-opus-4-8",
     "claude-fable-5",
     "claude-sonnet-5",
@@ -1234,13 +1235,31 @@ FALLBACK_MODELS = [
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
-# Models with lower max output token limits than MAX_TOKENS
-MODEL_MAX_OUTPUT_TOKENS = {
-    "claude-3-haiku-20240307": 4096,
-    "claude-3-opus-20240229": 4096,
-    "claude-3-sonnet-20240229": 4096,
-}
+# Models with lower max output token limits than MAX_TOKENS. Empty since the
+# 2026 retirements: the Claude 3 generation (the only 4K-cap models) is fully
+# retired (claude-3-sonnet 2025-07, claude-3-opus 2026-01, claude-3-haiku
+# 2026-04-19). Kept as a dict because the streaming paths .get() it per call —
+# repopulate if a low-cap model ever ships again.
+MODEL_MAX_OUTPUT_TOKENS = {}
+# Deprecated / soon-to-be-retired Anthropic id prefixes hidden from the model
+# picker (2026-07 audit; same filter SelfBot has carried). _fetch_available_models
+# drops live models.list() entries matching these, so new models appear
+# automatically and only retiring ones fall out. Opus/Sonnet/Haiku 4.5 stay —
+# still active. The dated 4.0 ids are claude-(opus|sonnet)-4-20250514, matched
+# by the "-4-20" prefix (a real "-4-20" minor is implausible — minors run
+# 5, 6, 7, 8…). A pinned instruction can still RUN a hidden id until Anthropic
+# actually shuts it down; this only removes them from the picker.
+ANTHROPIC_DEPRECATED_MODEL_PREFIXES = (
+    "claude-opus-4-1",       # Opus 4.1 — deprecated, retires 2026-08-05
+    "claude-opus-4-0",       # Opus 4.0 alias — retired 2026-06-15
+    "claude-opus-4-20",      # Opus 4.0 dated id (claude-opus-4-20250514)
+    "claude-sonnet-4-0",     # Sonnet 4.0 alias — retired 2026-06-15
+    "claude-sonnet-4-20",    # Sonnet 4.0 dated id (claude-sonnet-4-20250514)
+    "claude-3",              # every Claude 3.x — fully retired (last 2026-04-19)
+    "claude-2",              # Claude 2.x — retired
+)
 ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
+                            "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5", "claude-sonnet-4-6"}
 # Claude 5 Mythos-class models (Fable 5 / Mythos 5): thinking is ALWAYS ON.
@@ -1260,14 +1279,30 @@ EFFORT_LEVELS = ["low", "medium", "high", "max"]
 # builds the real per-model list (drops "Off" for always-on models, gates Xhigh/Max).
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
-OPENAI_FALLBACK_MODELS = ["gpt-5.4", "gpt-5.5", "gpt-5.4-mini", "gpt-4.1", "o4-mini"]
+# GPT-5.6 (2026-07-09) ships as three durable capability tiers: sol
+# (flagship, $5/$30), terra (balanced everyday, $2.50/$15 — the price point
+# of the previous gpt-5.4 default), luna (fast/cheap, $1/$6). Terra default.
+OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
+                          "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
+# o-series prefixes stay HERE (params wiring) even though the picker no longer
+# lists them — a saved instruction pinning o3 etc. keeps correct reasoning
+# params until the actual API shutdowns (see OPENAI_RESPONSES_PREFIXES).
 OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
-# Model families that support the Responses API (gpt-3.5, gpt-4 base/turbo do not)
-OPENAI_RESPONSES_PREFIXES = ("gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-5",
-                             "o1", "o3", "o4")
+# Model families that support the Responses API AND are still worth offering.
+# 2026-07 audit: gpt-4.5 left the API 2025-07; gpt-4o retired 2026-02-16; the
+# entire o-series is scheduled out (o1 / o1-pro / o3-mini / o4-mini shut down
+# 2026-10-23, o3 / o3-pro 2026-12-11 — all replaced by gpt-5.6) so it is
+# dropped from the picker. gpt-3.5 / gpt-4 base / gpt-4-turbo never supported
+# the Responses API and retire 2026-10-23 anyway.
+OPENAI_RESPONSES_PREFIXES = ("gpt-4.1", "gpt-5")
+# Gemini 2.5 is scheduled for shutdown (no earlier than 2026-10-16; Google
+# will give 6 months' notice once Gemini 3 is GA) and is replaced by the 3.x
+# tiers, so the fallback list carries only current 3.x models. The live fetch
+# still serves 2.5 ids until Google pulls them, and the 2.5 thinking_budget
+# wiring + pricing stay for pinned instructions.
 GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-pro-preview",
-                          "gemini-2.5-flash", "gemini-2.5-pro"]
+                          "gemini-3.1-flash-lite"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 # Models that support thinking via ThinkingConfig. EVERY current Gemini text
 # tier is thinking-capable, including Flash-Lite (2.5-flash-lite ships thinking
@@ -2538,9 +2573,14 @@ PROTON_CONFIRM_TOOLS = [
 # Prefixes are matched longest-first against model names.
 ANTHROPIC_PRICING = {
     # (input, output, 5min_cache_write, cache_read) per million tokens
+    # Retired generations (Claude 2.x/3.x/3.5, Opus 4.0/4.1, Sonnet 4.0) were
+    # dropped in the 2026-07 audit — the API rejects their ids, so they can
+    # never bill (Opus 4.1 lingers until 2026-08-05 but is picker-hidden).
     # Claude 5 family (Mythos-class tier above Opus)
     "claude-fable-5":      (10.00, 50.00, 12.50, 1.00),
     "claude-mythos-5":     (10.00, 50.00, 12.50, 1.00),
+    # Opus 5 — drop-in successor to Opus 4.8 at the same rates
+    "claude-opus-5":       (5.00, 25.00, 6.25, 0.50),
     # Claude 4.5+ family (new lower pricing)
     "claude-opus-4-8":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-7":     (5.00, 25.00, 6.25, 0.50),
@@ -2552,18 +2592,8 @@ ANTHROPIC_PRICING = {
     "claude-sonnet-5":     (2.00, 10.00, 2.50, 0.20),
     "claude-sonnet-4-6":   (3.00, 15.00, 3.75, 0.30),
     "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
-    # Claude 4.0/4.1 family (original pricing)
-    "claude-opus-4-1":     (15.00, 75.00, 18.75, 1.50),
-    "claude-opus-4":       (15.00, 75.00, 18.75, 1.50),
-    "claude-sonnet-4":     (3.00, 15.00, 3.75, 0.30),
-    # Claude 3.5 / Haiku 4.5
+    # Haiku 4.5 (prefix also covers the dated claude-haiku-4-5-20251001 id)
     "claude-haiku-4":      (1.00, 5.00, 1.25, 0.10),
-    "claude-3-5-sonnet":   (3.00, 15.00, 3.75, 0.30),
-    "claude-3-5-haiku":    (0.80, 4.00, 1.00, 0.08),
-    # Claude 3 family
-    "claude-3-opus":       (15.00, 75.00, 18.75, 1.50),
-    "claude-3-sonnet":     (3.00, 15.00, 3.75, 0.30),
-    "claude-3-haiku":      (0.25, 1.25, 0.30, 0.03),
 }
 
 # OpenAI API pricing (USD per million tokens)
@@ -2593,35 +2623,31 @@ OPENAI_PRICING = {
     "gpt-5.2-chat":        (1.75, 14.00),
     "gpt-5.2-codex":       (1.75, 14.00),
     "gpt-5.2":             (0.875, 7.00),
-    # GPT-5.1 family
+    # GPT-5.1 family (gpt-5.1-chat-latest and bare gpt-5.1-codex retired
+    # 2026-07-23 → gpt-5.6-sol; the surviving -codex-max/-codex-mini ids
+    # keep their own entries)
     "gpt-5.1-codex-mini":  (0.25, 2.00),
     "gpt-5.1-codex-max":   (1.25, 10.00),
-    "gpt-5.1-codex":       (1.25, 10.00),
-    "gpt-5.1-chat":        (0.625, 5.00),
     "gpt-5.1":             (0.625, 5.00),
-    # GPT-5.0 family
+    # GPT-5.0 family (gpt-5-chat-latest / gpt-5-codex retired 2026-07-23;
+    # the dated base/mini/nano ids retire 2026-12-11 → gpt-5.6)
     "gpt-5-pro":           (15.00, 120.00),
-    "gpt-5-codex":         (1.25, 10.00),
-    "gpt-5-chat":          (1.25, 10.00),
     "gpt-5-mini":          (0.125, 1.00),
     "gpt-5-nano":          (0.05, 0.40),
     "gpt-5":               (0.625, 5.00),
-    # GPT-4.1 family
+    # GPT-4.1 family — still served (no announced API shutdown)
     "gpt-4.1-mini":        (0.20, 0.80),
     "gpt-4.1-nano":        (0.05, 0.20),
     "gpt-4.1":             (2.00, 8.00),
-    # GPT-4o family
-    "gpt-4o-mini":         (0.15, 0.60),
-    "gpt-4o":              (2.50, 10.00),
-    # GPT-4.5
-    "gpt-4.5":             (75.00, 150.00),
-    # o-series reasoning
+    # o-series reasoning — hidden from the picker (all scheduled out:
+    # o1/o1-pro/o3-mini/o4-mini shut down 2026-10-23, o3/o3-pro 2026-12-11)
+    # but still billable for pinned instructions until then. gpt-4o, gpt-4.5,
+    # and o1-mini were dropped in the 2026-07 audit — already retired.
     "o4-mini":             (1.10, 4.40),
     "o3-pro":              (20.00, 80.00),
     "o3-mini":             (1.10, 4.40),
     "o3":                  (2.00, 8.00),
     "o1-pro":              (150.00, 600.00),
-    "o1-mini":             (0.55, 2.20),
     "o1":                  (15.00, 60.00),
     # Codex
     "codex-mini":          (0.75, 3.00),

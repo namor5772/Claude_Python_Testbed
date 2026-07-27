@@ -46,13 +46,15 @@ class AnthropicMixin:
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
             api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-            # Sonnet 5+ runs ADAPTIVE thinking when the param is omitted (a
-            # silent change from 4.6-era models, which ran thinking-off on
-            # omission) — "Off" must be an explicit disable there, or the model
-            # silently thinks against the non-thinking max_tokens cap with the
-            # Show Thinking pane dark. Explicit disabled is accepted on the
-            # whole 4.6+/5 Sonnet-Opus range; the always-on Fable/Mythos models
-            # (where it is HTTP 400) never reach this branch.
+            # Opus 5+ and Sonnet 5+ run ADAPTIVE thinking when the param is
+            # omitted (a silent change from 4.x-era models, which ran
+            # thinking-off on omission) — "Off" must be an explicit disable
+            # there, or the model silently thinks against the non-thinking
+            # max_tokens cap with the Show Thinking pane dark. Explicit
+            # disabled is accepted on the whole 4.6+/5 Sonnet-Opus range
+            # (Opus 5 only at effort ≤ high — satisfied, as "Off" sends no
+            # effort); the always-on Fable/Mythos models (where it is HTTP
+            # 400) never reach this branch.
             if self._anthropic_thinking_on_by_default():
                 api_kwargs["thinking"] = {"type": "disabled"}
             # Opus 4.7+, Sonnet 5+, and Fable/Mythos 5 removed temperature/top_p/

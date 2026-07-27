@@ -20,6 +20,8 @@ EXPECTED = {
                                    ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-mythos-5":            (True,  True,  True,  True,  True,
                                    ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-opus-5":              (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-opus-4-8":            (False, True,  True,  True,  True,
                                    ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-opus-4-7":            (False, True,  True,  True,  True,
@@ -48,6 +50,9 @@ EXPECTED = {
 THINKING_DEFAULT_ON = {
     "claude-fable-5": True,
     "claude-mythos-5": True,
+    # Opus 5 runs adaptive thinking on omission (unlike Opus 4.8/4.7) — the
+    # off branch must send an explicit disable (2026-07 audit fix).
+    "claude-opus-5": True,
     "claude-sonnet-5": True,
     "claude-sonnet-5-20260601": True,
     "claude-sonnet-4-6": False,

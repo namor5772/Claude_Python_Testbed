@@ -28,9 +28,22 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-sonnet-5"): {
             "input": 2e-06, "output": 1e-05,
             "cache_write": 2.5e-06, "cache_read": 2.0000000000000002e-07},
+        # Opus 5 — drop-in successor to Opus 4.8 at the same rates
+        ("Anthropic", "claude-opus-5"): {
+            "input": 5e-06, "output": 2.5e-05,
+            "cache_write": 6.25e-06, "cache_read": 5e-07},
+        # Retired generations were dropped from the table (2026-07 audit)
+        ("Anthropic", "claude-3-haiku-20240307"): None,
+        ("Anthropic", "claude-opus-4-1"): None,
         ("Anthropic", "totally-unknown-xyz"): None,
+        # GPT-5.6 tiers (2026-07-09); the tier ids must NOT prefix-match down
+        # to the bare "gpt-5.6" fallback entry
+        ("OpenAI", "gpt-5.6-sol"): {"input": 5e-06, "output": 3e-05},
+        ("OpenAI", "gpt-5.6-terra"): {"input": 2.5e-06, "output": 1.5e-05},
+        ("OpenAI", "gpt-5.6-luna"): {"input": 1e-06, "output": 6e-06},
         ("OpenAI", "gpt-5.2"): {"input": 8.75e-07, "output": 7e-06},
-        ("OpenAI", "gpt-4o"): {"input": 2.5e-06, "output": 1e-05},
+        # gpt-4o retired from the API 2026-02-16 — unpriced since the audit
+        ("OpenAI", "gpt-4o"): None,
         # gpt-5.5 must NOT prefix-match down to the cheap bare "gpt-5" entry
         ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05},
         ("OpenAI", "gpt-5.5-pro"): {"input": 3e-05, "output": 0.00018},
