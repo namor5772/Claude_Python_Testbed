@@ -7,7 +7,70 @@ from myagent.helpers import parse_overflow_counts, trim_history_for_context
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
+_CACHE_CONTROL = {"type": "ephemeral"}
+
+
 class AnthropicMixin:
+
+    @staticmethod
+    def _anthropic_cache_system(system_text):
+        """System prompt as a single cached text block.
+
+        Anthropic builds the cache prefix in the order tools → system →
+        messages, and a breakpoint caches EVERYTHING before it — so this one
+        marker covers the whole static header: every tool schema (the full
+        TOOLS/FILE/DESKTOP/BROWSER/MCP/mail catalog) plus the built system
+        prompt. Written once at 1.25x, read at 0.10x on every later turn.
+
+        An empty prompt stays a bare string: a text block with "" is a 400.
+        """
+        if not system_text:
+            return system_text
+        return [{"type": "text", "text": system_text, "cache_control": dict(_CACHE_CONTROL)}]
+
+    @staticmethod
+    def _anthropic_cache_messages(messages, max_breakpoints=2):
+        """Copy `messages` with rolling cache breakpoints on the newest turns.
+
+        Two rolling markers (plus the static system one) stay under Anthropic's
+        4-breakpoint ceiling. Turn N writes a cache ending at its last message;
+        turn N+1 matches that prefix and reads it at 0.10x, then writes its own.
+        The second, older marker is the safety net — if the newest write hasn't
+        landed or has aged past the 5-minute TTL, the previous turn's prefix is
+        still a hit instead of a full-price re-read of the whole conversation.
+
+        NEVER mutates history: only the messages that receive a breakpoint are
+        shallow-copied. `messages` stays the plain list stream_worker appends to
+        and that the context-overflow handler trims in place — and because the
+        caller rebuilds this per attempt, a trim is reflected on the retry.
+
+        Assistant turns hold SDK block objects (streaming_mixin appends
+        `final_message.content` verbatim), not dicts, so they are skipped; the
+        eligible messages are the user turns carrying tool_result dicts, which
+        are the natural turn boundaries anyway.
+        """
+        wire = list(messages)
+        placed = 0
+        for i in range(len(wire) - 1, -1, -1):
+            if placed >= max_breakpoints:
+                break
+            msg = wire[i]
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                if not content:
+                    continue
+                blocks = [{"type": "text", "text": content,
+                           "cache_control": dict(_CACHE_CONTROL)}]
+            elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                blocks = list(content)
+                blocks[-1] = {**blocks[-1], "cache_control": dict(_CACHE_CONTROL)}
+            else:
+                continue
+            wire[i] = {**msg, "content": blocks}
+            placed += 1
+        return wire
 
     def _stream_anthropic_call(self, messages, max_retries, label_emitted):
         """Execute one Anthropic API call with streaming and retry logic.
@@ -21,8 +84,8 @@ class AnthropicMixin:
         tools.append({"type": "code_execution_20250825", "name": "code_execution"})
         api_kwargs = {
             "model": self.model,
-            "system": self._build_system_prompt(),
-            "messages": messages,
+            "system": self._anthropic_cache_system(self._build_system_prompt()),
+            "messages": messages,  # replaced per attempt with the breakpointed copy
             "tools": tools,
         }
         model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
@@ -65,6 +128,12 @@ class AnthropicMixin:
                 api_kwargs["temperature"] = self.temperature
 
         for attempt in range(max_retries):
+            # Rebuilt every attempt, not once before the loop: the retry paths
+            # below mutate `messages` in place (the context-overflow trim), so
+            # the wire copy has to be re-derived or the retry would resend the
+            # pre-trim history — and the rolling breakpoints need to sit on the
+            # post-trim tail anyway.
+            api_kwargs["messages"] = self._anthropic_cache_messages(messages)
             try:
                 with self.client.beta.messages.stream(
                         betas=["web-search-2025-03-05", "code-execution-2025-08-25", "files-api-2025-04-14"],
@@ -168,8 +237,11 @@ class AnthropicMixin:
                 # N tokens > M maximum"). Resending the same history can't fix it,
                 # so compact instead: drop the oldest conversation rounds (never
                 # orphaning a tool_use/tool_result pair) and retry with the same
-                # in-place list — api_kwargs["messages"] IS `messages`, so the
-                # trim persists into stream_worker's ongoing loop. Same sliding-
+                # in-place list — the trim hits `messages` itself, so it both
+                # persists into stream_worker's ongoing loop and is picked up by
+                # the next attempt's `_anthropic_cache_messages` rebuild at the
+                # top of the retry loop (which is why that rebuild lives inside
+                # the loop and not above it). Same sliding-
                 # window recovery SelfBot uses for endless duo chats; here it lets
                 # a long coding/agent run keep going instead of dying mid-task.
                 if "prompt is too long" in msg or ("too long" in msg and "maximum" in msg):
