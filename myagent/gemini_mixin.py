@@ -12,6 +12,50 @@ from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 class GeminiMixin:
 
+    @staticmethod
+    def _gemini_usage_dict(um):
+        """Normalize a usage_metadata object into stream_worker's buckets.
+
+        Two corrections, both verified live 2026-07-31 against gemini-3.5-flash
+        (prompt=15009, candidates=1, thoughts=133, cached=8174, total=15143):
+
+        1. IMPLICIT caching is automatic on the current tiers — no client opt-in,
+           unlike Anthropic — and reports as cached_content_token_count, a SUBSET
+           of prompt_token_count. stream_worker prices input at the full rate AND
+           cache_read at the cached rate, so the raw overlapping totals would
+           double-charge every cached token. Note the hit only appears above the
+           model's implicit-cache floor (4,096 tokens on the Gemini 3 tiers), so
+           a zero here is normal on short prompts, not a broken probe.
+        2. thoughts_token_count is its OWN bucket, NOT part of
+           candidates_token_count — the totals above only add up if you count it
+           separately. Thinking tokens bill at the OUTPUT rate, so reading only
+           candidates under-reported every thinking-enabled run.
+
+        Returns None when there is nothing to report. Dict fallbacks cover
+        looser SDK shapes.
+        """
+        if not um:
+            return None
+
+        def _field(*names):
+            for name in names:
+                val = (getattr(um, name, None)
+                       or (um.get(name) if isinstance(um, dict) else None))
+                if val:
+                    return val
+            return 0
+
+        inp = _field("prompt_token_count", "input_tokens")
+        out = _field("candidates_token_count", "output_tokens")
+        cached = _field("cached_content_token_count")
+        thoughts = _field("thoughts_token_count")
+        cached = min(cached, inp)  # never let a bad report go negative
+        if not (inp or out or thoughts):
+            return None
+        return {"input_tokens": inp - cached,
+                "output_tokens": out + thoughts,
+                "cache_read_input_tokens": cached}
+
     # Gemini uses pixel coordinates from the screenshot image (same convention
     # as Anthropic and OpenAI). The previous [0, 1000] normalised system forced
     # the model to mentally convert pixel-space visual perception into [0, 1000]
@@ -430,19 +474,10 @@ class GeminiMixin:
                 # Extract usage from last streaming chunk
                 # Try last chunk first, then fall back to iterating all chunks
                 for source in ([last_chunk] if last_chunk else []):
-                    um = getattr(source, "usage_metadata", None)
-                    if um:
-                        inp = (getattr(um, "prompt_token_count", None)
-                               or getattr(um, "input_tokens", None)
-                               or (um.get("prompt_token_count") if isinstance(um, dict) else None)
-                               or 0)
-                        out = (getattr(um, "candidates_token_count", None)
-                               or getattr(um, "output_tokens", None)
-                               or (um.get("candidates_token_count") if isinstance(um, dict) else None)
-                               or 0)
-                        if inp or out:
-                            usage_dict = {"input_tokens": inp, "output_tokens": out}
-                            break
+                    usage_dict = self._gemini_usage_dict(
+                        getattr(source, "usage_metadata", None))
+                    if usage_dict:
+                        break
                 break  # success
             except Exception as e:
                 err_str = str(e)

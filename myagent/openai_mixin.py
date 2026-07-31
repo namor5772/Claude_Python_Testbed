@@ -17,6 +17,44 @@ from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 class OpenAIMixin:
 
+    @staticmethod
+    def _openai_usage_dict(usage):
+        """Normalize a Responses-API usage object into stream_worker's buckets.
+
+        OpenAI caches AUTOMATICALLY above ~1024 tokens — no client opt-in, so
+        unlike Anthropic (see anthropic_mixin's cache_control block) there was
+        never a discount to switch on, only one to report.
+
+        The subtraction is the load-bearing part: OpenAI reports the hit under
+        input_tokens_details.cached_tokens as a SUBSET of input_tokens, whereas
+        Anthropic's buckets are disjoint. stream_worker prices input at the full
+        rate AND cache_read at the cached rate, so handing it the raw
+        overlapping totals would double-charge every cached token. Verified live
+        2026-07-31: input_tokens=2714 with cached_tokens=2711 inside it.
+
+        `cache_write_tokens` is also reported but deliberately ignored — OpenAI
+        does not bill for cache writes (no such column on the pricing page),
+        unlike Anthropic's 1.25x write.
+
+        Returns None when there is no usage to report. Dict fallbacks cover
+        older/looser SDK shapes.
+        """
+        if not usage:
+            return None
+        total_in = getattr(usage, "input_tokens", 0) or 0
+        details = getattr(usage, "input_tokens_details", None)
+        cached = 0
+        if details is not None:
+            cached = (getattr(details, "cached_tokens", None)
+                      or (details.get("cached_tokens") if isinstance(details, dict) else None)
+                      or 0)
+        cached = min(cached, total_in)  # never let a bad report go negative
+        return {
+            "input_tokens": total_in - cached,
+            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+            "cache_read_input_tokens": cached,
+        }
+
     def _stream_responses(self, api_kwargs, label_emitted):
         """Stream an OpenAI Responses API call, accumulating text and tool calls.
         Returns (full_text, stop_reason, content_blocks, had_thinking, label_emitted)."""
@@ -165,12 +203,7 @@ class OpenAIMixin:
         usage_dict = None
         try:
             final_resp = stream.get_final_response()
-            usage = getattr(final_resp, "usage", None)
-            if usage:
-                usage_dict = {
-                    "input_tokens": getattr(usage, "input_tokens", 0) or 0,
-                    "output_tokens": getattr(usage, "output_tokens", 0) or 0,
-                }
+            usage_dict = self._openai_usage_dict(getattr(final_resp, "usage", None))
         except Exception:
             pass
 

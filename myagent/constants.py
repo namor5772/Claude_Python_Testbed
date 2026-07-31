@@ -2652,34 +2652,46 @@ ANTHROPIC_PRICING = {
 # Reasoning/thinking tokens are billed at output rate.
 # Prefix-matched longest-first, same as Anthropic.
 OPENAI_PRICING = {
-    # GPT-5.6 family  (input, output)
-    "gpt-5.6-sol":         (5.00, 30.00),
-    "gpt-5.6-terra":       (2.50, 15.00),
-    "gpt-5.6-luna":        (1.00, 6.00),
-    "gpt-5.6":             (5.00, 30.00),
+    # (input, output, cached_input) per million tokens. OpenAI caches
+    # AUTOMATICALLY above ~1024 tokens — no client opt-in (unlike Anthropic,
+    # see anthropic_mixin's cache_control block) — so the discount was always
+    # being applied to the BILL; before 2026-07-31 it just wasn't reflected
+    # here, which overstated every OpenAI line in APICostLog.txt. The cached
+    # rate is 1/10 of input across the GPT-5 families and 1/4 on GPT-4.1;
+    # `None` means the model has no cached tier at all (the -pro tiers).
+    # Base rates re-verified against the live Standard-tier table 2026-07-31
+    # (developers.openai.com/api/docs/pricing) — eight entries were WRONG:
+    # gpt-5.2, gpt-5.2-pro, gpt-5.1, gpt-4.1-mini, gpt-4.1-nano and codex-mini
+    # sat at exactly HALF the standard rate (Batch-tier numbers), gpt-5.6-terra
+    # carried gpt-5.4's numbers, and gpt-5.6-luna was 5x too high.
+    # GPT-5.6 family
+    "gpt-5.6-sol":         (5.00, 30.00, 0.50),
+    "gpt-5.6-terra":       (2.00, 12.00, 0.20),
+    "gpt-5.6-luna":        (0.20, 1.20, 0.02),
+    "gpt-5.6":             (5.00, 30.00, 0.50),
     # GPT-5.5 family
-    "gpt-5.5-pro":         (30.00, 180.00),
-    "gpt-5.5":             (5.00, 30.00),
+    "gpt-5.5-pro":         (30.00, 180.00, None),
+    "gpt-5.5":             (5.00, 30.00, 0.50),
     # GPT-5.4 family
-    "gpt-5.4-pro":         (30.00, 180.00),
-    "gpt-5.4-mini":        (0.75, 4.50),
-    "gpt-5.4-nano":        (0.20, 1.25),
-    "gpt-5.4":             (2.50, 15.00),
+    "gpt-5.4-pro":         (30.00, 180.00, None),
+    "gpt-5.4-mini":        (0.75, 4.50, 0.075),
+    "gpt-5.4-nano":        (0.20, 1.25, 0.02),
+    "gpt-5.4":             (2.50, 15.00, 0.25),
     # GPT-5.3 family
-    "gpt-5.3-chat":        (1.75, 14.00),
-    "gpt-5.3-codex":       (1.75, 14.00),
-    "gpt-5.3":             (1.75, 14.00),
+    "gpt-5.3-chat":        (1.75, 14.00, 0.175),
+    "gpt-5.3-codex":       (1.75, 14.00, 0.175),
+    "gpt-5.3":             (1.75, 14.00, 0.175),
     # GPT-5.2 family
-    "gpt-5.2-pro":         (10.50, 84.00),
-    "gpt-5.2-chat":        (1.75, 14.00),
-    "gpt-5.2-codex":       (1.75, 14.00),
-    "gpt-5.2":             (0.875, 7.00),
+    "gpt-5.2-pro":         (21.00, 168.00, None),
+    "gpt-5.2-chat":        (1.75, 14.00, 0.175),
+    "gpt-5.2-codex":       (1.75, 14.00, 0.175),
+    "gpt-5.2":             (1.75, 14.00, 0.175),
     # GPT-5.1 family (gpt-5.1-chat-latest and bare gpt-5.1-codex retired
     # 2026-07-23 → gpt-5.6-sol; the surviving -codex-max/-codex-mini ids
     # keep their own entries)
-    "gpt-5.1-codex-mini":  (0.25, 2.00),
-    "gpt-5.1-codex-max":   (1.25, 10.00),
-    "gpt-5.1":             (0.625, 5.00),
+    "gpt-5.1-codex-mini":  (0.25, 2.00, 0.025),
+    "gpt-5.1-codex-max":   (1.25, 10.00, 0.125),
+    "gpt-5.1":             (1.25, 10.00, 0.125),
     # GPT-5.0 family — only gpt-5-pro survives (no announced retirement).
     # The bare gpt-5 / -mini / -nano tiers (retire 2026-12-11), the -chat /
     # -codex ids (retired 2026-07-23), the whole o-series (o1 / o1-pro /
@@ -2687,39 +2699,54 @@ OPENAI_PRICING = {
     # the already-retired gpt-4o / gpt-4.5 / o1-mini were all unpriced in the
     # 2026-07 audit — retiring models are removed ahead of their shutdown
     # date, so a pinned instruction running one gets no cost line.
-    "gpt-5-pro":           (15.00, 120.00),
-    # GPT-4.1 family — still served (no announced API shutdown)
-    "gpt-4.1-mini":        (0.20, 0.80),
-    "gpt-4.1-nano":        (0.05, 0.20),
-    "gpt-4.1":             (2.00, 8.00),
-    # Codex (no announced retirement)
-    "codex-mini":          (0.75, 3.00),
+    "gpt-5-pro":           (15.00, 120.00, None),
+    # GPT-4.1 family — still served (no announced API shutdown). Note the
+    # cached discount here is 1/4, not the GPT-5 families' 1/10.
+    "gpt-4.1-mini":        (0.40, 1.60, 0.10),
+    "gpt-4.1-nano":        (0.10, 0.40, 0.025),
+    "gpt-4.1":             (2.00, 8.00, 0.50),
+    # Codex (no announced retirement) — listed as codex-mini-latest
+    "codex-mini":          (1.50, 6.00, 0.375),
 }
 
 # Gemini API pricing (USD per million tokens)
-# Each entry: (input_price, output_price)
+# Each entry: (input_price, output_price, cached_input_price)
 # Note: Gemini has a free tier (under rate limits) — these are paid-tier prices.
+# Gemini's IMPLICIT caching is automatic — no client opt-in — so the discount
+# was always hitting the bill; before 2026-07-31 it just wasn't reflected here,
+# which overstated every Google line in APICostLog.txt. Verified against the
+# live table 2026-07-31 (ai.google.dev/gemini-api/docs/pricing): the cached
+# rate is exactly 1/10 of input across the whole Gemini 3 family.
+# (Context-cache STORAGE, $1.00/M tokens/hour, is not modelled — it applies to
+# EXPLICIT CachedContent objects, which MyAgent never creates.)
 GEMINI_PRICING = {
     # Floating "-latest" aliases that models.list() returns. The version sits
     # AFTER the tier word (gemini-pro-latest, not gemini-3.1-pro), so none of the
     # version-pinned prefixes below match them — without explicit entries they
     # get no cost line. Priced at the model each alias resolves to (verified
     # live via response.model_version, 2026-07); revisit when the aliases move.
-    "gemini-pro-latest":        (2.00, 12.00),  # -> gemini-3.1-pro-preview
-    "gemini-flash-latest":      (1.50, 9.00),   # -> gemini-3.5-flash
-    "gemini-flash-lite-latest": (0.25, 1.50),   # -> gemini-3.1-flash-lite
-    # Gemini 3.5 family
-    "gemini-3.5-flash":    (1.50, 9.00),
-    # Gemini 3.1 family  (input, output per million tokens; 3.1-pro doubles
-    # input above 200k tokens — the table keeps the ≤200k tier, matching the
-    # 2.5-pro entry's convention)
-    "gemini-3.1-flash-lite": (0.25, 1.50),
-    "gemini-3.1-pro":      (2.00, 12.00),
+    # NOTE: gemini-3.6-flash shipped since that check and gemini-flash-latest
+    # may now resolve to it ($7.50 output, not $9.00) — re-verify the target
+    # before trusting a gemini-flash-latest cost line.
+    "gemini-pro-latest":        (2.00, 12.00, 0.20),  # -> gemini-3.1-pro-preview
+    "gemini-flash-latest":      (1.50, 9.00, 0.15),   # -> gemini-3.5-flash
+    "gemini-flash-lite-latest": (0.25, 1.50, 0.025),  # -> gemini-3.1-flash-lite
+    # Gemini 3.6 family (added 2026-07-31 — the bare "gemini-3" fallback was
+    # pricing it at $0.50/$3.00, well under its real rate)
+    "gemini-3.6-flash":    (1.50, 7.50, 0.15),
+    # Gemini 3.5 family (-lite is a LONGER prefix, so it must be listed for
+    # gemini-3.5-flash-lite not to match the pricier gemini-3.5-flash entry)
+    "gemini-3.5-flash-lite": (0.30, 2.50, 0.03),
+    "gemini-3.5-flash":    (1.50, 9.00, 0.15),
+    # Gemini 3.1 family  (3.1-pro doubles input above 200k tokens — the table
+    # keeps the ≤200k tier, matching the 2.5-pro entry's convention)
+    "gemini-3.1-flash-lite": (0.25, 1.50, 0.025),
+    "gemini-3.1-pro":      (2.00, 12.00, 0.20),
     # Gemini 3 family
-    "gemini-3-pro-image":  (2.00, 12.00),
-    "gemini-3-pro":        (2.00, 12.00),
-    "gemini-3-flash":      (0.50, 3.00),
-    "gemini-3":            (0.50, 3.00),
+    "gemini-3-pro-image":  (2.00, 12.00, 0.20),
+    "gemini-3-pro":        (2.00, 12.00, 0.20),
+    "gemini-3-flash":      (0.50, 3.00, 0.05),
+    "gemini-3":            (0.50, 3.00, 0.05),
     # Gemini 2.5 (sunset ≥ 2026-10-16) was unpriced in the 2026-07 audit —
     # retiring models are removed ahead of their shutdown date.
 }

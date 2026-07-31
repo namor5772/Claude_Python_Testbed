@@ -36,14 +36,38 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-3-haiku-20240307"): None,
         ("Anthropic", "claude-opus-4-1"): None,
         ("Anthropic", "totally-unknown-xyz"): None,
+        # OpenAI/Gemini gained a cache_read key on 2026-07-31 (their caching is
+        # automatic, so the discount was always billed — it just wasn't
+        # reported). Rates re-verified against the live Standard-tier tables
+        # the same day; several base rates were Batch-tier numbers.
         # GPT-5.6 tiers (2026-07-09); the tier ids must NOT prefix-match down
         # to the bare "gpt-5.6" fallback entry
-        ("OpenAI", "gpt-5.6-sol"): {"input": 5e-06, "output": 3e-05},
-        ("OpenAI", "gpt-5.6-terra"): {"input": 2.5e-06, "output": 1.5e-05},
-        ("OpenAI", "gpt-5.6-luna"): {"input": 1e-06, "output": 6e-06},
-        ("OpenAI", "gpt-5.2"): {"input": 8.75e-07, "output": 7e-06},
-        ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05},
+        ("OpenAI", "gpt-5.6-sol"): {"input": 5e-06, "output": 3e-05,
+                                    "cache_read": 5e-07},
+        # Arithmetic form (like the Kimi cases below) wherever the naive
+        # literal would miss the live float-division repr — see the docstring.
+        ("OpenAI", "gpt-5.6-terra"): {"input": 2.00 / 1_000_000,
+                                      "output": 12.00 / 1_000_000,
+                                      "cache_read": 0.20 / 1_000_000},
+        ("OpenAI", "gpt-5.6-luna"): {"input": 0.20 / 1_000_000,
+                                     "output": 1.20 / 1_000_000,
+                                     "cache_read": 0.02 / 1_000_000},
+        ("OpenAI", "gpt-5.2"): {"input": 1.75e-06, "output": 1.4e-05,
+                                "cache_read": 1.75e-07},
+        ("OpenAI", "gpt-5.1"): {"input": 1.25e-06, "output": 1e-05,
+                                "cache_read": 1.25e-07},
+        ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05,
+                                "cache_read": 5e-07},
+        # GPT-4.1 discounts cached input by 1/4, not the GPT-5 families' 1/10
+        ("OpenAI", "gpt-4.1"): {"input": 2e-06, "output": 8e-06,
+                                "cache_read": 5e-07},
+        ("OpenAI", "gpt-4.1-mini"): {"input": 0.40 / 1_000_000,
+                                     "output": 1.60 / 1_000_000,
+                                     "cache_read": 0.10 / 1_000_000},
+        # The -pro tiers have NO cached tier — the key must be absent entirely,
+        # not present as 0 (which would silently price cached tokens free)
         ("OpenAI", "gpt-5.5-pro"): {"input": 3e-05, "output": 0.00018},
+        ("OpenAI", "gpt-5.2-pro"): {"input": 2.1e-05, "output": 0.000168},
         # gpt-5-pro survives (no announced retirement) and must not fall to
         # None now that the bare "gpt-5" fallback entry is gone
         ("OpenAI", "gpt-5-pro"): {"input": 1.5e-05, "output": 0.00012},
@@ -57,11 +81,22 @@ class TestGetPricing(unittest.TestCase):
         ("OpenAI", "o4-mini"): None,
         # Gemini 2.5 (sunset ≥ 2026-10-16) unpriced under the same policy
         ("Google", "gemini-2.5-pro"): None,
-        ("Google", "gemini-3-pro"): {"input": 2e-06, "output": 1.2e-05},
+        # Gemini's cached rate is exactly 1/10 of input across the family
+        ("Google", "gemini-3-pro"): {"input": 2.00 / 1_000_000,
+                                     "output": 12.00 / 1_000_000,
+                                     "cache_read": 0.20 / 1_000_000},
         # gemini-3.5-flash must NOT prefix-match down to the cheaper
         # "gemini-3" fallback entry; the -latest alias resolves to it too.
-        ("Google", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06},
-        ("Google", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06},
+        ("Google", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06,
+                                         "cache_read": 1.5e-07},
+        ("Google", "gemini-flash-latest"): {"input": 1.5e-06, "output": 9e-06,
+                                            "cache_read": 1.5e-07},
+        # ...and gemini-3.5-flash-lite must not match gemini-3.5-flash (longer
+        # prefix wins), nor gemini-3.6-flash fall to the bare "gemini-3" entry
+        ("Google", "gemini-3.5-flash-lite"): {"input": 3e-07, "output": 2.5e-06,
+                                              "cache_read": 3e-08},
+        ("Google", "gemini-3.6-flash"): {"input": 1.5e-06, "output": 7.5e-06,
+                                         "cache_read": 1.5e-07},
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.20-multi-agent-0309"): {"input": 1.25e-06, "output": 2.5e-06},

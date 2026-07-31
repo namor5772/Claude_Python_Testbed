@@ -826,7 +826,11 @@ class StreamingMixin:
         """Look up per-token pricing for a model.
         Returns a dict with per-token prices, or None if no match.
         Anthropic: {input, output, cache_write, cache_read}
-        OpenAI/Gemini: {input, output}"""
+        OpenAI/Gemini: {input, output, cache_read} — cache_read omitted for the
+        few models with no cached tier (the OpenAI -pro ids, priced None)
+        xAI/Moonshot: {input, output} — both providers supply an authoritative
+        per-call cost that already nets out their cached-input discount, so a
+        table rate would never be consulted"""
         table = {"Anthropic": ANTHROPIC_PRICING,
                  "OpenAI": OPENAI_PRICING,
                  "Google": GEMINI_PRICING,
@@ -844,12 +848,20 @@ class StreamingMixin:
                 best_len = len(prefix)
         if best_match is None:
             return None
-        # Convert from per-million to per-token
-        per_token = tuple(p / 1_000_000 for p in best_match)
+        # Convert from per-million to per-token. A None slot (an OpenAI -pro
+        # tier with no cached-input rate) passes through untouched — dividing
+        # it would raise.
+        per_token = tuple(None if p is None else p / 1_000_000 for p in best_match)
         if provider == "Anthropic":
             return {"input": per_token[0], "output": per_token[1],
                     "cache_write": per_token[2], "cache_read": per_token[3]}
-        return {"input": per_token[0], "output": per_token[1]}
+        priced = {"input": per_token[0], "output": per_token[1]}
+        # OpenAI/Gemini carry a 3rd cached-input element; a None entry means the
+        # model has no cached tier, so the key is left out entirely and the
+        # accumulator's pricing.get("cache_read", 0) falls back to unpriced.
+        if len(per_token) > 2 and best_match[2] is not None:
+            priced["cache_read"] = per_token[2]
+        return priced
 
     def _log_api_cost(self, total_cost):
         """Append the run's final cumulative cost to APICostLog.txt in the repo root.
