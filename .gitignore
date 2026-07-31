@@ -99,3 +99,9 @@ Untitled.*
 *.stackdump
 
 SpecifyingList.csv
+
+# Sun2Set almanac output — PRIVACY: these files embed a street address in the
+# filename plus 6-decimal (~10 cm) latitude/longitude and a site-specific
+# horizon profile in the header. This repo is PUBLIC and git history is
+# permanent, so they must never be committed.
+Sun2Set_*.txt
