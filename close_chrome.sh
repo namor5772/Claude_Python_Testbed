@@ -7,9 +7,11 @@
 # Browser-automation instructions call this via run_command to shut the browser
 # down cleanly at the end of a run.
 #
-# Every process it touches is selected by matching the automation profile path
-# on the process command line, so a personal Brave/Chrome/Edge window open at
-# the same time is never closed. MyAgent launches its browser with
+# Every process it touches must satisfy BOTH tests: the automation profile path
+# appears on its command line, AND its executable really is a browser. So a
+# personal Brave/Chrome/Edge window open at the same time is never closed, and
+# neither is an unrelated process that merely mentions a browser in its
+# arguments. MyAgent launches its browser with
 # --user-data-dir=~/Library/Application Support/MyAgent/browser_profile on
 # macOS (myagent/browser_mixin.py), and that path is this script's default.
 #
@@ -44,22 +46,36 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# browser_mixin.py's macOS candidates, in its own preference order.
-BROWSER_RE='Brave Browser|Google Chrome|Microsoft Edge'
+# The browser list is browser_mixin.py's macOS candidates, in its own
+# preference order, and lives inline in matched_lines' case arms below rather
+# than in a variable: `case $x in $VAR)` would treat the expansion as a single
+# pattern, since case alternation is parsed before expansion, so a "|" list in
+# a variable would silently stop matching.
 
 # Matching on the profile path is what keeps personal windows safe. Helper
 # processes (renderer/GPU) inherit --user-data-dir too and so match as well —
 # which is wanted: they are all part of the automation instance.
 #
-# The second grep also solves the classic "grep matches itself" problem: the
-# first grep's own ps line contains the profile path (it is the search pattern)
-# but no browser name, so it is filtered out here. Excluding $$ covers this
-# script's own line when the path is passed as an argument.
+# The browser test is applied to "comm" (the executable path) and NOT to the
+# full command line, because a command line can name a browser without being
+# one. Testing the whole line was a real bug, proven live on 2026-07-31: a
+# shell invoked as `zsh -c '... /Google Chrome/ ... browser_profile ...'` — a
+# diagnostic that merely mentioned both strings — matched with no browser
+# running at all, and the script SIGTERMed its own caller and then reported
+# success. "comm" carries no arguments, so such a shell now reads as /bin/zsh
+# and cannot match. This also subsumes the classic "grep matches itself"
+# problem; excluding $$ is kept as cheap belt-and-braces.
 matched_lines() {
     ps -axo pid=,command= 2>/dev/null \
         | grep -F -- "$USER_DATA_DIR" \
-        | grep -E -- "$BROWSER_RE" \
-        | awk -v self="$$" '$1 != self'
+        | awk -v self="$$" '$1 != self { pid = $1; $1 = ""; sub(/^ +/, ""); print pid " " $0 }' \
+        | while IFS= read -r line; do
+              comm="$(ps -p "${line%% *}" -o comm= 2>/dev/null)"
+              case "$comm" in
+                  */Brave\ Browser*|*/Google\ Chrome*|*/Microsoft\ Edge*)
+                      printf '%s\n' "$line" ;;
+              esac
+          done
 }
 
 matched_pids() { matched_lines | awk '{print $1}'; }
