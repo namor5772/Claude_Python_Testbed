@@ -489,6 +489,7 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | `MyAgent_Pricing.txt` | Reference for the cost-tracking pricing tables |
 | `make_icon.py`, `*.ico` | Windows icon generator + generated icons |
 | `LaunchSelfBot.bat`, `LaunchMyAgent.bat`, `LaunchTodoList.bat`, `LaunchMyAgent.sh`, `My Agent.command`, `selfbot_position.ps1` | Per-platform launchers |
+| `close_chrome.ps1` | Clean browser shutdown for browser-automation instructions (called via `run_command`): closes every Chrome window, force-kills stragglers after 4 s, then rewrites `exit_type` to `"Normal"` in the profile's `Preferences` so the next launch skips the "restore pages?" bar. Finds the profile dir from a running `chrome.exe` command line, falling back to `%TEMP%\myagent_browser_debug` — no hardcoded paths. **Closes *all* Chrome processes, not just the automation instance** |
 | `CLAUDE.md` + `CLAUDE_*.md` | Claude Code project instructions / per-app architecture docs |
 | `.claude/skills/` | The slash commands above |
 | `WHATIS_AI.md` | The tool-use essay |
