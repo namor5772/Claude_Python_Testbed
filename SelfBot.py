@@ -876,6 +876,11 @@ FALLBACK_MODELS = [
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
+# Prompt-cache breakpoint marker. 5-minute TTL (the default) is deliberate:
+# writes cost 1.25x and match ANTHROPIC_PRICING's cache-write column exactly,
+# so _get_pricing's four-bucket cost stays accurate. A "ttl": "1h" variant
+# would need the extended-cache-ttl-2025-04-11 beta and 2x writes.
+CACHE_CONTROL = {"type": "ephemeral"}
 # Models with lower max output token limits than MAX_TOKENS. Empty since the
 # 2026 retirements: the Claude 3 generation (the only 4K-cap models) is fully
 # retired. Kept as a dict because stream_worker .get()s it per call.
@@ -4633,9 +4638,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         payload = {
             "model": self.model,
             "stream": True,
-            "system": self._build_system_prompt(),
+            # Cache breakpoints shown here too, for the same reason
+            # _apply_thinking_params is shared: the debug preview must not drift
+            # from what stream_worker actually sends.
+            "system": self._cache_system(self._build_system_prompt()),
             "tools": self._get_tools(),
-            "messages": display_msgs,
+            "messages": self._cache_messages(display_msgs),
         }
         self._apply_thinking_params(payload)
         return json.dumps(payload, indent=2)
@@ -4670,6 +4678,69 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if not self._rejects_temperature() and self.model not in self._no_temperature:
                 kwargs["temperature"] = self.temperature
         return kwargs
+
+    @staticmethod
+    def _cache_system(system_text):
+        """System prompt as a single cached text block.
+
+        Anthropic builds the cache prefix in the order tools → system →
+        messages, and a breakpoint caches EVERYTHING before it — so this one
+        marker also covers the whole tool array. Written once at 1.25x, read at
+        0.10x on every later call.
+
+        An empty prompt stays a bare string: a text block with "" is a 400.
+        """
+        if not system_text:
+            return system_text
+        return [{"type": "text", "text": system_text, "cache_control": dict(CACHE_CONTROL)}]
+
+    @staticmethod
+    def _cache_messages(messages, max_breakpoints=2):
+        """Copy `messages` with rolling cache breakpoints on the newest turns.
+
+        Two rolling markers (plus the static system one) stay under Anthropic's
+        4-breakpoint ceiling. Call N writes a cache ending at its last message;
+        call N+1 matches that prefix and reads it at 0.10x. The second, older
+        marker is the safety net — if the newest write hasn't landed or has aged
+        past the 5-minute TTL, the previous turn's prefix is still a hit rather
+        than a full-price re-read of the entire self-chat.
+
+        This is the single biggest cost lever in a duo run, where the history
+        grows without bound (see _trim_history_for_context) and EVERY turn
+        re-sends all of it. Note a trim invalidates the cache by changing the
+        prefix — one re-write, then the discount resumes.
+
+        NEVER mutates history: only the messages that receive a breakpoint are
+        shallow-copied. stream_worker works on `messages` and writes it back to
+        self.messages on success, and the overflow handler trims it in place —
+        mutating it here would accumulate stale breakpoints past the ceiling.
+
+        Assistant turns hold SDK block objects (stream_worker appends
+        `final_message.content` verbatim), not dicts, so they are skipped; the
+        eligible messages are the user turns, which are the real boundaries.
+        """
+        wire = list(messages)
+        placed = 0
+        for i in range(len(wire) - 1, -1, -1):
+            if placed >= max_breakpoints:
+                break
+            msg = wire[i]
+            if not isinstance(msg, dict):
+                continue
+            content = msg.get("content")
+            if isinstance(content, str):
+                if not content:
+                    continue
+                blocks = [{"type": "text", "text": content,
+                           "cache_control": dict(CACHE_CONTROL)}]
+            elif isinstance(content, list) and content and isinstance(content[-1], dict):
+                blocks = list(content)
+                blocks[-1] = {**blocks[-1], "cache_control": dict(CACHE_CONTROL)}
+            else:
+                continue
+            wire[i] = {**msg, "content": blocks}
+            placed += 1
+        return wire
 
     @staticmethod
     def _get_macos_display_rects():
@@ -5341,13 +5412,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 tools.append({"type": "code_execution_20250825", "name": "code_execution"})
                 api_kwargs = {
                     "model": self.model,
-                    "system": self._build_system_prompt(),
-                    "messages": messages,
+                    "system": self._cache_system(self._build_system_prompt()),
+                    "messages": messages,  # replaced per attempt with the breakpointed copy
                     "tools": tools,
                 }
                 self._apply_thinking_params(api_kwargs)
 
                 for attempt in range(max_retries):
+                    # Rebuilt every attempt, not once above the loop: the retry
+                    # paths below mutate `messages` in place (the overflow trim's
+                    # `del messages[:cut_at]`), so the wire copy has to be
+                    # re-derived or the retry would resend the pre-trim history —
+                    # and the rolling breakpoints belong on the post-trim tail.
+                    api_kwargs["messages"] = self._cache_messages(messages)
                     try:
                         with self.client.beta.messages.stream(
                                 betas=["web-search-2025-03-05", "code-execution-2025-08-25", "files-api-2025-04-14"],
