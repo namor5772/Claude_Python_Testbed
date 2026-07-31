@@ -7,6 +7,12 @@
 *.md text eol=lf
 *.bat text eol=crlf
 *.ps1 text eol=crlf
+# Shell scripts MUST stay LF even when checked out on Windows: a CRLF shebang
+# ("#!/usr/bin/env bash\r") fails on macOS with "bad interpreter". Previously
+# these fell through to `* text=auto` (LF in repo, NATIVE on checkout), which
+# only happened to be safe because macOS checkouts default to LF.
+*.sh text eol=lf
+*.command text eol=lf
 
 # Binary files — no conversion
 *.png binary
