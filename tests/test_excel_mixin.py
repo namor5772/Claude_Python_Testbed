@@ -207,6 +207,102 @@ class TestWriteDropped(unittest.TestCase):
         self.assertFalse(ExcelMixin._excel_write_dropped([[0]], [[0]]))
 
 
+class TestOpenKwargs(unittest.TestCase):
+    def test_no_params_is_a_bare_open(self):
+        # An unprotected open must stay byte-identical to open(path).
+        self.assertEqual(ExcelMixin._excel_open_kwargs({}), {})
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"path": "x.xlsx"}), {})
+
+    def test_open_password_only(self):
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"password": "s3cret"}),
+            {"password": "s3cret"})
+
+    def test_both_passwords_are_independent_locks(self):
+        # A workbook can be encrypted AND write-reserved; they are separate
+        # passwords and both must reach xlwings.
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs(
+                {"password": "open-pw", "write_res_password": "write-pw"}),
+            {"password": "open-pw", "write_res_password": "write-pw"})
+
+    def test_write_res_password_alone(self):
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"write_res_password": "w"}),
+            {"write_res_password": "w"})
+
+    def test_blank_and_whitespace_are_omitted_not_sent_empty(self):
+        # Sending password="" is not the same as omitting it.
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs(
+                {"password": "", "write_res_password": "   "}), {})
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"password": None}), {})
+
+    def test_passwords_are_stripped(self):
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"password": "  pw  "}),
+            {"password": "pw"})
+
+    def test_ignore_read_only_recommended_only_when_true(self):
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"ignore_read_only_recommended": True}),
+            {"ignore_read_only_recommended": True})
+        # False must be omitted, not sent as False
+        self.assertEqual(
+            ExcelMixin._excel_open_kwargs({"ignore_read_only_recommended": False}),
+            {})
+
+
+class _WinApi:
+    """Windows COM shape: a plain .ReadOnly attribute."""
+
+    def __init__(self, value):
+        self.ReadOnly = value
+
+
+class _MacProp:
+    def __init__(self, value):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+
+class _MacApi:
+    """macOS appscript shape: .read_only.get(). Touching .ReadOnly raises,
+    which is what the probe chain has to fall through."""
+
+    def __init__(self, value):
+        self.read_only = _MacProp(value)
+
+
+class _BookWithApi:
+    def __init__(self, api):
+        self.api = api
+
+
+class TestIsReadOnly(unittest.TestCase):
+    def test_windows_shape(self):
+        self.assertTrue(ExcelMixin._excel_is_read_only(
+            _BookWithApi(_WinApi(True))))
+        self.assertFalse(ExcelMixin._excel_is_read_only(
+            _BookWithApi(_WinApi(False))))
+
+    def test_macos_shape_falls_through_the_windows_probe(self):
+        # _MacApi has no .ReadOnly, so the first probe raises AttributeError
+        # and the chain must continue rather than give up.
+        self.assertTrue(ExcelMixin._excel_is_read_only(
+            _BookWithApi(_MacApi(True))))
+        self.assertFalse(ExcelMixin._excel_is_read_only(
+            _BookWithApi(_MacApi(False))))
+
+    def test_unknown_shape_defaults_to_not_read_only(self):
+        # Never invent a scary warning from a probe that couldn't answer.
+        self.assertFalse(ExcelMixin._excel_is_read_only(_BookWithApi(object())))
+
+
 class _FakeRange:
     """Stand-in for an xlwings Range over a shared cell grid, so resize()
     views the same cells the write landed in (or didn't)."""

@@ -120,6 +120,25 @@ class ExcelMixin:
         return out
 
     @staticmethod
+    def _excel_open_kwargs(params):
+        """Assemble books.open() kwargs from the tool params, omitting
+        anything not supplied so an ordinary open stays byte-identical to a
+        bare open(path).
+
+        The two password fields are DIFFERENT locks and a workbook can carry
+        both: `password` decrypts the file, `write_res_password` claims write
+        access on a write-reserved one. Missing the second is what leaves an
+        unattended run parked on a modal nothing can answer."""
+        kwargs = {}
+        for key in ("password", "write_res_password"):
+            val = (params.get(key) or "").strip()
+            if val:
+                kwargs[key] = val
+        if params.get("ignore_read_only_recommended"):
+            kwargs["ignore_read_only_recommended"] = True
+        return kwargs
+
+    @staticmethod
     def _excel_write_dropped(expected, actual):
         """True when a write that should have produced visible cells read
         back completely empty — the signature of an Excel instance that is
@@ -202,6 +221,22 @@ class ExcelMixin:
         except Exception:
             pass
         return app
+
+    @staticmethod
+    def _excel_is_read_only(book):
+        """True when the workbook opened read-only. A REJECTED write-access
+        password does NOT raise — Excel silently opens read-only instead — so
+        probing this is the only way to tell the caller their password didn't
+        take, rather than letting them discover it at the first failed save."""
+        for probe in (lambda: book.api.ReadOnly,          # Windows COM
+                      lambda: book.api.read_only.get()):  # macOS appscript
+            try:
+                value = probe()
+            except Exception:
+                continue
+            if value is not None:
+                return bool(value)
+        return False
 
     def _excel_book(self, workbook=None):
         """Resolve a workbook by name (case-insensitive, extension
@@ -295,7 +330,7 @@ class ExcelMixin:
                 return ("excel_open error: xlwings is not installed "
                         "(pip install xlwings).")
             path = (params.get("path") or "").strip()
-            password = (params.get("password") or "").strip() or None
+            open_kwargs = self._excel_open_kwargs(params)
             app = self._excel_app(launch=True)
             note = ""
             if path:
@@ -306,14 +341,16 @@ class ExcelMixin:
                 if book is not None:
                     note = f"Attached to already-open {book.name}. "
                 elif os.path.exists(ap):
-                    # password only applies to opening from disk; a wrong one
-                    # errors immediately (no dialog). Kwarg passed only when
-                    # given so the unprotected path stays byte-identical.
-                    if password:
-                        book = app.books.open(ap, password=password)
-                    else:
-                        book = app.books.open(ap)
+                    # These only apply to opening from disk; a wrong password
+                    # errors immediately (no dialog). Kwargs are passed only
+                    # when given, so an unprotected open stays byte-identical.
+                    book = app.books.open(ap, **open_kwargs)
                     note = f"Opened {ap}. "
+                    if (open_kwargs.get("write_res_password")
+                            and self._excel_is_read_only(book)):
+                        note += ("⚠ The write-access password was REJECTED — "
+                                 "the workbook opened READ-ONLY, so edits and "
+                                 "saves will fail. ")
                 elif params.get("create"):
                     book = app.books.add()
                     book.save(ap)

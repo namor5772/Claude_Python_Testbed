@@ -1552,6 +1552,26 @@ EXCEL_TOOLS = [
                         "omit this."
                     ),
                 },
+                "write_res_password": {
+                    "type": "string",
+                    "description": (
+                        "Password for WRITE ACCESS to a write-reserved workbook — a "
+                        "second, separate password from 'password'. Without it Excel "
+                        "stops on a 'reserved by ... enter password for write access, "
+                        "or open read only' dialog that nothing can answer in an "
+                        "unattended run. Supply it whenever the workbook is "
+                        "write-reserved and the run needs to make changes."
+                    ),
+                },
+                "ignore_read_only_recommended": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true to mute the 'author would like you to open this "
+                        "read-only' prompt, which otherwise blocks an unattended open. "
+                        "Unrelated to 'write_res_password' — that one is a real "
+                        "password, this is only a recommendation flag."
+                    ),
+                },
             },
             "required": [],
         },
