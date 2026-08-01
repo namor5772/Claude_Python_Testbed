@@ -699,7 +699,14 @@ class ExcelMixin:
                 book = self._excel_book(params.get("workbook"))
                 name = book.name
                 note = ""
-                if save and os.path.dirname(book.fullname):
+                if save and self._excel_is_read_only(book):
+                    # Saving a read-only workbook fails deep in the driver
+                    # (a bare OSERROR -50 / COM error naming .save), which
+                    # reads as "close broke" rather than "your edits are
+                    # gone". Say what actually happened.
+                    note = (" — ⚠ NOT SAVED: the workbook was open READ-ONLY, "
+                            "so any edits made in this session are LOST")
+                elif save and os.path.dirname(book.fullname):
                     book.save()
                     note = " (saved)"
                 elif save:
