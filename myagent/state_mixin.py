@@ -388,6 +388,7 @@ class StateMixin:
                 ],
                 "desktop": self.desktop_enabled.get(),
                 "browser": self.browser_enabled.get(),
+                "excel": self.excel_enabled.get(),
                 "meta": self.meta_enabled.get(),
                 "mcp": self.mcp_enabled.get(),
                 "google": self.google_enabled.get(),
@@ -543,6 +544,7 @@ class StateMixin:
         ]
         self.desktop_enabled.set(entry.get("desktop", False))
         self.browser_enabled.set(entry.get("browser", False))
+        self.excel_enabled.set(entry.get("excel", False))
         self.meta_enabled.set(entry.get("meta", False))
         self.mcp_enabled.set(entry.get("mcp", False))
         self.google_enabled.set(entry.get("google", False))

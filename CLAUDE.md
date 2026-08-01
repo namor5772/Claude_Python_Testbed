@@ -70,6 +70,7 @@ MyAgent has a characterization test suite under `tests/` (stdlib `unittest`, no 
   - `file_mixin.py` — Native file tools (`read_file`/`edit_file`/`write_file`/`glob_files`/`grep_files`): Claude-Code-style exact-unique-match editing that fails loudly, read-before-edit tracking, CRLF/BOM-preserving round-trips
   - `desktop_mixin.py` — Desktop automation tools (pyautogui): screenshot, mouse, keyboard, clipboard, OCR
   - `browser_mixin.py` — Browser automation tools (Playwright): open, navigate, click, fill, screenshot, download (`browser_download` wraps the click in `expect_download()` + `save_as()` — required because the CDP attach GUID-renames unmanaged downloads)
+  - `excel_mixin.py` — Excel live-workbook automation tools (xlwings): `excel_open`/`excel_read`/`excel_write`/`excel_format`/`excel_sheet`/`excel_find`/`excel_run_macro`/`excel_save`/`excel_close` — drives the running Excel application (COM on Windows, AppleScript on macOS) so formulas recalculate and macros run; attaches to the user's open instance; `quit_app` refuses to quit while other workbooks remain open (see `.claude/rules/CLAUDE_MYAGENT.md` for the invariants)
   - `safety_mixin.py` — Command safety, confirmation dialog, user_prompt, run_powershell, agent control
   - `chat_mixin.py` — Chat save/serialize, image attachment, LaTeX processing
   - `event_loop_mixin.py` — check_queue, _on_close, _finish_close
@@ -112,5 +113,5 @@ Per-app architecture deep-dives live in `.claude/rules/` and load automatically 
 - Keep code simple and focused — this is a testbed for experimentation
 - Use tkinter for GUI work
 - SelfBot uses single-file architecture: all changes go in `SelfBot.py`
-- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 22 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
+- MyAgent uses a mixin-based modular architecture: the `App` class in `MyAgent.py` inherits from 23 mixin classes in the `myagent/` package. Add new methods to the appropriate mixin module by concern. `MyAgent.py` itself contains only `__init__` and the entry point.
 - Bank extractor changes go in `Account_Activity_WBC.py`

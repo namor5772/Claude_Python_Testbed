@@ -73,6 +73,19 @@ try:
 except Exception:
     _HAS_OUTLOOK = False
 
+# Excel live-workbook automation via xlwings — drives the REAL Excel
+# application (COM on Windows, AppleScript on macOS), so the user watches
+# changes land in the open workbook, formulas recalculate, and VBA macros run.
+# Optional — absence disables the Excel checkbox and the excel_* tools.
+# Install via:  pip install xlwings
+# Desktop Excel must also be installed; like Proton Bridge, that's detected
+# at first-call time as a clear error, not a startup check.
+_HAS_EXCEL = True
+try:
+    import xlwings  # noqa: F401
+except Exception:
+    _HAS_EXCEL = False
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -448,6 +461,10 @@ META_TOOLS = [
                 "browser": {
                     "type": "boolean",
                     "description": "Enable browser tools (default false on create)",
+                },
+                "excel": {
+                    "type": "boolean",
+                    "description": "Enable Excel live-workbook tools — excel_open, excel_read, excel_write, etc. (via xlwings; drives the real Excel app). Default false on create.",
                 },
                 "meta": {
                     "type": "boolean",
@@ -1493,6 +1510,287 @@ PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill",
                        # can't collide on an instance slot (O_EXCL claim in state_mixin).
                        # manage_instructions/manage_skills stay sequential.
                        "run_instruction"}
+
+# ── Excel live-workbook tools ────────────────────────────────────────────────
+# Native tools that drive the running Excel application via xlwings (COM on
+# Windows, AppleScript on macOS) — NOT file-level xlsx editing: changes appear
+# live in the open workbook, formulas recalculate, and existing VBA macros can
+# run. Attaches to the user's already-open Excel instance when there is one.
+# Conditionally included in _get_tools() only when self.excel_enabled.get()
+# is True AND _HAS_EXCEL is True. Dispatch is the namespaced excel_* pattern
+# (myagent/excel_mixin.py).
+EXCEL_TOOLS = [
+    {
+        "name": "excel_open",
+        "description": (
+            "Connect to Excel and report what is open, optionally opening or creating a "
+            "workbook first. Attaches to the user's running Excel instance when there is "
+            "one (so you can work inside a workbook the user already has open), otherwise "
+            "launches Excel visibly. Call this FIRST before other excel_* tools. Returns "
+            "the open workbooks, their sheets, and the active sheet's used range."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Workbook file to open (.xlsx/.xlsm/.csv). Omit to just attach "
+                        "and look around. If that file is already open, attaches to it."
+                    ),
+                },
+                "create": {
+                    "type": "boolean",
+                    "description": "If true and 'path' does not exist, create a new workbook and save it there.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "excel_read",
+        "description": (
+            "Read a cell range as a table labeled with real row numbers and column "
+            "letters. Values are the CURRENT calculated results; set formulas=true to "
+            "see formula text instead. Defaults to the used range of the active sheet "
+            "of the active workbook."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name (e.g. 'Budget.xlsx'). Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "Sheet name. Default: the active sheet.",
+                },
+                "range": {
+                    "type": "string",
+                    "description": "A1-style range like 'A1:D20', or a named range. Default: the sheet's used range.",
+                },
+                "formulas": {
+                    "type": "boolean",
+                    "description": "Return formula text (e.g. '=SUM(B2:B9)') instead of calculated values.",
+                },
+                "max_cells": {
+                    "type": "number",
+                    "description": "Cap on cells returned (default 4000). Larger ranges are truncated with a notice.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "excel_write",
+        "description": (
+            "Write values or formulas into cells, starting at start_cell and filling "
+            "right/down from the 2D 'values' array. Each cell is a string EXACTLY as you "
+            "would type it into Excel: '42' becomes a number, 'Revenue' text, "
+            "'2026-08-01' a date (use ISO dates), '=SUM(B2:B9)' a live formula. Empty "
+            "string = empty cell (short rows are padded with empty cells, clearing "
+            "them). The recalculated result of the written range is returned when small."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "Sheet name. Default: the active sheet.",
+                },
+                "start_cell": {
+                    "type": "string",
+                    "description": "Top-left target cell, e.g. 'B2'.",
+                },
+                "values": {
+                    "type": "array",
+                    "items": {"type": "array", "items": {"type": "string"}},
+                    "description": (
+                        "2D array of rows of cell strings. A single row is "
+                        "[[\"a\", \"b\", \"c\"]]; a single column is [[\"a\"], [\"b\"], [\"c\"]]."
+                    ),
+                },
+            },
+            "required": ["start_cell", "values"],
+        },
+    },
+    {
+        "name": "excel_format",
+        "description": (
+            "Apply formatting to a range: bold/italic, font size/color, fill color, "
+            "number format, column width, autofit. Only the provided properties change."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "Sheet name. Default: the active sheet.",
+                },
+                "range": {
+                    "type": "string",
+                    "description": "A1-style range, e.g. 'A1:D1', or whole columns like 'C:C'.",
+                },
+                "bold": {"type": "boolean", "description": "Bold on/off."},
+                "italic": {"type": "boolean", "description": "Italic on/off."},
+                "font_size": {"type": "number", "description": "Font size in points."},
+                "font_color": {"type": "string", "description": "Font color as hex '#RRGGBB'."},
+                "fill_color": {
+                    "type": "string",
+                    "description": "Cell background as hex '#RRGGBB', or 'none' to clear the fill.",
+                },
+                "number_format": {
+                    "type": "string",
+                    "description": "Excel format code, e.g. '0.00', '$#,##0.00', 'dd/mm/yyyy', '0%'.",
+                },
+                "column_width": {"type": "number", "description": "Column width in Excel character units."},
+                "autofit": {"type": "boolean", "description": "Auto-size the range's columns and rows to their content."},
+            },
+            "required": ["range"],
+        },
+    },
+    {
+        "name": "excel_sheet",
+        "description": (
+            "Manage worksheets: list (names + used-range sizes), add, rename, delete, "
+            "activate, or clear one."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "add", "rename", "delete", "activate", "clear"],
+                    "description": "The operation to perform.",
+                },
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Sheet name (required for every action except list).",
+                },
+                "new_name": {
+                    "type": "string",
+                    "description": "New sheet name (rename only).",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "excel_find",
+        "description": (
+            "Search cells for text (case-insensitive substring) or a number (exact "
+            "match). Searches every sheet of the workbook unless 'sheet' is given. "
+            "Returns matching cell addresses with their values."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "Text or number to search for.",
+                },
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "Limit the search to one sheet.",
+                },
+                "max_results": {
+                    "type": "number",
+                    "description": "Stop after this many matches (default 50).",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "excel_run_macro",
+        "description": (
+            "Run an existing VBA macro from a workbook (e.g. 'RefreshAll' or "
+            "'Module1.UpdateReport'). Macros must already exist in the workbook — this "
+            "cannot create VBA code."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "macro": {
+                    "type": "string",
+                    "description": "Macro name, optionally module-qualified.",
+                },
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook containing the macro. Default: the active workbook.",
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Positional arguments passed to the macro.",
+                },
+            },
+            "required": ["macro"],
+        },
+    },
+    {
+        "name": "excel_save",
+        "description": "Save a workbook (or Save As when 'path' is given).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Save As target path. Required for a workbook that has never been saved.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "excel_close",
+        "description": (
+            "Close a workbook (saving first by default). A workbook that has never been "
+            "saved to disk is discarded unless you excel_save it with a path first. "
+            "quit_app=true additionally quits Excel, but ONLY if no other workbooks "
+            "remain open — the user's own open workbooks are never closed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook to close. Default: the active workbook.",
+                },
+                "save": {
+                    "type": "boolean",
+                    "description": "Save before closing (default true).",
+                },
+                "quit_app": {
+                    "type": "boolean",
+                    "description": "Also quit Excel afterwards — only honored when no other workbooks remain open.",
+                },
+            },
+            "required": [],
+        },
+    },
+]
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
 # MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the

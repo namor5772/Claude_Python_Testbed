@@ -1,0 +1,556 @@
+"""Excel live-workbook automation tools (xlwings).
+
+Drives the REAL Excel application — COM on Windows, AppleScript on macOS —
+so changes land visibly in the open workbook, formulas recalculate, and
+existing VBA macros can run. This is the "agent inside your workbook"
+surface: attach to whatever the user already has open (or open/create a
+workbook), then read/write/format ranges, manage sheets, run macros.
+
+Architecture notes (mirrors the mail mixins):
+- No COM/AppleScript handles are cached on self. Tool calls run on a fresh
+  stream_worker thread each run, and COM objects must not cross threads —
+  so every call re-attaches to the running Excel instance (cheap, via the
+  Running Object Table on Windows). Workbook state lives in the Excel
+  process itself, not in MyAgent.
+- All helpers are prefixed _excel_ against flat-namespace MRO shadowing
+  (the Proton/Outlook lesson in CLAUDE_MYAGENT.md).
+- xlwings import failure leaves the module importable (_HAS_EXCEL in
+  constants gates the checkbox and dispatch); Excel-not-installed is
+  detected at first-call time, like Proton Bridge availability.
+"""
+
+import datetime as _dt
+import decimal as _decimal
+import numbers as _numbers
+import os
+import sys
+
+try:
+    import xlwings as xw
+except Exception:
+    xw = None
+
+
+class ExcelMixin:
+
+    # ── Pure helpers (unit-tested in tests/test_excel_mixin.py) ──────────
+
+    @staticmethod
+    def _excel_col_letter(n):
+        """1-based column number → Excel letters (1→A, 27→AA)."""
+        letters = ""
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            letters = chr(65 + rem) + letters
+        return letters
+
+    @staticmethod
+    def _excel_hex_to_rgb(color):
+        """'#RRGGBB' (hash optional) → (r, g, b) tuple for xlwings."""
+        c = str(color).strip().lstrip("#")
+        if len(c) != 6:
+            raise ValueError(f"color must be hex RRGGBB, got '{color}'")
+        return tuple(int(c[i:i + 2], 16) for i in (0, 2, 4))
+
+    @staticmethod
+    def _excel_cell_str(v):
+        """One cell value → display string for the model. Integral floats
+        drop the '.0' (COM returns all numbers as float); midnight
+        datetimes render as bare dates; tabs/newlines are flattened so
+        TSV rows stay rectangular."""
+        if v is None:
+            return ""
+        if v is True:
+            return "TRUE"
+        if v is False:
+            return "FALSE"
+        if isinstance(v, _decimal.Decimal):
+            # COM returns currency-formatted cells as VT_CY → Decimal
+            # (with trailing zeros like 7.5000); normalize to float display.
+            v = float(v)
+        if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
+            return str(int(v))
+        if isinstance(v, _dt.datetime):
+            if v.hour == v.minute == v.second == 0 and v.microsecond == 0:
+                return v.strftime("%Y-%m-%d")
+            return v.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(v, _dt.date):
+            return v.isoformat()
+        return str(v).replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+    @staticmethod
+    def _excel_as_2d(v):
+        """Normalize a range .value/.formula result to a 2D list. COM and
+        AppleScript return a scalar for one cell and (on some paths) a flat
+        sequence for a single row."""
+        if not isinstance(v, (list, tuple)):
+            return [[v]]
+        rows = list(v)
+        if not rows:
+            return [[None]]
+        if not isinstance(rows[0], (list, tuple)):
+            return [rows]
+        return [list(r) for r in rows]
+
+    @staticmethod
+    def _excel_values_matrix(values):
+        """Normalize the excel_write 'values' input to a rectangular 2D
+        list. Scalar → [[v]]; flat list → one row; ragged rows are padded
+        with None (empty cell). '' and None both mean empty."""
+        if not isinstance(values, list):
+            rows = [[values]]
+        elif not values:
+            raise ValueError("'values' is empty")
+        elif not any(isinstance(r, list) for r in values):
+            rows = [values]
+        else:
+            rows = [r if isinstance(r, list) else [r] for r in values]
+        width = max(len(r) for r in rows)
+        if width == 0:
+            raise ValueError("'values' contains only empty rows")
+        out = []
+        for r in rows:
+            row = [None if c is None or c == "" else c for c in r]
+            row += [None] * (width - len(row))
+            out.append(row)
+        return out
+
+    @staticmethod
+    def _excel_matrix_tsv(matrix, first_row, first_col):
+        """Render a 2D matrix as TSV with REAL column letters and row
+        numbers so the model can address any cell it sees directly."""
+        n_cols = len(matrix[0]) if matrix else 0
+        header = "\t" + "\t".join(
+            ExcelMixin._excel_col_letter(first_col + c) for c in range(n_cols))
+        lines = [header]
+        for i, row in enumerate(matrix):
+            cells = "\t".join(ExcelMixin._excel_cell_str(v) for v in row)
+            lines.append(f"{first_row + i}\t{cells}")
+        return "\n".join(lines)
+
+    # ── Excel plumbing ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _excel_com_init():
+        """Per-call COM apartment init (Windows only; idempotent per
+        thread). Required because each agent run executes tools on a new
+        stream_worker thread. No-op on macOS (AppleScript backend)."""
+        if sys.platform == "win32":
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _excel_err(e):
+        """COM errors bury the useful text three levels deep; dig it out."""
+        if type(e).__name__ == "com_error":
+            try:
+                details = e.args[2]
+                if details and details[2]:
+                    return str(details[2])
+            except Exception:
+                pass
+        return str(e)
+
+    def _excel_app(self, launch=False):
+        """Attach to the running Excel instance (the user's, if one is
+        open) or launch a visible one when launch=True."""
+        app = None
+        try:
+            if xw.apps.count:
+                app = xw.apps.active
+                # Liveness probe: a just-quit instance can linger in the COM
+                # Running Object Table with a dead window handle, surfacing
+                # later as a cryptic FindWindowEx error. Touching .books here
+                # turns that into "no instance" (and a fresh launch if asked).
+                _ = app.books.count
+        except Exception:
+            app = None
+        if app is None:
+            if not launch:
+                raise RuntimeError(
+                    "No running Excel instance. Call excel_open first — it "
+                    "attaches to the user's open Excel or launches it.")
+            app = xw.App(visible=True, add_book=False)
+        try:
+            app.visible = True  # the point is watching the workbook change
+        except Exception:
+            pass
+        return app
+
+    def _excel_book(self, workbook=None):
+        """Resolve a workbook by name (case-insensitive, extension
+        optional) or return the active one."""
+        app = self._excel_app(launch=False)
+        books = list(app.books)
+        if not books:
+            raise RuntimeError(
+                "Excel is running but no workbook is open. Use excel_open "
+                "with a path (create=true to make a new one).")
+        if not workbook:
+            book = app.books.active
+            if book is None:
+                book = books[0]
+            return book
+        want = os.path.basename(str(workbook).strip()).lower()
+        want_stem = os.path.splitext(want)[0]
+        for b in books:
+            name = b.name.lower()
+            if name == want or os.path.splitext(name)[0] == want_stem:
+                return b
+        names = ", ".join(b.name for b in books)
+        raise RuntimeError(
+            f"Workbook '{workbook}' is not open. Open workbooks: {names}. "
+            "Use excel_open to open a file from disk.")
+
+    @staticmethod
+    def _excel_get_sheet(book, sheet=None):
+        if not sheet:
+            return book.sheets.active
+        try:
+            return book.sheets[sheet]
+        except Exception:
+            names = ", ".join(s.name for s in book.sheets)
+            raise RuntimeError(
+                f"Sheet '{sheet}' not found in {book.name}. Sheets: {names}")
+
+    def _excel_target(self, params):
+        book = self._excel_book(params.get("workbook"))
+        sht = self._excel_get_sheet(book, params.get("sheet"))
+        return book, sht
+
+    def _excel_state_summary(self, app):
+        books = list(app.books)
+        if not books:
+            return "Excel is running with no workbooks open."
+        active_book = app.books.active
+        active_name = active_book.name if active_book else ""
+        lines = ["Open workbooks:"]
+        for b in books:
+            marker = " (active)" if b.name == active_name else ""
+            sheets = [s.name for s in b.sheets]
+            shown = ", ".join(sheets[:15])
+            if len(sheets) > 15:
+                shown += f", … +{len(sheets) - 15} more"
+            lines.append(f"• {b.name}{marker} — sheets: {shown}")
+        if active_book:
+            sht = active_book.sheets.active
+            ur = sht.used_range
+            addr = ur.address.replace("$", "")
+            lines.append(
+                f"Active sheet: [{active_book.name}]{sht.name}, used range "
+                f"{addr} ({ur.rows.count} rows x {ur.columns.count} cols)")
+        return "\n".join(lines)
+
+    # ── Tools ────────────────────────────────────────────────────────────
+
+    def do_excel_open(self, params):
+        try:
+            self._excel_com_init()
+            if xw is None:
+                return ("excel_open error: xlwings is not installed "
+                        "(pip install xlwings).")
+            path = (params.get("path") or "").strip()
+            app = self._excel_app(launch=True)
+            note = ""
+            if path:
+                ap = os.path.abspath(os.path.expanduser(path))
+                base = os.path.basename(ap).lower()
+                book = next(
+                    (b for b in app.books if b.name.lower() == base), None)
+                if book is not None:
+                    note = f"Attached to already-open {book.name}. "
+                elif os.path.exists(ap):
+                    book = app.books.open(ap)
+                    note = f"Opened {ap}. "
+                elif params.get("create"):
+                    book = app.books.add()
+                    book.save(ap)
+                    note = f"Created new workbook {ap}. "
+                else:
+                    return (f"excel_open error: file not found: {ap}. Pass "
+                            "create=true to create a new workbook there.")
+                book.activate()
+            return note + self._excel_state_summary(app)
+        except Exception as e:
+            return f"excel_open error: {self._excel_err(e)}"
+
+    def do_excel_read(self, params):
+        try:
+            self._excel_com_init()
+            book, sht = self._excel_target(params)
+            rng_str = (params.get("range") or "").strip()
+            rng = sht.range(rng_str) if rng_str else sht.used_range
+            rows, cols = rng.rows.count, rng.columns.count
+            try:
+                max_cells = int(params.get("max_cells") or 4000)
+            except (TypeError, ValueError):
+                max_cells = 4000
+            max_cells = max(1, min(max_cells, 100_000))
+            shown_cols = min(cols, max_cells)
+            shown_rows = min(rows, max(1, max_cells // shown_cols))
+            sub = rng
+            if shown_rows < rows or shown_cols < cols:
+                sub = rng.resize(shown_rows, shown_cols)
+            if params.get("formulas"):
+                kind = "formulas"
+                matrix = self._excel_as_2d(sub.formula)
+            else:
+                kind = "values"
+                matrix = sub.options(ndim=2).value
+            addr = rng.address.replace("$", "")
+            out = (f"[{book.name}]{sht.name}!{addr} — {rows}x{cols} {kind}\n"
+                   + self._excel_matrix_tsv(matrix, rng.row, rng.column))
+            if shown_rows < rows or shown_cols < cols:
+                out += (f"\n… truncated to {shown_rows}x{shown_cols} "
+                        f"(max_cells={max_cells}). Read a smaller range or "
+                        "raise max_cells for the rest.")
+            return out
+        except Exception as e:
+            return f"excel_read error: {self._excel_err(e)}"
+
+    def do_excel_write(self, params):
+        try:
+            self._excel_com_init()
+            book, sht = self._excel_target(params)
+            start = (params.get("start_cell") or "").strip()
+            if not start:
+                return "excel_write error: 'start_cell' is required (e.g. 'B2')."
+            matrix = self._excel_values_matrix(params.get("values"))
+            target = sht.range(start).resize(len(matrix), len(matrix[0]))
+            target.value = matrix
+            addr = target.address.replace("$", "")
+            out = (f"Wrote {len(matrix)}x{len(matrix[0])} cells to "
+                   f"[{book.name}]{sht.name}!{addr}.")
+            if len(matrix) * len(matrix[0]) <= 200:
+                back = target.options(ndim=2).value
+                out += ("\nCurrent values (after recalculation):\n"
+                        + self._excel_matrix_tsv(back, target.row, target.column))
+            return out
+        except Exception as e:
+            return f"excel_write error: {self._excel_err(e)}"
+
+    def do_excel_format(self, params):
+        try:
+            self._excel_com_init()
+            book, sht = self._excel_target(params)
+            rng_str = (params.get("range") or "").strip()
+            if not rng_str:
+                return "excel_format error: 'range' is required (e.g. 'A1:D1')."
+            rng = sht.range(rng_str)
+            applied = []
+            if params.get("bold") is not None:
+                rng.font.bold = bool(params["bold"])
+                applied.append(f"bold={bool(params['bold'])}")
+            if params.get("italic") is not None:
+                rng.font.italic = bool(params["italic"])
+                applied.append(f"italic={bool(params['italic'])}")
+            if params.get("font_size") is not None:
+                rng.font.size = float(params["font_size"])
+                applied.append(f"font_size={params['font_size']}")
+            if params.get("font_color"):
+                rng.font.color = self._excel_hex_to_rgb(params["font_color"])
+                applied.append(f"font_color={params['font_color']}")
+            if params.get("fill_color"):
+                if str(params["fill_color"]).strip().lower() == "none":
+                    rng.color = None
+                    applied.append("fill_color=none")
+                else:
+                    rng.color = self._excel_hex_to_rgb(params["fill_color"])
+                    applied.append(f"fill_color={params['fill_color']}")
+            if params.get("number_format"):
+                rng.number_format = str(params["number_format"])
+                applied.append(f"number_format={params['number_format']}")
+            if params.get("column_width") is not None:
+                rng.column_width = float(params["column_width"])
+                applied.append(f"column_width={params['column_width']}")
+            if params.get("autofit"):
+                rng.autofit()
+                applied.append("autofit")
+            if not applied:
+                return ("excel_format error: no formatting properties given. "
+                        "Provide at least one of bold, italic, font_size, "
+                        "font_color, fill_color, number_format, column_width, "
+                        "autofit.")
+            addr = rng.address.replace("$", "")
+            return (f"Applied {', '.join(applied)} to "
+                    f"[{book.name}]{sht.name}!{addr}.")
+        except Exception as e:
+            return f"excel_format error: {self._excel_err(e)}"
+
+    def do_excel_sheet(self, params):
+        try:
+            self._excel_com_init()
+            action = (params.get("action") or "").strip().lower()
+            book = self._excel_book(params.get("workbook"))
+            name = (params.get("name") or "").strip()
+            if action == "list":
+                lines = []
+                active = book.sheets.active.name
+                for s in book.sheets:
+                    ur = s.used_range
+                    marker = " (active)" if s.name == active else ""
+                    lines.append(
+                        f"• {s.name}{marker} — used range "
+                        f"{ur.address.replace('$', '')} "
+                        f"({ur.rows.count}x{ur.columns.count})")
+                return f"Sheets in {book.name}:\n" + "\n".join(lines)
+            if not name:
+                return f"excel_sheet error: 'name' is required for '{action}'."
+            if action == "add":
+                book.sheets.add(name, after=book.sheets[book.sheets.count - 1])
+                return (f"Added sheet '{name}' to {book.name}. Sheets: "
+                        + ", ".join(s.name for s in book.sheets))
+            sht = self._excel_get_sheet(book, name)
+            if action == "rename":
+                new_name = (params.get("new_name") or "").strip()
+                if not new_name:
+                    return "excel_sheet error: 'new_name' is required for rename."
+                sht.name = new_name
+                return f"Renamed sheet '{name}' to '{new_name}' in {book.name}."
+            if action == "delete":
+                sht.delete()
+                return (f"Deleted sheet '{name}' from {book.name}. Sheets: "
+                        + ", ".join(s.name for s in book.sheets))
+            if action == "activate":
+                book.activate()
+                sht.activate()
+                return f"Activated sheet '{name}' in {book.name}."
+            if action == "clear":
+                sht.clear()
+                return f"Cleared all contents and formats of sheet '{name}'."
+            return (f"excel_sheet error: unknown action '{action}'. Use "
+                    "list, add, rename, delete, activate, or clear.")
+        except Exception as e:
+            return f"excel_sheet error: {self._excel_err(e)}"
+
+    def do_excel_find(self, params):
+        try:
+            self._excel_com_init()
+            text = str(params.get("text") or "").strip()
+            if not text:
+                return "excel_find error: 'text' is required."
+            book = self._excel_book(params.get("workbook"))
+            if params.get("sheet"):
+                sheets = [self._excel_get_sheet(book, params["sheet"])]
+            else:
+                sheets = list(book.sheets)
+            try:
+                max_results = int(params.get("max_results") or 50)
+            except (TypeError, ValueError):
+                max_results = 50
+            needle = text.lower()
+            try:
+                num = float(text)
+            except ValueError:
+                num = None
+            hits, truncated = [], False
+            for sht in sheets:
+                ur = sht.used_range
+                if ur.rows.count * ur.columns.count > 200_000:
+                    hits.append(f"[skipped sheet '{sht.name}': "
+                                f"{ur.rows.count}x{ur.columns.count} cells is "
+                                "too large to scan — search it with excel_read "
+                                "on smaller ranges]")
+                    continue
+                matrix = ur.options(ndim=2).value
+                r0, c0 = ur.row, ur.column
+                for i, row in enumerate(matrix):
+                    for j, v in enumerate(row):
+                        # numbers.Number (not int/float) because COM returns
+                        # currency-formatted cells as decimal.Decimal.
+                        match = (isinstance(v, str) and needle in v.lower()) or \
+                                (num is not None
+                                 and isinstance(v, _numbers.Number)
+                                 and not isinstance(v, bool)
+                                 and float(v) == num)
+                        if match:
+                            addr = (f"{sht.name}!"
+                                    f"{self._excel_col_letter(c0 + j)}{r0 + i}")
+                            hits.append(f"{addr}: {self._excel_cell_str(v)}")
+                            if len(hits) >= max_results:
+                                truncated = True
+                                break
+                    if truncated:
+                        break
+                if truncated:
+                    break
+            if not hits:
+                return (f"No cells matching '{text}' in {book.name} "
+                        f"({', '.join(s.name for s in sheets)}).")
+            out = f"Matches for '{text}' in {book.name}:\n" + "\n".join(hits)
+            if truncated:
+                out += f"\n… stopped at max_results={max_results}."
+            return out
+        except Exception as e:
+            return f"excel_find error: {self._excel_err(e)}"
+
+    def do_excel_run_macro(self, params):
+        try:
+            self._excel_com_init()
+            macro = (params.get("macro") or "").strip()
+            if not macro:
+                return "excel_run_macro error: 'macro' is required."
+            book = self._excel_book(params.get("workbook"))
+            args = params.get("args") or []
+            result = book.macro(macro)(*args)
+            return (f"Macro '{macro}' ran in {book.name}. "
+                    f"Return value: {result!r}")
+        except Exception as e:
+            return (f"excel_run_macro error: {self._excel_err(e)} "
+                    "(check the macro name exists in that workbook and that "
+                    "macros are enabled)")
+
+    def do_excel_save(self, params):
+        try:
+            self._excel_com_init()
+            book = self._excel_book(params.get("workbook"))
+            path = (params.get("path") or "").strip()
+            if path:
+                book.save(os.path.abspath(os.path.expanduser(path)))
+            elif os.path.dirname(book.fullname):
+                book.save()
+            else:
+                return (f"excel_save error: '{book.name}' has never been "
+                        "saved — pass 'path' to choose where to save it.")
+            return f"Saved {book.fullname}"
+        except Exception as e:
+            return f"excel_save error: {self._excel_err(e)}"
+
+    def do_excel_close(self, params):
+        try:
+            self._excel_com_init()
+            save = params.get("save", True)
+            quit_app = bool(params.get("quit_app"))
+            app = self._excel_app(launch=False)
+            closed = ""
+            if app.books.count:
+                book = self._excel_book(params.get("workbook"))
+                name = book.name
+                note = ""
+                if save and os.path.dirname(book.fullname):
+                    book.save()
+                    note = " (saved)"
+                elif save:
+                    note = " (never saved to disk — contents discarded)"
+                book.close()
+                closed = f"Closed {name}{note}."
+            if not quit_app:
+                return closed or "No workbook open to close."
+            # quit_app only quits when NOTHING else remains open — the agent
+            # may be attached to the user's own Excel instance, and quitting
+            # over their other workbooks would close them out from under them
+            # (found live 2026-08-01: a smoke test's quit saved-and-closed the
+            # user's open personal workbook).
+            remaining = [b.name for b in app.books]
+            if remaining:
+                return ((closed + " " if closed else "")
+                        + "Excel left running — other workbooks are still "
+                        f"open: {', '.join(remaining)}. Close them explicitly "
+                        "by name if that is really intended.")
+            app.quit()
+            return (closed + " " if closed else "") + "Excel closed."
+        except Exception as e:
+            return f"excel_close error: {self._excel_err(e)}"

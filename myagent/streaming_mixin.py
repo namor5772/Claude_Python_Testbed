@@ -8,8 +8,9 @@ from datetime import datetime
 
 from myagent.constants import (
     TOOLS, FILE_TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
-    GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, PARALLEL_SAFE_TOOLS, _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
-    _HAS_PROTONMAIL, _HAS_OUTLOOK,
+    GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, EXCEL_TOOLS, PARALLEL_SAFE_TOOLS,
+    _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
+    _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
     KIMI_PRICING, OLLAMA_PRICING, APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
@@ -386,6 +387,11 @@ class StreamingMixin:
             tools.extend(desktop)
         if self.browser_enabled.get():
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
+        # Excel live-workbook tools (xlwings) — checkbox-gated like browser;
+        # _HAS_EXCEL is False when xlwings isn't installed.
+        if (_HAS_EXCEL and getattr(self, "excel_enabled", None)
+                and self.excel_enabled.get()):
+            tools.extend(copy.deepcopy(EXCEL_TOOLS))
         if self.meta_enabled.get():
             tools.extend(copy.deepcopy(META_TOOLS))
         # MCP tools are populated by MCPMixin._refresh_mcp_tools at connect-time.
@@ -514,6 +520,21 @@ class StreamingMixin:
             if method is None:
                 return f"Unknown Outlook tool: {block.name}"
             self._tool_info(f"Outlook: {block.name}\n")
+            return method(block.input or {})
+        # Excel live-workbook tools (xlwings) — same namespaced dispatch
+        # pattern. The _HAS_EXCEL check is inside so a missing xlwings gives
+        # a clear install hint instead of falling through to "Unknown tool".
+        if block.name.startswith("excel_"):
+            if not _HAS_EXCEL:
+                return ("Excel tools unavailable: xlwings is not installed. "
+                        "Install with: pip install xlwings (desktop Excel must "
+                        "also be installed).")
+            if not getattr(self, "excel_enabled", None) or not self.excel_enabled.get():
+                return f"Excel tools are disabled. Enable the Excel checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Excel tool: {block.name}"
+            self._tool_info(f"Excel: {block.name}\n")
             return method(block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")
