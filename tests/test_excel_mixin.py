@@ -140,5 +140,163 @@ class TestMatrixTsv(unittest.TestCase):
         self.assertEqual(lines[2], "11\t3\t")
 
 
+class TestResolveSheetName(unittest.TestCase):
+    NAMES = ["Sheet1", "Data Sheet", "Summary"]
+
+    def test_exact_match(self):
+        self.assertEqual(
+            ExcelMixin._excel_resolve_sheet_name(self.NAMES, "Summary"),
+            "Summary")
+
+    def test_case_insensitive_returns_the_real_name(self):
+        # Windows COM's lookup is case-insensitive; macOS's is not, so the
+        # helper normalizes both platforms onto the real cased name.
+        self.assertEqual(
+            ExcelMixin._excel_resolve_sheet_name(self.NAMES, "summary"),
+            "Summary")
+        self.assertEqual(
+            ExcelMixin._excel_resolve_sheet_name(self.NAMES, "DATA sheet"),
+            "Data Sheet")
+
+    def test_surrounding_whitespace_tolerated(self):
+        self.assertEqual(
+            ExcelMixin._excel_resolve_sheet_name(self.NAMES, "  Sheet1 "),
+            "Sheet1")
+
+    def test_missing_returns_none(self):
+        # None is what makes the friendly "not found" error fire, instead of
+        # a lazy macOS reference blowing up later with a raw OSERROR -1728.
+        self.assertIsNone(
+            ExcelMixin._excel_resolve_sheet_name(self.NAMES, "NoSuch"))
+
+    def test_no_partial_match(self):
+        self.assertIsNone(
+            ExcelMixin._excel_resolve_sheet_name(self.NAMES, "Sheet"))
+
+
+class TestWriteDropped(unittest.TestCase):
+    def test_all_expected_all_empty_actual_is_a_drop(self):
+        self.assertTrue(ExcelMixin._excel_write_dropped(
+            [["Item", "Qty"], ["Widget", 12]], [[None, None], [None, None]]))
+
+    def test_values_landed_is_not_a_drop(self):
+        self.assertFalse(ExcelMixin._excel_write_dropped(
+            [["Item", "Qty"]], [["Item", 12]]))
+
+    def test_partial_read_back_is_not_a_drop(self):
+        # One surviving cell means Excel is honouring writes; whatever else
+        # happened isn't the silent-discard failure mode.
+        self.assertFalse(ExcelMixin._excel_write_dropped(
+            [["a", "b"]], [["a", None]]))
+
+    def test_intentionally_blank_write_never_warns(self):
+        # A formula returning "" (or a deliberately cleared cell) must not be
+        # reported as a dropped write — hence the all-expected-non-empty gate.
+        self.assertFalse(ExcelMixin._excel_write_dropped(
+            [["a", None]], [[None, None]]))
+        self.assertFalse(ExcelMixin._excel_write_dropped(
+            [["", ""]], [[None, None]]))
+
+    def test_empty_inputs_never_warn(self):
+        self.assertFalse(ExcelMixin._excel_write_dropped([], []))
+        self.assertFalse(ExcelMixin._excel_write_dropped([["a"]], []))
+
+    def test_zero_is_not_treated_as_empty(self):
+        # 0 and False are falsy but are real written values.
+        self.assertTrue(ExcelMixin._excel_write_dropped([[0]], [[None]]))
+        self.assertFalse(ExcelMixin._excel_write_dropped([[0]], [[0]]))
+
+
+class _FakeRange:
+    """Stand-in for an xlwings Range over a shared cell grid, so resize()
+    views the same cells the write landed in (or didn't)."""
+
+    def __init__(self, sheet, row, column, rows=1, cols=1):
+        self.sheet = sheet
+        self.row, self.column = row, column
+        self._rows, self._cols = rows, cols
+
+    def resize(self, rows, cols):
+        return _FakeRange(self.sheet, self.row, self.column, rows, cols)
+
+    @property
+    def address(self):
+        return f"${self.column}${self.row}"
+
+    @property
+    def value(self):
+        return [[self.sheet.cells.get((self.row + r, self.column + c))
+                 for c in range(self._cols)] for r in range(self._rows)]
+
+    @value.setter
+    def value(self, matrix):
+        if self.sheet.drops:      # the wedged-Excel mode: accepted, discarded
+            return
+        for r, row in enumerate(matrix):
+            for c, v in enumerate(row):
+                self.sheet.cells[(self.row + r, self.column + c)] = v
+
+    def options(self, **kwargs):
+        return self
+
+
+class _FakeSheet:
+    def __init__(self, drops=False):
+        self.name = "Sheet1"
+        self.drops = drops
+        self.cells = {}
+
+    def range(self, addr):
+        return _FakeRange(self, 1, 1)
+
+
+class _FakeBook:
+    name = "fake.xlsx"
+
+
+class _WriteHost(ExcelMixin):
+    def __init__(self, drops):
+        self._sheet = _FakeSheet(drops)
+
+    def _excel_com_init(self):
+        pass
+
+    def _excel_target(self, params):
+        return _FakeBook(), self._sheet
+
+
+class TestWriteVerificationWiring(unittest.TestCase):
+    """The pure helper is covered above; these check do_excel_write actually
+    consults it, on BOTH the echo path and the large-write probe path."""
+
+    SMALL = [["Item", "Qty"], ["Widget", 12]]
+    LARGE = [[f"r{r}c{c}" for c in range(10)] for r in range(30)]  # 300 cells
+
+    def test_small_write_warns_when_dropped(self):
+        out = _WriteHost(drops=True).do_excel_write(
+            {"start_cell": "A1", "values": self.SMALL})
+        self.assertIn("VERIFICATION FAILED", out)
+
+    def test_small_write_silent_when_it_lands(self):
+        out = _WriteHost(drops=False).do_excel_write(
+            {"start_cell": "A1", "values": self.SMALL})
+        self.assertNotIn("VERIFICATION FAILED", out)
+        self.assertIn("Current values", out)
+
+    def test_large_write_warns_when_dropped(self):
+        # The regression this closes: >200 cells skip the echo, so before the
+        # probe a dropping Excel produced a bare "Wrote 30x10 cells."
+        out = _WriteHost(drops=True).do_excel_write(
+            {"start_cell": "A1", "values": self.LARGE})
+        self.assertIn("VERIFICATION FAILED", out)
+
+    def test_large_write_silent_when_it_lands(self):
+        out = _WriteHost(drops=False).do_excel_write(
+            {"start_cell": "A1", "values": self.LARGE})
+        self.assertNotIn("VERIFICATION FAILED", out)
+        # still no full echo for large writes
+        self.assertNotIn("Current values", out)
+
+
 if __name__ == "__main__":
     unittest.main()

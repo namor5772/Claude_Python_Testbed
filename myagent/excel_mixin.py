@@ -33,6 +33,10 @@ except Exception:
 
 class ExcelMixin:
 
+    #: excel_sheet actions, in the order the tool description lists them.
+    #: Single source of truth for the guard and its error message.
+    SHEET_ACTIONS = ("list", "add", "rename", "delete", "activate", "clear")
+
     # ── Pure helpers (unit-tested in tests/test_excel_mixin.py) ──────────
 
     @staticmethod
@@ -114,6 +118,25 @@ class ExcelMixin:
             row += [None] * (width - len(row))
             out.append(row)
         return out
+
+    @staticmethod
+    def _excel_write_dropped(expected, actual):
+        """True when a write that should have produced visible cells read
+        back completely empty — the signature of an Excel instance that is
+        silently discarding Apple Event writes (found live on macOS
+        2026-08-01: reads, formatting and sheet ops keep working while every
+        value write is dropped, and .books.count still reports healthy).
+
+        Deliberately conservative: it fires only when EVERY expected cell was
+        non-empty and EVERY cell read back empty, so a legitimately blank
+        result (a formula returning "") can't trip it."""
+        exp = [c for row in expected for c in row]
+        act = [c for row in actual for c in row]
+        if not exp or not act:
+            return False
+        if any(c is None or c == "" for c in exp):
+            return False
+        return all(c is None or c == "" for c in act)
 
     @staticmethod
     def _excel_matrix_tsv(matrix, first_row, first_col):
@@ -206,15 +229,34 @@ class ExcelMixin:
             "Use excel_open to open a file from disk.")
 
     @staticmethod
+    def _excel_resolve_sheet_name(names, want):
+        """Pick the real sheet name matching `want`, or None. Exact first,
+        then case-insensitive (Windows COM's lookup is case-insensitive and
+        macOS's is not — this keeps both platforms behaving the same)."""
+        want = str(want).strip()
+        if want in names:
+            return want
+        folded = want.lower()
+        for n in names:
+            if n.lower() == folded:
+                return n
+        return None
+
+    @staticmethod
     def _excel_get_sheet(book, sheet=None):
         if not sheet:
             return book.sheets.active
-        try:
-            return book.sheets[sheet]
-        except Exception:
-            names = ", ".join(s.name for s in book.sheets)
+        # Validate against the real names rather than trusting the lookup to
+        # raise: on macOS book.sheets['NoSuch'] returns a LAZY reference that
+        # only fails later at use (leaking a raw OSERROR -1728 from whatever
+        # call happened to touch it), so the friendly error never fired.
+        names = [s.name for s in book.sheets]
+        real = ExcelMixin._excel_resolve_sheet_name(names, sheet)
+        if real is None:
             raise RuntimeError(
-                f"Sheet '{sheet}' not found in {book.name}. Sheets: {names}")
+                f"Sheet '{sheet}' not found in {book.name}. "
+                f"Sheets: {', '.join(names)}")
+        return book.sheets[real]
 
     def _excel_target(self, params):
         book = self._excel_book(params.get("workbook"))
@@ -332,9 +374,25 @@ class ExcelMixin:
             out = (f"Wrote {len(matrix)}x{len(matrix[0])} cells to "
                    f"[{book.name}]{sht.name}!{addr}.")
             if len(matrix) * len(matrix[0]) <= 200:
-                back = target.options(ndim=2).value
+                back = self._excel_as_2d(target.options(ndim=2).value)
+                probe_expected, probe_actual = matrix, back
                 out += ("\nCurrent values (after recalculation):\n"
                         + self._excel_matrix_tsv(back, target.row, target.column))
+            else:
+                # Large writes get no echo (it would swamp the model), which
+                # left them with NO verification at all — a silently-dropping
+                # Excel would still report "Wrote NxN cells". Probe the first
+                # row instead: one cheap read that catches the same failure.
+                probe_cols = min(len(matrix[0]), 20)
+                probe = target.resize(1, probe_cols)
+                probe_expected = [matrix[0][:probe_cols]]
+                probe_actual = self._excel_as_2d(probe.options(ndim=2).value)
+            if self._excel_write_dropped(probe_expected, probe_actual):
+                out += ("\n⚠ VERIFICATION FAILED: the cells read back EMPTY "
+                        "after writing. This Excel instance is discarding "
+                        "writes (reads and formatting still work, so it looks "
+                        "healthy). Nothing was written. Quit Excel completely, "
+                        "reopen it, and retry — do not assume the data landed.")
             return out
         except Exception as e:
             return f"excel_write error: {self._excel_err(e)}"
@@ -391,6 +449,12 @@ class ExcelMixin:
         try:
             self._excel_com_init()
             action = (params.get("action") or "").strip().lower()
+            # Validate the action BEFORE resolving the sheet, so a bad action
+            # is named as such instead of surfacing as "sheet not found" for
+            # whatever placeholder name came along with it.
+            if action not in self.SHEET_ACTIONS:
+                return (f"excel_sheet error: unknown action '{action}'. Use "
+                        + ", ".join(self.SHEET_ACTIONS) + ".")
             book = self._excel_book(params.get("workbook"))
             name = (params.get("name") or "").strip()
             if action == "list":
@@ -428,8 +492,11 @@ class ExcelMixin:
             if action == "clear":
                 sht.clear()
                 return f"Cleared all contents and formats of sheet '{name}'."
-            return (f"excel_sheet error: unknown action '{action}'. Use "
-                    "list, add, rename, delete, activate, or clear.")
+            # Unreachable: the guard above admits only actions handled here.
+            # Kept so adding a name to SHEET_ACTIONS without a branch fails
+            # loudly instead of returning None.
+            return (f"excel_sheet error: action '{action}' is accepted but "
+                    "not implemented — this is a bug in excel_mixin.")
         except Exception as e:
             return f"excel_sheet error: {self._excel_err(e)}"
 
@@ -503,8 +570,20 @@ class ExcelMixin:
             book = self._excel_book(params.get("workbook"))
             args = params.get("args") or []
             result = book.macro(macro)(*args)
-            return (f"Macro '{macro}' ran in {book.name}. "
-                    f"Return value: {result!r}")
+            if sys.platform == "win32":
+                # COM raises for an unknown macro, so reaching here means it ran.
+                return (f"Macro '{macro}' ran in {book.name}. "
+                        f"Return value: {result!r}")
+            # macOS cannot confirm this. AppleScript's `run VB macro` returns
+            # None for a MISSING macro exactly as it does for one that ran and
+            # returned nothing, and Excel's dictionary exposes no way to
+            # enumerate VBA project members — so claiming success here would
+            # report a typo'd or hallucinated macro name as a clean run.
+            return (f"Macro '{macro}' was dispatched to {book.name}. "
+                    f"Return value: {result!r}. NOTE (macOS): Excel does not "
+                    "report whether the macro exists — a missing macro also "
+                    "returns None. Confirm the macro's effect (e.g. with "
+                    "excel_read) before relying on it having run.")
         except Exception as e:
             return (f"excel_run_macro error: {self._excel_err(e)} "
                     "(check the macro name exists in that workbook and that "
