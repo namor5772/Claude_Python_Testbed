@@ -223,20 +223,29 @@ class ExcelMixin:
         return app
 
     @staticmethod
-    def _excel_is_read_only(book):
-        """True when the workbook opened read-only. A REJECTED write-access
-        password does NOT raise — Excel silently opens read-only instead — so
-        probing this is the only way to tell the caller their password didn't
-        take, rather than letting them discover it at the first failed save."""
-        for probe in (lambda: book.api.ReadOnly,          # Windows COM
-                      lambda: book.api.read_only.get()):  # macOS appscript
+    def _excel_api_bool(book, win_name, mac_name):
+        """Read a boolean workbook property across both backends, or None if
+        neither shape answers. COM exposes a plain attribute (`ReadOnly`);
+        appscript exposes a reference needing .get() (`read_only`). Probing
+        the wrong one raises, so the chain must fall through rather than
+        give up — and an unanswerable probe returns None so callers never
+        invent a state they could not actually observe."""
+        for probe in (lambda: getattr(book.api, win_name),          # Windows
+                      lambda: getattr(book.api, mac_name).get()):   # macOS
             try:
                 value = probe()
             except Exception:
                 continue
             if value is not None:
                 return bool(value)
-        return False
+        return None
+
+    @staticmethod
+    def _excel_is_read_only(book):
+        """True when the workbook opened read-only. Read-only is SILENT and
+        only bites at the first save, so this is what turns it into an
+        up-front warning instead of a lost run."""
+        return bool(ExcelMixin._excel_api_bool(book, "ReadOnly", "read_only"))
 
     @staticmethod
     def _excel_lock_file(path):
@@ -264,14 +273,11 @@ class ExcelMixin:
                 "an Office owner-lock file (~$…) sits beside it, so Excel may "
                 "consider it open elsewhere — if it is genuinely not open on "
                 "another machine, that lock is stale")
-        try:
-            if book.api.write_reserved.get():
-                checks.append(
-                    "the workbook IS write-reserved — supply "
-                    "'write_res_password' (a second password, separate from "
-                    "'password')")
-        except Exception:
-            pass
+        if self._excel_api_bool(book, "WriteReserved", "write_reserved"):
+            checks.append(
+                "the workbook IS write-reserved — supply "
+                "'write_res_password' (a second password, separate from "
+                "'password')")
         if not os.access(path, os.W_OK):
             checks.append("the file is not writable on disk")
         checks.append(

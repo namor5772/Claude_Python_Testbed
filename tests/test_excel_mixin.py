@@ -304,6 +304,26 @@ class TestIsReadOnly(unittest.TestCase):
         # Never invent a scary warning from a probe that couldn't answer.
         self.assertFalse(ExcelMixin._excel_is_read_only(_BookWithApi(object())))
 
+    def test_api_bool_returns_none_when_neither_shape_answers(self):
+        # None, not False: "could not observe" must stay distinguishable from
+        # "observed false", so callers don't report a state they never saw.
+        self.assertIsNone(ExcelMixin._excel_api_bool(
+            _BookWithApi(object()), "WriteReserved", "write_reserved"))
+
+    def test_api_bool_reads_either_backend(self):
+        # The same helper must serve WriteReserved/write_reserved too — the
+        # read-only note's write-reservation check runs on Windows as well.
+        class _Win:
+            WriteReserved = True
+
+        class _Mac:
+            write_reserved = _MacProp(True)
+
+        self.assertTrue(ExcelMixin._excel_api_bool(
+            _BookWithApi(_Win()), "WriteReserved", "write_reserved"))
+        self.assertTrue(ExcelMixin._excel_api_bool(
+            _BookWithApi(_Mac()), "WriteReserved", "write_reserved"))
+
 
 class TestLockFile(unittest.TestCase):
     def test_detects_the_sidecar_lock(self):
