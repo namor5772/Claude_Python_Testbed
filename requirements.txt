@@ -14,3 +14,4 @@ pygetwindow
 Pillow
 pypdf
 python-docx
+xlwings
