@@ -8,6 +8,8 @@ xw=None gracefully).
 
 import datetime
 import decimal
+import os
+import tempfile
 import unittest
 
 from myagent.excel_mixin import ExcelMixin
@@ -301,6 +303,24 @@ class TestIsReadOnly(unittest.TestCase):
     def test_unknown_shape_defaults_to_not_read_only(self):
         # Never invent a scary warning from a probe that couldn't answer.
         self.assertFalse(ExcelMixin._excel_is_read_only(_BookWithApi(object())))
+
+
+class TestLockFile(unittest.TestCase):
+    def test_detects_the_sidecar_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            book = os.path.join(d, "DeathBook.xlsm")
+            open(book, "w").close()
+            self.assertIsNone(ExcelMixin._excel_lock_file(book))
+            lock = os.path.join(d, "~$DeathBook.xlsm")
+            open(lock, "w").close()
+            self.assertEqual(ExcelMixin._excel_lock_file(book), lock)
+
+    def test_lock_for_a_different_workbook_is_not_matched(self):
+        with tempfile.TemporaryDirectory() as d:
+            book = os.path.join(d, "DeathBook.xlsm")
+            open(book, "w").close()
+            open(os.path.join(d, "~$Other.xlsm"), "w").close()
+            self.assertIsNone(ExcelMixin._excel_lock_file(book))
 
 
 class _FakeRange:

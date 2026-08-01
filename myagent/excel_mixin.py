@@ -238,6 +238,49 @@ class ExcelMixin:
                 return bool(value)
         return False
 
+    @staticmethod
+    def _excel_lock_file(path):
+        """Office's owner-lock sidecar for `path` (`~$Name.xlsm`), or None if
+        absent. A crashed or force-killed Excel leaves this behind, and a
+        stale one makes every later open silently READ-ONLY."""
+        lock = os.path.join(os.path.dirname(path),
+                            "~$" + os.path.basename(path))
+        return lock if os.path.exists(lock) else None
+
+    def _excel_read_only_note(self, book, path):
+        """Report a read-only open loudly, and list what to check.
+
+        Read-only is silent and only bites at the first save, so the warning
+        itself is the point. The CAUSE is deliberately not asserted: live
+        2026-08-01 DeathBook.xlsm opened read-only for one agent run and
+        fully editable minutes later — same password, no write reservation,
+        file untouched — and neither a sidecar lock file nor Excel session
+        state reproduced it on demand. So state the facts that ARE checkable
+        and give the remedy that actually worked (retry on a fresh Excel)
+        rather than inventing a diagnosis."""
+        checks = []
+        if self._excel_lock_file(path):
+            checks.append(
+                "an Office owner-lock file (~$…) sits beside it, so Excel may "
+                "consider it open elsewhere — if it is genuinely not open on "
+                "another machine, that lock is stale")
+        try:
+            if book.api.write_reserved.get():
+                checks.append(
+                    "the workbook IS write-reserved — supply "
+                    "'write_res_password' (a second password, separate from "
+                    "'password')")
+        except Exception:
+            pass
+        if not os.access(path, os.W_OK):
+            checks.append("the file is not writable on disk")
+        checks.append(
+            "it may be open on another machine or still checked out by "
+            "OneDrive — quitting Excel completely and retrying has resolved "
+            "this in practice")
+        return ("⚠ Opened READ-ONLY — edits apply in memory but every save "
+                "will FAIL. Check: " + "; ".join(checks) + ". ")
+
     def _excel_book(self, workbook=None):
         """Resolve a workbook by name (case-insensitive, extension
         optional) or return the active one."""
@@ -346,11 +389,8 @@ class ExcelMixin:
                     # when given, so an unprotected open stays byte-identical.
                     book = app.books.open(ap, **open_kwargs)
                     note = f"Opened {ap}. "
-                    if (open_kwargs.get("write_res_password")
-                            and self._excel_is_read_only(book)):
-                        note += ("⚠ The write-access password was REJECTED — "
-                                 "the workbook opened READ-ONLY, so edits and "
-                                 "saves will fail. ")
+                    if self._excel_is_read_only(book):
+                        note += self._excel_read_only_note(book, ap)
                 elif params.get("create"):
                     book = app.books.add()
                     book.save(ap)
