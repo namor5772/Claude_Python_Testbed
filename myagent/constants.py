@@ -1543,6 +1543,15 @@ EXCEL_TOOLS = [
                     "type": "boolean",
                     "description": "If true and 'path' does not exist, create a new workbook and save it there.",
                 },
+                "password": {
+                    "type": "string",
+                    "description": (
+                        "Password for an open-protected workbook (only used when "
+                        "opening from disk). Attaching to an already-open workbook "
+                        "never needs it — if the user opened the file themselves, "
+                        "omit this."
+                    ),
+                },
             },
             "required": [],
         },

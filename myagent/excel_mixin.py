@@ -253,6 +253,7 @@ class ExcelMixin:
                 return ("excel_open error: xlwings is not installed "
                         "(pip install xlwings).")
             path = (params.get("path") or "").strip()
+            password = (params.get("password") or "").strip() or None
             app = self._excel_app(launch=True)
             note = ""
             if path:
@@ -263,7 +264,13 @@ class ExcelMixin:
                 if book is not None:
                     note = f"Attached to already-open {book.name}. "
                 elif os.path.exists(ap):
-                    book = app.books.open(ap)
+                    # password only applies to opening from disk; a wrong one
+                    # errors immediately (no dialog). Kwarg passed only when
+                    # given so the unprotected path stays byte-identical.
+                    if password:
+                        book = app.books.open(ap, password=password)
+                    else:
+                        book = app.books.open(ap)
                     note = f"Opened {ap}. "
                 elif params.get("create"):
                     book = app.books.add()
