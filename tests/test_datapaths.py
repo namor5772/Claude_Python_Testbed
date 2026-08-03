@@ -287,5 +287,75 @@ class AbsorbTests(DatapathsCase):
         self.assertTrue(bystander.exists())
 
 
+class CostlogTests(DatapathsCase):
+    """resolve_costlog: per-machine cost-log file in the shared dir (appends
+    never conflict across machines, yet every machine's spend syncs
+    everywhere), with the one-shot repo→shared migration claimed atomically
+    by the local-file rename."""
+
+    def setUp(self):
+        super().setUp()
+        self.local = self.repo / dp.COSTLOG_BASENAME
+        self.shared_log = self.shared / f"APICostLog_{dp.machine_label()}.txt"
+
+    def test_resolves_to_per_machine_file_in_share(self):
+        self.assertEqual(dp.resolve_costlog(), str(self.shared_log))
+        self.assertTrue(self.shared.is_dir())
+
+    def test_no_shared_dir_falls_back_to_repo_root(self):
+        os.environ.pop(dp.DATA_DIR_ENV)
+        orig = dp.find_onedrive_root
+        dp.find_onedrive_root = lambda: None
+        self.addCleanup(setattr, dp, "find_onedrive_root", orig)
+        self.assertEqual(dp.resolve_costlog(), str(self.local))
+
+    def test_migration_moves_local_lines_and_leaves_marker(self):
+        self.local.write_text("t1;P;m;0.1\nt2;P;m;0.2\n", encoding="utf-8")
+        dp.resolve_costlog()
+        self.assertEqual(self.shared_log.read_text(encoding="utf-8"),
+                         "t1;P;m;0.1\nt2;P;m;0.2\n")
+        self.assertFalse(self.local.exists())
+        bak = self.local.with_name(dp.COSTLOG_BASENAME + ".migrated.bak")
+        self.assertEqual(bak.read_text(encoding="utf-8"),
+                         "t1;P;m;0.1\nt2;P;m;0.2\n")
+
+    def test_migration_appends_and_adds_missing_newline(self):
+        self.shared.mkdir(parents=True, exist_ok=True)
+        self.shared_log.write_text("t0;P;m;0.5\n", encoding="utf-8")
+        self.local.write_text("t1;P;m;0.1", encoding="utf-8")  # no trailing \n
+        dp.resolve_costlog()
+        self.assertEqual(self.shared_log.read_text(encoding="utf-8"),
+                         "t0;P;m;0.5\nt1;P;m;0.1\n")
+
+    def test_stray_local_file_is_folded_at_next_resolve(self):
+        dp.resolve_costlog()  # nothing to migrate yet
+        self.local.write_text("late;P;m;0.3\n", encoding="utf-8")  # old-code writer
+        dp.resolve_costlog()
+        self.assertEqual(self.shared_log.read_text(encoding="utf-8"),
+                         "late;P;m;0.3\n")
+        self.assertFalse(self.local.exists())
+
+    def test_rotation_archive_rides_along_by_copy(self):
+        old = self.local.with_name(dp.COSTLOG_BASENAME + ".old")
+        old.write_text("archived;P;m;0.9\n", encoding="utf-8")
+        dp.resolve_costlog()
+        shared_old = Path(str(self.shared_log) + ".old")
+        self.assertEqual(shared_old.read_text(encoding="utf-8"),
+                         "archived;P;m;0.9\n")
+        self.assertFalse(old.exists())
+        self.assertTrue(old.with_name(old.name + ".migrated.bak").exists())
+
+    def test_existing_shared_archive_is_never_clobbered(self):
+        self.shared.mkdir(parents=True, exist_ok=True)
+        shared_old = Path(str(self.shared_log) + ".old")
+        shared_old.write_text("theirs\n", encoding="utf-8")
+        old = self.local.with_name(dp.COSTLOG_BASENAME + ".old")
+        old.write_text("mine\n", encoding="utf-8")
+        dp.resolve_costlog()
+        self.assertEqual(shared_old.read_text(encoding="utf-8"), "theirs\n")
+        self.assertFalse(old.exists())  # renamed away; data kept in the .bak
+        self.assertTrue(old.with_name(old.name + ".migrated.bak").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -3138,14 +3138,18 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # client is present (one copy follows the user across machines — OneDrive, not
 # git, is the sync channel; see myagent/datapaths.py), falling back to the
 # repo root on solo machines. State files below stay per-machine at the root.
-from myagent.datapaths import resolve_store  # noqa: E402  (needs os already imported)
+from myagent.datapaths import resolve_store, resolve_costlog  # noqa: E402  (needs os already imported)
 INSTRUCTIONS_FILE = resolve_store("agent_instructions.json")
 CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
 AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
 SKILLS_FILE = resolve_store("skills.json")
 STORES_SYNCED = os.path.dirname(INSTRUCTIONS_FILE) != _BASE_DIR  # shared dir in use
-APICOST_LOG_FILE = os.path.join(_BASE_DIR, "APICostLog.txt")  # per-run cost log (repo root, gitignored)
+# Per-run cost log: APICostLog_<machine>.txt in the OneDrive share (one file
+# per machine — appends never conflict, yet every machine's spend syncs
+# everywhere and the Cost Log viewers total ALL of them). Repo-root
+# APICostLog.txt fallback on solo machines; both locations gitignored.
+APICOST_LOG_FILE = resolve_costlog()
 APICOST_LOG_MAX_BYTES = 100_000  # one-slot rotation cap (helpers.rotate_log_if_needed), same as heartbeat.log's
 
 DEFAULT_SYSTEM_PROMPT = (

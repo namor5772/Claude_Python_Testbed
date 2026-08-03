@@ -32,6 +32,14 @@ Design invariants:
   adopted, identical entries dedupe, a genuinely different entry under an
   existing name is preserved as "<name>__<label>" for the user to reconcile
   in the app UI. The union is idempotent, so concurrent absorbers converge.
+- resolve_costlog() puts the per-run API cost log in the same shared dir,
+  but as ONE FILE PER MACHINE (APICostLog_<machine>.txt): an append-only log
+  can't be key-level-unioned, so two machines must never write the same
+  synced file — instead each appends only to its own, OneDrive syncs them
+  all side by side, and the Cost Log viewers aggregate the folder. Unlike
+  the stores, its one-shot repo→shared migration runs AT RESOLVE TIME (there
+  is no load step to hang it on), claimed atomically by the local-file
+  rename so concurrently-launching apps migrate exactly once.
 """
 
 import glob
@@ -148,6 +156,69 @@ def is_shared(path):
 def machine_label():
     """Short hostname-derived label used to name conflicting variants."""
     return re.sub(r"[^A-Za-z0-9._-]+", "_", platform.node() or "").strip("_.") or "local"
+
+
+COSTLOG_BASENAME = "APICostLog.txt"
+
+
+def resolve_costlog():
+    """Path this machine's API cost log is written to: with a shared dir,
+    <shared>/APICostLog_<machine>.txt — every machine's log syncs side by
+    side and any machine can total ALL of them — else the classic repo-root
+    APICostLog.txt. Runs the one-shot repo→shared migration of this
+    machine's legacy log (so pre-move history counts in the aggregate)."""
+    shared = _shared_dir()
+    if not shared:
+        return os.path.join(_BASE_DIR, COSTLOG_BASENAME)
+    try:
+        os.makedirs(shared, exist_ok=True)
+    except OSError:
+        return os.path.join(_BASE_DIR, COSTLOG_BASENAME)
+    stem, ext = os.path.splitext(COSTLOG_BASENAME)
+    path = os.path.join(shared, f"{stem}_{machine_label()}{ext}")
+    _migrate_costlog(os.path.join(_BASE_DIR, COSTLOG_BASENAME), path)
+    return path
+
+
+def _migrate_costlog(local, shared_path):
+    """One-shot: fold the legacy repo-root cost log into this machine's
+    shared file, renaming the local copy to APICostLog.txt.migrated.bak (the
+    stores' migration marker). The rename is the atomic CLAIM — it happens
+    before the append, so two apps launching at once (LaunchSelfBot.bat
+    starts a pair) migrate exactly once: the loser's rename raises and it
+    backs off. The lines are appended, not copied — only this machine ever
+    writes its label's file, but appending stays correct even if one exists
+    (the viewers sort rows by timestamp, so in-file order is cosmetic). The
+    rotation archive (.old) rides along by copy — os.replace into OneDrive's
+    File Provider volume on macOS would be EXDEV. Best-effort: on any
+    failure the history survives locally and the next launch retries."""
+    if os.path.exists(local):
+        try:
+            with open(local, encoding="utf-8") as f:
+                content = f.read()
+            os.replace(local, local + ".migrated.bak")
+        except OSError:
+            return
+        try:
+            if content and not content.endswith("\n"):
+                content += "\n"
+            if content:
+                with open(shared_path, "a", encoding="utf-8") as f:
+                    f.write(content)
+        except OSError:
+            pass  # history is preserved in the .migrated.bak
+    old_local = local + ".old"
+    if not os.path.exists(old_local):
+        return
+    try:
+        if not os.path.exists(shared_path + ".old"):
+            with open(old_local, encoding="utf-8") as f:
+                old_content = f.read()
+            with open(shared_path + ".old", "w", encoding="utf-8") as f:
+                f.write(old_content)
+        os.replace(old_local, old_local + ".migrated.bak")
+    except OSError:
+        pass
 
 
 def union_stores(primary, other, label):

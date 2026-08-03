@@ -885,17 +885,19 @@ class StreamingMixin:
         return priced
 
     def _log_api_cost(self, total_cost):
-        """Append the run's final cumulative cost to APICostLog.txt in the repo root.
+        """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
         total_cost is the last cost displayed in the output window. Runs where
         no priced usage was recorded (total_cost == 0 — e.g. Ollama, an
         unmatched model prefix, or a STOP before the first API result) are
         skipped, matching the "only if relevant" display behaviour. The log
-        lives in the project root (APICOST_LOG_FILE, derived from _BASE_DIR like
-        agent_instructions.json/skills.json), so it works unchanged on any
-        platform and from any working directory. Best-effort: any I/O failure is
-        reported but never interrupts the run."""
+        (APICOST_LOG_FILE via datapaths.resolve_costlog) is
+        APICostLog_<machine>.txt in the OneDrive share — per-machine files
+        never conflict-fork, yet every machine's spend syncs everywhere for
+        the viewers to aggregate — falling back to repo-root APICostLog.txt
+        on solo machines. Best-effort: any I/O failure is reported but never
+        interrupts the run."""
         if not total_cost or total_cost <= 0:
             return
         try:

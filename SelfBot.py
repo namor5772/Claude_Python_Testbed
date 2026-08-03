@@ -988,6 +988,7 @@ DEFAULT_SYSTEM_PROMPT = (
 try:
     from myagent.datapaths import (
         resolve_store as _resolve_store,
+        resolve_costlog as _resolve_costlog,
         load_store as _load_store,
         save_store as _save_store,
         absorb_conflict_forks as _absorb_conflict_forks,
@@ -995,6 +996,9 @@ try:
 except ImportError:
     def _resolve_store(name):
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+
+    def _resolve_costlog():
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "APICostLog.txt")
 
     def _load_store(path):
         try:
@@ -1012,9 +1016,10 @@ except ImportError:
         return False
 
 PROMPTS_FILE = _resolve_store("system_prompts.json")
-# Same per-run cost log MyAgent writes (repo root / APICostLog.txt); SelfBot is at the
-# repo root, so this resolves to MyAgent's _BASE_DIR path — one shared file for both apps.
-APICOST_LOG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "APICostLog.txt")
+# Same cost log MyAgent writes: APICostLog_<machine>.txt in the OneDrive share
+# (per-machine files — appends never conflict-fork, every machine's spend syncs
+# everywhere for the viewers to aggregate), repo-root APICostLog.txt fallback.
+APICOST_LOG_FILE = _resolve_costlog()
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
@@ -5659,7 +5664,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
 
     def _log_api_cost(self, total_cost):
-        """Append the session's cumulative API cost to APICostLog.txt (repo root — the
+        """Append the session's cumulative API cost to this machine's cost log
+        (APICostLog_<machine>.txt in the OneDrive share, repo-root fallback — the
         SAME file MyAgent writes). Called once when the app closes. Semicolon-delimited
         {timestamp};{provider};{model};{cost} so a comma in a model name can't split a
         field; 4-decimal cost for spreadsheet summing. Skipped when the cost is zero (no
