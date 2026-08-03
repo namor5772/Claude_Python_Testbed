@@ -1,9 +1,10 @@
 # CostLog_Win.ps1 -- Desktop-shortcut viewer for the MyAgent/SelfBot API cost
 # log (Windows twin of CostLog.applescript / view_costlog.command). Shows a
 # spend summary first (grand total, today, this month, by machine, by provider,
-# by model), then the cost per session (consecutive runs on one machine no more
-# than 30 min apart count as one working session), then every run
-# most-recent-first. Since 2026-08-03 each machine
+# by model), then every run most-recent-first WITH its individual cost -- the
+# per-run cost column is rendered with fixed-width format strings, placed
+# before the model name, so a narrow console can never drop it (see the FULL
+# LOG comment below). Since 2026-08-03 each machine
 # writes its OWN log file into the OneDrive share -- APICostLog_<machine>.txt in
 # <OneDrive>\MyAppShare (see myagent/datapaths.py: per-machine files never
 # conflict-fork, yet OneDrive syncs them all everywhere) -- so this viewer
@@ -18,6 +19,18 @@
 $repoDir = Split-Path -Parent $PSScriptRoot
 $Host.UI.RawUI.WindowTitle = 'API Cost Log'
 $inv = [Globalization.CultureInfo]::InvariantCulture
+# Widen a narrow console (a fresh shortcut's conhost defaults to 80 columns)
+# so the full-log lines don't wrap. Best-effort: the cost column stays visible
+# even when this fails, because it is placed before the model name.
+try {
+    $rawUI = $Host.UI.RawUI
+    if ($rawUI.BufferSize.Width -lt 100) {
+        $bs = $rawUI.BufferSize; $bs.Width = 100; $rawUI.BufferSize = $bs
+        $ws = $rawUI.WindowSize
+        $ws.Width = [Math]::Min(100, $rawUI.MaxPhysicalWindowSize.Width)
+        $rawUI.WindowSize = $ws
+    }
+} catch {}
 # The logs are written as UTF-8; read and render them as UTF-8 so a non-ASCII
 # provider/model/machine name can't mojibake (guarded: the console-encoding
 # setter throws when there is no real console, e.g. a redirected invocation).
@@ -106,56 +119,27 @@ try {
         $out += ($rows | Group-Object Model |
             Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
             ForEach-Object { '    {0,-32} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
-
-        # Cost per session: the log has no session id (MyAgent appends one line
-        # per run, SelfBot one per process close), so a "session" is
-        # reconstructed by time adjacency -- consecutive runs logged by the
-        # SAME machine no more than $sessionGapMin apart (a scheduled morning
-        # batch, an orchestrator plus its waited children, a SelfBot duo's two
-        # lines) group into one session. Machine-keyed because the merged rows
-        # interleave machines: a Mac run minutes after a Windows run is
-        # parallel work, not the same session.
-        $sessionGapMin = 30
-        $sessions = @()
-        $openSession = @{}
-        foreach ($r in $rows) {
-            $t = $null
-            try { $t = [datetime]::ParseExact($r.Time, 'yyyy-MM-dd HH:mm:ss', $inv) } catch {}
-            $s = $openSession[$r.Machine]
-            if ($null -eq $s -or $null -eq $t -or $null -eq $s.End -or
-                    ($t - $s.End).TotalMinutes -gt $sessionGapMin) {
-                $s = @{ Start = $r.Time; End = $t; EndStr = $r.Time; Machine = $r.Machine
-                        Runs = 0; Cost = 0.0; Models = @() }
-                $sessions += $s
-                $openSession[$r.Machine] = $s
-            }
-            $s.Runs++; $s.Cost += $r.Cost; $s.End = $t; $s.EndStr = $r.Time
-            if ($s.Models -notcontains $r.Model) { $s.Models += $r.Model }
-        }
-        $out += @('', ('=' * 21 + ' SESSIONS (most recent first) ' + '=' * 21), '')
-        $out += ('  {0} sessions - consecutive runs on one machine <= {1} min apart' -f $sessions.Count, $sessionGapMin)
-        $out += ''
-        $revSessions = @($sessions); [array]::Reverse($revSessions)
-        foreach ($s in $revSessions) {
-            $models = $s.Models -join ', '
-            if ($models.Length -gt 42) { $models = $models.Substring(0, 41) + '~' }
-            $startDisp = if ($s.Start.Length -ge 16) { $s.Start.Substring(0, 16) } else { $s.Start }
-            $endDisp = if ($s.EndStr.Length -ge 19) { $s.EndStr.Substring(11, 5) } else { $s.EndStr }
-            $runWord = if ($s.Runs -eq 1) { 'run' } else { 'runs' }
-            $out += ('  {0} -> {1}  {2,-24} ${3,10:N4}  ({4} {5}; {6})' -f $startDisp, $endDisp, $s.Machine, $s.Cost, $s.Runs, $runWord, $models)
-        }
     }
     $out += @('', ('=' * 21 + ' FULL LOG (most recent first) ' + '=' * 21), '')
 
     if ($rows.Count -gt 0) {
+        # Rendered with explicit fixed-width format strings, NOT Format-Table:
+        # -AutoSize sizes columns from ALL rows and, when the widest line
+        # exceeds the console width, silently DROPS trailing columns
+        # table-wide. Adding the MACHINE column (2026-08-03, the per-machine
+        # log merge) pushed the widest rows past a default 80-column conhost
+        # and the per-run COST column vanished entirely. Cost now sits BEFORE
+        # the open-ended model name, so it stays on screen at any console
+        # width -- at worst a long model name wraps.
+        $machW = [Math]::Max(7, ($rows | ForEach-Object { $_.Machine.Length } | Measure-Object -Maximum).Maximum)
+        $provW = [Math]::Max(8, ($rows | ForEach-Object { $_.Provider.Length } | Measure-Object -Maximum).Maximum)
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4}"
+        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'MODEL')
+        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 5))
         $rev = @($rows); [array]::Reverse($rev)
-        $table = $rev | Format-Table -AutoSize `
-            @{ Label = 'DATE/TIME'; Expression = { $_.Time } },
-            @{ Label = 'MACHINE';   Expression = { $_.Machine } },
-            @{ Label = 'PROVIDER';  Expression = { $_.Provider } },
-            @{ Label = 'MODEL';     Expression = { $_.Model } },
-            @{ Label = 'COST(USD)'; Expression = { '{0:N4}' -f $_.Cost } } | Out-String -Stream
-        $out += $table
+        foreach ($r in $rev) {
+            $out += ($fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Model)
+        }
     }
 
     try { $out | Out-Host -Paging } catch { $out | Write-Host }

@@ -2,10 +2,11 @@
 # view_costlog.command — opened by the "API Cost Log" desktop launcher.
 #
 # Shows the MyAgent/SelfBot API cost log for examination: a spend summary first
-# (grand total, today, this month, by machine, by provider, by model), then the
-# cost per session (consecutive runs on one machine no more than 30 min apart
-# count as one working session), then every logged run (most recent first), in
-# a scrollable, searchable pager.
+# (grand total, today, this month, by machine, by provider, by model), then
+# every logged run (most recent first) WITH its individual cost, in a
+# scrollable, searchable pager. The cost column sits before the model name so
+# a narrow terminal wraps only the model tail, never hides the cost (matching
+# the Windows twin, where Format-Table used to drop the trailing cost column).
 #   ↑/↓ scroll · /text search · n next match · q to quit.
 #
 # Since 2026-08-03 each machine writes its OWN log file into the OneDrive
@@ -103,49 +104,13 @@ done | sort -t';' -k1,1 > "$MERGED"
   awk -F';' 'NF>=5 { m[$3]+=$4; c[$3]++ } END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
     | sort -rn | awk -F'\t' '{ printf "    %-32s $%10.4f  (%d)\n", $2, $1+0, $3 }'
   echo
-  echo "═════════════════════ SESSIONS (most recent first) ═════════════════════"
-  echo
-  # Cost per session: the log has no session id (MyAgent appends one line per
-  # run, SelfBot one per process close), so a "session" is reconstructed by
-  # time adjacency — consecutive runs logged by the SAME machine no more than
-  # 30 min apart (a scheduled morning batch, an orchestrator plus its waited
-  # children, a SelfBot duo's two lines) group into one session. Machine-keyed
-  # because the merged rows interleave machines: a Mac run minutes after a
-  # Windows run is parallel work, not the same session. BSD awk has no
-  # mktime(), so timestamps become epoch seconds via the days-from-civil
-  # formula (exact for gap arithmetic; the input is already time-sorted).
-  awk -F';' '
-    function dayn(y, m, d,    era, yoe, doy, doe) {
-      if (m <= 2) { y -= 1; m += 12 }
-      era = int(y / 400); yoe = y - era * 400
-      doy = int((153 * (m - 3) + 2) / 5) + d - 1
-      doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
-      return era * 146097 + doe - 719468
-    }
-    NF>=5 {
-      ts = $1; mach = $5
-      ep = dayn(substr(ts,1,4)+0, substr(ts,6,2)+0, substr(ts,9,2)+0) * 86400
-      ep += substr(ts,12,2) * 3600 + substr(ts,15,2) * 60 + substr(ts,18,2)
-      if (!(mach in last) || ep - last[mach] > 1800) {
-        n++; sid[mach] = n; start[n] = substr(ts,1,16); machs[n] = mach
-      }
-      s = sid[mach]; last[mach] = ep
-      endt[s] = substr(ts,12,5); runs[s]++; total[s] += $4
-      if (!((s, $3) in seen)) { seen[s, $3] = 1; mods[s] = (mods[s] == "") ? $3 : mods[s] ", " $3 }
-    }
-    END {
-      if (n == 0) { print "  (no sessions)"; exit }
-      printf "  %d sessions — consecutive runs on one machine ≤ 30 min apart\n\n", n
-      for (i = n; i >= 1; i--) {
-        m2 = mods[i]; if (length(m2) > 42) m2 = substr(m2, 1, 41) "…"
-        w = (runs[i] == 1) ? "run" : "runs"
-        printf "  %s → %s  %-24s $%10.4f  (%d %s; %s)\n", start[i], endt[i], machs[i], total[i], runs[i], w, m2
-      }
-    }' "$MERGED"
-  echo
   echo "═════════════════════ FULL LOG (most recent first) ═════════════════════"
   echo
-  { echo "DATE/TIME;MACHINE;PROVIDER;MODEL;COST(USD)"
-    tail -r "$MERGED" | awk -F';' 'NF>=5 { print $1 ";" $5 ";" $2 ";" $3 ";" $4 }'; } \
+  # COST before MODEL: the model column is the only open-ended one, so with
+  # cost ahead of it a narrow terminal wraps at worst the model tail — the
+  # per-run cost is always on screen (the Windows twin does the same; its
+  # Format-Table used to silently drop the trailing cost column instead).
+  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);MODEL"
+    tail -r "$MERGED" | awk -F';' 'NF>=5 { print $1 ";" $5 ";" $2 ";" $4 ";" $3 }'; } \
     | column -t -s';'
 } | less -R
