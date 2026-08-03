@@ -69,9 +69,7 @@ print("\n1. attach and create")
 pre = h.do_excel_open({})
 print(f"     (your Excel before we start: {pre.splitlines()[0]})")
 for p in (BOOK, BYSTANDER):
-    if os.path.exists(p):
-        os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
-        os.remove(p)
+    force_rm(p)
 out = h.do_excel_open({"path": BOOK, "create": True})
 check("create + save a new workbook", "error:" not in out, out)
 check("a fresh writable workbook gets NO read-only warning",
@@ -152,9 +150,7 @@ h.do_excel_close({"workbook": "check_main.xlsx", "save": True})
 # again (seen live 2026-08-01; it does not reproduce every run). Reusing the
 # main workbook here would poison checks 8 and 9 with that stale state.
 RO = os.path.join(TMP, "check_readonly.xlsx")
-if os.path.exists(RO):
-    os.chmod(RO, stat.S_IWRITE | stat.S_IREAD)
-    os.remove(RO)
+force_rm(RO)
 h.do_excel_open({"path": RO, "create": True})
 h.do_excel_close({"workbook": "check_readonly.xlsx", "save": True})
 if not os.path.exists(RO):

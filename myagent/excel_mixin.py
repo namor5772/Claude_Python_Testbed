@@ -25,6 +25,8 @@ import numbers as _numbers
 import os
 import sys
 
+from myagent.constants import EXCEL_SHEET_ACTIONS
+
 try:
     import xlwings as xw
 except Exception:
@@ -34,8 +36,9 @@ except Exception:
 class ExcelMixin:
 
     #: excel_sheet actions, in the order the tool description lists them.
-    #: Single source of truth for the guard and its error message.
-    SHEET_ACTIONS = ("list", "add", "rename", "delete", "activate", "clear")
+    #: Defined in constants.py beside the tool schema (whose enum it also
+    #: feeds), so the guard and the schema can never drift apart.
+    SHEET_ACTIONS = EXCEL_SHEET_ACTIONS
 
     # ── Pure helpers (unit-tested in tests/test_excel_mixin.py) ──────────
 
@@ -198,7 +201,16 @@ class ExcelMixin:
 
     def _excel_app(self, launch=False):
         """Attach to the running Excel instance (the user's, if one is
-        open) or launch a visible one when launch=True."""
+        open) or launch a visible one when launch=True.
+
+        The chokepoint every tool passes through (directly or via
+        _excel_book/_excel_target), so the xlwings-missing guard and the
+        per-thread COM init live here instead of being repeated in each
+        do_excel_* method."""
+        if xw is None:
+            raise RuntimeError(
+                "xlwings is not installed (pip install xlwings).")
+        self._excel_com_init()
         app = None
         try:
             if xw.apps.count:
@@ -374,12 +386,7 @@ class ExcelMixin:
 
     def do_excel_open(self, params):
         try:
-            self._excel_com_init()
-            if xw is None:
-                return ("excel_open error: xlwings is not installed "
-                        "(pip install xlwings).")
             path = (params.get("path") or "").strip()
-            open_kwargs = self._excel_open_kwargs(params)
             app = self._excel_app(launch=True)
             note = ""
             if path:
@@ -393,7 +400,7 @@ class ExcelMixin:
                     # These only apply to opening from disk; a wrong password
                     # errors immediately (no dialog). Kwargs are passed only
                     # when given, so an unprotected open stays byte-identical.
-                    book = app.books.open(ap, **open_kwargs)
+                    book = app.books.open(ap, **self._excel_open_kwargs(params))
                     note = f"Opened {ap}. "
                     if self._excel_is_read_only(book):
                         note += self._excel_read_only_note(book, ap)
@@ -411,7 +418,6 @@ class ExcelMixin:
 
     def do_excel_read(self, params):
         try:
-            self._excel_com_init()
             book, sht = self._excel_target(params)
             rng_str = (params.get("range") or "").strip()
             rng = sht.range(rng_str) if rng_str else sht.used_range
@@ -445,7 +451,6 @@ class ExcelMixin:
 
     def do_excel_write(self, params):
         try:
-            self._excel_com_init()
             book, sht = self._excel_target(params)
             start = (params.get("start_cell") or "").strip()
             if not start:
@@ -457,7 +462,7 @@ class ExcelMixin:
             out = (f"Wrote {len(matrix)}x{len(matrix[0])} cells to "
                    f"[{book.name}]{sht.name}!{addr}.")
             if len(matrix) * len(matrix[0]) <= 200:
-                back = self._excel_as_2d(target.options(ndim=2).value)
+                back = target.options(ndim=2).value
                 probe_expected, probe_actual = matrix, back
                 out += ("\nCurrent values (after recalculation):\n"
                         + self._excel_matrix_tsv(back, target.row, target.column))
@@ -469,7 +474,7 @@ class ExcelMixin:
                 probe_cols = min(len(matrix[0]), 20)
                 probe = target.resize(1, probe_cols)
                 probe_expected = [matrix[0][:probe_cols]]
-                probe_actual = self._excel_as_2d(probe.options(ndim=2).value)
+                probe_actual = probe.options(ndim=2).value
             if self._excel_write_dropped(probe_expected, probe_actual):
                 out += ("\n⚠ VERIFICATION FAILED: the cells read back EMPTY "
                         "after writing. This Excel instance is discarding "
@@ -482,7 +487,6 @@ class ExcelMixin:
 
     def do_excel_format(self, params):
         try:
-            self._excel_com_init()
             book, sht = self._excel_target(params)
             rng_str = (params.get("range") or "").strip()
             if not rng_str:
@@ -530,7 +534,6 @@ class ExcelMixin:
 
     def do_excel_sheet(self, params):
         try:
-            self._excel_com_init()
             action = (params.get("action") or "").strip().lower()
             # Validate the action BEFORE resolving the sheet, so a bad action
             # is named as such instead of surfacing as "sheet not found" for
@@ -585,7 +588,6 @@ class ExcelMixin:
 
     def do_excel_find(self, params):
         try:
-            self._excel_com_init()
             text = str(params.get("text") or "").strip()
             if not text:
                 return "excel_find error: 'text' is required."
@@ -646,7 +648,6 @@ class ExcelMixin:
 
     def do_excel_run_macro(self, params):
         try:
-            self._excel_com_init()
             macro = (params.get("macro") or "").strip()
             if not macro:
                 return "excel_run_macro error: 'macro' is required."
@@ -674,7 +675,6 @@ class ExcelMixin:
 
     def do_excel_save(self, params):
         try:
-            self._excel_com_init()
             book = self._excel_book(params.get("workbook"))
             path = (params.get("path") or "").strip()
             if path:
@@ -690,7 +690,6 @@ class ExcelMixin:
 
     def do_excel_close(self, params):
         try:
-            self._excel_com_init()
             save = params.get("save", True)
             quit_app = bool(params.get("quit_app"))
             app = self._excel_app(launch=False)

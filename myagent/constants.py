@@ -1519,6 +1519,12 @@ PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill",
 # Conditionally included in _get_tools() only when self.excel_enabled.get()
 # is True AND _HAS_EXCEL is True. Dispatch is the namespaced excel_* pattern
 # (myagent/excel_mixin.py).
+
+# excel_sheet's action set — single source of truth for the schema enum below
+# AND the mixin's guard/error message (excel_mixin imports it as
+# SHEET_ACTIONS), so a new action can't reach one list and miss the other.
+EXCEL_SHEET_ACTIONS = ("list", "add", "rename", "delete", "activate", "clear")
+
 EXCEL_TOOLS = [
     {
         "name": "excel_open",
@@ -1698,7 +1704,7 @@ EXCEL_TOOLS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "add", "rename", "delete", "activate", "clear"],
+                    "enum": list(EXCEL_SHEET_ACTIONS),
                     "description": "The operation to perform.",
                 },
                 "workbook": {

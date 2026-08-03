@@ -394,9 +394,6 @@ class _WriteHost(ExcelMixin):
     def __init__(self, drops):
         self._sheet = _FakeSheet(drops)
 
-    def _excel_com_init(self):
-        pass
-
     def _excel_target(self, params):
         return _FakeBook(), self._sheet
 

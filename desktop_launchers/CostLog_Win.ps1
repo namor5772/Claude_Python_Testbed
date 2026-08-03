@@ -131,15 +131,22 @@ try {
         # and the per-run COST column vanished entirely. Cost now sits BEFORE
         # the open-ended model name, so it stays on screen at any console
         # width -- at worst a long model name wraps.
-        $machW = [Math]::Max(7, ($rows | ForEach-Object { $_.Machine.Length } | Measure-Object -Maximum).Maximum)
-        $provW = [Math]::Max(8, ($rows | ForEach-Object { $_.Provider.Length } | Measure-Object -Maximum).Maximum)
+        # One plain loop for both column widths (headers set the floors), and
+        # the row lines are emitted as a single array append -- a per-row
+        # `$out +=` reallocates the whole accumulated array each time, which
+        # goes quadratic as the merged per-machine logs grow.
+        $machW = 7; $provW = 8
+        foreach ($r in $rows) {
+            if ($r.Machine.Length -gt $machW) { $machW = $r.Machine.Length }
+            if ($r.Provider.Length -gt $provW) { $provW = $r.Provider.Length }
+        }
         $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4}"
         $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'MODEL')
         $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 5))
         $rev = @($rows); [array]::Reverse($rev)
-        foreach ($r in $rev) {
-            $out += ($fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Model)
-        }
+        $out += @(foreach ($r in $rev) {
+            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Model
+        })
     }
 
     try { $out | Out-Host -Paging } catch { $out | Write-Host }

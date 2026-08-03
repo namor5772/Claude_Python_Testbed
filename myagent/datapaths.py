@@ -134,17 +134,28 @@ def _shared_dir():
     return shared
 
 
+def _ensured_shared_dir():
+    """The usable shared dir (created if needed), or None → use the repo
+    root. THE fallback policy: resolve_store and resolve_costlog both route
+    through this, so the stores and the cost log can never diverge on where
+    runtime files live."""
+    shared = _shared_dir()
+    if not shared:
+        return None
+    try:
+        os.makedirs(shared, exist_ok=True)
+    except OSError:
+        return None
+    return shared
+
+
 def resolve_store(filename):
     """Path for a shared store file: <shared dir>/<filename> when a shared dir
     is available (env override or OneDrive), else <repo root>/<filename>."""
-    shared = _shared_dir()
+    shared = _ensured_shared_dir()
     if not shared:
         return os.path.join(_BASE_DIR, filename)
-    try:
-        os.makedirs(shared, exist_ok=True)
-        return os.path.join(shared, filename)
-    except OSError:
-        return os.path.join(_BASE_DIR, filename)
+    return os.path.join(shared, filename)
 
 
 def is_shared(path):
@@ -160,6 +171,10 @@ def machine_label():
 
 COSTLOG_BASENAME = "APICostLog.txt"
 
+# Marker suffix a migrated-away local file is renamed to (stores and cost log
+# alike) so deletions in the shared copy can't be resurrected by a re-merge.
+_MIGRATED_SUFFIX = ".migrated.bak"
+
 
 def resolve_costlog():
     """Path this machine's API cost log is written to: with a shared dir,
@@ -167,12 +182,8 @@ def resolve_costlog():
     side and any machine can total ALL of them — else the classic repo-root
     APICostLog.txt. Runs the one-shot repo→shared migration of this
     machine's legacy log (so pre-move history counts in the aggregate)."""
-    shared = _shared_dir()
+    shared = _ensured_shared_dir()
     if not shared:
-        return os.path.join(_BASE_DIR, COSTLOG_BASENAME)
-    try:
-        os.makedirs(shared, exist_ok=True)
-    except OSError:
         return os.path.join(_BASE_DIR, COSTLOG_BASENAME)
     stem, ext = os.path.splitext(COSTLOG_BASENAME)
     path = os.path.join(shared, f"{stem}_{machine_label()}{ext}")
@@ -196,7 +207,7 @@ def _migrate_costlog(local, shared_path):
         try:
             with open(local, encoding="utf-8") as f:
                 content = f.read()
-            os.replace(local, local + ".migrated.bak")
+            os.replace(local, local + _MIGRATED_SUFFIX)
         except OSError:
             return
         try:
@@ -216,7 +227,7 @@ def _migrate_costlog(local, shared_path):
                 old_content = f.read()
             with open(shared_path + ".old", "w", encoding="utf-8") as f:
                 f.write(old_content)
-        os.replace(old_local, old_local + ".migrated.bak")
+        os.replace(old_local, old_local + _MIGRATED_SUFFIX)
     except OSError:
         pass
 
@@ -318,7 +329,7 @@ def _migrate_local_into(path):
     else:
         save_store(path, local_data)
     try:
-        os.replace(local, local + ".migrated.bak")
+        os.replace(local, local + _MIGRATED_SUFFIX)
     except OSError:
         pass
 
