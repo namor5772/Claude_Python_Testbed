@@ -120,10 +120,18 @@ syncs them all everywhere — see `myagent/datapaths.py`), so
 `view_costlog.command` merges EVERY machine's file (plus any unmigrated
 repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
 `awk -F';'` builds a spend summary — grand total, today, this month, by
-machine, by provider, and by model (highest spend first) — before listing
-every run most-recent-first via `column -t -s';'`. There are no idle ticks to
-hide here, so the "meaningful first" analog is the totals rather than a
-`grep -v`. Icon master from `make_costlog_icon.py`
+machine, by provider, and by model (highest spend first) — then the **cost per
+session**, then every run most-recent-first via `column -t -s';'`. The log
+carries no session id (MyAgent appends one line per run, SelfBot one per
+process close), so a session is reconstructed by time adjacency: consecutive
+runs logged by the same machine no more than 30 min apart (a scheduled morning
+batch, an orchestrator plus its waited children, a SelfBot duo's two lines)
+group into one session, shown as span → machine → total cost → run count and
+models. The grouping is machine-keyed because the merged rows interleave
+machines — a Mac run minutes after a Windows run is parallel work, not the
+same session — and since BSD awk has no `mktime()`, timestamps become epoch
+seconds via the days-from-civil formula. There are no idle ticks to hide here,
+so the "meaningful first" analog is the totals rather than a `grep -v`. Icon master from `make_costlog_icon.py`
 (`python desktop_launchers/make_costlog_icon.py`). Its Windows twin is
 `CostLog_Win.ps1` (same OneDrive share on Windows) — see the Windows section.
 

@@ -1,7 +1,9 @@
 # CostLog_Win.ps1 -- Desktop-shortcut viewer for the MyAgent/SelfBot API cost
 # log (Windows twin of CostLog.applescript / view_costlog.command). Shows a
 # spend summary first (grand total, today, this month, by machine, by provider,
-# by model), then every run most-recent-first. Since 2026-08-03 each machine
+# by model), then the cost per session (consecutive runs on one machine no more
+# than 30 min apart count as one working session), then every run
+# most-recent-first. Since 2026-08-03 each machine
 # writes its OWN log file into the OneDrive share -- APICostLog_<machine>.txt in
 # <OneDrive>\MyAppShare (see myagent/datapaths.py: per-machine files never
 # conflict-fork, yet OneDrive syncs them all everywhere) -- so this viewer
@@ -104,6 +106,44 @@ try {
         $out += ($rows | Group-Object Model |
             Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
             ForEach-Object { '    {0,-32} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+
+        # Cost per session: the log has no session id (MyAgent appends one line
+        # per run, SelfBot one per process close), so a "session" is
+        # reconstructed by time adjacency -- consecutive runs logged by the
+        # SAME machine no more than $sessionGapMin apart (a scheduled morning
+        # batch, an orchestrator plus its waited children, a SelfBot duo's two
+        # lines) group into one session. Machine-keyed because the merged rows
+        # interleave machines: a Mac run minutes after a Windows run is
+        # parallel work, not the same session.
+        $sessionGapMin = 30
+        $sessions = @()
+        $openSession = @{}
+        foreach ($r in $rows) {
+            $t = $null
+            try { $t = [datetime]::ParseExact($r.Time, 'yyyy-MM-dd HH:mm:ss', $inv) } catch {}
+            $s = $openSession[$r.Machine]
+            if ($null -eq $s -or $null -eq $t -or $null -eq $s.End -or
+                    ($t - $s.End).TotalMinutes -gt $sessionGapMin) {
+                $s = @{ Start = $r.Time; End = $t; EndStr = $r.Time; Machine = $r.Machine
+                        Runs = 0; Cost = 0.0; Models = @() }
+                $sessions += $s
+                $openSession[$r.Machine] = $s
+            }
+            $s.Runs++; $s.Cost += $r.Cost; $s.End = $t; $s.EndStr = $r.Time
+            if ($s.Models -notcontains $r.Model) { $s.Models += $r.Model }
+        }
+        $out += @('', ('=' * 21 + ' SESSIONS (most recent first) ' + '=' * 21), '')
+        $out += ('  {0} sessions - consecutive runs on one machine <= {1} min apart' -f $sessions.Count, $sessionGapMin)
+        $out += ''
+        $revSessions = @($sessions); [array]::Reverse($revSessions)
+        foreach ($s in $revSessions) {
+            $models = $s.Models -join ', '
+            if ($models.Length -gt 42) { $models = $models.Substring(0, 41) + '~' }
+            $startDisp = if ($s.Start.Length -ge 16) { $s.Start.Substring(0, 16) } else { $s.Start }
+            $endDisp = if ($s.EndStr.Length -ge 19) { $s.EndStr.Substring(11, 5) } else { $s.EndStr }
+            $runWord = if ($s.Runs -eq 1) { 'run' } else { 'runs' }
+            $out += ('  {0} -> {1}  {2,-24} ${3,10:N4}  ({4} {5}; {6})' -f $startDisp, $endDisp, $s.Machine, $s.Cost, $s.Runs, $runWord, $models)
+        }
     }
     $out += @('', ('=' * 21 + ' FULL LOG (most recent first) ' + '=' * 21), '')
 
