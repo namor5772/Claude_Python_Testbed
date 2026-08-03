@@ -30,14 +30,33 @@ affected either way — launchd runs the venv python directly.)
 
 `rebuild.sh` patches the repo path into the AppleScript for whatever clone
 it runs from, renders the iconset from the 1024px master with `sips`
-(no Python needed), compiles with `osacompile`, ad-hoc signs, and finally
-pastes the icon on with `NSWorkspace.setIconForFile` — that last step
-outranks macOS's IconServices cache, which can otherwise keep showing stale
-artwork no matter how many times Finder restarts. Never run `xattr -cr` on
-the built apps afterwards: that strips the pasted-on icon (re-run
-`rebuild.sh` if it happens). First press after a rebuild re-asks the
-one-time permission prompts (notifications / System Events) because the
-code hash changed.
+(no Python needed), compiles with `osacompile`, injects a stable
+`CFBundleIdentifier` (`com.roman.launcher.<slug>` — osacompile emits none),
+signs, and finally pastes the icon on with `NSWorkspace.setIconForFile` —
+that last step outranks macOS's IconServices cache, which can otherwise keep
+showing stale artwork no matter how many times Finder restarts. Never run
+`xattr -cr` on the built apps afterwards: that strips the pasted-on icon
+(re-run `rebuild.sh` if it happens).
+
+**Signing & TCC (why rebuilds no longer break permissions)** — TCC stores a
+grant against the app's *designated code requirement*. Under the old ad-hoc
+signing that requirement was a hash of the exact binary, so every rebuild
+orphaned every granted consent: the toggle in System Settings stayed ON but
+`tccd` logged `Failed to match existing code requirement` and silently
+denied (symptom on 2026-08-03: MyAgent screenshots came back black in the
+Excel area while the Screen Recording toggle looked enabled). Since then
+`rebuild.sh` signs with the local self-signed **"Roman Launcher Signing"**
+certificate (in `~/Library/Keychains/launcher-signing.keychain-db`,
+password `launchersign` — it protects nothing but this key), making the
+requirement `identifier + certificate leaf`, which survives rebuilds.
+Consents therefore need granting ONCE per machine per app and then stick.
+On a machine without the cert, signing falls back to ad-hoc and the old
+"re-ask after every rebuild" behaviour returns. To recreate the cert on a
+new machine: openssl self-signed cert with the `codeSigning` EKU, exported
+`-legacy` PKCS12 (macOS can't import OpenSSL 3's default format), imported
+with `-T /usr/bin/codesign` + `set-key-partition-list` into a dedicated
+keychain added to the user search list. Note the identifier must never
+change once granted — TCC matches on both halves.
 
 **Detachment trap (why the launch lines read `cd X && (nohup ... &)`)** — under
 `do shell script`, a trailing `&` on a *compound* list (`cd X && cmd &`) does

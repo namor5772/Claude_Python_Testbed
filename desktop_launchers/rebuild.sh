@@ -19,9 +19,25 @@
 # Order matters: xattr -cr (clean) -> codesign -> setIcon LAST, because
 # xattr -cr is exactly the command that deletes a pasted-on icon.
 #
-# First press of a rebuilt app re-asks any TCC consents (notifications /
-# System Events control) — the code hash changed, so macOS treats it as new.
+# TCC consents (Screen Recording / Accessibility / notifications) are keyed to
+# the app's code-signing identity. Ad-hoc signatures hash the exact binary, so
+# every rebuild used to orphan all granted permissions (the Settings toggle
+# stayed ON but tccd logged "Failed to match existing code requirement" and
+# silently denied — black screenshots, re-prompts). The fix: each app gets a
+# stable CFBundleIdentifier and is signed with the local self-signed
+# "Roman Launcher Signing" certificate (in ~/Library/Keychains/
+# launcher-signing.keychain-db, password below — it protects nothing but this
+# key). That makes the TCC designated requirement "identifier + certificate
+# leaf", which SURVIVES rebuilds. On a machine without the cert, signing falls
+# back to ad-hoc and each rebuild re-asks consents, as before.
 set -euo pipefail
+
+SIGN_ID="Roman Launcher Signing"
+if security find-certificate -c "$SIGN_ID" >/dev/null 2>&1; then
+  security unlock-keychain -p launchersign launcher-signing.keychain 2>/dev/null || true
+else
+  SIGN_ID="-"   # ad-hoc fallback: cert not installed on this machine
+fi
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 DEST="${LAUNCHER_DEST:-$HOME/Applications}"
@@ -51,8 +67,13 @@ build() { # <source.applescript> <master.png> <AppName>
   rm -rf "$app"
   osacompile -o "$app" "$tmp/src.applescript"
   cp "$tmp/icon.icns" "$app/Contents/Resources/applet.icns"
+  # Stable bundle id (osacompile emits none): lowercase, spaces/parens stripped.
+  # Must never change once TCC grants reference it.
+  local slug; slug="$(echo "$name" | tr 'A-Z' 'a-z' | tr -d ' ()')"
+  plutil -replace CFBundleIdentifier -string "com.roman.launcher.$slug" \
+         "$app/Contents/Info.plist"
   xattr -cr "$app"
-  codesign --force --deep -s - "$app"
+  codesign --force --deep -s "$SIGN_ID" "$app"
   osascript -l JavaScript \
     -e "ObjC.import('AppKit');" \
     -e "const i = \$.NSImage.alloc.initWithContentsOfFile('$DIR/$png');" \
