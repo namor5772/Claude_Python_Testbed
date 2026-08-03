@@ -906,7 +906,9 @@ class StreamingMixin:
             # misread as a field separator.
             line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f}\n"
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
-            with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
+            # newline="\n": the per-machine logs are read cross-platform via
+            # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
+            with open(APICOST_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line)
             self._tool_info(f"Logged API cost to {APICOST_LOG_FILE}: {line}")
         except Exception as e:

@@ -61,10 +61,13 @@ fi
 
 # Merge every file into machine-tagged rows "timestamp;provider;model;cost;machine",
 # sorted by timestamp — cross-machine order comes from the field, not file order.
+# The sub() strips the CR that Windows-written lines carry (CRLF via Python
+# text mode until 2026-08-03, and any not-yet-updated writer): without it the
+# cost field ends in \r and the viewer shows ^M after every Windows row.
 MERGED="$(mktemp)"
 trap 'rm -f "$MERGED"' EXIT
 for i in "${!LOGS[@]}"; do
-  awk -F';' -v M="${LABELS[$i]}" 'NF>=4 { print $0 ";" M }' "${LOGS[$i]}"
+  awk -F';' -v M="${LABELS[$i]}" '{ sub(/\r$/, "") } NF>=4 { print $0 ";" M }' "${LOGS[$i]}"
 done | sort -t';' -k1,1 > "$MERGED"
 
 {

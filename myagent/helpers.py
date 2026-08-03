@@ -107,7 +107,9 @@ def rotate_log_if_needed(log_path, max_bytes):
         if path.stat().st_size <= max_bytes:
             return False
         path.replace(path.with_name(path.name + ".old"))
-        with open(path, "w", encoding="utf-8") as f:
+        # newline="\n": the cost logs sync cross-platform via OneDrive, and a
+        # Windows CRLF marker line would show as ^M in the macOS viewer.
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} log restarted "
                     f"(previous log archived to {path.name}.old)\n")
     except OSError:

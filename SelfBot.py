@@ -5676,7 +5676,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             line = f"{timestamp};Anthropic;{self.model};{total_cost:.4f}\n"
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
-            with open(APICOST_LOG_FILE, "a", encoding="utf-8") as f:
+            # newline="\n": the per-machine logs are read cross-platform via
+            # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
+            with open(APICOST_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line)
         except Exception:
             pass
