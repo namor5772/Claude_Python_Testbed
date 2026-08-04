@@ -1,9 +1,10 @@
 """Heartbeat.py — zero-API-cost replacement for the Heartbeat_Instruction.
 
 Polls namor5772@gmail.com for an unread Inbox email with the per-machine
-Subject "APW" (Windows) or "APM" (macOS) — both machines poll the same inbox,
-so the per-machine subject routes each trigger to exactly one executor instead
-of racing for it.
+Subject — "APD" (the Windows desktop, DESKTOP-NAMOR), "APL" (any other
+Windows box, i.e. the laptop) or "APM" (macOS) — all machines poll the same
+inbox, so the per-machine subject routes each trigger to exactly one executor
+instead of racing for it.
 If found:
   line 1 of the body  -> {Instruction}  (name of a saved agent instruction)
   lines 3+ of the body -> {PromptCore}
@@ -46,10 +47,17 @@ from myagent.helpers import rotate_log_if_needed as _rotate_log  # noqa: E402
 from myagent.datapaths import resolve_store as _resolve_store  # noqa: E402
 
 ACCOUNT = "namor5772"
-# Per-machine trigger subject: the Windows box and the Mac mini poll the SAME
-# inbox, so each answers only its own subject — deterministic routing, and no
-# tick-timing race where both process (or one steals) the other's trigger.
-SUBJECT = "APW" if platform.system() == "Windows" else "APM"
+# Per-machine trigger subject: every machine polls the SAME inbox, so each
+# answers only its own subject — deterministic routing, and no tick-timing
+# race where one machine processes (or steals) another's trigger. Two Windows
+# boxes split by hostname: the desktop answers APD, any other Windows machine
+# (the laptop) APL. Was a single Windows-wide "APW" until 2026-08-04.
+if platform.system() != "Windows":
+    SUBJECT = "APM"
+elif platform.node().upper() == "DESKTOP-NAMOR":
+    SUBJECT = "APD"
+else:
+    SUBJECT = "APL"
 MARKER = "*****"
 GOOGLE_CONFIG_DIR = Path.home() / ".config" / "myagent-google"
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
