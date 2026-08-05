@@ -9,11 +9,11 @@ SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv —
 kept in the OneDrive MyImportant/DeathFinances folder shared by all
 machines, with a repo-root fallback) are
 listed like any other email except for a bare "SPECIFYING LIST EMAIL"
-marker line at the top of the entry, followed by "Type={Type}" and
-"Index={Index}" lines echoing those rule columns verbatim, and, at the
-bottom, the names of their downloaded PDF attachments plus a "Determine:"
-line echoing the rule's Determine column verbatim (a reference note —
-nothing is extracted from the email body). Their PDFs are saved to ~/Downloads (idempotently) and
+marker line at the top of the entry, followed by one
+"Type={Type}, Index={Index}" line echoing those rule columns verbatim,
+and, at the bottom, the names of their downloaded PDF attachments plus a
+"Determine:" line echoing the rule's Determine column verbatim (a
+reference note — nothing is extracted from the email body). Their PDFs are saved to ~/Downloads (idempotently) and
 they are marked read — but stay in place: the original move-to-Trash is
 off by default behind the TRASH_MATCHES flag (each per-match action has
 its own flag; see the constants below). The list is sent from
@@ -145,12 +145,12 @@ def rotate_log_if_needed():
 # type, semicolon-delimited with every field double-quoted (same convention
 # as APICostLog.txt: the data itself is full of commas) — with columns:
 #   Type       the user's category for this bill type (e.g. "setup", "info").
-#              Echoed verbatim as a "Type={Type}" line directly under the
-#              entry's "SPECIFYING LIST EMAIL" marker; never used for
-#              matching.
-#   Index      the user's reference index for this bill type. Echoed
-#              verbatim as an "Index={Index}" line under the Type line;
+#              Echoed verbatim in the "Type={Type}, Index={Index}" line
+#              directly under the entry's "SPECIFYING LIST EMAIL" marker;
 #              never used for matching.
+#   Index      the user's reference index for this bill type. Echoed
+#              verbatim in the same "Type=..., Index=..." line; never used
+#              for matching.
 #   To         optional substring the To header must contain (forwarded bills)
 #   From       substring of the From header (display name or address)
 #   Subject    START of the subject — always a prefix match, never exact,
@@ -751,7 +751,7 @@ def _field(label, value, width=9):
 def format_entry(n, entry):
     """A SPECIFYING match renders like any other email; the only additions
     are the bare "SPECIFYING LIST EMAIL" marker line at the top, followed by
-    "Type={Type}" and "Index={Index}" lines echoing those rule columns
+    one "Type={Type}, Index={Index}" line echoing those rule columns
     verbatim (blank value -> bare "Type=" / "Index="), and, at the bottom,
     the names of any downloaded PDF attachments plus a Determine: line
     echoing the rule's Determine column verbatim from SpecifyingList.csv."""
@@ -760,8 +760,8 @@ def format_entry(n, entry):
     lines = []
     if entry.get("spec"):
         lines.append(f"{num}SPECIFYING LIST EMAIL")
-        lines.append(f"   Type={entry['spec'].get('type') or ''}")
-        lines.append(f"   Index={entry['spec'].get('index') or ''}")
+        lines.append(f"   Type={entry['spec'].get('type') or ''}, "
+                     f"Index={entry['spec'].get('index') or ''}")
         lines.append(f"   Account:  {entry['account_email']}{tag}")
     else:
         lines.append(f"{num}Account:  {entry['account_email']}{tag}")
