@@ -53,7 +53,7 @@ class UIMixin:
 
         self._start_button = tk.Button(
             chat_toolbar, text="START", command=self._start_agent, width=8,
-            font=("Arial", 10, "bold"),
+            font=("Arial", 10),
         )
         self._start_button.pack(side=tk.LEFT, padx=(0, 5))
 
