@@ -556,6 +556,8 @@ META_TOOLS = [
         "description": (
             "Manage the shared skills library on disk. Skills can be injected into system "
             "prompts (enabled), retrieved on demand (on_demand), or inactive (disabled). "
+            "Each skill may carry a short description (what it does + when to use it), "
+            "listed in the system prompt for on_demand skills as the trigger signal. "
             "Actions: list, read, create, update, delete."
         ),
         "input_schema": {
@@ -573,6 +575,14 @@ META_TOOLS = [
                 "content": {
                     "type": "string",
                     "description": "Skill text content (required for create, optional for update)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "One or two sentences: WHAT the skill does and WHEN to use it — "
+                        "shown in the system prompt for on_demand skills. Optional; on "
+                        "update, an empty string clears it. Guideline: <=1024 chars."
+                    ),
                 },
                 "mode": {
                     "type": "string",

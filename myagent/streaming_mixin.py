@@ -447,7 +447,9 @@ class StreamingMixin:
         if od_names:
             tools.append({
                 "name": "get_skill",
-                "description": "Retrieve the full content of an on-demand skill by name.",
+                "description": ("Retrieve the full content of an on-demand skill by name. "
+                                "Each skill's purpose is listed under '## On-Demand Skills' "
+                                "in the system prompt."),
                 "input_schema": {
                     "type": "object",
                     "properties": {

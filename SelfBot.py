@@ -189,7 +189,9 @@ SELFBOT_META_TOOLS = [
         "description": (
             "Manage the shared skills library on disk (skills.json, shared with MyAgent). "
             "Skills can be injected into the system prompt (enabled), retrieved on demand "
-            "(on_demand), or inactive (disabled). Actions: list, read, create, update, delete."
+            "(on_demand), or inactive (disabled). Each skill may carry a short description "
+            "(what it does + when to use it), listed in the system prompt for on_demand "
+            "skills as the trigger signal. Actions: list, read, create, update, delete."
         ),
         "input_schema": {
             "type": "object",
@@ -203,6 +205,14 @@ SELFBOT_META_TOOLS = [
                 "content": {
                     "type": "string",
                     "description": "Skill text content (required for create, optional for update)",
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "One or two sentences: WHAT the skill does and WHEN to use it — "
+                        "shown in the system prompt for on_demand skills. Optional; on "
+                        "update, an empty string clears it. Guideline: <=1024 chars."
+                    ),
                 },
                 "mode": {
                     "type": "string",
@@ -2458,21 +2468,36 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         except (AttributeError, tk.TclError):
             pass  # Button doesn't exist yet or was destroyed
 
+    @staticmethod
+    def _format_on_demand_listing(skills):
+        """Build the '## On-Demand Skills' system-prompt block: one bullet per
+        on_demand skill carrying its description — the what-it-does / when-to-
+        use-it routing signal, Agent-Skills style. A skill without a description
+        is listed by bare name. Returns "" when nothing is on_demand. (In-file
+        copy of SkillsMixin._format_on_demand_listing, like _trim_history_for_context.)"""
+        lines = []
+        for name, skill in skills.items():
+            if skill.get("mode") != "on_demand":
+                continue
+            desc = (skill.get("description") or "").strip()
+            lines.append(f"- {name} — {desc}" if desc else f"- {name}")
+        if not lines:
+            return ""
+        return (
+            "## On-Demand Skills\n"
+            "The following skills are available via the `get_skill` tool. "
+            "Call `get_skill` with the skill name when its description matches "
+            "the task at hand:\n" + "\n".join(lines)
+        )
+
     def _build_system_prompt(self):
         parts = [self.system_prompt]
-        on_demand_names = []
         for name, skill in self.skills.items():
             if skill.get("mode") == "enabled":
                 parts.append(f"## Skill: {name}\n{skill['content']}")
-            elif skill.get("mode") == "on_demand":
-                on_demand_names.append(name)
-        if on_demand_names:
-            listing = ", ".join(on_demand_names)
-            parts.append(
-                f"## On-Demand Skills\n"
-                f"The following skills are available via the `get_skill` tool: {listing}\n"
-                f"Call `get_skill` with the skill name when you need its content."
-            )
+        od_block = self._format_on_demand_listing(self.skills)
+        if od_block:
+            parts.append(od_block)
         return "\n\n".join(parts)
 
     def open_skills_editor(self):
@@ -2511,9 +2536,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if not content:
                 messagebox.showwarning("Empty", "The skill content is empty.", parent=win)
                 return
-            # Preserve mode if skill already exists
-            mode = self.skills.get(name, {}).get("mode", "disabled")
-            self.skills[name] = {"content": content, "mode": mode}
+            # Merge into the existing entry (never whole-entry replace) so fields
+            # this editor doesn't show — e.g. one added by a newer version on
+            # another machine — survive a SAVE here.
+            entry = dict(self.skills.get(name, {}))
+            entry["content"] = content
+            entry.setdefault("mode", "disabled")
+            desc = desc_entry.get().strip()
+            if desc:
+                entry["description"] = desc
+            else:
+                entry.pop("description", None)
+            self.skills[name] = entry
             self._save_skills()
             refresh_list()
             self._update_skills_button()
@@ -2529,11 +2563,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 self._save_skills()
                 refresh_list()
                 name_entry.delete(0, tk.END)
+                desc_entry.delete(0, tk.END)
                 text_editor.delete("1.0", tk.END)
                 self._update_skills_button()
 
         def new_skill():
             name_entry.delete(0, tk.END)
+            desc_entry.delete(0, tk.END)
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
 
@@ -2544,9 +2580,17 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.RIGHT, padx=2)
         tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.RIGHT, padx=2)
 
+        # Description row: the what+when trigger signal shown in the system
+        # prompt for on_demand skills (Agent-Skills style). Optional.
+        desc_row = tk.Frame(win)
+        desc_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
+        tk.Label(desc_row, text="Description", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        desc_entry = tk.Entry(desc_row, font=("Arial", 10))
+        desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         # Left panel: Cycle Mode button ABOVE the listbox
         left = tk.Frame(win)
-        left.grid(row=1, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
+        left.grid(row=2, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
         left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
@@ -2589,6 +2633,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name in self.skills:
                 name_entry.delete(0, tk.END)
                 name_entry.insert(0, name)
+                desc_entry.delete(0, tk.END)
+                desc_entry.insert(0, self.skills[name].get("description", ""))
                 text_editor.delete("1.0", tk.END)
                 text_editor.insert("1.0", self.skills[name]["content"])
 
@@ -2620,7 +2666,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         # Right panel: content editor
         right = tk.Frame(win)
-        right.grid(row=1, column=1, sticky="nsew", padx=(5, 10), pady=(0, 10))
+        right.grid(row=2, column=1, sticky="nsew", padx=(5, 10), pady=(0, 10))
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
@@ -2632,7 +2678,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         win.grid_columnconfigure(0, weight=0)
         win.grid_columnconfigure(1, weight=1)
-        win.grid_rowconfigure(1, weight=1)
+        win.grid_rowconfigure(2, weight=1)
 
         refresh_list()
 
@@ -4899,7 +4945,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if od_names:
             tools.append({
                 "name": "get_skill",
-                "description": "Retrieve the full content of an on-demand skill by name.",
+                "description": ("Retrieve the full content of an on-demand skill by name. "
+                                "Each skill's purpose is listed under '## On-Demand Skills' "
+                                "in the system prompt."),
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -5118,6 +5166,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
     # --- Meta tools (SelfBot's analog of MyAgent's meta-agent tools) ---
 
+    @staticmethod
+    def _desc_length_warning(desc):
+        """Soft Agent-Skills-spec guideline (<=1024 chars) — warn, never reject."""
+        if len(desc) > 1024:
+            return (f"\nWarning: description is {len(desc)} chars; the Agent Skills "
+                    "guideline is <=1024. Consider shortening it.")
+        return ""
+
     def do_manage_skills(self, params):
         """CRUD the shared skills library (skills.json). Mirrors MyAgent's manage_skills,
         including thread-safe UI refresh via _post_skill_ui_refresh."""
@@ -5130,8 +5186,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             lines = []
             for sn, sd in sorted(self.skills.items()):
                 mode = sd.get("mode", "disabled")
-                preview = sd.get("content", "")[:100].replace("\n", " ")
-                lines.append(f"• {sn}  [{mode}]\n  {preview}...")
+                desc = (sd.get("description") or "").strip()
+                info = desc or sd.get("content", "")[:100].replace("\n", " ") + "..."
+                lines.append(f"• {sn}  [{mode}]\n  {info}")
             return "\n".join(lines)
 
         if not name:
@@ -5141,7 +5198,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found."
             sd = self.skills[name]
-            return json.dumps({"name": name, "content": sd.get("content", ""), "mode": sd.get("mode", "disabled")}, indent=2)
+            return json.dumps({"name": name, "content": sd.get("content", ""),
+                               "mode": sd.get("mode", "disabled"),
+                               "description": sd.get("description", "")}, indent=2)
 
         if action == "create":
             if name in self.skills:
@@ -5152,27 +5211,40 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             mode = params.get("mode", "disabled")
             if mode not in ("disabled", "enabled", "on_demand"):
                 return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
-            self.skills[name] = {"content": content, "mode": mode}
+            entry = {"content": content, "mode": mode}
+            desc = (params.get("description") or "").strip()
+            if desc:
+                entry["description"] = desc
+            self.skills[name] = entry
             self._save_skills()
             self._post_skill_ui_refresh()
-            return f"Skill '{name}' created successfully."
+            return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
 
         if action == "update":
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found. Use 'create' to add it."
             content = params.get("content")
             mode = params.get("mode")
-            if content is None and mode is None:
-                return "Error: At least one of 'content' or 'mode' must be provided for update."
+            description = params.get("description")
+            if content is None and mode is None and description is None:
+                return ("Error: At least one of 'content', 'mode' or 'description' "
+                        "must be provided for update.")
             if mode is not None and mode not in ("disabled", "enabled", "on_demand"):
                 return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
             if content is not None:
                 self.skills[name]["content"] = content
             if mode is not None:
                 self.skills[name]["mode"] = mode
+            desc = ""
+            if description is not None:
+                desc = description.strip()
+                if desc:
+                    self.skills[name]["description"] = desc
+                else:
+                    self.skills[name].pop("description", None)  # "" clears it
             self._save_skills()
             self._post_skill_ui_refresh()
-            return f"Skill '{name}' updated successfully."
+            return f"Skill '{name}' updated successfully." + self._desc_length_warning(desc)
 
         if action == "delete":
             if name not in self.skills:
