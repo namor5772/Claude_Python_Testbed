@@ -229,10 +229,6 @@ class InstructionsMixin:
         _apply_btn = tk.Button(
             win, text="Apply", command=self._apply_instruction, width=6
         )
-        import tkinter.font as _tkfont
-        _f = _tkfont.nametofont(_apply_btn.cget("font")).copy()
-        _f.configure(weight="bold")
-        _apply_btn.configure(font=_f)
         _apply_btn.grid(row=1, column=2, padx=5, pady=5)
 
         # Row 2: Text editor
