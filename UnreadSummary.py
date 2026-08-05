@@ -13,7 +13,9 @@ marker line at the top of the entry, followed by one
 "Type={Type}, Index={Index}" line echoing those rule columns verbatim,
 and, at the bottom, the names of their downloaded PDF attachments plus a
 "Determine:" line echoing the rule's Determine column verbatim (a
-reference note — nothing is extracted from the email body). Their PDFs are saved to ~/Downloads (idempotently) and
+reference note — nothing is extracted from the email body). Their PDFs
+are saved (idempotently) to the shared Attachments folder beside
+SpecifyingList.csv — OneDrive MyImportant/DeathFinances/Attachments — and
 they are marked read — but stay in place: the original move-to-Trash is
 off by default behind the TRASH_MATCHES flag (each per-match action has
 its own flag; see the constants below). The list is sent from
@@ -103,11 +105,10 @@ SUBJECT_PREFIX = "Summary of Unread Emails"
 # the bill PDFs and mark the email read, but leave it in place. Setting
 # TRASH_MATCHES True as well restores the full Email_AllUnreadSummary_Mac3
 # behaviour (save PDFs, mark read, move to Trash).
-SAVE_MATCH_PDFS = True     # save pdf attachments to ~/Downloads (idempotent)
+SAVE_MATCH_PDFS = True     # save pdf attachments to DOWNLOAD_DIR (idempotent)
 MARK_MATCHES_READ = True   # mark the matched email as read
 TRASH_MATCHES = False      # move the matched email to Trash/Bin
 
-DOWNLOAD_DIR = Path.home() / "Downloads"
 SUMMARY_MAX_WORDS = 45  # "under 50 word summary"
 DIV = "=" * 50   # instruction: every divider EXACTLY 50 chars
 SUB = "-" * 50
@@ -188,6 +189,14 @@ def _locate_specifying_csv():
 
 
 SPECIFYING_CSV = _locate_specifying_csv()
+
+# Matched-bill PDFs are saved beside the rules that matched them: the
+# Attachments subfolder of SpecifyingList.csv's home — normally the shared
+# OneDrive MyImportant/DeathFinances/Attachments, so the PDFs sync to every
+# machine (was the run machine's local ~/Downloads until 2026-08-05). On a
+# OneDrive-less machine this degrades with the CSV to <repo>/Attachments,
+# which is gitignored.
+DOWNLOAD_DIR = SPECIFYING_CSV.parent / "Attachments"
 
 
 def load_specifying():
@@ -330,11 +339,12 @@ def forwarded_to(entry, account_email):
 
 
 def save_pdf(filename, data):
-    """Write attachment bytes to ~/Downloads. Idempotent: a matched email is
-    left unread by default, so every later run sees it again — if a file
-    with the same (cleaned) name and identical bytes is already there, reuse
-    it instead of stacking up "name (1).pdf", "name (2).pdf" day after day.
-    A same-named file with DIFFERENT content still gets a fresh suffix."""
+    """Write attachment bytes to DOWNLOAD_DIR (the shared Attachments
+    folder). Idempotent: a matched email can be seen again on later runs —
+    if a file with the same (cleaned) name and identical bytes is already
+    there, reuse it instead of stacking up "name (1).pdf", "name (2).pdf"
+    day after day. A same-named file with DIFFERENT content still gets a
+    fresh suffix."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r'[\\/:*?"<>|]', "_", filename or "attachment.pdf").strip() or "attachment.pdf"
     target = DOWNLOAD_DIR / safe
@@ -343,7 +353,7 @@ def save_pdf(filename, data):
     while target.exists():
         try:
             if target.stat().st_size == len(data) and target.read_bytes() == data:
-                return f"{target.name} (already in Downloads)"
+                return f"{target.name} (already in Attachments)"
         except OSError:
             pass
         target = DOWNLOAD_DIR / f"{stem} ({i}){suffix}"

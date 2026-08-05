@@ -99,6 +99,9 @@ Untitled.*
 *.stackdump
 
 SpecifyingList.csv
+# UnreadSummary matched-bill PDFs — repo-root fallback location on a
+# OneDrive-less machine (normally <OneDrive>/MyImportant/DeathFinances/Attachments)
+/Attachments/
 
 # Sun2Set almanac output — PRIVACY: these files embed a street address in the
 # filename plus 6-decimal (~10 cm) latitude/longitude and a site-specific
