@@ -8,12 +8,12 @@ Subject, Date, To (when forwarded) and a short summary. Emails matching the
 SPECIFYING LIST (known bills/receipts, defined in SpecifyingList.csv —
 kept in the OneDrive MyImportant/DeathFinances folder shared by all
 machines, with a repo-root fallback) are
-listed like any other email except for a "SPECIFYING LIST EMAIL - {Type}"
-marker line at the top of the entry (Type from the rule's column; the
-suffix is dropped when blank) and, at the bottom, the names of their
-downloaded PDF attachments plus a "Determine:" line echoing the rule's
-Determine column verbatim (a reference note — nothing is extracted from
-the email body). Their PDFs are saved to ~/Downloads (idempotently) and
+listed like any other email except for a bare "SPECIFYING LIST EMAIL"
+marker line at the top of the entry, followed by "Type={Type}" and
+"Index={Index}" lines echoing those rule columns verbatim, and, at the
+bottom, the names of their downloaded PDF attachments plus a "Determine:"
+line echoing the rule's Determine column verbatim (a reference note —
+nothing is extracted from the email body). Their PDFs are saved to ~/Downloads (idempotently) and
 they are marked read — but stay in place: the original move-to-Trash is
 off by default behind the TRASH_MATCHES flag (each per-match action has
 its own flag; see the constants below). The list is sent from
@@ -145,8 +145,12 @@ def rotate_log_if_needed():
 # type, semicolon-delimited with every field double-quoted (same convention
 # as APICostLog.txt: the data itself is full of commas) — with columns:
 #   Type       the user's category for this bill type (e.g. "setup", "info").
-#              Echoed in the entry's marker line as
-#              "SPECIFYING LIST EMAIL - {Type}"; never used for matching.
+#              Echoed verbatim as a "Type={Type}" line directly under the
+#              entry's "SPECIFYING LIST EMAIL" marker; never used for
+#              matching.
+#   Index      the user's reference index for this bill type. Echoed
+#              verbatim as an "Index={Index}" line under the Type line;
+#              never used for matching.
 #   To         optional substring the To header must contain (forwarded bills)
 #   From       substring of the From header (display name or address)
 #   Subject    START of the subject — always a prefix match, never exact,
@@ -211,6 +215,7 @@ def load_specifying():
                     "subject_pre": _norm_subject(subj),
                     "determine": (row.get("Determine") or "").strip(),
                     "type": (row.get("Type") or "").strip(),
+                    "index": (row.get("Index") or "").strip(),
                 }
                 if to:
                     spec["to_has"] = to.lower()
@@ -745,17 +750,18 @@ def _field(label, value, width=9):
 
 def format_entry(n, entry):
     """A SPECIFYING match renders like any other email; the only additions
-    are the marker line at the top — "SPECIFYING LIST EMAIL - {Type}", with
-    the Type suffix dropped when the rule has no Type — and, at the bottom,
+    are the bare "SPECIFYING LIST EMAIL" marker line at the top, followed by
+    "Type={Type}" and "Index={Index}" lines echoing those rule columns
+    verbatim (blank value -> bare "Type=" / "Index="), and, at the bottom,
     the names of any downloaded PDF attachments plus a Determine: line
     echoing the rule's Determine column verbatim from SpecifyingList.csv."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
     lines = []
     if entry.get("spec"):
-        spec_type = entry["spec"].get("type") or ""
-        marker = f"SPECIFYING LIST EMAIL - {spec_type}" if spec_type else "SPECIFYING LIST EMAIL"
-        lines.append(f"{num}{marker}")
+        lines.append(f"{num}SPECIFYING LIST EMAIL")
+        lines.append(f"   Type={entry['spec'].get('type') or ''}")
+        lines.append(f"   Index={entry['spec'].get('index') or ''}")
         lines.append(f"   Account:  {entry['account_email']}{tag}")
     else:
         lines.append(f"{num}Account:  {entry['account_email']}{tag}")
