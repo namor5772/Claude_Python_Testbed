@@ -42,9 +42,14 @@ class UIMixin:
         self._verbosity_label = None
         self._verbosity_combo = None
 
-        # Row 0: Chat toolbar — START/STOP + Instruction + model info + Save
+        # Row 0: Chat toolbar — Instruction + START/STOP + model info + Save
         chat_toolbar = tk.Frame(self.root)
         chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
+
+        self.instruction_button = tk.Button(
+            chat_toolbar, text="Instruction", command=self.open_instruction_editor,
+        )
+        self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self._start_button = tk.Button(
             chat_toolbar, text="START", command=self._start_agent, width=8,
@@ -57,11 +62,6 @@ class UIMixin:
             font=("Arial", 10, "bold"), state="disabled",
         )
         self._stop_button.pack(side=tk.LEFT, padx=(0, 8))
-
-        self.instruction_button = tk.Button(
-            chat_toolbar, text="Instruction", command=self.open_instruction_editor,
-        )
-        self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self._update_title()
 
