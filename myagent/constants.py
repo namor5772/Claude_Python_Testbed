@@ -3154,12 +3154,12 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # client is present (one copy follows the user across machines — OneDrive, not
 # git, is the sync channel; see myagent/datapaths.py), falling back to the
 # repo root on solo machines. State files below stay per-machine at the root.
-from myagent.datapaths import resolve_store, resolve_costlog  # noqa: E402  (needs os already imported)
+from myagent.datapaths import resolve_store, resolve_costlog, resolve_skills_dir  # noqa: E402  (needs os already imported)
 INSTRUCTIONS_FILE = resolve_store("agent_instructions.json")
 CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
 AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
-SKILLS_FILE = resolve_store("skills.json")
+SKILLS_DIR = resolve_skills_dir()  # per-skill SKILL.md tree; a legacy skills.json migrates in on first load
 STORES_SYNCED = os.path.dirname(INSTRUCTIONS_FILE) != _BASE_DIR  # shared dir in use
 # Per-run cost log: APICostLog_<machine>.txt in the OneDrive share (one file
 # per machine — appends never conflict, yet every machine's spend syncs

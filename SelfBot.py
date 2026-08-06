@@ -990,11 +990,16 @@ DEFAULT_SYSTEM_PROMPT = (
 )
 
 # The authored-content stores (system prompts + the skills library shared with
-# MyAgent) live in <OneDrive>/MyAgent when a OneDrive client is present — one
+# MyAgent) live in <OneDrive>/MyAppShare when a OneDrive client is present — one
 # copy follows the user across machines; OneDrive, not git, is the sync channel
 # (see myagent/datapaths.py). Repo-root fallback on solo machines, and plain
 # repo-root behaviour when the myagent package is absent. State files
 # (app_state*.json etc.) stay per-machine at the repo root either way.
+# Since 2026-08-07 the skills library is a per-skill file tree
+# (skills/<Name>/SKILL.md, frontmatter name/description/mode over the markdown
+# content — Agent-Skills-shaped) rather than one skills.json; a legacy
+# skills.json migrates into the tree on first load. The stub fallbacks below
+# mirror the same file format so a standalone SelfBot.py stays compatible.
 try:
     from myagent.datapaths import (
         resolve_store as _resolve_store,
@@ -1002,6 +1007,10 @@ try:
         load_store as _load_store,
         save_store as _save_store,
         absorb_conflict_forks as _absorb_conflict_forks,
+        resolve_skills_dir as _resolve_skills_dir,
+        load_skills_tree as _load_skills_tree,
+        save_skills_tree as _save_skills_tree,
+        delete_skill_tree_entry as _delete_skill_tree_entry,
     )
 except ImportError:
     def _resolve_store(name):
@@ -1025,6 +1034,121 @@ except ImportError:
     def _absorb_conflict_forks(path, data):
         return False
 
+    # Compact skills-tree fallbacks — same skills/<Name>/SKILL.md format as
+    # myagent.datapaths (frontmatter name/description/mode + markdown body),
+    # minus the OneDrive-specific fork healing.
+    _SB_SKILL_MODES = ("disabled", "enabled", "on_demand")
+
+    def _resolve_skills_dir():
+        return os.path.join(os.path.dirname(os.path.abspath(__file__)), "skills")
+
+    def _sb_skill_dirname(name):
+        return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .") or "_skill"
+
+    def _sb_skill_serialize(name, entry):
+        lines = ["---", "name: " + " ".join(name.split())]
+        desc = " ".join((entry.get("description") or "").split())
+        if desc:
+            lines.append("description: " + desc)
+        lines.append("mode: " + entry.get("mode", "disabled"))
+        lines.append("---")
+        body = entry.get("content", "")
+        if body and not body.endswith("\n"):
+            body += "\n"
+        return "\n".join(lines) + "\n\n" + body
+
+    def _sb_skill_parse(text):
+        lines = text.split("\n")
+        if not lines or lines[0].strip() != "---":
+            return {}, text
+        meta, key, closed, i = {}, None, False, 1
+        while i < len(lines):
+            raw = lines[i]
+            if raw.strip() == "---":
+                closed = True
+                i += 1
+                break
+            m = re.match(r"([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]?(.*)$", raw)
+            if m:
+                key = m.group(1).strip().lower()
+                meta[key] = m.group(2).rstrip("\r").strip()
+            elif key is not None and raw.strip():
+                meta[key] = (meta[key] + " " + raw.strip()).strip()
+            i += 1
+        if not closed:
+            return {}, text
+        if i < len(lines) and not lines[i].strip():
+            i += 1
+        body = "\n".join(lines[i:])
+        return meta, body[:-1] if body.endswith("\n") else body
+
+    def _save_skills_tree(dirpath, skills):
+        try:
+            os.makedirs(dirpath, exist_ok=True)
+        except OSError:
+            return
+        for name, entry in skills.items():
+            if not isinstance(entry, dict):
+                continue
+            d = os.path.join(dirpath, _sb_skill_dirname(name))
+            md = os.path.join(d, "SKILL.md")
+            text = _sb_skill_serialize(name, entry)
+            try:
+                with open(md, encoding="utf-8-sig") as f:
+                    if f.read() == text:
+                        continue
+            except OSError:
+                pass
+            try:
+                os.makedirs(d, exist_ok=True)
+                with open(md, "w", encoding="utf-8") as f:
+                    f.write(text)
+            except OSError:
+                pass
+
+    def _load_skills_tree(dirpath):
+        skills = {}
+        if os.path.isdir(dirpath):
+            for sub in sorted(os.listdir(dirpath)):
+                md = os.path.join(dirpath, sub, "SKILL.md")
+                if not os.path.isfile(md):
+                    continue
+                try:
+                    with open(md, encoding="utf-8-sig") as f:
+                        meta, content = _sb_skill_parse(f.read())
+                except OSError:
+                    continue
+                name = " ".join((meta.get("name") or "").split()) or sub
+                mode = (meta.get("mode") or "").strip().lower()
+                entry = {"content": content,
+                         "mode": mode if mode in _SB_SKILL_MODES else "disabled"}
+                desc = (meta.get("description") or "").strip()
+                if desc:
+                    entry["description"] = desc
+                skills[name] = entry
+        # One-shot: fold a legacy repo-root skills.json into the tree (tree
+        # entries win their names), then park it as .migrated.bak.
+        legacy = _resolve_store("skills.json")
+        data = _load_store(legacy)
+        if data:
+            for name, entry in data.items():
+                if isinstance(entry, dict) and name not in skills:
+                    entry = dict(entry)
+                    if "mode" not in entry:
+                        entry["mode"] = "enabled" if entry.pop("enabled", False) else "disabled"
+                    skills[name] = entry
+            _save_skills_tree(dirpath, skills)
+            try:
+                os.replace(legacy, legacy + ".migrated.bak")
+            except OSError:
+                pass
+        return skills
+
+    def _delete_skill_tree_entry(dirpath, name):
+        import shutil
+        shutil.rmtree(os.path.join(dirpath, _sb_skill_dirname(name)),
+                      ignore_errors=True)
+
 PROMPTS_FILE = _resolve_store("system_prompts.json")
 # Same cost log MyAgent writes: APICostLog_<machine>.txt in the OneDrive share
 # (per-machine files — appends never conflict-fork, every machine's spend syncs
@@ -1033,7 +1157,7 @@ APICOST_LOG_FILE = _resolve_costlog()
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
-SKILLS_FILE = _resolve_store("skills.json")
+SKILLS_DIR = _resolve_skills_dir()  # per-skill SKILL.md tree; a legacy skills.json migrates in on first load
 STORES_SYNCED = os.path.dirname(PROMPTS_FILE) != os.path.dirname(os.path.abspath(__file__))
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lock")
 INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_inject.txt")
@@ -2413,19 +2537,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     # --- Skills System ---
 
     def _load_skills(self):
-        data = _load_store(SKILLS_FILE)  # tolerant read + one-shot repo→OneDrive migration
-        changed = _absorb_conflict_forks(SKILLS_FILE, data)
-        # Migrate old {enabled: bool} → {mode: "disabled"|"enabled"|"on_demand"}
-        for sdata in data.values():
-            if "mode" not in sdata:
-                sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
-                changed = True
-        if changed:
-            _save_store(SKILLS_FILE, data)
-        return data
+        # Per-skill SKILL.md tree (frontmatter: name/description/mode). Runs
+        # the one-shot skills.json→tree migration and heals OneDrive per-file
+        # conflict forks; every entry comes back with a valid mode.
+        return _load_skills_tree(SKILLS_DIR)
 
     def _save_skills(self):
-        _save_store(SKILLS_FILE, self.skills)
+        # Diff-aware and WRITE-ONLY (never deletes folders) — deletion is an
+        # explicit action via _delete_skill_tree_entry at the delete callsites.
+        _save_skills_tree(SKILLS_DIR, self.skills)
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of the Skills button and the open Skills Manager listbox.
@@ -2560,6 +2680,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             name = skill_listbox.get(sel[0])[5:]
             if name in self.skills:
                 del self.skills[name]
+                _delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()
                 refresh_list()
                 name_entry.delete(0, tk.END)
@@ -5250,6 +5371,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found."
             del self.skills[name]
+            _delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
             self._save_skills()
             self._post_skill_ui_refresh()
             return f"Skill '{name}' deleted."

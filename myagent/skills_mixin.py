@@ -1,10 +1,10 @@
 import os, sys, json, subprocess, tempfile, threading, time, tkinter as tk
 from tkinter import messagebox
 
-from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_FILE, MONO_FONT,
+from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
                                COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
-from myagent.datapaths import absorb_conflict_forks, load_store, save_store
+from myagent.datapaths import delete_skill_tree_entry, load_skills_tree, save_skills_tree
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
 # absorb OneDrive conflict forks on disk, + the spawn itself) so several
@@ -17,18 +17,15 @@ _SPAWN_LOCK = threading.Lock()
 class SkillsMixin:
 
     def _load_skills(self):
-        data = load_store(SKILLS_FILE)  # tolerant read; runs one-shot repo→OneDrive migration
-        changed = absorb_conflict_forks(SKILLS_FILE, data)
-        for sdata in data.values():
-            if "mode" not in sdata:
-                sdata["mode"] = "enabled" if sdata.pop("enabled", False) else "disabled"
-                changed = True
-        if changed:
-            save_store(SKILLS_FILE, data)
-        return data
+        # Per-skill SKILL.md tree (frontmatter: name/description/mode). Runs
+        # the one-shot skills.json→tree migration and heals OneDrive per-file
+        # conflict forks; every entry comes back with a valid mode.
+        return load_skills_tree(SKILLS_DIR)
 
     def _save_skills(self):
-        save_store(SKILLS_FILE, self.skills)
+        # Diff-aware and WRITE-ONLY (never deletes folders) — deletion is an
+        # explicit action via delete_skill_tree_entry at the delete callsites.
+        save_skills_tree(SKILLS_DIR, self.skills)
 
     @staticmethod
     def _desc_length_warning(desc):
@@ -113,6 +110,7 @@ class SkillsMixin:
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found."
             del self.skills[name]
+            delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
             self._save_skills()
             self._post_skill_ui_refresh()
             return f"Skill '{name}' deleted."
@@ -416,6 +414,7 @@ class SkillsMixin:
             name = skill_listbox.get(sel[0])[5:]
             if name in self.skills:
                 del self.skills[name]
+                delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()
                 refresh_list()
                 name_entry.delete(0, tk.END)
