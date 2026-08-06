@@ -9,6 +9,7 @@ migration latch are repointed/cleared per test."""
 
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -162,6 +163,25 @@ class SaveLoadTests(SkillsTreeCase):
                                                              {"content": "x", "mode": "disabled"}))
         dp.delete_skill_tree_entry(str(self.tree), "True Name")
         self.assertFalse((self.tree / "weird_folder").exists())
+
+    def test_delete_clears_readonly_resources(self):
+        # a read-only file makes plain rmtree fail on Windows; the verified
+        # remover clears the attribute and finishes the job
+        dp.save_skills_tree(str(self.tree), {"Locked": {"content": "x", "mode": "disabled"}})
+        res = self.tree / "Locked" / "readonly.txt"
+        res.write_text("r", encoding="utf-8")
+        os.chmod(res, stat.S_IREAD)
+        dp.delete_skill_tree_entry(str(self.tree), "Locked")
+        self.assertFalse((self.tree / "Locked").exists())
+
+    def test_delete_reclaims_skillmd_less_husk(self):
+        # residue of an interrupted delete (OneDrive handle race): folder at
+        # the sanitized dirname with no SKILL.md — reclaimed on re-delete
+        husk = self.tree / "Test_skill"
+        husk.mkdir(parents=True)
+        (husk / "leftover.txt").write_text("junk", encoding="utf-8")
+        dp.delete_skill_tree_entry(str(self.tree), "Test_skill")
+        self.assertFalse(husk.exists())
 
     def test_two_folders_claiming_one_name_keep_both(self):
         self.write_md("A", dp._serialize_skill_md("Same", {"content": "one", "mode": "disabled"}))

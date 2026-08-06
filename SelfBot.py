@@ -1147,9 +1147,21 @@ except ImportError:
         return skills
 
     def _delete_skill_tree_entry(dirpath, name):
+        # Retry the OneDrive/Windows handle race: rmtree can remove the files
+        # but fail the final rmdir while the sync client holds the folder,
+        # which would otherwise leave an empty husk directory behind.
         import shutil
-        shutil.rmtree(os.path.join(dirpath, _sb_skill_dirname(name)),
-                      ignore_errors=True)
+        target = os.path.join(dirpath, _sb_skill_dirname(name))
+        for attempt in range(6):
+            if not os.path.exists(target):
+                return
+            try:
+                shutil.rmtree(target)
+            except OSError:
+                pass
+            if not os.path.exists(target):
+                return
+            time.sleep(0.25 * (attempt + 1))
 
 PROMPTS_FILE = _resolve_store("system_prompts.json")
 # Same cost log MyAgent writes: APICostLog_<machine>.txt in the OneDrive share

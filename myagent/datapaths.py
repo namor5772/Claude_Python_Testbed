@@ -70,8 +70,10 @@ import os
 import platform
 import re
 import shutil
+import stat
 import sys
 import tempfile
+import time
 
 # Repo root (parent of the myagent/ package) — same expression as constants.py,
 # duplicated here so constants can import datapaths without a cycle.
@@ -672,9 +674,46 @@ def save_skills_tree(dirpath, skills):
                 pass  # best-effort per file; the next save retries
 
 
+def _rmtree_verified(path, attempts=6):
+    """shutil.rmtree that survives the Windows/OneDrive handle race (observed
+    live 2026-08-07): the sync client holds a directory handle for seconds
+    while processing recent activity, so rmtree removes the files but the
+    final rmdir fails — with the old ignore_errors=True that silently left
+    an empty husk folder behind (SKILL.md gone, directory there; a live
+    probe showed the hold outlasting a ~1 s retry window but clearing
+    within ~15 s). Clears read-only attributes, retries with backoff
+    (~5 s cumulative — paid only when a delete is actually blocked),
+    finishes with a bare rmdir for the files-went-dir-stayed case, and
+    returns whether the path is really gone so callers never assume."""
+    for attempt in range(attempts):
+        if not os.path.exists(path):
+            return True
+        for root, _dirs, files in os.walk(path):
+            for fn in files:
+                try:
+                    os.chmod(os.path.join(root, fn), stat.S_IWRITE)
+                except OSError:
+                    pass
+        try:
+            shutil.rmtree(path)
+        except OSError:
+            pass
+        if not os.path.exists(path):
+            return True
+        time.sleep(0.25 * (attempt + 1))
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+    return not os.path.exists(path)
+
+
 def delete_skill_tree_entry(dirpath, name):
-    """Remove the folder(s) whose SKILL.md frontmatter name matches `name`.
-    The folder is the skill — bundled resource files are removed with it."""
+    """Remove the folder(s) whose SKILL.md frontmatter name matches `name`
+    (the folder is the skill — bundled resource files are removed with it).
+    Also reclaims a SKILL.md-less husk folder sitting at this name's
+    sanitized dirname — the residue of an earlier interrupted delete — so
+    husks self-heal the next time their skill is deleted."""
     if not os.path.isdir(dirpath):
         return
     try:
@@ -684,11 +723,12 @@ def delete_skill_tree_entry(dirpath, name):
     for sub in subs:
         d = os.path.join(dirpath, sub)
         md = os.path.join(d, SKILL_BASENAME)
-        if not os.path.isfile(md):
-            continue
-        try:
-            fname, _ = _entry_from_md(_read_text(md), sub)
-        except OSError:
-            continue
-        if fname == name:
-            shutil.rmtree(d, ignore_errors=True)
+        if os.path.isfile(md):
+            try:
+                fname, _ = _entry_from_md(_read_text(md), sub)
+            except OSError:
+                continue
+            if fname == name:
+                _rmtree_verified(d)
+        elif sub == _skill_dirname(name) and os.path.isdir(d):
+            _rmtree_verified(d)
