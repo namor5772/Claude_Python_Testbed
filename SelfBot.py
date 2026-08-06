@@ -201,7 +201,9 @@ SELFBOT_META_TOOLS = [
                     "enum": ["list", "read", "create", "update", "delete"],
                     "description": "The operation to perform",
                 },
-                "name": {"type": "string", "description": "Skill name (required for all except list)"},
+                "name": {"type": "string", "description": ("Skill name (required for all except list). "
+                                                           "Convention: Agent-Skills kebab-case — lowercase "
+                                                           "letters/digits/hyphens, max 64 chars, e.g. 'westpac-login'.")},
                 "content": {
                     "type": "string",
                     "description": "Skill text content (required for create, optional for update)",
@@ -5295,8 +5297,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     "guideline is <=1024. Consider shortening it.")
         return ""
 
+    @staticmethod
+    def _name_convention_warning(name):
+        """Soft Agent-Skills-spec naming guideline (lowercase letters/digits/
+        hyphens, <=64 chars, e.g. 'westpac-login') — warn, never reject, so
+        legacy Title-Case names keep working. In-file copy of SkillsMixin's."""
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or len(name) > 64:
+            return (f"\nWarning: name '{name}' doesn't follow the Agent Skills "
+                    "naming convention (lowercase letters/digits/hyphens, max 64 "
+                    "chars, e.g. 'westpac-login').")
+        return ""
+
     def do_manage_skills(self, params):
-        """CRUD the shared skills library (skills.json). Mirrors MyAgent's manage_skills,
+        """CRUD the shared skills library (the skills/ SKILL.md tree). Mirrors MyAgent's manage_skills,
         including thread-safe UI refresh via _post_skill_ui_refresh."""
         action = params.get("action", "")
         name = params.get("name", "")
@@ -5339,7 +5352,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.skills[name] = entry
             self._save_skills()
             self._post_skill_ui_refresh()
-            return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
+            return (f"Skill '{name}' created successfully."
+                    + self._desc_length_warning(desc)
+                    + self._name_convention_warning(name))
 
         if action == "update":
             if name not in self.skills:

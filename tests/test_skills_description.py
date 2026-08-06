@@ -125,5 +125,35 @@ class TestManageSkillsDescription(unittest.TestCase):
         self.assertIn("body-B", out)  # preview fallback for undescribed skills
 
 
+class TestNameConventionWarning(unittest.TestCase):
+    """Agent-Skills kebab-case naming — soft warning, never a rejection."""
+
+    def test_conforming_names_pass_silently(self):
+        for name in ("westpac-login", "nip-generation", "a", "x1", "a-2-b",
+                     "reliable-youtube-music-playback"):
+            self.assertEqual(SkillsMixin._name_convention_warning(name), "", name)
+
+    def test_nonconforming_names_warn(self):
+        for name in ("Westpac Login", "S", "has space", "-leading", "trailing-",
+                     "double--hyphen", "UPPER", "under_score", "a" * 65):
+            self.assertIn("naming convention",
+                          SkillsMixin._name_convention_warning(name), name)
+
+    def test_create_warns_but_still_saves(self):
+        h = host({})
+        out = h.do_manage_skills({"action": "create", "name": "Title Case",
+                                  "content": "c"})
+        self.assertIn("created successfully", out)
+        self.assertIn("naming convention", out)
+        self.assertIn("Title Case", h.skills)
+
+    def test_create_conforming_name_no_warning(self):
+        h = host({})
+        out = h.do_manage_skills({"action": "create", "name": "tidy-skill",
+                                  "content": "c"})
+        self.assertIn("created successfully", out)
+        self.assertNotIn("Warning", out)
+
+
 if __name__ == "__main__":
     unittest.main()

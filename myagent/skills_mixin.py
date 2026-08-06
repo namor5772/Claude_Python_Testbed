@@ -1,4 +1,4 @@
-import os, sys, json, subprocess, tempfile, threading, time, tkinter as tk
+import os, re, sys, json, subprocess, tempfile, threading, time, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
@@ -33,6 +33,17 @@ class SkillsMixin:
         if len(desc) > 1024:
             return (f"\nWarning: description is {len(desc)} chars; the Agent Skills "
                     "guideline is <=1024. Consider shortening it.")
+        return ""
+
+    @staticmethod
+    def _name_convention_warning(name):
+        """Soft Agent-Skills-spec naming guideline (lowercase letters/digits/
+        hyphens, <=64 chars, e.g. 'westpac-login') — warn, never reject, so
+        legacy Title-Case names keep working."""
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or len(name) > 64:
+            return (f"\nWarning: name '{name}' doesn't follow the Agent Skills "
+                    "naming convention (lowercase letters/digits/hyphens, max 64 "
+                    "chars, e.g. 'westpac-login').")
         return ""
 
     def do_manage_skills(self, params):
@@ -78,7 +89,9 @@ class SkillsMixin:
             self.skills[name] = entry
             self._save_skills()
             self._post_skill_ui_refresh()
-            return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
+            return (f"Skill '{name}' created successfully."
+                    + self._desc_length_warning(desc)
+                    + self._name_convention_warning(name))
 
         if action == "update":
             if name not in self.skills:
