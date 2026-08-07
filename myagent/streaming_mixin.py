@@ -183,6 +183,38 @@ class StreamingMixin:
             return obj.model_dump()
         return str(obj)
 
+    @staticmethod
+    def _debug_render(obj):
+        """JSON-shaped rendering for the Debug payload dump, except strings
+        containing newlines become indented triple-quoted blocks with REAL
+        line breaks. The system prompt (with its ## Skill blocks) is the main
+        thing a human opens this dump for, and as a JSON string it was one
+        endless \\n-escaped line that hid the very content being verified
+        (live confusion 2026-08-07). Deliberately NOT valid JSON — display
+        only; the wire payload is unaffected."""
+        def render(o, indent):
+            pad = "  " * indent
+            inner = "  " * (indent + 1)
+            if isinstance(o, dict):
+                if not o:
+                    return "{}"
+                parts = [f"{inner}{json.dumps(str(k), ensure_ascii=False)}: "
+                         f"{render(v, indent + 1)}" for k, v in o.items()]
+                return "{\n" + ",\n".join(parts) + "\n" + pad + "}"
+            if isinstance(o, (list, tuple)):
+                if not o:
+                    return "[]"
+                parts = [f"{inner}{render(v, indent + 1)}" for v in o]
+                return "[\n" + ",\n".join(parts) + "\n" + pad + "]"
+            if isinstance(o, str) and "\n" in o:
+                block = "\n".join(inner + "  " + line for line in o.split("\n"))
+                return '"""\n' + block + "\n" + inner + '"""'
+            try:
+                return json.dumps(o, ensure_ascii=False)
+            except TypeError:
+                return repr(o)  # display must never crash on a stray object
+        return render(obj, 0)
+
     def _payload_for_display(self, messages):
         display_msgs = []
         for msg in messages:
@@ -332,7 +364,7 @@ class StreamingMixin:
                         or (not self._anthropic_rejects_temperature()
                             and self.model not in self._anthropic_no_temperature)):
                     payload["temperature"] = self.temperature
-        return json.dumps(payload, indent=2)
+        return self._debug_render(payload)
 
     def _get_tools(self):
         tools = copy.deepcopy(TOOLS)

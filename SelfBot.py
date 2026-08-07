@@ -4801,6 +4801,36 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return obj.model_dump()
         return str(obj)
 
+    @staticmethod
+    def _debug_render(obj):
+        """JSON-shaped rendering for the Debug payload dump, except strings
+        containing newlines become indented triple-quoted blocks with REAL
+        line breaks (in-file copy of StreamingMixin._debug_render — the
+        system prompt with its ## Skill blocks was one endless \\n-escaped
+        line). Deliberately NOT valid JSON; display only."""
+        def render(o, indent):
+            pad = "  " * indent
+            inner = "  " * (indent + 1)
+            if isinstance(o, dict):
+                if not o:
+                    return "{}"
+                parts = [f"{inner}{json.dumps(str(k), ensure_ascii=False)}: "
+                         f"{render(v, indent + 1)}" for k, v in o.items()]
+                return "{\n" + ",\n".join(parts) + "\n" + pad + "}"
+            if isinstance(o, (list, tuple)):
+                if not o:
+                    return "[]"
+                parts = [f"{inner}{render(v, indent + 1)}" for v in o]
+                return "[\n" + ",\n".join(parts) + "\n" + pad + "]"
+            if isinstance(o, str) and "\n" in o:
+                block = "\n".join(inner + "  " + line for line in o.split("\n"))
+                return '"""\n' + block + "\n" + inner + '"""'
+            try:
+                return json.dumps(o, ensure_ascii=False)
+            except TypeError:
+                return repr(o)  # display must never crash on a stray object
+        return render(obj, 0)
+
     def _payload_for_display(self, messages):
         """Build a display-friendly copy of the payload, truncating base64 data."""
         display_msgs = []
@@ -4845,7 +4875,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "messages": self._cache_messages(display_msgs),
         }
         self._apply_thinking_params(payload)
-        return json.dumps(payload, indent=2)
+        return self._debug_render(payload)
 
     def _apply_thinking_params(self, kwargs):
         """Populate max_tokens + thinking / effort / temperature on an Anthropic
