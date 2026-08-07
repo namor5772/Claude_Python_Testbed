@@ -202,8 +202,9 @@ SELFBOT_META_TOOLS = [
                     "description": "The operation to perform",
                 },
                 "name": {"type": "string", "description": ("Skill name (required for all except list). "
-                                                           "Convention: Agent-Skills kebab-case — lowercase "
-                                                           "letters/digits/hyphens, max 64 chars, e.g. 'westpac-login'.")},
+                                                           "On create it MUST be Agent-Skills kebab-case — lowercase "
+                                                           "letters/digits/hyphens, max 64 chars, e.g. 'westpac-login' "
+                                                           "(non-conforming creates are rejected).")},
                 "content": {
                     "type": "string",
                     "description": "Skill text content (required for create, optional for update)",
@@ -2679,6 +2680,28 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if not name:
                 messagebox.showwarning("No name", "Enter a name for the skill.", parent=win)
                 return
+            # Enforce Agent-Skills kebab-case on NEW names only (an existing
+            # legacy-named skill stays editable); offer the auto-converted
+            # name so a Title-Case typo is one click from correct.
+            if name not in self.skills and not self._is_kebab_name(name):
+                hint = self._kebabize(name)
+                if not hint:
+                    messagebox.showwarning(
+                        "Invalid name",
+                        "Skill names use Agent-Skills kebab-case: lowercase letters, "
+                        "digits and hyphens (e.g. 'westpac-login').", parent=win)
+                    return
+                if hint in self.skills:
+                    prompt = (f"Skill names use kebab-case, and '{hint}' already exists — "
+                              f"SAVE will overwrite its content.\n\nSave as '{hint}'?")
+                else:
+                    prompt = ("Skill names use kebab-case (lowercase letters/digits/"
+                              f"hyphens).\n\nCreate as '{hint}' instead?")
+                if not messagebox.askyesno("Skill name", prompt, parent=win):
+                    return
+                name = hint
+                name_entry.delete(0, tk.END)
+                name_entry.insert(0, name)
             content = text_editor.get("1.0", "end-1c").strip()
             if not content:
                 messagebox.showwarning("Empty", "The skill content is empty.", parent=win)
@@ -5353,15 +5376,21 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return ""
 
     @staticmethod
-    def _name_convention_warning(name):
-        """Soft Agent-Skills-spec naming guideline (lowercase letters/digits/
-        hyphens, <=64 chars, e.g. 'westpac-login') — warn, never reject, so
-        legacy Title-Case names keep working. In-file copy of SkillsMixin's."""
-        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or len(name) > 64:
-            return (f"\nWarning: name '{name}' doesn't follow the Agent Skills "
-                    "naming convention (lowercase letters/digits/hyphens, max 64 "
-                    "chars, e.g. 'westpac-login').")
-        return ""
+    def _is_kebab_name(name):
+        """Agent-Skills naming rule: lowercase letters/digits/hyphens, <=64
+        chars. Enforced on CREATE only — an existing legacy-named skill can
+        still be edited/saved (grandfathered). In-file copy of SkillsMixin's."""
+        return bool(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name)) and len(name) <= 64
+
+    @staticmethod
+    def _kebabize(name):
+        """Best-effort conversion of a free-typed name to kebab-case, offered
+        as the suggestion when enforcement rejects. In-file copy of
+        SkillsMixin's. Returns '' when nothing usable remains."""
+        s = re.sub(r"[ _]+", "-", name.strip().lower())
+        s = re.sub(r"[^a-z0-9-]+", "", s)
+        s = re.sub(r"-{2,}", "-", s).strip("-")
+        return s[:64].rstrip("-")
 
     def do_manage_skills(self, params):
         """CRUD the shared skills library (the skills/ SKILL.md tree). Mirrors MyAgent's manage_skills,
@@ -5394,6 +5423,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if action == "create":
             if name in self.skills:
                 return f"Error: Skill '{name}' already exists. Use 'update' to modify it."
+            if not self._is_kebab_name(name):
+                hint = self._kebabize(name)
+                suggestion = f" Try '{hint}'." if hint else ""
+                return ("Error: Skill names must be Agent-Skills kebab-case — lowercase "
+                        f"letters/digits/hyphens, max 64 chars (e.g. 'westpac-login').{suggestion}")
             content = params.get("content", "")
             if not content:
                 return "Error: 'content' is required when creating a skill."
@@ -5407,9 +5441,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.skills[name] = entry
             self._save_skills()
             self._post_skill_ui_refresh()
-            return (f"Skill '{name}' created successfully."
-                    + self._desc_length_warning(desc)
-                    + self._name_convention_warning(name))
+            return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
 
         if action == "update":
             if name not in self.skills:

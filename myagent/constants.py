@@ -570,9 +570,10 @@ META_TOOLS = [
                 },
                 "name": {
                     "type": "string",
-                    "description": ("Skill name (required for all except list). Convention: "
-                                    "Agent-Skills kebab-case — lowercase letters/digits/"
-                                    "hyphens, max 64 chars, e.g. 'westpac-login'."),
+                    "description": ("Skill name (required for all except list). On create it "
+                                    "MUST be Agent-Skills kebab-case — lowercase letters/"
+                                    "digits/hyphens, max 64 chars, e.g. 'westpac-login' "
+                                    "(non-conforming creates are rejected)."),
                 },
                 "content": {
                     "type": "string",

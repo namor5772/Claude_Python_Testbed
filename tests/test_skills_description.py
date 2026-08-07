@@ -71,17 +71,17 @@ class TestManageSkillsDescription(unittest.TestCase):
 
     def test_create_stores_stripped_and_read_returns(self):
         h = host({})
-        out = h.do_manage_skills({"action": "create", "name": "S", "content": "c",
+        out = h.do_manage_skills({"action": "create", "name": "desc-skill", "content": "c",
                                   "mode": "on_demand", "description": " What. When. "})
         self.assertIn("created successfully", out)
-        self.assertEqual(h.skills["S"]["description"], "What. When.")
-        read = h.do_manage_skills({"action": "read", "name": "S"})
+        self.assertEqual(h.skills["desc-skill"]["description"], "What. When.")
+        read = h.do_manage_skills({"action": "read", "name": "desc-skill"})
         self.assertIn('"description": "What. When."', read)
 
     def test_create_without_description_omits_key(self):
         h = host({})
-        h.do_manage_skills({"action": "create", "name": "S", "content": "c"})
-        self.assertNotIn("description", h.skills["S"])
+        h.do_manage_skills({"action": "create", "name": "desc-skill", "content": "c"})
+        self.assertNotIn("description", h.skills["desc-skill"])
 
     def test_update_description_alone(self):
         h = host({"S": {"content": "c", "mode": "disabled"}})
@@ -110,12 +110,12 @@ class TestManageSkillsDescription(unittest.TestCase):
     def test_long_description_warns_but_saves(self):
         h = host({})
         long_desc = "x" * 1500
-        out = h.do_manage_skills({"action": "create", "name": "S", "content": "c",
+        out = h.do_manage_skills({"action": "create", "name": "desc-skill", "content": "c",
                                   "description": long_desc})
         self.assertIn("created successfully", out)
         self.assertIn("Warning", out)
         self.assertIn("1500", out)
-        self.assertEqual(h.skills["S"]["description"], long_desc)
+        self.assertEqual(h.skills["desc-skill"]["description"], long_desc)
 
     def test_list_prefers_description_over_preview(self):
         h = host({"A": {"content": "body-A", "mode": "on_demand", "description": "Desc-A"},
@@ -171,34 +171,58 @@ class TestRestoreSkillModesWarning(unittest.TestCase):
         self.assertEqual(len(stash), 1)
 
 
-class TestNameConventionWarning(unittest.TestCase):
-    """Agent-Skills kebab-case naming — soft warning, never a rejection."""
+class TestNameEnforcement(unittest.TestCase):
+    """Agent-Skills kebab-case naming — ENFORCED on create (2026-08-07);
+    existing legacy-named skills stay editable (grandfathered)."""
 
-    def test_conforming_names_pass_silently(self):
+    def test_conforming_names_accepted(self):
         for name in ("westpac-login", "nip-generation", "a", "x1", "a-2-b",
                      "reliable-youtube-music-playback"):
-            self.assertEqual(SkillsMixin._name_convention_warning(name), "", name)
+            self.assertTrue(SkillsMixin._is_kebab_name(name), name)
 
-    def test_nonconforming_names_warn(self):
+    def test_nonconforming_names_rejected(self):
         for name in ("Westpac Login", "S", "has space", "-leading", "trailing-",
                      "double--hyphen", "UPPER", "under_score", "a" * 65):
-            self.assertIn("naming convention",
-                          SkillsMixin._name_convention_warning(name), name)
+            self.assertFalse(SkillsMixin._is_kebab_name(name), name)
 
-    def test_create_warns_but_still_saves(self):
+    def test_kebabize_conversions(self):
+        for raw, want in (("Test_skill", "test-skill"),
+                          ("Westpac Login", "westpac-login"),
+                          ("ANZ  Login!", "anz-login"),
+                          ("--Weird--Name--", "weird-name"),
+                          ("a" * 70, "a" * 64),
+                          ("???", "")):
+            self.assertEqual(SkillsMixin._kebabize(raw), want, raw)
+
+    def test_create_rejects_nonconforming_with_suggestion(self):
         h = host({})
         out = h.do_manage_skills({"action": "create", "name": "Title Case",
                                   "content": "c"})
-        self.assertIn("created successfully", out)
-        self.assertIn("naming convention", out)
-        self.assertIn("Title Case", h.skills)
+        self.assertIn("Error", out)
+        self.assertIn("'title-case'", out)
+        self.assertNotIn("Title Case", h.skills)
+        self.assertEqual(h.saves, [])
 
-    def test_create_conforming_name_no_warning(self):
+    def test_create_rejects_unconvertible_without_suggestion(self):
+        h = host({})
+        out = h.do_manage_skills({"action": "create", "name": "???", "content": "c"})
+        self.assertIn("Error", out)
+        self.assertNotIn("Try", out)
+
+    def test_create_conforming_name_succeeds(self):
         h = host({})
         out = h.do_manage_skills({"action": "create", "name": "tidy-skill",
                                   "content": "c"})
         self.assertIn("created successfully", out)
         self.assertNotIn("Warning", out)
+        self.assertIn("tidy-skill", h.skills)
+
+    def test_legacy_named_skill_still_updatable(self):
+        h = host({"Legacy Name": {"content": "old", "mode": "enabled"}})
+        out = h.do_manage_skills({"action": "update", "name": "Legacy Name",
+                                  "content": "new"})
+        self.assertIn("updated successfully", out)
+        self.assertEqual(h.skills["Legacy Name"]["content"], "new")
 
 
 if __name__ == "__main__":
