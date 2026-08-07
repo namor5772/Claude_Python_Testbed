@@ -253,6 +253,69 @@ class MigrationTests(SkillsTreeCase):
         self.assertTrue((self.repo / ("skills.json" + dp._MIGRATED_SUFFIX)).exists())
 
 
+def _case_insensitive_fs():
+    with tempfile.TemporaryDirectory() as t:
+        probe = Path(t) / "CaseProbe"
+        probe.mkdir()
+        return (Path(t) / "caseprobe").is_dir()
+
+
+class CaseFoldingTests(SkillsTreeCase):
+    """Windows/macOS filesystems fold case: 'test-skill' and 'Test-skill'
+    are the same path. Live incident 2026-08-07: a case-only rename plus a
+    blocked folder delete left TWO folders (Test-skill + test-skill_2) both
+    claiming name test-skill."""
+
+    @unittest.skipUnless(_case_insensitive_fs(), "needs a case-folding filesystem")
+    def test_write_claims_sibling_when_case_variant_occupies_path(self):
+        self.write_md("Alpha", dp._serialize_skill_md("Alpha", {"content": "old", "mode": "disabled"}))
+        dp.save_skills_tree(str(self.tree), {"alpha": {"content": "new", "mode": "enabled"}})
+        loaded = dp._scan_skills_tree(str(self.tree))
+        self.assertEqual(loaded["Alpha"]["content"], "old")
+        self.assertEqual(loaded["alpha"]["content"], "new")
+
+    @unittest.skipUnless(_case_insensitive_fs(), "needs a case-folding filesystem")
+    def test_write_never_adopts_case_variant_husk(self):
+        # SKILL.md-less folder under other casing — writing "into" the base
+        # path would land inside it; must claim a sibling instead
+        (self.tree / "Alpha").mkdir(parents=True)
+        dp.save_skills_tree(str(self.tree), {"alpha": {"content": "x", "mode": "disabled"}})
+        self.assertFalse((self.tree / "Alpha" / dp.SKILL_BASENAME).exists())
+        self.assertTrue((self.tree / "alpha_2" / dp.SKILL_BASENAME).is_file())
+        loaded = dp._scan_skills_tree(str(self.tree))
+        self.assertEqual(loaded["alpha"]["content"], "x")
+
+    def test_scan_heals_case_mismatched_folder(self):
+        # folder Test-skill holding name test-skill → renamed to test-skill
+        self.write_md("Test-skill", dp._serialize_skill_md("test-skill",
+                                                           {"content": "c", "mode": "enabled"}))
+        loaded = dp._scan_skills_tree(str(self.tree))
+        self.assertEqual(loaded["test-skill"]["mode"], "enabled")
+        entries = [e for e in os.listdir(self.tree)]
+        self.assertIn("test-skill", entries)
+        self.assertNotIn("Test-skill", entries)
+
+    def test_scan_deletes_equal_duplicate_folder(self):
+        text = dp._serialize_skill_md("test-skill", {"content": "c", "mode": "enabled"})
+        self.write_md("test-skill", text)
+        self.write_md("test-skill_2", text)
+        loaded = dp._scan_skills_tree(str(self.tree))
+        self.assertEqual(list(loaded), ["test-skill"])
+        self.assertFalse((self.tree / "test-skill_2").exists())
+
+    def test_scan_relocates_stranded_sibling_when_natural_free(self):
+        self.write_md("thing_2", dp._serialize_skill_md("thing", {"content": "c", "mode": "disabled"}))
+        loaded = dp._scan_skills_tree(str(self.tree))
+        self.assertEqual(loaded["thing"]["content"], "c")
+        self.assertTrue((self.tree / "thing").is_dir())
+        self.assertFalse((self.tree / "thing_2").exists())
+
+    def test_delete_reclaims_husk_case_insensitively(self):
+        (self.tree / "Gone-skill").mkdir(parents=True)
+        dp.delete_skill_tree_entry(str(self.tree), "gone-skill")
+        self.assertFalse((self.tree / "Gone-skill").exists())
+
+
 class ForkHealingTests(SkillsTreeCase):
     def test_identical_fork_is_deleted_silently(self):
         text = dp._serialize_skill_md("S", {"content": "same", "mode": "disabled"})

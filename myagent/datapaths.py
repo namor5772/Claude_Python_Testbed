@@ -491,24 +491,44 @@ def _read_text(path):
         return f.read()
 
 
+def _real_basename(dirpath, sub):
+    """The ACTUAL on-disk entry of `dirpath` matching `sub` case-insensitively
+    (its true casing), or None. Windows and default macOS filesystems fold
+    case, so os.path checks on 'test-skill' silently resolve into an existing
+    'Test-skill' — path existence alone cannot tell whose folder it is."""
+    try:
+        for entry in os.listdir(dirpath):
+            if entry.lower() == sub.lower():
+                return entry
+    except OSError:
+        pass
+    return None
+
+
 def _write_skill_file(dirpath, name, entry):
     """Write one skill's SKILL.md atomically, diff-aware (an identical file
     is left untouched — no OneDrive churn). The target folder is the
-    sanitized name; if that folder already belongs to a DIFFERENT skill
-    (its frontmatter name disagrees), a numbered sibling is used instead."""
+    sanitized name; if that path already belongs to a DIFFERENT skill —
+    its frontmatter name disagrees, OR the directory exists under a
+    different CASING (case-folding filesystems resolve 'test-skill' into an
+    existing 'Test-skill'; writing there would mix two skills' folders,
+    observed live 2026-08-07) — a numbered sibling is used instead."""
     sub = base = _skill_dirname(name)
     n = 2
     while True:
         d = os.path.join(dirpath, sub)
         md = os.path.join(d, SKILL_BASENAME)
-        if not os.path.isfile(md):
-            break
-        try:
-            existing_name, _ = _entry_from_md(_read_text(md), sub)
-        except OSError:
-            existing_name = None  # unreadable — claim a sibling, never clobber
-        if existing_name == name:
-            break
+        if os.path.isfile(md):
+            try:
+                existing_name, _ = _entry_from_md(_read_text(md), sub)
+            except OSError:
+                existing_name = None  # unreadable — claim a sibling, never clobber
+            if existing_name == name:
+                break
+        elif os.path.isdir(d) and _real_basename(dirpath, sub) not in (None, sub):
+            pass  # a differently-cased folder occupies this path — not ours
+        else:
+            break  # free, or an exact-cased SKILL.md-less husk we can adopt
         sub = f"{base}_{n}"
         n += 1
     new_text = _serialize_skill_md(name, entry)
@@ -607,9 +627,30 @@ def _scan_skills_tree(dirpath):
                 name, entry = _entry_from_md(_read_text(md), sub)
             except OSError:
                 name = None
-            if name is not None:
-                if name in skills and skills[name] != entry:
+            if name is not None and name in skills and skills[name] == entry:
+                # A second folder holding an IDENTICAL entry is junk — e.g.
+                # the numbered sibling a case-collision left behind (live
+                # 2026-08-07: Test-skill + test-skill_2 both said
+                # name: test-skill). Removed like an identical conflict fork.
+                _rmtree_verified(d)
+            elif name is not None:
+                if name in skills:
                     name = f"{name}__{sub}"
+                else:
+                    # Heal folder naming: a case-only mismatch (folder
+                    # Test-skill holding name test-skill) or a stranded
+                    # numbered sibling moves to the natural folder once that
+                    # slot is genuinely free — real==sub means the "occupant"
+                    # is this very folder under other casing, i.e. a pure
+                    # case-fix rename.
+                    natural = _skill_dirname(name)
+                    if sub != natural:
+                        real = _real_basename(dirpath, natural)
+                        if real is None or real == sub:
+                            try:
+                                os.rename(d, os.path.join(dirpath, natural))
+                            except OSError:
+                                pass
                 skills[name] = entry
         for extra_name, extra_entry in extras:
             skills.setdefault(extra_name, extra_entry)
@@ -730,5 +771,5 @@ def delete_skill_tree_entry(dirpath, name):
                 continue
             if fname == name:
                 _rmtree_verified(d)
-        elif sub == _skill_dirname(name) and os.path.isdir(d):
-            _rmtree_verified(d)
+        elif sub.lower() == _skill_dirname(name).lower() and os.path.isdir(d):
+            _rmtree_verified(d)  # husk match is case-insensitive (case-folding FS)
