@@ -2401,14 +2401,27 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
     def _restore_skill_modes(self, saved):
         """Apply a prompt's saved skill modes to the live session ONLY — this does NOT
-        rewrite skills.json (the sticky global store), matching MyAgent. Skills absent
-        from the snapshot fall back to disabled for this session."""
+        rewrite the skills store (the sticky global source of truth), matching MyAgent.
+        Skills absent from the snapshot fall back to disabled for this session, with a
+        visible ⚠ naming them (a just-enabled skill silently vanishing from the system
+        prompt cost a real debugging session, 2026-08-07)."""
         if not isinstance(saved, dict):
             return
+        forced_off = []
         for sname in self.skills:
-            mode = saved.get(sname, "disabled")
-            if mode in ("disabled", "enabled", "on_demand"):
+            mode = saved.get(sname)
+            if mode is None:
+                if self.skills[sname].get("mode") != "disabled":
+                    forced_off.append(sname)
+                self.skills[sname]["mode"] = "disabled"
+            elif mode in ("disabled", "enabled", "on_demand"):
                 self.skills[sname]["mode"] = mode
+        if forced_off:
+            names = ", ".join(f"'{n}'" for n in forced_off)
+            self.queue.put({"type": "warning", "content":
+                            f"⚠ Skill(s) {names}: ON in the skills store but absent from "
+                            f"this prompt's skill_modes snapshot — disabled for this "
+                            f"session. Re-save the prompt to include them.\n"})
         self._update_skills_button()
         if (self.skills_editor_window and self.skills_editor_window.winfo_exists()
                 and self._skills_refresh_list):

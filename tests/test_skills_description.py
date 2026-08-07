@@ -7,6 +7,7 @@ SelfBot.py keeps in-file copies of _format_on_demand_listing /
 _desc_length_warning (it can't be imported under test: module-level Tk/DPI
 code), so these tests are the contract both apps implement.
 """
+import queue
 import unittest
 
 from myagent.skills_mixin import SkillsMixin
@@ -123,6 +124,51 @@ class TestManageSkillsDescription(unittest.TestCase):
         self.assertIn("Desc-A", out)
         self.assertNotIn("body-A", out)
         self.assertIn("body-B", out)  # preview fallback for undescribed skills
+
+
+class TestRestoreSkillModesWarning(unittest.TestCase):
+    """Applying an instruction's skill_modes snapshot forces skills absent
+    from it to disabled (session-only, by design) — but must now SAY so:
+    a just-enabled skill silently vanishing from the system prompt cost a
+    real debugging session (2026-08-07)."""
+
+    def rhost(self, skills):
+        h = stub(SkillsMixin, skills=skills, system_prompt="BASE")
+        h.queue = queue.Queue()
+        h._update_skills_button = lambda: None
+        h.skills_editor_window = None
+        h._skills_refresh_list = None
+        return h
+
+    def test_absent_enabled_skill_warns_and_disables(self):
+        h = self.rhost({"new-skill": {"content": "c", "mode": "enabled"},
+                        "old": {"content": "c", "mode": "on_demand"}})
+        h._restore_skill_modes({"skill_modes": {"old": "on_demand"}})
+        self.assertEqual(h.skills["new-skill"]["mode"], "disabled")
+        self.assertEqual(h.skills["old"]["mode"], "on_demand")
+        w = h.queue.get_nowait()
+        self.assertEqual(w["type"], "warning")
+        self.assertIn("'new-skill'", w["content"])
+        self.assertEqual(h._model_drift_warnings, [w["content"]])
+
+    def test_absent_disabled_skill_stays_silent(self):
+        h = self.rhost({"quiet": {"content": "c", "mode": "disabled"}})
+        h._restore_skill_modes({"skill_modes": {"deleted-skill": "enabled"}})
+        self.assertTrue(h.queue.empty())
+
+    def test_present_modes_apply_without_warning(self):
+        h = self.rhost({"a": {"content": "c", "mode": "disabled"}})
+        h._restore_skill_modes({"skill_modes": {"a": "on_demand"}})
+        self.assertEqual(h.skills["a"]["mode"], "on_demand")
+        self.assertTrue(h.queue.empty())
+
+    def test_repeat_restore_replaces_stashed_warning(self):
+        h = self.rhost({"s": {"content": "c", "mode": "enabled"}})
+        h._restore_skill_modes({"skill_modes": {"z": "disabled"}})
+        h.skills["s"]["mode"] = "enabled"
+        h._restore_skill_modes({"skill_modes": {"z": "disabled"}})
+        stash = [w for w in h._model_drift_warnings if "skill_modes snapshot" in w]
+        self.assertEqual(len(stash), 1)
 
 
 class TestNameConventionWarning(unittest.TestCase):

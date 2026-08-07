@@ -264,10 +264,34 @@ class SkillsMixin:
         saved = entry.get("skill_modes", {})
         if not saved:
             return
+        forced_off = []
         for sname in self.skills:
-            mode = saved.get(sname, "disabled")  # new skills default to disabled
-            if mode in ("disabled", "enabled", "on_demand"):
+            mode = saved.get(sname)
+            if mode is None:
+                # Skills absent from the snapshot (created after the
+                # instruction was last saved) default to disabled — but SAY so:
+                # a skill the user just set [ON] silently vanishing from the
+                # system prompt cost a real debugging session (2026-08-07).
+                if self.skills[sname].get("mode") != "disabled":
+                    forced_off.append(sname)
+                self.skills[sname]["mode"] = "disabled"
+            elif mode in ("disabled", "enabled", "on_demand"):
                 self.skills[sname]["mode"] = mode
+        if forced_off:
+            names = ", ".join(f"'{n}'" for n in forced_off)
+            drift = (f"⚠ Skill(s) {names}: ON in the skills store but absent from this "
+                     f"instruction's skill_modes snapshot — disabled for this session. "
+                     f"Re-save the instruction with the skill set to include it.\n")
+            # Same stash-and-repost channel as provider/model drift: _start_agent
+            # clears the output window after an -l restore, so stream_worker
+            # re-posts these at run start. Replace any earlier snapshot warning
+            # (repeated restores would otherwise stack duplicates).
+            if not hasattr(self, "_model_drift_warnings"):
+                self._model_drift_warnings = []
+            self._model_drift_warnings[:] = [
+                w for w in self._model_drift_warnings if "skill_modes snapshot" not in w]
+            self._model_drift_warnings.append(drift)
+            self.queue.put({"type": "warning", "content": drift})
         # Session-only: applying an instruction's saved skill modes updates the
         # live session (self.skills drives _build_system_prompt) but is NOT
         # persisted to skills.json. skills.json is the sticky global store, changed
