@@ -316,6 +316,61 @@ class CaseFoldingTests(SkillsTreeCase):
         self.assertFalse((self.tree / "Gone-skill").exists())
 
 
+class HuskSweepTests(SkillsTreeCase):
+    """A blocked rmdir can strand an empty SKILL.md-less husk (OneDrive holds
+    the directory handle past any reasonable inline wait). The scan sweeps
+    aged empty husks at load; _sweep_dir_later finishes in-session deletes
+    in the background."""
+
+    def aged(self, path):
+        old = os.stat(path).st_mtime - 120
+        os.utime(path, (old, old))
+
+    def test_scan_sweeps_aged_empty_husk(self):
+        husk = self.tree / "left-behind"
+        husk.mkdir(parents=True)
+        (husk / "empty-sub").mkdir()
+        self.aged(husk)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertFalse(husk.exists())
+
+    def test_scan_spares_fresh_empty_folder(self):
+        fresh = self.tree / "incoming-sync"
+        fresh.mkdir(parents=True)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertTrue(fresh.is_dir())
+
+    def test_scan_spares_aged_folder_with_files(self):
+        wip = self.tree / "hand-authoring"
+        wip.mkdir(parents=True)
+        (wip / "draft.txt").write_text("notes", encoding="utf-8")
+        self.aged(wip)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertTrue((wip / "draft.txt").is_file())
+
+    def test_scan_sweeps_readonly_husk(self):
+        # OneDrive stamps a stuck-delete directory ReadOnly — a read-only
+        # DIRECTORY (not just files) defeats rmtree on Windows
+        husk = self.tree / "readonly-husk"
+        sub = husk / "inner"
+        sub.mkdir(parents=True)
+        self.aged(husk)
+        os.chmod(sub, stat.S_IREAD)
+        os.chmod(husk, stat.S_IREAD)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertFalse(husk.exists())
+
+    def test_deferred_sweep_removes_dir(self):
+        import time as _time
+        target = self.tree / "husk-being-swept"
+        target.mkdir(parents=True)
+        dp._sweep_dir_later(str(target), tries=10, interval=0.02)
+        deadline = _time.time() + 2
+        while target.exists() and _time.time() < deadline:
+            _time.sleep(0.02)
+        self.assertFalse(target.exists())
+
+
 class ForkHealingTests(SkillsTreeCase):
     def test_identical_fork_is_deleted_silently(self):
         text = dp._serialize_skill_md("S", {"content": "same", "mode": "disabled"})

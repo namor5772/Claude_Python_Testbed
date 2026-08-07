@@ -73,6 +73,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 import time
 
 # Repo root (parent of the myagent/ package) — same expression as constants.py,
@@ -652,6 +653,19 @@ def _scan_skills_tree(dirpath):
                             except OSError:
                                 pass
                 skills[name] = entry
+        else:
+            # SKILL.md-less folder: a husk from a blocked delete, or a folder
+            # OneDrive is still materializing / a user is hand-authoring a
+            # future skill. Sweep only when it is EMPTY (no files anywhere —
+            # nothing to lose) AND not brand-new (>60 s), so an incoming
+            # sync or work-in-progress is never touched.
+            try:
+                has_files = any(files for _r, _d, files in os.walk(d))
+                aged = (time.time() - os.path.getmtime(d)) > 60
+            except OSError:
+                has_files, aged = True, False
+            if not has_files and aged:
+                _rmtree_verified(d, attempts=1, defer=False)
         for extra_name, extra_entry in extras:
             skills.setdefault(extra_name, extra_entry)
     return skills
@@ -715,24 +729,55 @@ def save_skills_tree(dirpath, skills):
                 pass  # best-effort per file; the next save retries
 
 
-def _rmtree_verified(path, attempts=6):
+def _sweep_dir_later(path, tries=40, interval=3.0):
+    """Background daemon that keeps retrying a blocked directory removal
+    after the caller has returned. OneDrive's directory handle outlives any
+    reasonable inline wait (observed live 2026-08-07, three times: the
+    files delete instantly, the rmdir stays blocked — and a rename is
+    refused by the same sharing check, so there is no instant workaround).
+    The default budget is ~2 minutes; a husk that outlives the process is
+    finished by the aged-empty sweep in _scan_skills_tree next launch."""
+    def _sweep():
+        for _ in range(tries):
+            time.sleep(interval)
+            if not os.path.exists(path):
+                return
+            try:
+                shutil.rmtree(path)
+            except OSError:
+                continue
+    threading.Thread(target=_sweep, daemon=True, name="skill-husk-sweep").start()
+
+
+def _rmtree_verified(path, attempts=3, defer=True):
     """shutil.rmtree that survives the Windows/OneDrive handle race (observed
-    live 2026-08-07): the sync client holds a directory handle for seconds
-    while processing recent activity, so rmtree removes the files but the
-    final rmdir fails — with the old ignore_errors=True that silently left
-    an empty husk folder behind (SKILL.md gone, directory there; a live
-    probe showed the hold outlasting a ~1 s retry window but clearing
-    within ~15 s). Clears read-only attributes, retries with backoff
-    (~5 s cumulative — paid only when a delete is actually blocked),
-    finishes with a bare rmdir for the files-went-dir-stayed case, and
-    returns whether the path is really gone so callers never assume."""
+    live 2026-08-07): the sync client holds a directory handle while
+    processing recent activity, so rmtree removes the files but the final
+    rmdir fails — with the old ignore_errors=True that silently left an
+    empty husk folder behind (SKILL.md gone, directory there). Clears
+    read-only attributes and retries briefly inline (~0.75 s — the Skills
+    Manager DELETE runs on the Tk main thread, so long inline waits freeze
+    the UI); when the directory STILL can't go and defer=True, hands it to
+    _sweep_dir_later, which retries in the background until the handle
+    releases. Returns whether the path is gone RIGHT NOW — with a sweeper
+    running, False still means 'seconds away', and the load-time
+    aged-empty-husk sweep is the cross-launch backstop."""
     for attempt in range(attempts):
         if not os.path.exists(path):
             return True
-        for root, _dirs, files in os.walk(path):
-            for fn in files:
+        # Clear read-only on the root, every subdir AND every file: OneDrive
+        # stamps a stuck-delete directory ReadOnly (+ReparsePoint), and a
+        # read-only DIRECTORY defeats rmtree/rmdir on Windows — that, not
+        # the transient handle, is what made husks survive later retries
+        # (live test-skill-bak husk, 2026-08-07: empty, aged, ReadOnly).
+        try:
+            os.chmod(path, stat.S_IWRITE)
+        except OSError:
+            pass
+        for root, dirs, files in os.walk(path):
+            for entry in dirs + files:
                 try:
-                    os.chmod(os.path.join(root, fn), stat.S_IWRITE)
+                    os.chmod(os.path.join(root, entry), stat.S_IWRITE)
                 except OSError:
                     pass
         try:
@@ -741,12 +786,17 @@ def _rmtree_verified(path, attempts=6):
             pass
         if not os.path.exists(path):
             return True
-        time.sleep(0.25 * (attempt + 1))
+        if attempt < attempts - 1:
+            time.sleep(0.25 * (attempt + 1))
     try:
         os.rmdir(path)
     except OSError:
         pass
-    return not os.path.exists(path)
+    if not os.path.exists(path):
+        return True
+    if defer:
+        _sweep_dir_later(path)
+    return False
 
 
 def delete_skill_tree_entry(dirpath, name):
