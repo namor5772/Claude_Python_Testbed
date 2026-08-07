@@ -2712,7 +2712,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             entry = dict(self.skills.get(name, {}))
             entry["content"] = content
             entry.setdefault("mode", "disabled")
-            desc = desc_entry.get().strip()
+            desc = " ".join(desc_entry.get("1.0", "end-1c").split())
             if desc:
                 entry["description"] = desc
             else:
@@ -2734,13 +2734,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 self._save_skills()
                 refresh_list()
                 name_entry.delete(0, tk.END)
-                desc_entry.delete(0, tk.END)
+                desc_entry.delete("1.0", tk.END)
                 text_editor.delete("1.0", tk.END)
                 self._update_skills_button()
 
         def new_skill():
             name_entry.delete(0, tk.END)
-            desc_entry.delete(0, tk.END)
+            desc_entry.delete("1.0", tk.END)
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
 
@@ -2755,8 +2755,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # prompt for on_demand skills (Agent-Skills style). Optional.
         desc_row = tk.Frame(win)
         desc_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-        tk.Label(desc_row, text="Description", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
-        desc_entry = tk.Entry(desc_row, font=("Arial", 10))
+        tk.Label(desc_row, text="Description", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5), anchor="n")
+        # Three word-wrapped rows so long what+when descriptions are readable
+        # (they routinely run to two sentences); newlines a user types here
+        # are normalized to spaces on SAVE — descriptions are single-line.
+        desc_entry = tk.Text(desc_row, font=("Arial", 10), height=3, wrap="word", undo=True)
         desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # Left panel: Cycle Mode button ABOVE the listbox
@@ -2804,8 +2807,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name in self.skills:
                 name_entry.delete(0, tk.END)
                 name_entry.insert(0, name)
-                desc_entry.delete(0, tk.END)
-                desc_entry.insert(0, self.skills[name].get("description", ""))
+                desc_entry.delete("1.0", tk.END)
+                desc_entry.insert("1.0", self.skills[name].get("description", ""))
                 text_editor.delete("1.0", tk.END)
                 text_editor.insert("1.0", self.skills[name]["content"])
 
