@@ -770,14 +770,26 @@ def _rmtree_verified(path, attempts=3, defer=True):
         # read-only DIRECTORY defeats rmtree/rmdir on Windows — that, not
         # the transient handle, is what made husks survive later retries
         # (live test-skill-bak husk, 2026-08-07: empty, aged, ReadOnly).
+        # Directories get S_IRWXU, files S_IREAD|S_IWRITE — NOT bare S_IWRITE
+        # for both: Windows chmod honors only the write bit (either mode
+        # clears ReadOnly identically), but on POSIX the mode is literal, and
+        # 0o200 on a DIRECTORY strips read+execute — the directory can no
+        # longer be listed or traversed, so rmtree fails and every retry
+        # re-cripples it (the 2026-08-08 macOS regression: skill deletes left
+        # every husk behind and each delete burned the full retry ladder).
         try:
-            os.chmod(path, stat.S_IWRITE)
+            os.chmod(path, stat.S_IRWXU)
         except OSError:
             pass
         for root, dirs, files in os.walk(path):
-            for entry in dirs + files:
+            for entry in dirs:
                 try:
-                    os.chmod(os.path.join(root, entry), stat.S_IWRITE)
+                    os.chmod(os.path.join(root, entry), stat.S_IRWXU)
+                except OSError:
+                    pass
+            for entry in files:
+                try:
+                    os.chmod(os.path.join(root, entry), stat.S_IREAD | stat.S_IWRITE)
                 except OSError:
                     pass
         try:
