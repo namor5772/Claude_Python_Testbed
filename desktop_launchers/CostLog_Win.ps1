@@ -10,7 +10,10 @@
 # conflict-fork, yet OneDrive syncs them all everywhere) -- so this viewer
 # aggregates EVERY machine's spend, not just this clone's. A repo-root
 # APICostLog.txt (no-OneDrive fallback, or history an app launch hasn't
-# migrated yet) is included too. Each line is "timestamp;provider;model;cost".
+# migrated yet) is included too. Each line is
+# "timestamp;provider;model;cost[;params]" -- the params field (added
+# 2026-08-10: the thinking/temperature settings the run used, e.g.
+# "reasoning=Medium, temp=1") is absent on older lines and shown blank.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -24,10 +27,10 @@ $inv = [Globalization.CultureInfo]::InvariantCulture
 # even when this fails, because it is placed before the model name.
 try {
     $rawUI = $Host.UI.RawUI
-    if ($rawUI.BufferSize.Width -lt 100) {
-        $bs = $rawUI.BufferSize; $bs.Width = 100; $rawUI.BufferSize = $bs
+    if ($rawUI.BufferSize.Width -lt 132) {
+        $bs = $rawUI.BufferSize; $bs.Width = 132; $rawUI.BufferSize = $bs
         $ws = $rawUI.WindowSize
-        $ws.Width = [Math]::Min(100, $rawUI.MaxPhysicalWindowSize.Width)
+        $ws.Width = [Math]::Min(132, $rawUI.MaxPhysicalWindowSize.Width)
         $rawUI.WindowSize = $ws
     }
 } catch {}
@@ -78,8 +81,9 @@ try {
         return
     }
 
-    # Parse "timestamp;provider;model;cost" from every machine's file, then sort
-    # by timestamp -- cross-machine order comes from the field, not file order.
+    # Parse "timestamp;provider;model;cost[;params]" from every machine's file,
+    # then sort by timestamp -- cross-machine order comes from the field, not
+    # file order. Params (5th field, added 2026-08-10) is blank on older lines.
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -88,6 +92,7 @@ try {
             [pscustomobject]@{
                 Time = $f[0]; Provider = $f[1]; Model = $f[2]
                 Cost = [double]::Parse($f[3], $inv); Machine = $logf.Machine
+                Params = if ($f.Count -ge 5) { $f[4] } else { '' }
             }
         }
     }
@@ -135,17 +140,21 @@ try {
         # the row lines are emitted as a single array append -- a per-row
         # `$out +=` reallocates the whole accumulated array each time, which
         # goes quadratic as the merged per-machine logs grow.
-        $machW = 7; $provW = 8
+        # MODEL is fixed-width too now that PARAMETERS (the new open-ended
+        # column) sits after it; params is the least critical column, so at a
+        # too-narrow console it is the one that wraps -- cost never moves.
+        $machW = 7; $provW = 8; $modW = 5
         foreach ($r in $rows) {
             if ($r.Machine.Length -gt $machW) { $machW = $r.Machine.Length }
             if ($r.Provider.Length -gt $provW) { $provW = $r.Provider.Length }
+            if ($r.Model.Length -gt $modW) { $modW = $r.Model.Length }
         }
-        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4}"
-        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'MODEL')
-        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 5))
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,-$modW} {5}"
+        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'MODEL', 'PARAMETERS')
+        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 5), ('-' * 10))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
-            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Model
+            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Model, $r.Params
         })
     }
 

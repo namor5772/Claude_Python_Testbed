@@ -922,7 +922,10 @@ class StreamingMixin:
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
-        total_cost is the last cost displayed in the output window. Runs where
+        Line format: {timestamp};{provider};{model};{cost};{params} — params is
+        the compact _get_model_param_summary() string (comma-joined), so the
+        log records the thinking/temperature settings the run used alongside
+        its cost. total_cost is the last cost displayed in the output window. Runs where
         no priced usage was recorded (total_cost == 0 — e.g. Ollama, an
         unmatched model prefix, or a STOP before the first API result) are
         skipped, matching the "only if relevant" display behaviour. The log
@@ -936,9 +939,13 @@ class StreamingMixin:
             return
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            # ';' delimiter (not ',') so a comma inside a model name can't be
-            # misread as a field separator.
-            line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f}\n"
+            # 5th field: the title-bar parameter summary (e.g. "mode=Adaptive",
+            # "reasoning=Medium temp=1"), comma-joined for log readability —
+            # parts never contain ';' or ',' so the field can't split.
+            params = ", ".join(self._get_model_param_summary().split())
+            # ';' delimiter (not ',') so a comma inside a model name or the
+            # params field can't be misread as a field separator.
+            line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f};{params}\n"
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.

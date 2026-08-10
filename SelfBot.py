@@ -5962,18 +5962,50 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         pt = tuple(p / 1_000_000 for p in best)
         return {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
 
+    def _get_model_param_summary(self):
+        """Compact string of the parameters actually in effect — SelfBot's
+        Anthropic-only mirror of MyAgent's ui_mixin helper, used for the cost
+        log's params field. Adaptive models report their thinking mode (a stale
+        "off" on an always-on Fable/Mythos model reports Adaptive, matching
+        what _apply_thinking_params sends); manual models report the budget
+        label; temperature appears only when it is actually sent."""
+        parts = []
+        support = self._model_supports_thinking()
+        mode = (self.thinking_mode or "").lower()
+        if support == "adaptive":
+            if mode == "off" and self._is_always_on_thinking():
+                parts.append("mode=Adaptive")
+            else:
+                parts.append(f"mode={mode.capitalize() or 'Off'}")
+                if mode == "off" and not self._rejects_temperature():
+                    parts.append(f"temp={self.temperature:g}")
+        elif support == "manual" and self.thinking_enabled:
+            label = next(
+                (k for k, v in BUDGET_PRESETS.items() if v == self.thinking_budget),
+                f"{self.thinking_budget}tok",
+            )
+            parts.append(f"thinking={label}")
+        else:
+            parts.append("thinking=off")
+            if not self._rejects_temperature():
+                parts.append(f"temp={self.temperature:g}")
+        return " ".join(parts)
+
     def _log_api_cost(self, total_cost):
         """Append the session's cumulative API cost to this machine's cost log
         (APICostLog_<machine>.txt in the OneDrive share, repo-root fallback — the
         SAME file MyAgent writes). Called once when the app closes. Semicolon-delimited
-        {timestamp};{provider};{model};{cost} so a comma in a model name can't split a
-        field; 4-decimal cost for spreadsheet summing. Skipped when the cost is zero (no
+        {timestamp};{provider};{model};{cost};{params} so a comma in a model name or
+        the params field can't split a field; 4-decimal cost for spreadsheet summing;
+        params is the comma-joined _get_model_param_summary() string (thinking mode /
+        budget / temperature in effect at close). Skipped when the cost is zero (no
         priced usage — e.g. an unmatched model prefix). Best-effort; never raises."""
         if not total_cost or total_cost <= 0:
             return
         try:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            line = f"{timestamp};Anthropic;{self.model};{total_cost:.4f}\n"
+            params = ", ".join(self._get_model_param_summary().split())
+            line = f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params}\n"
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
