@@ -1423,17 +1423,30 @@ OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 # leaves plenty of headroom for long agent conversations. Override via
 # the OLLAMA_NUM_CTX_CAP env var if you have more RAM.
 OLLAMA_NUM_CTX_CAP = int(os.environ.get("OLLAMA_NUM_CTX_CAP", "32768"))
+# How long the Ollama server keeps the model loaded after each call, passed
+# per-request (e.g. "24h", "30m", "0" to unload immediately). The server
+# default is only 5m, so every fresh agent run pays the model load AND the
+# full multi-minute prompt prefill again; a warm model also reuses the
+# server's KV prefix cache, so a repeat run of the same instruction skips
+# most of the system-prompt/tool-catalog prefill. Opt-in: unset sends
+# nothing (server default applies) — a pinned 21 GB model is a real RAM
+# trade-off on 32 GB machines. Reclaim manually with `ollama stop <model>`.
+OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "")
 # Models that accept `think: true` on /api/chat and emit reasoning in the
 # separate `thinking` stream field. Ollama's `think` flag is boolean-only
 # today — all effort levels (low/medium/high) map to `think: true`.
-OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss")
+OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss", "muse-glimmer")
 # Vision-capable local models. When a non-vision Ollama model is paired with
 # the Desktop/Browser tool checkboxes, the weak-combo warning surfaces.
 # Ollama's library uses no dash between the base name and "vl" (e.g.
 # "qwen2.5vl:32b"), but some external references use a dash — both covered.
+# "gemma3" covers the family incl. the -tools graft; caveat: upstream
+# gemma3:1b is text-only, so its warning would be wrongly suppressed if
+# that variant were ever pulled.
 OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
                           "llava", "llama3.2-vision", "bakllava",
-                          "moondream", "minicpm-v", "granite3.2-vision")
+                          "moondream", "minicpm-v", "granite3.2-vision",
+                          "muse-glimmer", "gemma3")
 # ── xAI (Grok) ────────────────────────────────────────────────────────────────
 # Reached with the openai SDK pointed at XAI_DEFAULT_BASE_URL (the API is
 # OpenAI-compatible; the primary surface is the Responses endpoint, same

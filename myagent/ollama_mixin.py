@@ -6,6 +6,7 @@ from myagent.constants import (
     OLLAMA_THINKING_PREFIXES,
     OLLAMA_VISION_PREFIXES,
     OLLAMA_NUM_CTX_CAP,
+    OLLAMA_KEEP_ALIVE,
 )
 
 
@@ -213,6 +214,12 @@ class OllamaMixin:
             "stream": True,
             "options": options,
         }
+
+        # Keep the model warm between runs (env-driven; unset leaves the
+        # server's 5m default). Warm model = no reload and a reusable KV
+        # prefix cache for the next run's identical prompt head.
+        if OLLAMA_KEEP_ALIVE:
+            request_kwargs["keep_alive"] = OLLAMA_KEEP_ALIVE
 
         # Only send tools if the model's Ollama template supports them.
         # qwen2.5vl advertises only ["completion", "vision"] — passing tools
