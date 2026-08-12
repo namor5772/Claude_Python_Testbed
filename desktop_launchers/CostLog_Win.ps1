@@ -11,9 +11,12 @@
 # aggregates EVERY machine's spend, not just this clone's. A repo-root
 # APICostLog.txt (no-OneDrive fallback, or history an app launch hasn't
 # migrated yet) is included too. Each line is
-# "timestamp;provider;model;cost[;params]" -- the params field (added
+# "timestamp;provider;model;cost[;params[;secs]]" -- the params field (added
 # 2026-08-10: the thinking/temperature settings the run used, e.g.
-# "reasoning=Medium, temp=1") is absent on older lines and shown blank.
+# "reasoning=Medium, temp=1") is absent on older lines and shown blank; the
+# secs field (added 2026-08-12: MyAgent's wall-clock run duration in whole
+# seconds -> the TIME(sec) column) is absent on older lines and on SelfBot's,
+# which doesn't record duration.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -27,10 +30,10 @@ $inv = [Globalization.CultureInfo]::InvariantCulture
 # even when this fails, because it is placed before the model name.
 try {
     $rawUI = $Host.UI.RawUI
-    if ($rawUI.BufferSize.Width -lt 132) {
-        $bs = $rawUI.BufferSize; $bs.Width = 132; $rawUI.BufferSize = $bs
+    if ($rawUI.BufferSize.Width -lt 142) {
+        $bs = $rawUI.BufferSize; $bs.Width = 142; $rawUI.BufferSize = $bs
         $ws = $rawUI.WindowSize
-        $ws.Width = [Math]::Min(132, $rawUI.MaxPhysicalWindowSize.Width)
+        $ws.Width = [Math]::Min(142, $rawUI.MaxPhysicalWindowSize.Width)
         $rawUI.WindowSize = $ws
     }
 } catch {}
@@ -76,14 +79,16 @@ try {
         Write-Host "  looked in: $share"
         Write-Host "  and:       $repoLog`n"
         Write-Host "MyAgent.py / SelfBot.py append to APICostLog_<machine>.txt when a run"
-        Write-Host "ends with priced API usage. (Nothing is logged for Ollama, unmatched"
-        Write-Host "model prefixes, or STOPped runs.)"
+        Write-Host "ends with API usage -- Ollama runs log as `$0.0000 lines. (Nothing is"
+        Write-Host "logged for a paid provider's unmatched model prefix or a STOP before"
+        Write-Host "the first result.)"
         return
     }
 
-    # Parse "timestamp;provider;model;cost[;params]" from every machine's file,
-    # then sort by timestamp -- cross-machine order comes from the field, not
-    # file order. Params (5th field, added 2026-08-10) is blank on older lines.
+    # Parse "timestamp;provider;model;cost[;params[;secs]]" from every
+    # machine's file, then sort by timestamp -- cross-machine order comes from
+    # the field, not file order. Params (5th field, added 2026-08-10) and secs
+    # (6th, added 2026-08-12) are blank on older lines.
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -93,6 +98,7 @@ try {
                 Time = $f[0]; Provider = $f[1]; Model = $f[2]
                 Cost = [double]::Parse($f[3], $inv); Machine = $logf.Machine
                 Params = if ($f.Count -ge 5) { $f[4] } else { '' }
+                Secs = if ($f.Count -ge 6) { $f[5] } else { '' }
             }
         }
     }
@@ -149,12 +155,12 @@ try {
             if ($r.Provider.Length -gt $provW) { $provW = $r.Provider.Length }
             if ($r.Model.Length -gt $modW) { $modW = $r.Model.Length }
         }
-        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,-$modW} {5}"
-        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'MODEL', 'PARAMETERS')
-        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 5), ('-' * 10))
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,-$modW} {6}"
+        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'MODEL', 'PARAMETERS')
+        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 10))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
-            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Model, $r.Params
+            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Model, $r.Params
         })
     }
 

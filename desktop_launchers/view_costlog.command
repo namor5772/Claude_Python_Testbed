@@ -15,9 +15,12 @@
 # syncs them all everywhere) — so this viewer aggregates EVERY machine's
 # spend, not just this clone's. A repo-root APICostLog.txt (no-OneDrive
 # fallback, or history an app launch hasn't migrated yet) is included too.
-# Each line is "timestamp;provider;model;cost[;params]" (semicolon-delimited);
-# the params field (added 2026-08-10: the thinking/temperature settings the
-# run used, e.g. "reasoning=Medium, temp=1") is absent on older lines.
+# Each line is "timestamp;provider;model;cost[;params[;secs]]"
+# (semicolon-delimited); the params field (added 2026-08-10: the thinking/
+# temperature settings the run used, e.g. "reasoning=Medium, temp=1") is
+# absent on older lines, and the secs field (added 2026-08-12: MyAgent's
+# wall-clock run duration, whole seconds → the TIME(sec) column) is absent
+# on older lines and on SelfBot's, which doesn't record duration.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -54,18 +57,19 @@ if [ ${#LOGS[@]} -eq 0 ]; then
   echo "  and:       $REPO/APICostLog.txt"
   echo
   echo "MyAgent.py / SelfBot.py append to APICostLog_<machine>.txt when a run ends"
-  echo "with priced API usage. (Nothing is logged for Ollama, unmatched model"
-  echo "prefixes, or STOPped runs.)"
+  echo "with API usage — Ollama runs log as \$0.0000 lines. (Nothing is logged for"
+  echo "a paid provider's unmatched model prefix or a STOP before the first result.)"
   echo
   read -r -p "Press Return to close this window… " _
   exit 0
 fi
 
 # Merge every file into machine-tagged rows
-# "timestamp;provider;model;cost;params;machine", sorted by timestamp —
-# cross-machine order comes from the field, not file order. Pre-params 4-field
-# lines get an empty params field appended so every merged row is uniformly
-# 6 fields (machine is ALWAYS $6, params $5 — possibly empty).
+# "timestamp;provider;model;cost;params;secs;machine", sorted by timestamp —
+# cross-machine order comes from the field, not file order. Shorter historic
+# shapes (4-field pre-params, 5-field pre-secs incl. SelfBot's) get empty
+# fields appended so every merged row is uniformly 7 fields (machine is
+# ALWAYS $7, secs $6, params $5 — the latter two possibly empty).
 # The sub() strips the CR that Windows-written lines carry (CRLF via Python
 # text mode until 2026-08-03, and any not-yet-updated writer): without it the
 # cost field ends in \r and the viewer shows ^M after every Windows row.
@@ -73,8 +77,9 @@ MERGED="$(mktemp)"
 trap 'rm -f "$MERGED"' EXIT
 for i in "${!LOGS[@]}"; do
   awk -F';' -v M="${LABELS[$i]}" '{ sub(/\r$/, "") }
-    NF==4 { print $0 ";;" M }
-    NF>=5 { print $0 ";" M }' "${LOGS[$i]}"
+    NF==4 { print $0 ";;;" M }
+    NF==5 { print $0 ";;" M }
+    NF>=6 { print $0 ";" M }' "${LOGS[$i]}"
 done | sort -t';' -k1,1 > "$MERGED"
 
 {
@@ -86,9 +91,9 @@ done | sort -t';' -k1,1 > "$MERGED"
   echo
   echo "SUMMARY"
   awk -F';' -v TODAY="$(date +%Y-%m-%d)" -v MONTH="$(date +%Y-%m)" '
-    NF>=6 {
+    NF>=7 {
       c=$4+0; total+=c; n++;
-      mach[$6]+=c; machn[$6]++;
+      mach[$7]+=c; machn[$7]++;
       prov[$2]+=c; provn[$2]++;
       d=substr($1,1,10); mo=substr($1,1,7);
       if (d==TODAY) today+=c;
@@ -111,18 +116,23 @@ done | sort -t';' -k1,1 > "$MERGED"
     }' "$MERGED"
   echo
   echo "  By model (highest spend first):"
-  awk -F';' 'NF>=6 { m[$3]+=$4; c[$3]++ } END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
+  awk -F';' 'NF>=7 { m[$3]+=$4; c[$3]++ } END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
     | sort -rn | awk -F'\t' '{ printf "    %-32s $%10.4f  (%d)\n", $2, $1+0, $3 }'
   echo
   echo "═════════════════════ FULL LOG (most recent first) ═════════════════════"
   echo
-  # COST before MODEL: cost stays left of the open-ended columns, so a narrow
-  # terminal wraps at worst the model/params tail — the per-run cost is always
-  # on screen (the Windows twin does the same; its Format-Table used to
-  # silently drop the trailing cost column instead). PARAMETERS is last: the
-  # least critical column takes the wrap, and an empty params (pre-2026-08-10
-  # line) just leaves the tail blank.
-  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);MODEL;PARAMETERS"
-    tail -r "$MERGED" | awk -F';' 'NF>=6 { print $1 ";" $6 ";" $2 ";" $4 ";" $3 ";" $5 }'; } \
+  # COST/TIME before MODEL: the numeric columns stay left of the open-ended
+  # ones, so a narrow terminal wraps at worst the model/params tail — the
+  # per-run cost is always on screen (the Windows twin does the same; its
+  # Format-Table used to silently drop the trailing cost column instead).
+  # PARAMETERS is last: the least critical column takes the wrap, and an
+  # empty params (pre-2026-08-10 line) just leaves the tail blank. An empty
+  # secs (SelfBot / older line) renders as "-" — it sits mid-row and BSD
+  # column -t COLLAPSES consecutive delimiters, so a genuinely empty field
+  # would shift every later column left.
+  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);MODEL;PARAMETERS"
+    tail -r "$MERGED" | awk -F';' 'NF>=7 {
+      t=($6=="" ? "-" : $6);
+      print $1 ";" $7 ";" $2 ";" $4 ";" t ";" $3 ";" $5 }'; } \
     | column -t -s';'
 } | less -R

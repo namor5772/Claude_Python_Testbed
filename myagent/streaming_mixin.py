@@ -3,6 +3,7 @@ import copy
 import re
 import concurrent.futures
 import os
+import time
 import tkinter as tk
 from datetime import datetime
 
@@ -918,17 +919,25 @@ class StreamingMixin:
             priced["cache_read"] = per_token[2]
         return priced
 
-    def _log_api_cost(self, total_cost):
+    def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None):
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
-        Line format: {timestamp};{provider};{model};{cost};{params} — params is
-        the compact _get_model_param_summary() string (comma-joined), so the
-        log records the thinking/temperature settings the run used alongside
-        its cost. total_cost is the last cost displayed in the output window. Runs where
-        no priced usage was recorded (total_cost == 0 — e.g. Ollama, an
-        unmatched model prefix, or a STOP before the first API result) are
-        skipped, matching the "only if relevant" display behaviour. The log
+        Line format: {timestamp};{provider};{model};{cost};{params};{secs} —
+        params is the compact _get_model_param_summary() string (comma-joined),
+        so the log records the thinking/temperature settings the run used
+        alongside its cost; secs (6th field, 2026-08-12) is the run's
+        wall-clock duration in whole seconds, blank when duration_secs is None
+        (SelfBot's 5-field lines and pre-2026-08-12 history render a blank
+        TIME(sec) column in the viewers). total_cost is the last cost
+        displayed in the output window.
+        Ollama runs are deliberately free but still logged (cost 0.0000) when
+        at least one call returned usage (had_usage) — local activity shows in
+        the viewers without inflating any spend total. Other zero-cost runs
+        (a paid provider's unmatched model prefix, or a STOP before the first
+        API result) stay skipped: a false $0.0000 line for a PAID provider
+        would claim the run was free when the truth is the price is unknown.
+        The log
         (APICOST_LOG_FILE via datapaths.resolve_costlog) is
         APICostLog_<machine>.txt in the OneDrive share — per-machine files
         never conflict-fork, yet every machine's spend syncs everywhere for
@@ -936,16 +945,20 @@ class StreamingMixin:
         on solo machines. Best-effort: any I/O failure is reported but never
         interrupts the run."""
         if not total_cost or total_cost <= 0:
-            return
+            if not (self.provider == "Ollama" and had_usage):
+                return
+            total_cost = 0.0
         try:
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # 5th field: the title-bar parameter summary (e.g. "mode=Adaptive",
             # "reasoning=Medium temp=1"), comma-joined for log readability —
             # parts never contain ';' or ',' so the field can't split.
             params = ", ".join(self._get_model_param_summary().split())
+            secs = "" if duration_secs is None else f"{duration_secs:.0f}"
             # ';' delimiter (not ',') so a comma inside a model name or the
             # params field can't be misread as a field separator.
-            line = f"{timestamp};{self.provider};{self.model};{total_cost:.4f};{params}\n"
+            line = (f"{timestamp};{self.provider};{self.model};"
+                    f"{total_cost:.4f};{params};{secs}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
@@ -1014,8 +1027,14 @@ class StreamingMixin:
 
     def stream_worker(self, messages):
         # Initialized before the try so the except path can log whatever cost
-        # accumulated before the failure.
+        # accumulated before the failure. had_usage distinguishes a run that
+        # made at least one completed call from one stopped before any result
+        # — free (Ollama) runs log only in the former case. run_started feeds
+        # the cost log's TIME(sec) field (wall-clock run duration; monotonic
+        # so a system clock change can't produce a negative duration).
         total_cost = 0.0
+        had_usage = False
+        run_started = time.monotonic()
         try:
             # Sync temperature from spinbox
             try:
@@ -1091,6 +1110,7 @@ class StreamingMixin:
 
                 # Accumulate cost
                 if usage:
+                    had_usage = True
                     pricing = self._get_pricing(self.provider, self.model)
                     # xAI reports the authoritative billed cost per call
                     # (cost_in_usd_ticks → cost_usd, set in _stream_xai_events).
@@ -1251,7 +1271,8 @@ class StreamingMixin:
 
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
-            self._log_api_cost(total_cost)
+            self._log_api_cost(total_cost, had_usage,
+                               time.monotonic() - run_started)
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
@@ -1267,7 +1288,8 @@ class StreamingMixin:
             # Mirror the success path: persist whatever cost accrued before the
             # failure, and never leave a headless run as a zombie process — an
             # unattended error should exit (the auto-saved transcript records it).
-            self._log_api_cost(total_cost)
+            self._log_api_cost(total_cost, had_usage,
+                               time.monotonic() - run_started)
             self._write_result_file("error", messages, error=str(e))
             if self._headless or self._result_file:
                 self.root.after(500, self._on_close)
