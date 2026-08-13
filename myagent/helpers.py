@@ -1,6 +1,8 @@
 import json
 import os
 import re
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -115,6 +117,26 @@ def rotate_log_if_needed(log_path, max_bytes):
     except OSError:
         return False
     return True
+
+
+@contextmanager
+def input_wait_timer(app):
+    """Accumulate seconds spent blocked on user input into app._input_wait_secs.
+
+    Wraps every dialog wait that parks the streaming thread on the user —
+    do_user_prompt, _request_confirmation, and the mail confirms
+    (mail_common.confirm_action) — so the cost log's TIME(sec) field measures
+    the agent working, not the user's response latency: stream_worker zeroes
+    the accumulator at run start and subtracts it from the wall clock at log
+    time. The finally path accumulates even when the wrapped wait raises, and
+    getattr-defaulting keeps the dialogs callable outside a run (nothing to
+    bill the wait against)."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        app._input_wait_secs = (getattr(app, "_input_wait_secs", 0.0)
+                                + (time.monotonic() - started))
 
 
 class HTMLTextExtractor(HTMLParser):

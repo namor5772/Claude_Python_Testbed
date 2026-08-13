@@ -8,6 +8,8 @@ instead of being copy-pasted three times.
 """
 from tkinter import messagebox
 
+from myagent.helpers import input_wait_timer
+
 
 def confirm_action(app, provider_label, tool_name, title, summary, detail):
     """Modal dialog confirming a destructive mail action. Returns True if the
@@ -32,6 +34,9 @@ def confirm_action(app, provider_label, tool_name, title, summary, detail):
         return True
     message = f"{summary}\n\n{detail}\n\nProceed?"
     try:
-        return bool(messagebox.askyesno(title, message, parent=app.root))
+        # Time parked on the user's Yes/No doesn't count as run time
+        # (cost log TIME(sec)) — see helpers.input_wait_timer.
+        with input_wait_timer(app):
+            return bool(messagebox.askyesno(title, message, parent=app.root))
     except Exception:
         return False

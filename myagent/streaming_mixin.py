@@ -927,7 +927,10 @@ class StreamingMixin:
         params is the compact _get_model_param_summary() string (comma-joined),
         so the log records the thinking/temperature settings the run used
         alongside its cost; secs (6th field, 2026-08-12) is the run's
-        wall-clock duration in whole seconds, blank when duration_secs is None
+        wall-clock duration in whole seconds — minus any time the run sat
+        waiting on user input (user_prompt / confirmation dialogs, since
+        2026-08-13), so it measures the agent working, not the user's
+        response latency — blank when duration_secs is None
         (SelfBot's 5-field lines and pre-2026-08-12 history render a blank
         TIME(sec) column in the viewers). total_cost is the last cost
         displayed in the output window.
@@ -1031,10 +1034,15 @@ class StreamingMixin:
         # made at least one completed call from one stopped before any result
         # — free (Ollama) runs log only in the former case. run_started feeds
         # the cost log's TIME(sec) field (wall-clock run duration; monotonic
-        # so a system clock change can't produce a negative duration).
+        # so a system clock change can't produce a negative duration), minus
+        # _input_wait_secs — the seconds the run sat parked on user input
+        # (user_prompt / confirmation dialogs, accumulated by
+        # helpers.input_wait_timer) — so TIME(sec) measures the agent
+        # working, not the user's response latency.
         total_cost = 0.0
         had_usage = False
         run_started = time.monotonic()
+        self._input_wait_secs = 0.0
         try:
             # Sync temperature from spinbox
             try:
@@ -1272,7 +1280,8 @@ class StreamingMixin:
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
             self._log_api_cost(total_cost, had_usage,
-                               time.monotonic() - run_started)
+                               max(0.0, time.monotonic() - run_started
+                                   - self._input_wait_secs))
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
@@ -1289,7 +1298,8 @@ class StreamingMixin:
             # failure, and never leave a headless run as a zombie process — an
             # unattended error should exit (the auto-saved transcript records it).
             self._log_api_cost(total_cost, had_usage,
-                               time.monotonic() - run_started)
+                               max(0.0, time.monotonic() - run_started
+                                   - self._input_wait_secs))
             self._write_result_file("error", messages, error=str(e))
             if self._headless or self._result_file:
                 self.root.after(500, self._on_close)

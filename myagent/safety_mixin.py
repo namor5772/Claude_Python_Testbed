@@ -7,7 +7,7 @@ from myagent.constants import (
     MONO_FONT,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
 )
-from myagent.helpers import extract_text_from_html
+from myagent.helpers import extract_text_from_html, input_wait_timer
 
 from ddgs import DDGS
 import httpx
@@ -353,7 +353,10 @@ class SafetyMixin:
             dlg.deiconify()  # Show with correct geometry
 
         self.root.after(0, ask)
-        event.wait()
+        # Time parked on the user's Allow/Deny doesn't count as run time
+        # (cost log TIME(sec)) — see helpers.input_wait_timer.
+        with input_wait_timer(self):
+            event.wait()
         return result_holder[0]
 
     def do_user_prompt(self, message):
@@ -464,7 +467,10 @@ class SafetyMixin:
             resp_text.focus_set()
 
         self.root.after(0, ask)
-        event.wait()
+        # Time parked on the user's reply doesn't count as run time
+        # (cost log TIME(sec)) — see helpers.input_wait_timer.
+        with input_wait_timer(self):
+            event.wait()
         # Echo the user's response in the chat display so it's visible
         response = result_holder[0]
         if response and response != "[User dismissed the dialog without responding]":
