@@ -207,6 +207,7 @@ class OllamaMixin:
             # is almost never needed for agent loops and triples the KV cache
             # footprint. Override via env var if you have bigger hardware.
             options["num_ctx"] = min(caps["context_length"], OLLAMA_NUM_CTX_CAP)
+            self._ollama_ctx_guard(options["num_ctx"])
 
         request_kwargs = {
             "model": self.model,
@@ -409,6 +410,57 @@ class OllamaMixin:
 
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict
 
+    def _ollama_loaded_context(self, model_id=None):
+        """Context length of the currently loaded instance of a model, or None.
+
+        Reads /api/ps — the data behind `ollama ps`'s CONTEXT column. None
+        means "not loaded, field unavailable, or query failed"; the guard
+        treats all three as no-op.
+        """
+        mid = model_id or self.model
+        if not getattr(self, "ollama_client", None):
+            return None
+        try:
+            resp = self.ollama_client.ps()
+            for m in _attr(resp, "models", None) or []:
+                name = _attr(m, "model", None) or _attr(m, "name", None)
+                if name == mid:
+                    ctx = _attr(m, "context_length", None)
+                    return int(ctx) if ctx else None
+        except Exception:
+            return None
+        return None
+
+    def _ollama_ctx_guard(self, num_ctx):
+        """Drop a warm instance pinned at a smaller context than this run needs.
+
+        Ollama 0.32.x serves requests on an already-loaded instance regardless
+        of the requested num_ctx — it never reloads for a bigger window — so an
+        instance warmed small (a CLI `ollama run` chat, a probe script, a
+        failed caps query) silently context-shifts the ~9K system-prompt/tool
+        prefix out of the window and roughly doubles run time (live incident
+        2026-08-14: 2,663s vs a 802-1,561s baseline). A keep_alive=0 generate
+        poke unloads the small instance; the chat call that follows reloads at
+        the right size. A LARGER loaded context is left alone — requests fit
+        inside it, and downgrading a deliberately big warm instance would be
+        its own trap.
+        """
+        loaded = self._ollama_loaded_context()
+        if not loaded or loaded >= num_ctx:
+            return
+        try:
+            self.ollama_client.generate(model=self.model, prompt="", keep_alive=0)
+            self.queue.put({
+                "type": "warning",
+                "content": (
+                    f"⚠ {self.model} was warm at {loaded} ctx but this run needs "
+                    f"{num_ctx} — dropped the small instance so it reloads at "
+                    f"{num_ctx} (small-ctx warm trap; see README)\n"
+                ),
+            })
+        except Exception:
+            pass  # best-effort: a failed poke must never block the run
+
     def _is_ollama_thinking_model(self, model_id=None):
         mid = model_id or self.model
         return any(mid.startswith(p) for p in OLLAMA_THINKING_PREFIXES)
@@ -443,8 +495,10 @@ class OllamaMixin:
         """Query and cache Ollama model capabilities + context length.
 
         Returns a dict: {"context_length": int | None, "capabilities": set[str]}.
-        Cached per-model for the life of the session — `ollama show` is cheap
-        locally but this avoids hitting the endpoint on every stream call.
+        SUCCESSFUL lookups are cached per-model for the life of the session —
+        `ollama show` is cheap locally but this avoids hitting the endpoint on
+        every stream call. A failed lookup is served empty for that call only
+        and re-queried next time.
 
         The `context_length` lives in `modelinfo["{arch}.context_length"]` where
         the arch prefix is model-specific (`qwen3`, `qwen25vl`, `llama`, etc.).
@@ -467,9 +521,13 @@ class OllamaMixin:
                         if k.endswith(".context_length") and isinstance(v, int):
                             caps["context_length"] = v
                             break
+                # Cache only a SUCCESSFUL query. Caching a transient failure
+                # used to pin empty caps for the whole session: every later
+                # call then omitted num_ctx, so the server-default small load
+                # (pinned by keep_alive) became a session-long small-ctx trap.
+                self._ollama_model_caps[mid] = caps
             except Exception:
-                # Leave caps empty → the caller falls back to pre-existing
-                # behaviour (default num_ctx, tools passed unconditionally).
+                # Serve empty caps for THIS call only (default num_ctx, tools
+                # sent unconditionally); the next call re-queries.
                 pass
-        self._ollama_model_caps[mid] = caps
         return caps
