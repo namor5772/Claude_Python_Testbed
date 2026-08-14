@@ -1412,7 +1412,14 @@ GEMINI_NON_AGENTIC_SUBSTRINGS = (
     "robotics", "computer-use", "deep-research", "antigravity",
 )
 # Ollama (local inference) — no API key needed; availability probed at startup.
-OLLAMA_FALLBACK_MODELS = ["qwen3:32b-q4_K_M"]
+# Order is the curated preference: [0] is OLLAMA_DEFAULT_MODEL (initial model,
+# instruction-create default, and the drift-fallback target when a saved model
+# is missing from the live list); the full list is served only when the model
+# fetch fails. muse-glimmer first per the 2026-08-14 live-fire audit (only
+# all-four-capability model, fastest, reliable tool parse); qwen3 is the
+# text-only second. Ollama is used on macOS only, so defaulting to the
+# Apple-Silicon MLX build is safe.
+OLLAMA_FALLBACK_MODELS = ["muse-glimmer:30b-mlx", "qwen3:32b-q4_K_M"]
 OLLAMA_DEFAULT_MODEL = OLLAMA_FALLBACK_MODELS[0]
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 # Pragmatic ceiling on num_ctx for Ollama calls. Without this we'd pass the
