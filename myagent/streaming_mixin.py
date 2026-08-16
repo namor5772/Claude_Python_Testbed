@@ -919,21 +919,30 @@ class StreamingMixin:
             priced["cache_read"] = per_token[2]
         return priced
 
-    def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None):
+    def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,
+                      instruction="", calls=None):
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
-        Line format: {timestamp};{provider};{model};{cost};{params};{secs} —
-        params is the compact _get_model_param_summary() string (comma-joined),
-        so the log records the thinking/temperature settings the run used
-        alongside its cost; secs (6th field, 2026-08-12) is the run's
-        wall-clock duration in whole seconds — minus any time the run sat
-        waiting on user input (user_prompt / confirmation dialogs, since
+        Line format:
+        {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
+        — params is the compact _get_model_param_summary() string
+        (comma-joined), so the log records the thinking/temperature settings
+        the run used alongside its cost; secs (6th field, 2026-08-12) is the
+        run's wall-clock duration in whole seconds — minus any time the run
+        sat waiting on user input (user_prompt / confirmation dialogs, since
         2026-08-13), so it measures the agent working, not the user's
-        response latency — blank when duration_secs is None
-        (SelfBot's 5-field lines and pre-2026-08-12 history render a blank
-        TIME(sec) column in the viewers). total_cost is the last cost
-        displayed in the output window.
+        response latency — blank when duration_secs is None; instruction
+        (7th field, 2026-08-16) is the name of the saved Agent Instruction
+        the run was launched from (agent_instruction_name, snapshotted at
+        run start — blank for an ad-hoc run), whitespace-collapsed and with
+        any ';' turned into ',' so a name can never split the line; calls
+        (8th field, 2026-08-16) is the run's API-call count — the "Call #N"
+        counter in the output window, one per round-trip of the agentic loop,
+        so every call after the first is a tool-use round-trip — blank when
+        None. Older 4-/5-/6-field lines stay valid and render blank
+        PARAMETERS / TIME(sec) / INSTRUCTION / CALLS columns in the viewers.
+        total_cost is the last cost displayed in the output window.
         Ollama runs are deliberately free but still logged (cost 0.0000) when
         at least one call returned usage (had_usage) — local activity shows in
         the viewers without inflating any spend total. Other zero-cost runs
@@ -958,10 +967,16 @@ class StreamingMixin:
             # parts never contain ';' or ',' so the field can't split.
             params = ", ".join(self._get_model_param_summary().split())
             secs = "" if duration_secs is None else f"{duration_secs:.0f}"
-            # ';' delimiter (not ',') so a comma inside a model name or the
-            # params field can't be misread as a field separator.
+            # 7th field: the instruction name is user-typed free text —
+            # collapse whitespace (a stray newline would end the record
+            # early) and neutralise the one character that could split it.
+            instr = " ".join(str(instruction or "").split()).replace(";", ",")
+            calls_s = "" if calls is None else f"{int(calls)}"
+            # ';' delimiter (not ',') so a comma inside a model name, the
+            # params field or an instruction name can't be misread as a
+            # field separator.
             line = (f"{timestamp};{self.provider};{self.model};"
-                    f"{total_cost:.4f};{params};{secs}\n")
+                    f"{total_cost:.4f};{params};{secs};{instr};{calls_s}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
@@ -1038,9 +1053,16 @@ class StreamingMixin:
         # _input_wait_secs — the seconds the run sat parked on user input
         # (user_prompt / confirmation dialogs, accumulated by
         # helpers.input_wait_timer) — so TIME(sec) measures the agent
-        # working, not the user's response latency.
+        # working, not the user's response latency. call_num — the "Call #N"
+        # counter, one per API round-trip — and the instruction name feed the
+        # cost log's CALLS / INSTRUCTION fields; both hoisted for the same
+        # reason (the exception path logs whatever the run got through), and
+        # the name is snapshotted at run start so an instruction applied
+        # mid-run can't relabel the entry.
         total_cost = 0.0
         had_usage = False
+        call_num = 0
+        instr_name = getattr(self, "agent_instruction_name", "")
         run_started = time.monotonic()
         self._input_wait_secs = 0.0
         try:
@@ -1073,7 +1095,6 @@ class StreamingMixin:
                 self.queue.put({"type": "label"})
                 label_emitted = True
 
-            call_num = 0
             user_prompt_count = 0
             user_prompt_nudges = 0
             # Cost tracking (total_cost itself is hoisted above the try)
@@ -1281,7 +1302,8 @@ class StreamingMixin:
                 messages.append({"role": "assistant", "content": full_text})
             self._log_api_cost(total_cost, had_usage,
                                max(0.0, time.monotonic() - run_started
-                                   - self._input_wait_secs))
+                                   - self._input_wait_secs),
+                               instruction=instr_name, calls=call_num)
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
@@ -1299,7 +1321,8 @@ class StreamingMixin:
             # unattended error should exit (the auto-saved transcript records it).
             self._log_api_cost(total_cost, had_usage,
                                max(0.0, time.monotonic() - run_started
-                                   - self._input_wait_secs))
+                                   - self._input_wait_secs),
+                               instruction=instr_name, calls=call_num)
             self._write_result_file("error", messages, error=str(e))
             if self._headless or self._result_file:
                 self.root.after(500, self._on_close)

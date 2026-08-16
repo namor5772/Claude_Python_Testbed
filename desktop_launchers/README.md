@@ -113,17 +113,23 @@ glowing green ECG trace and a googly-eyed red heart. Its Windows twin is
 folder) — see the Windows section.
 
 The **API Cost Log** launcher is the same viewer pattern for the API cost log
-(`{timestamp};{provider};{model};{cost}`, semicolon-delimited, gitignored).
+(`{timestamp};{provider};{model};{cost}[;{params}[;{secs}[;{instruction}[;{calls}]]]]`,
+semicolon-delimited, gitignored — the trailing fields arrived 2026-08-10 /
+2026-08-12 / 2026-08-16 and are absent on older lines, which both viewers
+still accept).
 Since 2026-08-03 each machine writes its own `APICostLog_<machine>.txt` into
 `<OneDrive>/MyAppShare` (per-machine files never conflict-fork, yet OneDrive
 syncs them all everywhere — see `myagent/datapaths.py`), so
 `view_costlog.command` merges EVERY machine's file (plus any unmigrated
 repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
 `awk -F';'` builds a spend summary — grand total, today, this month, by
-machine, by provider, and by model (highest spend first) — before listing
-every run most-recent-first **with its individual cost** via `column -t -s';'`.
-The cost column sits before the open-ended model name, so a narrow terminal
-wraps at worst the model tail and never hides a run's cost — the same layout
+machine, by provider, by model (highest spend first) and, for rows that carry
+one, by instruction — before listing every run most-recent-first **with its
+individual cost** via `column -t -s';'` (columns: DATE/TIME, MACHINE, PROVIDER,
+COST(USD), TIME(sec), CALLS, MODEL, INSTRUCTION, PARAMETERS; empty mid-row
+fields print as `-` because BSD `column -t` collapses consecutive delimiters).
+The cost/time/calls columns sit before the open-ended model/instruction/params
+ones, so a narrow terminal wraps at worst the tail and never hides a run's cost — the same layout
 the Windows twin uses, where it is load-bearing: `Format-Table -AutoSize`
 sizes columns from all rows and silently DROPS trailing columns table-wide
 when the widest line exceeds the console width, which made the per-run cost
@@ -352,8 +358,9 @@ events first via `-notmatch 'nothing found'`, then the full log);
 `CostLog_Win.ps1` aggregates every machine's `;`-delimited
 `APICostLog_<machine>.txt` from `<OneDrive>\MyAppShare` (plus any unmigrated
 repo-root `APICostLog.txt`) into a spend summary (grand total, today, this
-month, by machine, by provider, by model) then lists every run
-most-recent-first. Both resolve the repo from the script's own location, page
+month, by machine, by provider, by model, by instruction) then lists every run
+most-recent-first with its cost, TIME(sec), CALLS, MODEL, INSTRUCTION and
+PARAMETERS columns (fixed-width format strings, console widened to 190 best-effort). Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On
 Windows `heartbeat.log` lives at the repo root (`BASE_DIR / "heartbeat.log"`,
 not under a `Logs` folder); the cost log lives in the OneDrive share on both

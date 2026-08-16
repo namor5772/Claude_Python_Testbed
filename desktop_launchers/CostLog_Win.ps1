@@ -11,12 +11,18 @@
 # aggregates EVERY machine's spend, not just this clone's. A repo-root
 # APICostLog.txt (no-OneDrive fallback, or history an app launch hasn't
 # migrated yet) is included too. Each line is
-# "timestamp;provider;model;cost[;params[;secs]]" -- the params field (added
-# 2026-08-10: the thinking/temperature settings the run used, e.g.
-# "reasoning=Medium, temp=1") is absent on older lines and shown blank; the
-# secs field (added 2026-08-12: MyAgent's wall-clock run duration in whole
-# seconds -> the TIME(sec) column) is absent on older lines and on SelfBot's,
-# which doesn't record duration.
+# "timestamp;provider;model;cost[;params[;secs[;instruction[;calls]]]]" -- the
+# params field (added 2026-08-10: the thinking/temperature settings the run
+# used, e.g. "reasoning=Medium, temp=1") is absent on older lines and shown
+# blank; the secs field (added 2026-08-12: MyAgent's wall-clock run duration
+# in whole seconds -> the TIME(sec) column) is absent on older lines and
+# EMPTY on SelfBot's, which doesn't record duration; the instruction field
+# (added 2026-08-16: the saved Agent Instruction the run was launched from --
+# SelfBot writes its active system prompt's name there -- blank for an ad-hoc
+# run -> the INSTRUCTION column) and the calls field (added 2026-08-16: the
+# run's API-call count, the "Call #N" counter -- one per round-trip of the
+# agentic loop, so beyond the first they are tool-use round-trips -> the CALLS
+# column) are absent on older lines and shown blank.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -26,14 +32,16 @@ $repoDir = Split-Path -Parent $PSScriptRoot
 $Host.UI.RawUI.WindowTitle = 'API Cost Log'
 $inv = [Globalization.CultureInfo]::InvariantCulture
 # Widen a narrow console (a fresh shortcut's conhost defaults to 80 columns)
-# so the full-log lines don't wrap. Best-effort: the cost column stays visible
-# even when this fails, because it is placed before the model name.
+# so the full-log lines don't wrap (190: the 2026-08-16 CALLS + INSTRUCTION
+# columns pushed the widest rows past the previous 142). Best-effort: the
+# cost column stays visible even when this fails, because it is placed
+# before the model name.
 try {
     $rawUI = $Host.UI.RawUI
-    if ($rawUI.BufferSize.Width -lt 142) {
-        $bs = $rawUI.BufferSize; $bs.Width = 142; $rawUI.BufferSize = $bs
+    if ($rawUI.BufferSize.Width -lt 190) {
+        $bs = $rawUI.BufferSize; $bs.Width = 190; $rawUI.BufferSize = $bs
         $ws = $rawUI.WindowSize
-        $ws.Width = [Math]::Min(142, $rawUI.MaxPhysicalWindowSize.Width)
+        $ws.Width = [Math]::Min(190, $rawUI.MaxPhysicalWindowSize.Width)
         $rawUI.WindowSize = $ws
     }
 } catch {}
@@ -85,10 +93,11 @@ try {
         return
     }
 
-    # Parse "timestamp;provider;model;cost[;params[;secs]]" from every
-    # machine's file, then sort by timestamp -- cross-machine order comes from
-    # the field, not file order. Params (5th field, added 2026-08-10) and secs
-    # (6th, added 2026-08-12) are blank on older lines.
+    # Parse "timestamp;provider;model;cost[;params[;secs[;instruction[;calls]]]]"
+    # from every machine's file, then sort by timestamp -- cross-machine order
+    # comes from the field, not file order. Params (5th field, added
+    # 2026-08-10), secs (6th, added 2026-08-12), instruction (7th) and calls
+    # (8th, both added 2026-08-16) are blank on older lines.
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -99,6 +108,8 @@ try {
                 Cost = [double]::Parse($f[3], $inv); Machine = $logf.Machine
                 Params = if ($f.Count -ge 5) { $f[4] } else { '' }
                 Secs = if ($f.Count -ge 6) { $f[5] } else { '' }
+                Instr = if ($f.Count -ge 7) { $f[6] } else { '' }
+                Calls = if ($f.Count -ge 8) { $f[7] } else { '' }
             }
         }
     }
@@ -130,6 +141,16 @@ try {
         $out += ($rows | Group-Object Model |
             Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
             ForEach-Object { '    {0,-32} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+        # Only rows that carry an instruction name (2026-08-16 lines onward;
+        # ad-hoc runs and older history have none) -- a "(none)" bucket would
+        # just restate the grand total for as long as the old lines dominate.
+        $named = @($rows | Where-Object { $_.Instr -ne '' })
+        if ($named.Count -gt 0) {
+            $out += @('', '  By instruction (highest spend first; runs logged with a name):')
+            $out += ($named | Group-Object Instr |
+                Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
+                ForEach-Object { '    {0,-40} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+        }
     }
     $out += @('', ('=' * 21 + ' FULL LOG (most recent first) ' + '=' * 21), '')
 
@@ -146,21 +167,26 @@ try {
         # the row lines are emitted as a single array append -- a per-row
         # `$out +=` reallocates the whole accumulated array each time, which
         # goes quadratic as the merged per-machine logs grow.
-        # MODEL is fixed-width too now that PARAMETERS (the new open-ended
-        # column) sits after it; params is the least critical column, so at a
-        # too-narrow console it is the one that wraps -- cost never moves.
-        $machW = 7; $provW = 8; $modW = 5
+        # MODEL and INSTRUCTION are fixed-width too now that PARAMETERS (the
+        # open-ended column) sits after them; params is the least critical
+        # column, so at a too-narrow console it is the one that wraps -- cost
+        # never moves. CALLS (2026-08-16) joins the numeric cluster right of
+        # TIME(sec); INSTRUCTION (2026-08-16) follows MODEL so the
+        # always-populated columns stay contiguous on the left and the two
+        # often-blank ones (instruction, params) take any wrap.
+        $machW = 7; $provW = 8; $modW = 5; $instrW = 11
         foreach ($r in $rows) {
             if ($r.Machine.Length -gt $machW) { $machW = $r.Machine.Length }
             if ($r.Provider.Length -gt $provW) { $provW = $r.Provider.Length }
             if ($r.Model.Length -gt $modW) { $modW = $r.Model.Length }
+            if ($r.Instr.Length -gt $instrW) { $instrW = $r.Instr.Length }
         }
-        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,-$modW} {6}"
-        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'MODEL', 'PARAMETERS')
-        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 10))
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,-$modW} {7,-$instrW} {8}"
+        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS', 'MODEL', 'INSTRUCTION', 'PARAMETERS')
+        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 5), ('-' * 11), ('-' * 10))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
-            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Model, $r.Params
+            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls, $r.Model, $r.Instr, $r.Params
         })
     }
 

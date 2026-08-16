@@ -1210,6 +1210,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.queue = queue.Queue()
         self.streaming = False
         self._session_cost = 0.0  # cumulative Anthropic API cost for this process (logged on close)
+        self._session_calls = 0   # API calls made by this process (the "Call #N" counter, summed across every message) — logged beside the cost
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
@@ -5699,6 +5700,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             call_num = 0
             while True:
                 call_num += 1
+                self._session_calls += 1
                 if call_num > 1:
                     self.queue.put({"type": "ensure_newline"})
                 payload_text = self._payload_for_display(messages)
@@ -5995,17 +5997,29 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         """Append the session's cumulative API cost to this machine's cost log
         (APICostLog_<machine>.txt in the OneDrive share, repo-root fallback — the
         SAME file MyAgent writes). Called once when the app closes. Semicolon-delimited
-        {timestamp};{provider};{model};{cost};{params} so a comma in a model name or
-        the params field can't split a field; 4-decimal cost for spreadsheet summing;
-        params is the comma-joined _get_model_param_summary() string (thinking mode /
-        budget / temperature in effect at close). Skipped when the cost is zero (no
-        priced usage — e.g. an unmatched model prefix). Best-effort; never raises."""
+        {timestamp};{provider};{model};{cost};{params};;{prompt};{calls} so a comma in
+        a model name, the params field or a prompt name can't split a field; 4-decimal
+        cost for spreadsheet summing; params is the comma-joined
+        _get_model_param_summary() string (thinking mode / budget / temperature in
+        effect at close). The 6th field (MyAgent's TIME(sec) run duration) is left
+        EMPTY on purpose — a self-chat's duration is window-open time, not a
+        comparable run metric — so the two 2026-08-16 fields land in the same
+        positions as MyAgent's: prompt (7th → the viewers' INSTRUCTION column) is the
+        active saved system prompt's name — SelfBot's analogue of an Agent
+        Instruction, blank when none is loaded — whitespace-collapsed with any ';'
+        turned into ','; calls (8th → CALLS) is _session_calls, the process's total
+        API round-trips. Skipped when the cost is zero (no priced usage — e.g. an
+        unmatched model prefix). Best-effort; never raises."""
         if not total_cost or total_cost <= 0:
             return
         try:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
             params = ", ".join(self._get_model_param_summary().split())
-            line = f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params}\n"
+            prompt = " ".join(str(getattr(self, "system_prompt_name", "") or "")
+                              .split()).replace(";", ",")
+            calls = getattr(self, "_session_calls", 0)
+            line = (f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params};;"
+                    f"{prompt};{calls}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
