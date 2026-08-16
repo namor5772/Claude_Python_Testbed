@@ -19,10 +19,11 @@
 # EMPTY on SelfBot's, which doesn't record duration; the instruction field
 # (added 2026-08-16: the saved Agent Instruction the run was launched from --
 # SelfBot writes its active system prompt's name there -- blank for an ad-hoc
-# run -> the INSTRUCTION column) and the calls field (added 2026-08-16: the
-# run's API-call count, the "Call #N" counter -- one per round-trip of the
-# agentic loop, so beyond the first they are tool-use round-trips -> the CALLS
-# column) are absent on older lines and shown blank.
+# run -> the INSTRUCTION column, rightmost after PARAMETERS) and the calls
+# field (added 2026-08-16: the run's API-call count, the "Call #N" counter --
+# one per round-trip of the agentic loop, so beyond the first they are
+# tool-use round-trips -> the CALLS column, right of TIME(sec)) are absent on
+# older lines and shown blank.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -167,26 +168,24 @@ try {
         # the row lines are emitted as a single array append -- a per-row
         # `$out +=` reallocates the whole accumulated array each time, which
         # goes quadratic as the merged per-machine logs grow.
-        # MODEL and INSTRUCTION are fixed-width too now that PARAMETERS (the
-        # open-ended column) sits after them; params is the least critical
-        # column, so at a too-narrow console it is the one that wraps -- cost
-        # never moves. CALLS (2026-08-16) joins the numeric cluster right of
-        # TIME(sec); INSTRUCTION (2026-08-16) follows MODEL so the
-        # always-populated columns stay contiguous on the left and the two
-        # often-blank ones (instruction, params) take any wrap.
-        $machW = 7; $provW = 8; $modW = 5; $instrW = 11
+        # MODEL and PARAMETERS are fixed-width too now that INSTRUCTION (the
+        # open-ended, rightmost column since 2026-08-16 -- the user wants it
+        # after PARAMETERS) sits after them; at a too-narrow console the
+        # instruction name is the one that wraps -- cost never moves. CALLS
+        # (2026-08-16) joins the numeric cluster right of TIME(sec).
+        $machW = 7; $provW = 8; $modW = 5; $parW = 10
         foreach ($r in $rows) {
             if ($r.Machine.Length -gt $machW) { $machW = $r.Machine.Length }
             if ($r.Provider.Length -gt $provW) { $provW = $r.Provider.Length }
             if ($r.Model.Length -gt $modW) { $modW = $r.Model.Length }
-            if ($r.Instr.Length -gt $instrW) { $instrW = $r.Instr.Length }
+            if ($r.Params.Length -gt $parW) { $parW = $r.Params.Length }
         }
-        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,-$modW} {7,-$instrW} {8}"
-        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS', 'MODEL', 'INSTRUCTION', 'PARAMETERS')
-        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 5), ('-' * 11), ('-' * 10))
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,-$modW} {7,-$parW} {8}"
+        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS', 'MODEL', 'PARAMETERS', 'INSTRUCTION')
+        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 5), ('-' * 10), ('-' * 11))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
-            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls, $r.Model, $r.Instr, $r.Params
+            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls, $r.Model, $r.Params, $r.Instr
         })
     }
 

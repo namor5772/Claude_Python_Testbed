@@ -9,8 +9,8 @@ whitespace-collapsed, ';' -> ',' — blank for an ad-hoc run) and an 8th
 ;calls field (the run's API-call count, the "Call #N" counter — blank when
 None) complete the line. The viewers (CostLog_Win.ps1 / view_costlog.command)
 render params as a trailing PARAMETERS column, secs as TIME(sec) right of
-COST(USD), calls as CALLS right of that and instruction as INSTRUCTION after
-MODEL, and must keep accepting 4-, 5- and 6-field lines, so the writer
+COST(USD), calls as CALLS right of that and instruction as the rightmost
+INSTRUCTION column (after PARAMETERS), and must keep accepting 4-, 5- and 6-field lines, so the writer
 contract here is: exactly eight ;-separated fields, calls last (possibly
 empty), instruction before it, secs (possibly empty) 6th, params 5th.
 

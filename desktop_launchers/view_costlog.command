@@ -24,10 +24,11 @@
 # on older lines and EMPTY on SelfBot's, which doesn't record duration; the
 # instruction field (added 2026-08-16: the saved Agent Instruction the run
 # was launched from — SelfBot writes its active system prompt's name there —
-# blank for an ad-hoc run → the INSTRUCTION column) and the calls field
-# (added 2026-08-16: the run's API-call count, the "Call #N" counter — one
-# per round-trip of the agentic loop, so beyond the first they are tool-use
-# round-trips → the CALLS column) are absent on older lines.
+# blank for an ad-hoc run → the INSTRUCTION column, rightmost after
+# PARAMETERS) and the calls field (added 2026-08-16: the run's API-call
+# count, the "Call #N" counter — one per round-trip of the agentic loop, so
+# beyond the first they are tool-use round-trips → the CALLS column, right of
+# TIME(sec)) are absent on older lines.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -145,18 +146,17 @@ done | sort -t';' -k1,1 > "$MERGED"
   # ones, so a narrow terminal wraps at worst the model/params tail — the
   # per-run cost is always on screen (the Windows twin does the same; its
   # Format-Table used to silently drop the trailing cost column instead).
-  # PARAMETERS is last: the least critical column takes the wrap, and an
-  # empty params (pre-2026-08-10 line) just leaves the tail blank. CALLS
-  # (2026-08-16) joins the numeric cluster right of TIME(sec); INSTRUCTION
-  # (2026-08-16) follows MODEL so the always-populated columns stay
-  # contiguous on the left and the two often-blank ones (instruction,
-  # params) take any wrap. An empty secs (SelfBot / older line), calls or
-  # instruction (older line, ad-hoc run) renders as "-" — they sit mid-row
-  # and BSD column -t COLLAPSES consecutive delimiters, so a genuinely empty
-  # field would shift every later column left.
-  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;MODEL;INSTRUCTION;PARAMETERS"
+  # INSTRUCTION is last (2026-08-16, the user wants it after PARAMETERS):
+  # the open-ended column takes the wrap, and an empty instruction (older
+  # line, ad-hoc run) just leaves the tail blank. CALLS (2026-08-16) joins
+  # the numeric cluster right of TIME(sec). An empty secs (SelfBot / older
+  # line), calls (older line) or params (pre-2026-08-10 line) renders as
+  # "-" — they sit mid-row and BSD column -t COLLAPSES consecutive
+  # delimiters, so a genuinely empty field would shift every later column
+  # left.
+  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;MODEL;PARAMETERS;INSTRUCTION"
     tail -r "$MERGED" | awk -F';' 'NF>=9 {
-      t=($6=="" ? "-" : $6); k=($8=="" ? "-" : $8); i=($7=="" ? "-" : $7);
-      print $1 ";" $9 ";" $2 ";" $4 ";" t ";" k ";" $3 ";" i ";" $5 }'; } \
+      t=($6=="" ? "-" : $6); k=($8=="" ? "-" : $8); p=($5=="" ? "-" : $5);
+      print $1 ";" $9 ";" $2 ";" $4 ";" t ";" k ";" $3 ";" p ";" $7 }'; } \
     | column -t -s';'
 } | less -R

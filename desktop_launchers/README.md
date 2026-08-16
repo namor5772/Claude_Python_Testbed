@@ -126,10 +126,10 @@ repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
 machine, by provider, by model (highest spend first) and, for rows that carry
 one, by instruction — before listing every run most-recent-first **with its
 individual cost** via `column -t -s';'` (columns: DATE/TIME, MACHINE, PROVIDER,
-COST(USD), TIME(sec), CALLS, MODEL, INSTRUCTION, PARAMETERS; empty mid-row
+COST(USD), TIME(sec), CALLS, MODEL, PARAMETERS, INSTRUCTION; empty mid-row
 fields print as `-` because BSD `column -t` collapses consecutive delimiters).
-The cost/time/calls columns sit before the open-ended model/instruction/params
-ones, so a narrow terminal wraps at worst the tail and never hides a run's cost — the same layout
+The cost/time/calls columns sit before the model/params columns and the
+open-ended INSTRUCTION is last, so a narrow terminal wraps at worst the tail and never hides a run's cost — the same layout
 the Windows twin uses, where it is load-bearing: `Format-Table -AutoSize`
 sizes columns from all rows and silently DROPS trailing columns table-wide
 when the widest line exceeds the console width, which made the per-run cost
@@ -359,8 +359,8 @@ events first via `-notmatch 'nothing found'`, then the full log);
 `APICostLog_<machine>.txt` from `<OneDrive>\MyAppShare` (plus any unmigrated
 repo-root `APICostLog.txt`) into a spend summary (grand total, today, this
 month, by machine, by provider, by model, by instruction) then lists every run
-most-recent-first with its cost, TIME(sec), CALLS, MODEL, INSTRUCTION and
-PARAMETERS columns (fixed-width format strings, console widened to 190 best-effort). Both resolve the repo from the script's own location, page
+most-recent-first with its cost, TIME(sec), CALLS, MODEL, PARAMETERS and
+INSTRUCTION columns (fixed-width format strings, console widened to 190 best-effort). Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On
 Windows `heartbeat.log` lives at the repo root (`BASE_DIR / "heartbeat.log"`,
 not under a `Logs` folder); the cost log lives in the OneDrive share on both
