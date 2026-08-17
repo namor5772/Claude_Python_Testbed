@@ -29,11 +29,13 @@ Deliberate differences from the OpenAI mixin:
    degrade gracefully.
 3. **Reasoning knob per family** — ``XAI_REASONING_EFFORT`` maps model
    families to their accepted ``reasoning.effort`` values (grok-4.3:
-   none/low/medium/high; grok-4.5: low..xhigh, always-reasoning — "none" is
-   HTTP 400, verified live 2026-07-17; grok-4.20-multi-agent: low..xhigh,
-   where the knob is agent collaboration count). Families not in
-   the table get no reasoning param at all — the pinned ``-reasoning`` /
-   ``-non-reasoning`` variants bake the behaviour into the model id.
+   none/low/medium/high; grok-4.5 and grok-4.6: low..xhigh, always-reasoning
+   — "none" is HTTP 400, verified live 2026-07-17 for 4.5 and 2026-08-18
+   for 4.6; grok-4.20-multi-agent: low..xhigh, where the knob is agent
+   collaboration count). Families not in the table get no reasoning param at
+   all — the pinned ``-reasoning`` / ``-non-reasoning`` variants bake the
+   behaviour into the model id, and the floating ``grok-latest`` alias
+   (grok-4.6 since 2026-08) runs at its target's server default.
    Reasoning deltas stream back as ``response.reasoning_text.delta`` or
    ``response.reasoning_summary_text.delta`` depending on model; both feed the
    Show Thinking pane.

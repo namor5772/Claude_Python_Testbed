@@ -99,14 +99,17 @@ class TestGetPricing(unittest.TestCase):
                                          "cache_read": 1.5e-07},
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
+        ("xAI", "grok-4.6"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.20-multi-agent-0309"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-build-0.1"): {"input": 1e-06, "output": 2e-06},
-        # Aliases (live catalog 2026-07-17): grok-code-fast-1 folds into
-        # grok-build-0.1's price; grok-latest resolves to grok-4.3; the
-        # longer grok-build-latest entry (re-aliased to grok-4.5) must win
-        # over the cheaper grok-build prefix.
+        # Aliases (live catalog 2026-07-17, re-checked 2026-08-18):
+        # grok-code-fast-1 folds into grok-build-0.1's price; grok-latest
+        # floats — it served grok-4.3 until 2026-08 and grok-4.6 since, so
+        # its row tracks the current target; the longer grok-build-latest
+        # entry (re-aliased to grok-4.5) must win over the cheaper
+        # grok-build prefix.
         ("xAI", "grok-code-fast-1"): {"input": 1e-06, "output": 2e-06},
-        ("xAI", "grok-latest"): {"input": 1.25e-06, "output": 2.5e-06},
+        ("xAI", "grok-latest"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-build-latest"): {"input": 2e-06, "output": 6e-06},
         # Retired families are no longer priced (the API rejects their ids)
         ("xAI", "grok-3-mini"): None,
