@@ -350,13 +350,40 @@ class ChatMixin:
             raw = self._fetch_image_url(src)
         if not raw:
             return []
-        media_type = self._sniff_image_media_type(raw)
-        if not media_type:
+        normalized = self._normalize_image_bytes(raw)
+        if not normalized:
             return []
+        raw, media_type = normalized
         if len(raw) > self.MAX_IMAGE_BYTES:
             raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
         filename = f"pasted_{time.strftime('%H%M%S')}{_MEDIA_EXT.get(media_type, '.png')}"
         return [(base64.standard_b64encode(raw).decode("utf-8"), media_type, filename)]
+
+    @classmethod
+    def _normalize_image_bytes(cls, raw):
+        """Fully decode downloaded/decoded clipboard bytes and return
+        (bytes, media_type) guaranteed API-valid, or None. A truncated file
+        fails the full decode (magic alone passed one to the API as an
+        'Invalid PNG' — live 2026-08-24); an exotic variant (16-bit PNG,
+        CMYK JPEG, TIFF...) is re-encoded to plain PNG."""
+        if Image is None:  # can't validate — fall back to the magic sniff
+            media_type = cls._sniff_image_media_type(raw)
+            return (raw, media_type) if media_type else None
+        try:
+            img = Image.open(io.BytesIO(raw))
+            fmt = img.format
+            img.load()  # forces FULL decode — catches truncation
+        except Exception:
+            return None
+        common = {"PNG": "image/png", "JPEG": "image/jpeg",
+                  "GIF": "image/gif", "WEBP": "image/webp"}
+        if fmt in common and img.mode in ("1", "L", "P", "RGB", "RGBA"):
+            return raw, common[fmt]
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue(), "image/png"
 
     @staticmethod
     def _fetch_image_url(url, timeout=10, max_bytes=30_000_000):
@@ -368,7 +395,16 @@ class ChatMixin:
                 url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
             )
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read(max_bytes)
+                # Loop until EOF — a single read(n) can return short on
+                # chunked responses, which truncates the image.
+                chunks, total = [], 0
+                while total < max_bytes:
+                    chunk = resp.read(min(1_048_576, max_bytes - total))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                return b"".join(chunks)
         except Exception:
             return None
 

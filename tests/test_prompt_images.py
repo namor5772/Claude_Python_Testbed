@@ -88,12 +88,22 @@ class ClipboardContentToImagesTest(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+def _real_png(mode="RGB", size=(4, 4)):
+    """A genuine PNG — the full-decode validation rejects fake magic bytes."""
+    buf = __import__("io").BytesIO()
+    Image.new(mode, size).save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@unittest.skipIf(Image is None, "PIL not installed")
 class HtmlClipboardFallbackTest(unittest.TestCase):
     """CF_HTML fallback: web apps (OneDrive Photos etc.) copy an <img>
     reference instead of a bitmap; _html_to_image_tuples turns it into an
     attachment. Only the network-free paths are tested here."""
 
-    PNG = b"\x89PNG\r\n\x1a\nfakepixels"
+    @classmethod
+    def setUpClass(cls):
+        cls.PNG = _real_png()
 
     def setUp(self):
         self.host = ChatMixin()
@@ -154,6 +164,36 @@ class HtmlClipboardFallbackTest(unittest.TestCase):
         self.assertEqual(sniff(b"RIFF\x00\x00\x00\x00WEBPVP8 "), "image/webp")
         self.assertIsNone(sniff(b"RIFF\x00\x00\x00\x00WAVEdata"))  # a .wav, not webp
         self.assertIsNone(sniff(b"plain text"))
+
+
+@unittest.skipIf(Image is None, "PIL not installed")
+class NormalizeImageBytesTest(unittest.TestCase):
+    """_normalize_image_bytes guarantees attached bytes decode fully —
+    a truncated PNG passed magic sniffing and reached the API as
+    'Invalid PNG image' (live xAI 400, 2026-08-24)."""
+
+    def test_valid_png_passes_through_unchanged(self):
+        raw = _real_png()
+        self.assertEqual(ChatMixin._normalize_image_bytes(raw), (raw, "image/png"))
+
+    def test_truncated_png_rejected(self):
+        raw = _real_png(size=(64, 64))
+        self.assertIsNone(ChatMixin._normalize_image_bytes(raw[: len(raw) // 2]))
+
+    def test_magic_only_fake_rejected(self):
+        self.assertIsNone(
+            ChatMixin._normalize_image_bytes(b"\x89PNG\r\n\x1a\nfakepixels")
+        )
+
+    def test_exotic_mode_reencoded_to_plain_png(self):
+        raw = _real_png(mode="I;16")  # 16-bit PNG — some APIs choke on it
+        result = ChatMixin._normalize_image_bytes(raw)
+        self.assertIsNotNone(result)
+        out, media_type = result
+        self.assertEqual(media_type, "image/png")
+        self.assertNotEqual(out, raw)
+        img = Image.open(__import__("io").BytesIO(out))
+        self.assertIn(img.mode, ("RGB", "RGBA"))
 
 
 if __name__ == "__main__":
