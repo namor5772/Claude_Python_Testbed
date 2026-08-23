@@ -1,5 +1,5 @@
 import os, json, tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import font as tkfont, messagebox, ttk
 
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
@@ -220,7 +220,8 @@ class InstructionsMixin:
         self._instr_combo_var = tk.StringVar()
         self._instr_combo = ttk.Combobox(
             win, textvariable=self._instr_combo_var, state="readonly",
-            font=("Arial", 10), width=28
+            font=("Arial", 10), width=28,
+            postcommand=self._size_instr_dropdown,
         )
         self._instr_combo.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self._instr_combo.bind("<<ComboboxSelected>>", self._on_instruction_selected)
@@ -499,6 +500,36 @@ class InstructionsMixin:
             self._save_last_state()
         except Exception:
             pass
+
+    def _size_instr_dropdown(self):
+        """postcommand for the Load Instruction combobox: fit the popdown's
+        rows into the space between the combobox and the bottom edge of the
+        instruction text widget, so a tall editor shows more instructions but
+        the list never covers the model/tool/button rows below the text area.
+        Recomputed on every open — row 2 is the editor's stretchy row."""
+        combo = self._instr_combo
+        rows = 10  # Tk's default popdown height, kept if the probe fails
+        try:
+            popdown_top = combo.winfo_rooty() + combo.winfo_height()
+            text_bottom = (self._instr_text.winfo_rooty()
+                           + self._instr_text.winfo_height())
+            avail_px = text_bottom - popdown_top - 4  # popdown border chrome
+            # Row height comes from the REAL popdown listbox (an internal Tcl
+            # widget, created on demand) — it uses the Tk default font, not
+            # the combobox's Arial 10. A listbox row is linespace + 1 + the
+            # selection border on each side (tkListbox.c ComputeGeometry).
+            lb = str(combo.tk.call("ttk::combobox::PopdownWindow", combo)) + ".f.l"
+            lb_font = tkfont.Font(root=combo, font=combo.tk.eval(f"{lb} cget -font"))
+            sel_bd = int(float(combo.tk.eval(f"{lb} cget -selectborderwidth") or 0))
+            row_px = lb_font.metrics("linespace") + 1 + 2 * sel_bd
+            rows = max(5, avail_px // row_px)  # floor keeps a tiny editor usable
+        except Exception:
+            pass
+        try:
+            n_values = len(combo.tk.splitlist(combo.cget("values")))
+        except Exception:
+            n_values = rows
+        combo.configure(height=max(1, min(n_values, rows)))
 
     def _refresh_instruction_list(self):
         instructions = self._load_saved_instructions()
