@@ -240,6 +240,11 @@ class InstructionsMixin:
         instr_scrollbar = tk.Scrollbar(win, command=self._instr_text.yview)
         instr_scrollbar.grid(row=2, column=5, sticky="ns", pady=(5, 5), padx=(0, 5))
         self._instr_text.config(yscrollcommand=instr_scrollbar.set)
+        # Ctrl+V with an image on the clipboard attaches it (text pastes normally)
+        self._instr_text.bind("<Control-v>", self._on_editor_paste_image)
+        self._instr_text.bind("<Control-V>", self._on_editor_paste_image)
+        if not IS_WINDOWS:
+            self._instr_text.bind("<Command-v>", self._on_editor_paste_image)
 
         # Row 3: Model / provider controls
         model_frame = tk.Frame(win)

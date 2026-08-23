@@ -409,7 +409,8 @@ class SafetyMixin:
             msg_text.config(state="disabled")
 
             tk.Label(
-                dlg, text="Your response (Ctrl+Enter for newline):", font=("Arial", 10), anchor="w",
+                dlg, text="Your response (Ctrl+Enter for newline; Ctrl+V pastes a clipboard image as an attachment):",
+                font=("Arial", 10), anchor="w",
             ).grid(row=2, column=0, sticky="w", padx=15, pady=(10, 2))
 
             resp_frame = tk.Frame(dlg)
@@ -459,6 +460,21 @@ class SafetyMixin:
                 img_frame, text="Remove Selected", command=on_remove_images, width=15,
             ).grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
+
+            def on_paste(ev=None):
+                # Ctrl+V with an image on the clipboard attaches it; with
+                # text, returning None lets Tk's default paste proceed.
+                pasted = self._grab_clipboard_images()
+                if pasted:
+                    attached_images.extend(pasted)
+                    _refresh_prompt_images()
+                    return "break"
+                return None
+
+            resp_text.bind("<Control-v>", on_paste)
+            resp_text.bind("<Control-V>", on_paste)
+            if not IS_WINDOWS:
+                resp_text.bind("<Command-v>", on_paste)
 
             def _capture_and_close():
                 """Save dialog geometry before destroying."""

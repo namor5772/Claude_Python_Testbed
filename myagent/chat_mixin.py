@@ -1,4 +1,4 @@
-import os, re, json, io, base64, tkinter as tk
+import os, re, json, io, time, base64, tkinter as tk
 from tkinter import filedialog, messagebox
 
 from myagent.constants import CHATS_DIR
@@ -12,6 +12,14 @@ except ImportError:
 class ChatMixin:
 
     MAX_IMAGE_BYTES = 4_800_000  # stay under Anthropic's 5MB limit
+
+    IMAGE_MEDIA_TYPES = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+    }
 
     @staticmethod
     def _sanitize_filename(name, ext='.json'):
@@ -169,17 +177,10 @@ class ChatMixin:
         )
         if not filepaths:
             return []
-        media_types = {
-            ".png": "image/png",
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".gif": "image/gif",
-            ".webp": "image/webp",
-        }
         images = []
         for filepath in filepaths:
             ext = os.path.splitext(filepath)[1].lower()
-            media_type = media_types.get(ext)
+            media_type = self.IMAGE_MEDIA_TYPES.get(ext)
             if not media_type:
                 messagebox.showwarning("Unsupported format", f"Unsupported image type: {ext}")
                 continue
@@ -196,6 +197,70 @@ class ChatMixin:
     def attach_image(self):
         self._editor_images.extend(self._pick_image_files())
         self._refresh_image_listbox()
+
+    def _on_editor_paste_image(self, ev=None):
+        """Ctrl+V in the instruction editor: an image on the clipboard
+        becomes an attachment; text falls through to Tk's default paste."""
+        pasted = self._grab_clipboard_images()
+        if pasted:
+            self._editor_images.extend(pasted)
+            self._refresh_image_listbox()
+            return "break"
+        return None
+
+    def _grab_clipboard_images(self):
+        """Return the clipboard's image content as (b64, media_type, filename)
+        tuples, or [] when the clipboard holds no image — the caller then lets
+        the normal text paste proceed. Covers both a bitmap (PrintScreen /
+        'Copy Image') and image FILES copied in Explorer/Finder."""
+        if Image is None:
+            return []
+        try:
+            from PIL import ImageGrab
+            content = ImageGrab.grabclipboard()
+        except Exception:
+            return []
+        return self._clipboard_content_to_images(content)
+
+    def _clipboard_content_to_images(self, content):
+        """Pure conversion of ImageGrab.grabclipboard()'s three result shapes
+        (PIL Image / list of file paths / None) into attachment tuples."""
+        if content is None:
+            return []
+        if isinstance(content, list):
+            # Copied files — keep only recognised image types, skip the rest
+            # silently (a mixed Explorer selection may include non-images).
+            images = []
+            for path in content:
+                ext = os.path.splitext(path)[1].lower()
+                media_type = self.IMAGE_MEDIA_TYPES.get(ext)
+                if not media_type:
+                    continue
+                try:
+                    with open(path, "rb") as f:
+                        raw = f.read()
+                except OSError:
+                    continue
+                if len(raw) > self.MAX_IMAGE_BYTES:
+                    raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
+                images.append((
+                    base64.standard_b64encode(raw).decode("utf-8"),
+                    media_type,
+                    os.path.basename(path),
+                ))
+            return images
+        # A bitmap (PIL Image)
+        try:
+            buf = io.BytesIO()
+            content.save(buf, format="PNG")
+        except Exception:
+            return []
+        raw = buf.getvalue()
+        media_type = "image/png"
+        if len(raw) > self.MAX_IMAGE_BYTES:
+            raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
+        filename = f"pasted_{time.strftime('%H%M%S')}.png"
+        return [(base64.standard_b64encode(raw).decode("utf-8"), media_type, filename)]
 
     def _refresh_image_listbox(self):
         """Populate the editor's image listbox from _editor_images."""
