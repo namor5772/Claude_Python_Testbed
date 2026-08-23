@@ -88,5 +88,73 @@ class ClipboardContentToImagesTest(unittest.TestCase):
         self.assertEqual(result, [])
 
 
+class HtmlClipboardFallbackTest(unittest.TestCase):
+    """CF_HTML fallback: web apps (OneDrive Photos etc.) copy an <img>
+    reference instead of a bitmap; _html_to_image_tuples turns it into an
+    attachment. Only the network-free paths are tested here."""
+
+    PNG = b"\x89PNG\r\n\x1a\nfakepixels"
+
+    def setUp(self):
+        self.host = ChatMixin()
+
+    def test_data_uri_decodes_locally(self):
+        b64 = base64.b64encode(self.PNG).decode()
+        html = f'<html><body><img alt="x" src="data:image/png;base64,{b64}"></body></html>'
+        result = self.host._html_to_image_tuples(html)
+        self.assertEqual(len(result), 1)
+        data, media_type, filename = result[0]
+        self.assertEqual(media_type, "image/png")
+        self.assertTrue(filename.endswith(".png"))
+        self.assertEqual(base64.b64decode(data), self.PNG)
+
+    def test_http_url_uses_fetch(self):
+        fetched = {}
+
+        class Host(ChatMixin):
+            @staticmethod
+            def _fetch_image_url(url, timeout=10, max_bytes=30_000_000):
+                fetched["url"] = url
+                return HtmlClipboardFallbackTest.PNG
+
+        html = '<img src="https://example.com/photo123.png">'
+        result = Host()._html_to_image_tuples(html)
+        self.assertEqual(fetched["url"], "https://example.com/photo123.png")
+        self.assertEqual(result[0][1], "image/png")
+
+    def test_failed_fetch_gives_empty(self):
+        class Host(ChatMixin):
+            @staticmethod
+            def _fetch_image_url(url, timeout=10, max_bytes=30_000_000):
+                return None
+
+        self.assertEqual(
+            Host()._html_to_image_tuples('<img src="https://x.example/a.png">'), []
+        )
+
+    def test_no_img_tag_or_no_html_gives_empty(self):
+        self.assertEqual(self.host._html_to_image_tuples(None), [])
+        self.assertEqual(self.host._html_to_image_tuples("<p>just a link</p>"), [])
+
+    def test_non_image_bytes_rejected_by_sniff(self):
+        class Host(ChatMixin):
+            @staticmethod
+            def _fetch_image_url(url, timeout=10, max_bytes=30_000_000):
+                return b"<html>login page, not an image</html>"
+
+        self.assertEqual(
+            Host()._html_to_image_tuples('<img src="https://x.example/a.png">'), []
+        )
+
+    def test_sniff_magic_numbers(self):
+        sniff = ChatMixin._sniff_image_media_type
+        self.assertEqual(sniff(b"\x89PNG\r\n\x1a\nxx"), "image/png")
+        self.assertEqual(sniff(b"\xff\xd8\xffxx"), "image/jpeg")
+        self.assertEqual(sniff(b"GIF89a"), "image/gif")
+        self.assertEqual(sniff(b"RIFF\x00\x00\x00\x00WEBPVP8 "), "image/webp")
+        self.assertIsNone(sniff(b"RIFF\x00\x00\x00\x00WAVEdata"))  # a .wav, not webp
+        self.assertIsNone(sniff(b"plain text"))
+
+
 if __name__ == "__main__":
     unittest.main()

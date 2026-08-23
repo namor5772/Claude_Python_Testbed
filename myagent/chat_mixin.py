@@ -1,12 +1,19 @@
 import os, re, json, io, time, base64, tkinter as tk
 from tkinter import filedialog, messagebox
 
-from myagent.constants import CHATS_DIR
+from myagent.constants import CHATS_DIR, IS_WINDOWS
 
 try:
     from PIL import Image
 except ImportError:
     Image = None
+
+_MEDIA_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 
 
 class ChatMixin:
@@ -220,7 +227,12 @@ class ChatMixin:
             content = ImageGrab.grabclipboard()
         except Exception:
             return []
-        return self._clipboard_content_to_images(content)
+        images = self._clipboard_content_to_images(content)
+        if not images and IS_WINDOWS:
+            # Web apps (OneDrive Photos and friends) often copy an <img>
+            # REFERENCE (CF_HTML) instead of a bitmap — Pillow sees nothing.
+            images = self._html_to_image_tuples(self._get_clipboard_html())
+        return images
 
     def _clipboard_content_to_images(self, content):
         """Pure conversion of ImageGrab.grabclipboard()'s three result shapes
@@ -261,6 +273,104 @@ class ChatMixin:
             raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
         filename = f"pasted_{time.strftime('%H%M%S')}.png"
         return [(base64.standard_b64encode(raw).decode("utf-8"), media_type, filename)]
+
+    @staticmethod
+    def _get_clipboard_html():
+        """Windows: return the clipboard's 'HTML Format' payload as text, or
+        None. Explicit restypes matter — the 64-bit handle/pointer values
+        truncate under ctypes' default c_int."""
+        if not IS_WINDOWS:
+            return None
+        try:
+            import ctypes
+            u32 = ctypes.windll.user32
+            k32 = ctypes.windll.kernel32
+            u32.GetClipboardData.restype = ctypes.c_void_p
+            k32.GlobalLock.restype = ctypes.c_void_p
+            k32.GlobalLock.argtypes = [ctypes.c_void_p]
+            k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            k32.GlobalSize.restype = ctypes.c_size_t
+            k32.GlobalSize.argtypes = [ctypes.c_void_p]
+            cf_html = u32.RegisterClipboardFormatW("HTML Format")
+            if not cf_html or not u32.OpenClipboard(None):
+                return None
+            try:
+                handle = u32.GetClipboardData(cf_html)
+                if not handle:
+                    return None
+                ptr = k32.GlobalLock(handle)
+                if not ptr:
+                    return None
+                try:
+                    raw = ctypes.string_at(ptr, k32.GlobalSize(handle))
+                finally:
+                    k32.GlobalUnlock(handle)
+            finally:
+                u32.CloseClipboard()
+            return raw.split(b"\x00", 1)[0].decode("utf-8", "replace")
+        except Exception:
+            return None
+
+    _IMAGE_MAGIC = (
+        (b"\x89PNG\r\n\x1a\n", "image/png"),
+        (b"\xff\xd8\xff", "image/jpeg"),
+        (b"GIF8", "image/gif"),
+        (b"RIFF", "image/webp"),  # RIFF....WEBP — checked further below
+    )
+
+    @classmethod
+    def _sniff_image_media_type(cls, raw):
+        for magic, media_type in cls._IMAGE_MAGIC:
+            if raw.startswith(magic):
+                if media_type == "image/webp" and raw[8:12] != b"WEBP":
+                    continue
+                return media_type
+        return None
+
+    def _html_to_image_tuples(self, html):
+        """Extract the first <img src=...> from a CF_HTML payload and turn it
+        into an attachment tuple: a data: URI decodes locally, an http(s) URL
+        is downloaded (10s timeout). Returns [] on any failure."""
+        if not html:
+            return []
+        m = re.search(r"<img[^>]+?src=[\"']([^\"']+)", html, re.IGNORECASE)
+        if not m:
+            return []
+        src = m.group(1)
+        raw = None
+        if src.startswith("data:"):
+            dm = re.match(r"data:image/[\w.+-]+;base64,(.*)", src, re.DOTALL)
+            if not dm:
+                return []
+            try:
+                raw = base64.b64decode(dm.group(1))
+            except Exception:
+                return []
+        elif src.startswith(("http://", "https://")):
+            raw = self._fetch_image_url(src)
+        if not raw:
+            return []
+        media_type = self._sniff_image_media_type(raw)
+        if not media_type:
+            return []
+        if len(raw) > self.MAX_IMAGE_BYTES:
+            raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
+        filename = f"pasted_{time.strftime('%H%M%S')}{_MEDIA_EXT.get(media_type, '.png')}"
+        return [(base64.standard_b64encode(raw).decode("utf-8"), media_type, filename)]
+
+    @staticmethod
+    def _fetch_image_url(url, timeout=10, max_bytes=30_000_000):
+        """Download an image the clipboard HTML references. Best-effort: the
+        URL may need auth cookies we don't have — then this returns None."""
+        import urllib.request
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read(max_bytes)
+        except Exception:
+            return None
 
     def _refresh_image_listbox(self):
         """Populate the editor's image listbox from _editor_images."""
