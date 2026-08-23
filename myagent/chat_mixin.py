@@ -153,16 +153,22 @@ class ChatMixin:
         img.save(buf, format="JPEG", quality=30)
         return buf.getvalue(), "image/jpeg"
 
-    def attach_image(self):
+    def _pick_image_files(self, parent=None):
+        """Open a file dialog and return the chosen images as
+        (base64_data, media_type, filename) tuples, compressed to the API
+        size limit. Shared by the instruction editor and the Agent Request
+        dialog."""
+        kwargs = {"parent": parent} if parent is not None else {}
         filepaths = filedialog.askopenfilenames(
             title="Select image(s)",
             filetypes=[
                 ("Image files", "*.png *.jpg *.jpeg *.gif *.webp"),
                 ("All files", "*.*"),
             ],
+            **kwargs,
         )
         if not filepaths:
-            return
+            return []
         media_types = {
             ".png": "image/png",
             ".jpg": "image/jpeg",
@@ -170,6 +176,7 @@ class ChatMixin:
             ".gif": "image/gif",
             ".webp": "image/webp",
         }
+        images = []
         for filepath in filepaths:
             ext = os.path.splitext(filepath)[1].lower()
             media_type = media_types.get(ext)
@@ -183,7 +190,11 @@ class ChatMixin:
                 raw, media_type = self._compress_image(raw, self.MAX_IMAGE_BYTES)
             image_data = base64.standard_b64encode(raw).decode("utf-8")
             filename = os.path.basename(filepath)
-            self._editor_images.append((image_data, media_type, filename))
+            images.append((image_data, media_type, filename))
+        return images
+
+    def attach_image(self):
+        self._editor_images.extend(self._pick_image_files())
         self._refresh_image_listbox()
 
     def _refresh_image_listbox(self):

@@ -360,9 +360,14 @@ class SafetyMixin:
         return result_holder[0]
 
     def do_user_prompt(self, message):
-        """Pause the agent and ask the user for input via a modal dialog."""
+        """Pause the agent and ask the user for input via a modal dialog.
+
+        Returns the reply text; any images the user attached are stashed on
+        self._prompt_attached_images for the caller to pop via
+        _take_prompt_images() (same thread — the streaming worker blocks on
+        the dialog and reads the result synchronously)."""
         event = threading.Event()
-        result_holder = [""]
+        result_holder = ["", []]  # [reply_text, [(b64, media_type, filename)]]
 
         def ask():
             dlg = tk.Toplevel(self.root)
@@ -421,6 +426,40 @@ class SafetyMixin:
             resp_sb.grid(row=0, column=1, sticky="ns")
             resp_text.config(yscrollcommand=resp_sb.set)
 
+            # Image attachment row — mirrors the instruction editor's
+            # Attach/Remove pattern so a reply can carry images back to the
+            # model (they ride the tool_result / user message as standard
+            # image blocks, same as screenshots).
+            attached_images = []  # (b64_data, media_type, filename)
+
+            img_frame = tk.Frame(dlg)
+            img_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 10))
+            img_frame.grid_columnconfigure(2, weight=1)
+
+            img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
+
+            def _refresh_prompt_images():
+                img_listbox.delete(0, tk.END)
+                for _data, _mt, filename in attached_images:
+                    img_listbox.insert(tk.END, filename)
+
+            def on_attach_images():
+                attached_images.extend(self._pick_image_files(parent=dlg))
+                _refresh_prompt_images()
+
+            def on_remove_images():
+                for idx in reversed(list(img_listbox.curselection())):
+                    del attached_images[idx]
+                _refresh_prompt_images()
+
+            tk.Button(
+                img_frame, text="Attach Images", command=on_attach_images, width=15,
+            ).grid(row=0, column=0, padx=(0, 5), sticky="nw")
+            tk.Button(
+                img_frame, text="Remove Selected", command=on_remove_images, width=15,
+            ).grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
+            img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
+
             def _capture_and_close():
                 """Save dialog geometry before destroying."""
                 try:
@@ -430,7 +469,13 @@ class SafetyMixin:
                 self._prompt_dialog = None
 
             def on_inject(ev=None):
-                result_holder[0] = resp_text.get("1.0", tk.END).strip()
+                text = resp_text.get("1.0", tk.END).strip()
+                # An image-only reply is still a reply — don't let the
+                # empty-text path stop the agent.
+                if not text and attached_images:
+                    text = "[See attached image(s)]"
+                result_holder[0] = text
+                result_holder[1] = list(attached_images)
                 _capture_and_close()
                 event.set()
                 dlg.destroy()
@@ -473,9 +518,36 @@ class SafetyMixin:
             event.wait()
         # Echo the user's response in the chat display so it's visible
         response = result_holder[0]
+        self._prompt_attached_images = list(result_holder[1])
         if response and response != "[User dismissed the dialog without responding]":
-            self.queue.put({"type": "user_prompt_echo", "content": response})
+            echo = response
+            if result_holder[1]:
+                names = ", ".join(fn for _d, _mt, fn in result_holder[1])
+                echo += f"\n[Attached image(s): {names}]"
+            self.queue.put({"type": "user_prompt_echo", "content": echo})
         return response
+
+    def _take_prompt_images(self):
+        """Pop the images attached in the last Agent Request dialog."""
+        images = getattr(self, "_prompt_attached_images", [])
+        self._prompt_attached_images = []
+        return images
+
+    @staticmethod
+    def _prompt_image_blocks(images):
+        """(b64, media_type, filename) tuples -> Anthropic-style image blocks
+        (the internal history format; provider translators handle the rest)."""
+        return [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": image_data,
+                },
+            }
+            for image_data, media_type, _filename in images
+        ]
 
     @staticmethod
     def _kill_process_tree(proc):

@@ -617,9 +617,16 @@ class StreamingMixin:
             prompt_msg = block.input.get("message", "")
             self._tool_info("Requesting user input...\n")
             response = self.do_user_prompt(prompt_msg)
+            images = self._take_prompt_images()
             if not response.strip():
                 self.stop_requested = True
                 return "[User submitted empty response — stopping agent]"
+            if images:
+                # Ship attached images inside the tool_result — the same
+                # list-of-blocks shape screenshots use, so every provider
+                # translator already handles it.
+                return ([{"type": "text", "text": response}]
+                        + self._prompt_image_blocks(images))
             return response
         if block.name in ("screenshot", "mouse_click", "type_text",
                              "press_key", "mouse_scroll", "open_application",
@@ -1270,6 +1277,7 @@ class StreamingMixin:
                         next_msg = self.do_user_prompt(
                             "Reply, or type empty / 'quit' / 'exit' / 'stop' to end."
                         )
+                        prompt_images = self._take_prompt_images()
                         if (not next_msg
                                 or next_msg.strip().lower() in ("quit", "exit", "stop")):
                             self._tool_info("Conversation ended.\n")
@@ -1277,7 +1285,16 @@ class StreamingMixin:
                             break
                         # do_user_prompt already emits user_prompt_echo from
                         # safety_mixin — no second echo needed here.
-                        messages.append({"role": "user", "content": next_msg})
+                        if prompt_images:
+                            # Same list-of-blocks user message shape as the
+                            # instruction images sent at agent start.
+                            messages.append({
+                                "role": "user",
+                                "content": ([{"type": "text", "text": next_msg}]
+                                            + self._prompt_image_blocks(prompt_images)),
+                            })
+                        else:
+                            messages.append({"role": "user", "content": next_msg})
                         full_text = ""
                         label_emitted = False
                         continue

@@ -249,7 +249,8 @@ TOOLS = [
             "(e.g., log into a website, approve something, make a choice) or when you need "
             "information only the user can provide. NEVER just output text asking the user "
             "something — that ends your turn and they cannot reply. This tool is the ONLY "
-            "way to communicate with the user and receive a response."
+            "way to communicate with the user and receive a response. The user may "
+            "attach images to their reply; they arrive in the tool result as image blocks."
         ),
         "input_schema": {
             "type": "object",
