@@ -415,27 +415,26 @@ class InstructionsMixin:
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
         self._update_ps_safety_button()
 
-        # Row 6: Image management buttons
+        # Row 6: Image management — same layout as the Agent Request dialog:
+        # buttons stacked on the left, listbox filling the width to the right
         img_frame = tk.Frame(win)
-        img_frame.grid(row=6, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        img_frame.grid(row=6, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 5))
+        img_frame.grid_columnconfigure(2, weight=1)
 
         tk.Button(
             img_frame, text="Attach Images", command=self.attach_image, width=15
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        ).grid(row=0, column=0, padx=(0, 5), sticky="nw")
         tk.Button(
             img_frame, text="Remove Selected", command=self._remove_selected_images, width=15
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        ).grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
 
-        # Row 7: Image listbox
         self._instr_image_listbox = tk.Listbox(
-            win, height=4, font=("Arial", 9), foreground="#6a1b9a",
-            selectmode=tk.EXTENDED,
+            img_frame, height=3, font=("Arial", 9), foreground="#6a1b9a",
+            selectmode=tk.EXTENDED, exportselection=False,
         )
-        self._instr_image_listbox.grid(
-            row=7, column=0, columnspan=5, sticky="ew", padx=10, pady=(3, 5)
-        )
-        img_list_scrollbar = tk.Scrollbar(win, command=self._instr_image_listbox.yview)
-        img_list_scrollbar.grid(row=7, column=5, sticky="ns", pady=(3, 5), padx=(0, 5))
+        self._instr_image_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
+        img_list_scrollbar = tk.Scrollbar(img_frame, command=self._instr_image_listbox.yview)
+        img_list_scrollbar.grid(row=0, column=3, rowspan=2, sticky="ns")
         self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
 
         # (Apply button is in row 1, to the right of the Load combo)
