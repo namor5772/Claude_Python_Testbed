@@ -1,7 +1,8 @@
 ================================================================================
   MyAgent.py — API Model Pricing Reference
   All prices in USD per million tokens
-  Verified: April 12, 2026
+  Verified: April 12, 2026 — rate audits 2026-07-31 and 2026-08-25 (see the
+  dated notes in each section; constants.py is the source of truth)
 ================================================================================
 
 
@@ -29,6 +30,7 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
+  claude-opus-5          $5.00    $25.00   $6.25        $0.50
   claude-opus-4-8        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-7        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-6        $5.00    $25.00   $6.25        $0.50
@@ -37,11 +39,13 @@
   claude-sonnet-4-6      $3.00    $15.00   $3.75        $0.30
   claude-sonnet-4-5      $3.00    $15.00   $3.75        $0.30
 
-  (claude-sonnet-5 is at its launch INTRO price — $2/$10 through 2026-08-31,
-   $3/$15 sticker afterwards. Flip the ANTHROPIC_PRICING entry and this row
-   from September 2026.)
+  (claude-sonnet-5 launched at $2/$10 as an INTRO price through 2026-08-31;
+   on 2026-08-25 the pricing page stated that rate "is now the standard
+   price" and that the September 1 increase to $3/$15 "will not occur" —
+   the row is permanent. Every Anthropic row above was re-verified the same
+   day; claude-opus-5 is the picker default.)
 
-  Claude 4.0/4.1 Family (Legacy — Higher Pricing)
+  Claude 4.0/4.1 Family (RETIRED — Opus 4.1 on 2026-08-05; not in ANTHROPIC_PRICING)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
@@ -87,10 +91,25 @@
   gpt-5.2, gpt-5.2-pro, gpt-5.1, gpt-4.1-mini, gpt-4.1-nano and codex-mini all
   sat at exactly HALF the Standard rate (Batch-tier numbers); gpt-5.6-terra
   carried gpt-5.4's numbers; gpt-5.6-luna was 5x too high.
-  KNOWN STALE: this file predates the GPT-5.6 family (no section below) and
-  still lists models the 2026-07 audit removed from OPENAI_PRICING (gpt-4o,
-  gpt-4.5, the o-series, the gpt-5.0 base tiers) — constants.py is the source
-  of truth for what actually prices.
+  2026-08-25 RATE AUDIT — gpt-5.6-sol was carrying gpt-5.5's $5/$30; it bills
+  $4/$20 (cached $0.40), corrected below. The 5.5/5.6 tiers bill 2x input /
+  1.5x output above 272K input tokens (table keeps the ≤272K tier). All three
+  5.6 tiers accept reasoning.effort "max" (5.5 / 5.4 reject it) — MyAgent's
+  Reasoning combobox offers Max on 5.6+.
+  KNOWN STALE: this file still lists models the 2026-07 audit removed from
+  OPENAI_PRICING (gpt-4o, gpt-4.5, the o-series, the gpt-5.0 base tiers) —
+  constants.py is the source of truth for what actually prices.
+
+  GPT-5.6 Family (Current — three durable tiers, terra is the default)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output    Cached
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-5.6-sol            $4.00    $20.00    $0.40    [was $5.00/$30.00 —
+                                                      gpt-5.5's numbers]
+  gpt-5.6-terra          $2.00    $12.00    $0.20
+  gpt-5.6-luna           $0.20    $1.20     $0.02
+  (No bare "gpt-5.6" id exists, so there is no family fallback row: an
+   unknown future 5.6 tier is unpriced rather than mispriced.)
 
   GPT-5.5 Family (Flagship)
   ──────────────────────────────────────────────────────────────────────────
@@ -222,23 +241,38 @@
   Model Prefix               Input    Output   Cached   Resolves to
   ──────────────────────────────────────────────────────────────────────────
   gemini-pro-latest          $2.00    $12.00   $0.20    gemini-3.1-pro-preview
-  gemini-flash-latest        $1.50    $9.00    $0.15    gemini-3.5-flash
-  gemini-flash-lite-latest   $0.25    $1.50    $0.025   gemini-3.1-flash-lite
+  gemini-flash-latest        $0.75*   $3.75*   $0.075*  gemini-3.7-flash
+  gemini-flash-lite-latest   $0.30    $2.50    $0.03    gemini-3.5-flash-lite
 
   (These aliases float to whatever Google currently serves; the version sits
    after the tier word, so the version-pinned prefixes below don't match them.
-   Resolution verified live via response.model_version, 2026-07 — revisit
-   when the aliases move to a new generation. CAVEAT: gemini-3.6-flash shipped
-   since that check and gemini-flash-latest may now resolve to it, whose output
-   is $7.50 not $9.00 — re-verify before trusting a -latest cost line.)
+   Resolution re-verified live via response.model_version on 2026-08-25:
+   gemini-flash-latest moved from 3.5-flash to 3.7-flash and
+   gemini-flash-lite-latest from 3.1-flash-lite to 3.5-flash-lite — revisit
+   whenever a new Gemini tier ships. * = the 3.6/3.7 Flash launch PROMO
+   through 2026-12-31; sticker $1.50/$7.50/$0.15 from 2027-01-01, see below.)
+
+  Gemini 3.7 Family                        (added 2026-08-25)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cached
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-3.7-flash       $0.75*   $3.75*   $0.075*
+  (Stable 2026-08, now the Google default and the gemini-flash-latest target;
+   until this audit it fell through to the bare "gemini-3" entry at
+   $0.50/$3.00. * PROMO "through December 31, 2026" — $1.50/$7.50/$0.15
+   "starting January 1, 2027". Modelled as a DatedPrice in constants.py, so
+   _get_pricing flips on New Year's Day by itself.)
 
   Gemini 3.6 Family                        (added 2026-07-31)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
-  gemini-3.6-flash       $1.50    $7.50    $0.15
+  gemini-3.6-flash       $0.75*   $3.75*   $0.075*
   (Previously fell through to the bare "gemini-3" entry and was priced at
-   $0.50/$3.00 — well under its real rate.)
+   $0.50/$3.00; entered 2026-07-31 at the $1.50/$7.50 sticker, which the
+   2026-08-25 re-check found suspended by the same promo as 3.7 Flash —
+   * through 2026-12-31, sticker $1.50/$7.50/$0.15 from 2027-01-01; the
+   same DatedPrice object as gemini-3.7-flash.)
 
   Gemini 3.5 Family
   ──────────────────────────────────────────────────────────────────────────
@@ -285,7 +319,8 @@
   Reasoning tokens are billed at the output token rate. Reached via the
   OpenAI SDK at https://api.x.ai/v1 with XAI_API_KEY.
 
-  Current Catalog — verified LIVE 2026-07-17 (re-verified 2026-08-18) against
+  Current Catalog — verified LIVE 2026-07-17 (re-verified 2026-08-18 and
+  2026-08-25 — catalog, prices and alias targets all unchanged) against
   /v1/models' own price fields (unit = $1/10000 per MTok; grok-4.3 reports
   12500/25000 = $1.25/$2.50, grok-4.5 and grok-4.6 both report 20000/60000
   = $2/$6)
@@ -351,7 +386,8 @@
   rate; Kimi's context caching is automatic). Reached via the OpenAI SDK at
   https://api.moonshot.ai/v1 with MOONSHOT_API_KEY (or KIMI_API_KEY).
 
-  Current Catalog — verified against platform.kimi.ai/docs/pricing 2026-07-25
+  Current Catalog — verified against platform.kimi.ai/docs/pricing 2026-07-25,
+  re-verified 2026-08-25 (k3 / k2.7-code / k2.6 rates unchanged)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix              Input    Output   Cache-Hit Input
   ──────────────────────────────────────────────────────────────────────────
@@ -363,12 +399,13 @@
                                               always-thinking, no knobs)
   kimi-k2.6                 $0.95    $4.00    $0.16   (256K, vision, thinking
                                               toggle + Preserved Thinking)
-  kimi-k2.5                 $0.60    $3.00    $0.10   (256K, vision, thinking
-                                              toggle, NO reasoning round-trip;
-                                              still documented+priced but NOT
-                                              in the live /v1/models catalog
-                                              as of 2026-07-25 — entry kept in
-                                              case it returns)
+  kimi-k2.5                 —        —        —       (UNPRICED since 2026-08-25:
+                                              full platform sunset 2026-08-31
+                                              per the models page, and never
+                                              in this account's /v1/models
+                                              catalog; the thinking-toggle /
+                                              no-round-trip param wiring stays
+                                              for pinned instructions)
 
   Notes:
   - MyAgent's Kimi cost line is computed exactly: usage reports cached input

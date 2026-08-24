@@ -294,13 +294,16 @@ class TestKimiUsageDict(unittest.TestCase):
         self.assertAlmostEqual(d["cost_usd"], 0.000876, delta=1e-12)
 
     def test_flat_cached_tokens_field_fallback(self):
-        obj = stub(_CostStub, provider="Moonshot", model="kimi-k2.5")
+        # kimi-k2.6 rates (miss $0.95 / hit $0.16 / out $4.00) — this case
+        # used kimi-k2.5 until 2026-08-25, when k2.5 was unpriced ahead of its
+        # 2026-08-31 sunset (an unpriced model yields no cost_usd at all).
+        obj = stub(_CostStub, provider="Moonshot", model="kimi-k2.6")
         usage = SimpleNamespace(prompt_tokens=500, completion_tokens=10,
                                 cached_tokens=200)
         d = obj._kimi_usage_dict(usage)
         self.assertEqual(d["cache_read_input_tokens"], 200)
-        # (500-200)*0.60 + 200*0.10 + 10*3.00 per MTok
-        self.assertAlmostEqual(d["cost_usd"], (300 * 0.60 + 200 * 0.10 + 10 * 3.00) / 1e6,
+        # (500-200)*0.95 + 200*0.16 + 10*4.00 per MTok
+        self.assertAlmostEqual(d["cost_usd"], (300 * 0.95 + 200 * 0.16 + 10 * 4.00) / 1e6,
                                delta=1e-12)
 
     def test_unknown_model_no_cost(self):

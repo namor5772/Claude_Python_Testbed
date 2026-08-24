@@ -263,7 +263,8 @@ class AnthropicMixin:
                         "  Even the most recent exchanges alone are larger than this model "
                         "can hold. 200K-window models (Haiku 4.5, Opus 4.5) cannot run "
                         "very long tasks — switch this instruction to a 1M-context model "
-                        "(claude-sonnet-5, claude-sonnet-4-6, or claude-opus-4-8/4.7/4.6), or "
+                        "(claude-opus-5, claude-sonnet-5, claude-sonnet-4-6, or "
+                        "claude-opus-4-8/4.7/4.6), or "
                         "split the task into smaller parts.\n"})
                     return ("end_turn", [{"type": "text", "text": full_text}],
                             full_text, had_thinking, label_emitted, None)

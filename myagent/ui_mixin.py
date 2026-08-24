@@ -266,7 +266,7 @@ class UIMixin:
                 # Sync state from thinking_mode (may pack temp after combo)
                 self._on_thinking_mode_changed()
             elif support == "extended" and self.provider == "OpenAI":
-                # GPT-5.1+: show mode combobox with None/Low/.../Xhigh
+                # GPT-5.1+: show mode combobox with None/Low/.../Xhigh (+Max on 5.6+)
                 self._thinking_mode_label.config(text="Reasoning")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
@@ -278,11 +278,19 @@ class UIMixin:
                     values = ["None", "Low", "Medium", "High"]
                 if self._has_reasoning_xhigh():
                     values.append("Xhigh")
+                # GPT-5.6+ add "max" above xhigh (live-probed 2026-08-25: all
+                # three 5.6 tiers accept it, gpt-5.5 / 5.4 reject it).
+                if self._has_reasoning_max():
+                    values.append("Max")
                 self._thinking_mode_combo["values"] = values
-                # Validate current selection
+                # Validate current selection: an effort above this model's
+                # ceiling (Max/Xhigh saved against a 5.6, now on a 5.5) steps
+                # down to its top rung; anything else (None on a -pro tier)
+                # takes the lowest.
                 current = self._thinking_mode_var.get()
                 if current not in values:
-                    self._thinking_mode_var.set(values[0])
+                    self._thinking_mode_var.set(
+                        values[-1] if current in ("Max", "Xhigh") else values[0])
                 self._on_thinking_mode_changed()
                 # Show verbosity after mode combo
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))

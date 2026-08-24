@@ -14,7 +14,8 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
-    KIMI_PRICING, OLLAMA_PRICING, APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
+    KIMI_PRICING, OLLAMA_PRICING, resolve_price,
+    APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
 )
 from myagent.helpers import _ToolBlock, rotate_log_if_needed
 
@@ -885,7 +886,7 @@ class StreamingMixin:
         return None
 
     @staticmethod
-    def _get_pricing(provider, model_name):
+    def _get_pricing(provider, model_name, today=None):
         """Look up per-token pricing for a model.
         Returns a dict with per-token prices, or None if no match.
         Anthropic: {input, output, cache_write, cache_read}
@@ -893,7 +894,11 @@ class StreamingMixin:
         few models with no cached tier (the OpenAI -pro ids, priced None)
         xAI/Moonshot: {input, output} — both providers supply an authoritative
         per-call cost that already nets out their cached-input discount, so a
-        table rate would never be consulted"""
+        table rate would never be consulted.
+        A table entry may be a DatedPrice (a launch promo that reverts to the
+        sticker rate on a known date — Gemini 3.6/3.7 Flash through
+        2026-12-31); it is resolved against ``today`` (default: the real date,
+        so a long-running agent flips at the boundary; tests pin it)."""
         table = {"Anthropic": ANTHROPIC_PRICING,
                  "OpenAI": OPENAI_PRICING,
                  "Google": GEMINI_PRICING,
@@ -911,6 +916,7 @@ class StreamingMixin:
                 best_len = len(prefix)
         if best_match is None:
             return None
+        best_match = resolve_price(best_match, today)
         # Convert from per-million to per-token. A None slot (an OpenAI -pro
         # tier with no cached-input rate) passes through untouched — dividing
         # it would raise.

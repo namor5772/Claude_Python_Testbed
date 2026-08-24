@@ -1,5 +1,6 @@
 import sys
 import os
+import datetime
 import subprocess
 
 IS_WINDOWS = sys.platform == "win32"
@@ -1318,7 +1319,7 @@ MODEL_MAX_OUTPUT_TOKENS = {}
 # 5, 6, 7, 8…). A pinned instruction can still RUN a hidden id until Anthropic
 # actually shuts it down; this only removes them from the picker.
 ANTHROPIC_DEPRECATED_MODEL_PREFIXES = (
-    "claude-opus-4-1",       # Opus 4.1 — deprecated, retires 2026-08-05
+    "claude-opus-4-1",       # Opus 4.1 — retired 2026-08-05 (gone from models.list())
     "claude-opus-4-0",       # Opus 4.0 alias — retired 2026-06-15
     "claude-opus-4-20",      # Opus 4.0 dated id (claude-opus-4-20250514)
     "claude-sonnet-4-0",     # Sonnet 4.0 alias — retired 2026-06-15
@@ -1348,8 +1349,10 @@ EFFORT_LEVELS = ["low", "medium", "high", "max"]
 ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 # GPT-5.6 (2026-07-09) ships as three durable capability tiers: sol
-# (flagship, $5/$30), terra (balanced everyday, $2.50/$15 — the price point
-# of the previous gpt-5.4 default), luna (fast/cheap, $1/$6). Terra default.
+# (flagship, $4/$20), terra (balanced everyday, $2/$12), luna (fast/cheap,
+# $0.20/$1.20) — rates per OPENAI_PRICING, re-trued 2026-08-25. Terra
+# default. All three accept reasoning.effort none..xhigh AND "max" (probed
+# live 2026-08-25; gpt-5.5 / 5.4 reject "max") — see _has_reasoning_max.
 OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
                           "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
@@ -1383,8 +1386,14 @@ OPENAI_DEPRECATED_MODEL_IDS = {"gpt-5", "gpt-5.1-codex"}
 # only current 3.x models. The 2.5 thinking_budget PARAM wiring stays
 # (GEMINI_THINKING_PREFIXES + _gemini_uses_thinking_level) so a pinned
 # instruction that still names a 2.5 id keeps working until Google pulls it.
-GEMINI_FALLBACK_MODELS = ["gemini-3.5-flash", "gemini-3.1-pro-preview",
-                          "gemini-3.1-flash-lite"]
+# gemini-3.7-flash (stable, 2026-08) leads: the current Flash tier — what the
+# floating gemini-flash-latest alias resolves to (verified live 2026-08-25) —
+# and cheaper than 3.5-flash at either its promo or sticker rate; it accepts
+# thinking_level low/medium/high like the rest of 3.x (probed live the same
+# day). 3.5-flash stays listed because instructions were pinned to it while
+# it was the default; gemini-flash-lite-latest now resolves to 3.5-flash-lite.
+GEMINI_FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.1-pro-preview",
+                          "gemini-3.5-flash", "gemini-3.5-flash-lite"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 # Models that support thinking via ThinkingConfig. EVERY current Gemini text
 # tier is thinking-capable, including Flash-Lite (2.5-flash-lite ships thinking
@@ -1513,10 +1522,12 @@ XAI_NON_VISION_PREFIXES = ("grok-build-0", "grok-code")
 # (KIMI_API_KEY also accepted). Catalog, parameters, and the reasoning_content
 # round-trip contract verified against platform.kimi.ai docs 2026-07-25.
 KIMI_DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
-# Matches the LIVE /v1/models catalog 1:1 (verified 2026-07-25 with a real
-# key): kimi-k2.5 is documented/priced but NOT served (at least to new
-# accounts), so it is omitted here — its pricing and no-round-trip policy
-# entries below are retained in case it reappears in the listing.
+# Matches the LIVE /v1/models catalog 1:1 (verified 2026-07-25, re-verified
+# 2026-08-25 with a real key): kimi-k2.5 is documented but NOT served to this
+# account, and the models page now gives it a full platform sunset on
+# 2026-08-31 — so it is omitted here and unpriced (the retiring-models-
+# unpriced policy); its thinking-toggle / no-round-trip PARAM wiring below
+# stays so a pinned instruction keeps correct params until the shutdown.
 KIMI_FALLBACK_MODELS = ["kimi-k2.6", "kimi-k3",
                         "kimi-k2.7-code", "kimi-k2.7-code-highspeed"]
 KIMI_DEFAULT_MODEL = KIMI_FALLBACK_MODELS[0]
@@ -2995,14 +3006,52 @@ PROTON_CONFIRM_TOOLS = [
     "proton_trash", "proton_delete_label",
 ]
 
+class DatedPrice:
+    """A pricing-table entry whose rate changes on a known calendar date —
+    a launch promo that reverts to the sticker price. ``promo`` applies
+    through ``until`` (a datetime.date, INCLUSIVE — the vendors phrase it
+    "through December 31"), ``then`` from the next day. Resolved at lookup
+    time, not import time, so a MyAgent left running across the boundary
+    prices each call at the rate that call is actually billed at. Both
+    tuples must have the same shape as the table's plain entries."""
+    __slots__ = ("until", "promo", "then")
+
+    def __init__(self, until, promo, then):
+        self.until = until
+        self.promo = promo
+        self.then = then
+
+    def resolve(self, today=None):
+        today = today or datetime.date.today()
+        return self.promo if today <= self.until else self.then
+
+    def __repr__(self):
+        return (f"DatedPrice(until={self.until!r}, promo={self.promo!r}, "
+                f"then={self.then!r})")
+
+
+def resolve_price(entry, today=None):
+    """The concrete per-MTok tuple for a pricing-table entry: a DatedPrice
+    picks promo-or-sticker by date, a plain tuple passes through. Every
+    consumer of the tables must go through this (or a DatedPrice would leak
+    into the arithmetic) — streaming_mixin._get_pricing does; ANTHROPIC_PRICING,
+    which SelfBot unpacks directly, deliberately holds no DatedPrice."""
+    if isinstance(entry, DatedPrice):
+        return entry.resolve(today)
+    return entry
+
+
 # ── Anthropic API pricing (USD per million tokens) ────────────────────────────
 # Each entry: (input_price, output_price, cache_write_price, cache_read_price)
-# Prefixes are matched longest-first against model names.
+# Prefixes are matched longest-first against model names. Re-verified against
+# platform.claude.com/docs/en/about-claude/pricing on 2026-08-25 (every row
+# matches). Entries here must stay plain 4-tuples: SelfBot imports this table
+# and unpacks it directly, without the DatedPrice resolver GEMINI_PRICING uses.
 ANTHROPIC_PRICING = {
     # (input, output, 5min_cache_write, cache_read) per million tokens
     # Retired generations (Claude 2.x/3.x/3.5, Opus 4.0/4.1, Sonnet 4.0) were
     # dropped in the 2026-07 audit — the API rejects their ids, so they can
-    # never bill (Opus 4.1 lingers until 2026-08-05 but is picker-hidden).
+    # never bill (Opus 4.1 retired 2026-08-05 and has left models.list()).
     # Claude 5 family (Mythos-class tier above Opus)
     "claude-fable-5":      (10.00, 50.00, 12.50, 1.00),
     "claude-mythos-5":     (10.00, 50.00, 12.50, 1.00),
@@ -3013,9 +3062,10 @@ ANTHROPIC_PRICING = {
     "claude-opus-4-7":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-6":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-5":     (5.00, 25.00, 6.25, 0.50),
-    # Sonnet 5 launched at $3/$15 sticker with INTRO pricing $2/$10 through
-    # 2026-08-31 — the tracker mirrors what the API actually bills today, so
-    # flip this entry to (3.00, 15.00, 3.75, 0.30) from September 2026.
+    # Sonnet 5 launched at a $3/$15 sticker with INTRO pricing $2/$10 through
+    # 2026-08-31 — but the pricing page (checked 2026-08-25) now states the
+    # $2/$10 rate "is now the standard price" and that the September 1
+    # increase "will not occur", so this entry is permanent: do NOT flip it.
     "claude-sonnet-5":     (2.00, 10.00, 2.50, 0.20),
     "claude-sonnet-4-6":   (3.00, 15.00, 3.75, 0.30),
     "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
@@ -3039,12 +3089,17 @@ OPENAI_PRICING = {
     # (developers.openai.com/api/docs/pricing) — eight entries were WRONG:
     # gpt-5.2, gpt-5.2-pro, gpt-5.1, gpt-4.1-mini, gpt-4.1-nano and codex-mini
     # sat at exactly HALF the standard rate (Batch-tier numbers), gpt-5.6-terra
-    # carried gpt-5.4's numbers, and gpt-5.6-luna was 5x too high.
-    # GPT-5.6 family
-    "gpt-5.6-sol":         (5.00, 30.00, 0.50),
+    # carried gpt-5.4's numbers, and gpt-5.6-luna was 5x too high. Re-verified
+    # 2026-08-25 (pricing table + the per-model pages): gpt-5.6-sol had been
+    # entered at gpt-5.5's $5/$30 — it is $4/$20 (cached $0.40). The 5.5/5.6
+    # tiers bill 2x input / 1.5x output above 272K input tokens; the table
+    # keeps the ≤272K tier (same convention as gemini-3.1-pro / grok >200K).
+    # GPT-5.6 family — no bare "gpt-5.6" id exists (only the three tiers), so
+    # there is deliberately no family fallback row: an unknown future 5.6 id
+    # gets no cost line rather than a wrong one.
+    "gpt-5.6-sol":         (4.00, 20.00, 0.40),
     "gpt-5.6-terra":       (2.00, 12.00, 0.20),
     "gpt-5.6-luna":        (0.20, 1.20, 0.02),
-    "gpt-5.6":             (5.00, 30.00, 0.50),
     # GPT-5.5 family
     "gpt-5.5-pro":         (30.00, 180.00, None),
     "gpt-5.5":             (5.00, 30.00, 0.50),
@@ -3086,32 +3141,50 @@ OPENAI_PRICING = {
 }
 
 # Gemini API pricing (USD per million tokens)
-# Each entry: (input_price, output_price, cached_input_price)
+# Each entry: (input_price, output_price, cached_input_price) — or a
+# DatedPrice holding a promo tuple and the sticker tuple it reverts to.
 # Note: Gemini has a free tier (under rate limits) — these are paid-tier prices.
 # Gemini's IMPLICIT caching is automatic — no client opt-in — so the discount
 # was always hitting the bill; before 2026-07-31 it just wasn't reflected here,
 # which overstated every Google line in APICostLog.txt. Verified against the
 # live table 2026-07-31 (ai.google.dev/gemini-api/docs/pricing): the cached
-# rate is exactly 1/10 of input across the whole Gemini 3 family.
+# rate is exactly 1/10 of input across the whole Gemini 3 family. Re-verified
+# 2026-08-25: gemini-3.7-flash (new, stable) added, and Google is running a
+# launch promo on BOTH 3.6 Flash and 3.7 Flash — $0.75/$3.75 (cached $0.075)
+# "through December 31, 2026", $1.50/$7.50 ($0.15) "starting January 1,
+# 2027" — modelled as a DatedPrice so the tracker flips itself on New Year's
+# Day instead of overstating every Flash line by 2x until someone edits this.
 # (Context-cache STORAGE, $1.00/M tokens/hour, is not modelled — it applies to
 # EXPLICIT CachedContent objects, which MyAgent never creates.)
+_GEMINI_FLASH_37_PROMO = DatedPrice(
+    until=datetime.date(2026, 12, 31),
+    promo=(0.75, 3.75, 0.075),
+    then=(1.50, 7.50, 0.15),
+)
 GEMINI_PRICING = {
     # Floating "-latest" aliases that models.list() returns. The version sits
     # AFTER the tier word (gemini-pro-latest, not gemini-3.1-pro), so none of the
     # version-pinned prefixes below match them — without explicit entries they
-    # get no cost line. Priced at the model each alias resolves to (verified
-    # live via response.model_version, 2026-07); revisit when the aliases move.
-    # NOTE: gemini-3.6-flash shipped since that check and gemini-flash-latest
-    # may now resolve to it ($7.50 output, not $9.00) — re-verify the target
-    # before trusting a gemini-flash-latest cost line.
-    "gemini-pro-latest":        (2.00, 12.00, 0.20),  # -> gemini-3.1-pro-preview
-    "gemini-flash-latest":      (1.50, 9.00, 0.15),   # -> gemini-3.5-flash
-    "gemini-flash-lite-latest": (0.25, 1.50, 0.025),  # -> gemini-3.1-flash-lite
-    # Gemini 3.6 family (added 2026-07-31 — the bare "gemini-3" fallback was
-    # pricing it at $0.50/$3.00, well under its real rate)
-    "gemini-3.6-flash":    (1.50, 7.50, 0.15),
+    # get no cost line. Priced at the model each alias resolves to, verified
+    # live via response.model_version on 2026-08-25: gemini-flash-latest moved
+    # from 3.5-flash to 3.7-flash and gemini-flash-lite-latest from
+    # 3.1-flash-lite to 3.5-flash-lite (pro-latest is still 3.1-pro-preview).
+    # Re-verify the targets whenever a new Gemini tier ships.
+    "gemini-pro-latest":        (2.00, 12.00, 0.20),    # -> gemini-3.1-pro-preview
+    "gemini-flash-latest":      _GEMINI_FLASH_37_PROMO,  # -> gemini-3.7-flash
+    "gemini-flash-lite-latest": (0.30, 2.50, 0.03),     # -> gemini-3.5-flash-lite
+    # Gemini 3.7 family (added 2026-08-25 — until then it fell through to the
+    # bare "gemini-3" entry at $0.50/$3.00). Same promo/sticker as 3.6.
+    "gemini-3.7-flash":    _GEMINI_FLASH_37_PROMO,
+    # Gemini 3.6 family (added 2026-07-31 at the $1.50/$7.50 sticker — the
+    # bare "gemini-3" fallback had been pricing it at $0.50/$3.00; the
+    # 2026-08-25 re-check found the sticker itself suspended by the promo)
+    "gemini-3.6-flash":    _GEMINI_FLASH_37_PROMO,
     # Gemini 3.5 family (-lite is a LONGER prefix, so it must be listed for
-    # gemini-3.5-flash-lite not to match the pricier gemini-3.5-flash entry)
+    # gemini-3.5-flash-lite not to match the pricier gemini-3.5-flash entry).
+    # The pricing page lists no context-caching rate for 3.5 Flash-Lite; the
+    # 1/10 slot is kept rather than None so that, should cached tokens ever be
+    # reported, they are priced by the family rule instead of silently free.
     "gemini-3.5-flash-lite": (0.30, 2.50, 0.03),
     "gemini-3.5-flash":    (1.50, 9.00, 0.15),
     # Gemini 3.1 family  (3.1-pro doubles input above 200k tokens — the table
@@ -3128,7 +3201,7 @@ GEMINI_PRICING = {
 }
 # xAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output.
-# Verified LIVE 2026-07-17 (re-verified 2026-08-18) against /v1/models' own
+# Verified LIVE 2026-07-17 (re-verified 2026-08-18 and 2026-08-25) against /v1/models' own
 # price fields (unit = $1/10000 per MTok: grok-4.3 reports 12500/25000 =
 # $1.25/$2.50, grok-4.5 and grok-4.6 both report 20000/60000 = $2/$6). The
 # legacy families (grok-4 / -fast, grok-3, grok-2) are fully retired — the
@@ -3155,18 +3228,20 @@ XAI_PRICING = {
 # Each entry: (input_price, output_price) — reasoning tokens bill as output,
 # and re-sent reasoning_content (the required round-trip on thinking models)
 # bills again as input. Verified against platform.kimi.ai/docs/pricing
-# 2026-07-25. The 2-tuple treats all input at the cache-MISS rate; the mixin
-# computes an exact cost_usd from the reported cached tokens using
-# KIMI_CACHE_HIT_PRICING below (stream_worker prefers cost_usd when present).
-# The legacy dash-family (kimi-k2-thinking / -0905 / -0711 / -turbo) was
-# discontinued 2026-05-25 and moonshot-v1 dies 2026-08-31 — neither is priced
-# because _fetch_kimi_models filters them out.
+# 2026-07-25, re-verified 2026-08-25 against the per-model pages
+# (pricing/chat-k3 / -k27-code / -k26: unchanged). The 2-tuple treats all
+# input at the cache-MISS rate; the mixin computes an exact cost_usd from the
+# reported cached tokens using KIMI_CACHE_HIT_PRICING below (stream_worker
+# prefers cost_usd when present). Unpriced under the retiring-models policy:
+# the legacy dash-family (kimi-k2-thinking / -0905 / -0711 / -turbo,
+# discontinued 2026-05-25), moonshot-v1 (dies 2026-08-31), and kimi-k2.5
+# (full platform sunset 2026-08-31 per the models page) — none of them is
+# served by _fetch_kimi_models.
 KIMI_PRICING = {
     "kimi-k3":                    (3.00, 15.00),
     "kimi-k2.7-code-highspeed":   (1.90, 8.00),
     "kimi-k2.7-code":             (0.95, 4.00),
     "kimi-k2.6":                  (0.95, 4.00),
-    "kimi-k2.5":                  (0.60, 3.00),
 }
 # Cache-HIT input rate (USD per million tokens), used only by kimi_mixin's
 # exact-cost computation. Longest prefix wins (so -highspeed outranks
@@ -3176,7 +3251,6 @@ KIMI_CACHE_HIT_PRICING = {
     "kimi-k2.7-code-highspeed":   0.38,
     "kimi-k2.7-code":             0.19,
     "kimi-k2.6":                  0.16,
-    "kimi-k2.5":                  0.10,
 }
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.

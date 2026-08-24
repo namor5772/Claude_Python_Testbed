@@ -294,6 +294,16 @@ class OpenAIMixin:
             return False
         return self._parse_gpt5_minor(mid) >= 2
 
+    def _has_reasoning_max(self, model_id=None):
+        """Check if model supports reasoning.effort='max' — the GPT-5.6 tiers
+        (sol/terra/luna all accept it; gpt-5.5, gpt-5.4 and 5.4-mini reject it
+        with "Unsupported value: 'max' is not supported with the ... model",
+        probed live 2026-08-25). Version-gated at minor >= 6 so a future 5.7
+        keeps it; the reactive 400 handler in _stream_responses_call is the
+        backstop if a later tier drops it."""
+        mid = model_id or self.model
+        return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 6
+
     def _gpt5_supports_temp_at_none(self, model_id=None):
         """Check if model supports temperature when reasoning.effort='none' (gpt-5.4+)."""
         mid = model_id or self.model

@@ -9,24 +9,29 @@ import unittest
 from tests._util import stub
 from myagent.openai_mixin import OpenAIMixin
 
-# model -> (minor, family, reasoning, none, xhigh, temp_at_none, chat, verbosity)
+# model -> (minor, family, reasoning, none, xhigh, max, temp_at_none, chat, verbosity)
+# `max` (reasoning.effort='max') is a GPT-5.6 addition: live-probed 2026-08-25,
+# all three 5.6 tiers accept it and gpt-5.5 / 5.4 / 5.4-mini reject it.
 EXPECTED = {
-    "gpt-5":               (0, True,  True,  False, False, False, False, True),
-    "gpt-5.0":             (0, True,  True,  False, False, False, False, True),
-    "gpt-5.1":             (1, True,  True,  True,  False, False, False, True),
-    "gpt-5.2":             (2, True,  True,  True,  True,  False, False, True),
-    "gpt-5.4":             (4, True,  True,  True,  True,  True,  False, True),
-    "gpt-5.5":             (5, True,  True,  True,  True,  True,  False, True),
-    "gpt-5.5-pro":         (5, True,  True,  True,  True,  True,  False, True),
-    "gpt-5.2-mini":        (2, True,  True,  True,  False, False, False, True),
-    "gpt-5.1-nano":        (1, True,  True,  True,  False, False, False, True),
-    "gpt-5.1-chat-latest": (1, False, False, False, False, False, True,  True),
-    "gpt-5-chat":          (0, False, False, False, False, False, True,  True),
-    "o1":                  (0, False, True,  False, False, False, False, False),
-    "o3":                  (0, False, True,  False, False, False, False, False),
-    "o4-mini":             (0, False, True,  False, False, False, False, False),
-    "gpt-4o":              (0, False, False, False, False, False, False, False),
-    "gpt-4.1":             (0, False, False, False, False, False, False, False),
+    "gpt-5":               (0, True,  True,  False, False, False, False, False, True),
+    "gpt-5.0":             (0, True,  True,  False, False, False, False, False, True),
+    "gpt-5.1":             (1, True,  True,  True,  False, False, False, False, True),
+    "gpt-5.2":             (2, True,  True,  True,  True,  False, False, False, True),
+    "gpt-5.4":             (4, True,  True,  True,  True,  False, True,  False, True),
+    "gpt-5.5":             (5, True,  True,  True,  True,  False, True,  False, True),
+    "gpt-5.5-pro":         (5, True,  True,  True,  True,  False, True,  False, True),
+    "gpt-5.6-sol":         (6, True,  True,  True,  True,  True,  True,  False, True),
+    "gpt-5.6-terra":       (6, True,  True,  True,  True,  True,  True,  False, True),
+    "gpt-5.6-luna":        (6, True,  True,  True,  True,  True,  True,  False, True),
+    "gpt-5.2-mini":        (2, True,  True,  True,  False, False, False, False, True),
+    "gpt-5.1-nano":        (1, True,  True,  True,  False, False, False, False, True),
+    "gpt-5.1-chat-latest": (1, False, False, False, False, False, False, True,  True),
+    "gpt-5-chat":          (0, False, False, False, False, False, False, True,  True),
+    "o1":                  (0, False, True,  False, False, False, False, False, False),
+    "o3":                  (0, False, True,  False, False, False, False, False, False),
+    "o4-mini":             (0, False, True,  False, False, False, False, False, False),
+    "gpt-4o":              (0, False, False, False, False, False, False, False, False),
+    "gpt-4.1":             (0, False, False, False, False, False, False, False, False),
 }
 
 
@@ -36,13 +41,14 @@ class TestOpenAIDetect(unittest.TestCase):
 
     def test_matrix(self):
         for model, exp in EXPECTED.items():
-            minor, family, reasoning, none, xhigh, temp_none, chat, verb = exp
+            minor, family, reasoning, none, xhigh, mx, temp_none, chat, verb = exp
             with self.subTest(model=model):
                 self.assertEqual(self.p._parse_gpt5_minor(model), minor)
                 self.assertEqual(self.p._is_gpt5_family(model), family)
                 self.assertEqual(self.p._is_openai_reasoning_model(model), reasoning)
                 self.assertEqual(self.p._has_reasoning_none(model), none)
                 self.assertEqual(self.p._has_reasoning_xhigh(model), xhigh)
+                self.assertEqual(self.p._has_reasoning_max(model), mx)
                 self.assertEqual(self.p._gpt5_supports_temp_at_none(model), temp_none)
                 self.assertEqual(self.p._is_gpt5_chat_model(model), chat)
                 self.assertEqual(self.p._has_openai_verbosity(model), verb)
