@@ -89,6 +89,9 @@ FROM.txt
 MyAgent_preview.png
 hello_world_gui.py
 *.txtLaptop
+# MyAgent's saved Kimi_Feature_Test instruction writes its Step-3 scratch file and its
+# final report here on every run (kimi_test_scratch.md / kimi_test_report.md) - test residue
+kimi_test_*.md
 
 # Stray scratch from misdirected shell redirects (e.g. Windows-style `>nul`
 # evaluated in bash creates a literal file named `nul`)
