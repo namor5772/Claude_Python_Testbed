@@ -1,6 +1,36 @@
 import os, re, json, time, subprocess, ctypes, tkinter as tk
 from tkinter import messagebox
-from myagent.constants import IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY
+from myagent.constants import IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY, _BASE_DIR
+from myagent.helpers import rotate_log_if_needed
+
+# Optional diagnostic trace of every geometry save/restore, one line per event,
+# to geometry_debug.log beside the state file (100 KB one-slot rotation). OFF by
+# default; set MYAGENT_GEOMETRY_DEBUG=1 to turn it on — the reproduction switch
+# for a "window comes back on the wrong monitor" report (it records the entry
+# restored at launch and the geometry saved at each close, which is exactly what
+# distinguishes a bad-save from a bad-restore). Best-effort, never fatal.
+GEOMETRY_DEBUG = os.environ.get("MYAGENT_GEOMETRY_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+GEOMETRY_LOG_FILE = os.path.join(_BASE_DIR, "geometry_debug.log")
+GEOMETRY_LOG_MAX_BYTES = 100_000
+
+# Windows whose size/position persist per monitor layout, per instance
+# (agent_state.json / agent_state_N.json): kind → key inside a layout entry.
+# The on-disk key names predate this table and are kept so existing state
+# files keep restoring unchanged.
+GEOMETRY_KINDS = {
+    "main": "geometry",
+    "editor": "editor_geometry",
+    "ps_safety": "ps_safety_dialog_geometry",
+    "prompt": "prompt_dialog_geometry",
+    "confirm": "confirm_dialog_geometry",
+    "skills": "skills_dialog_geometry",
+}
+# A saved position is usable only if enough of the window's title bar lands on
+# a real monitor to grab it: at least GEOMETRY_VISIBLE_W px wide, and at least
+# GEOMETRY_TITLE_VISIBLE_H px of the window's top GEOMETRY_TITLE_STRIP px.
+GEOMETRY_VISIBLE_W = 50
+GEOMETRY_TITLE_STRIP = 30
+GEOMETRY_TITLE_VISIBLE_H = 10
 
 
 class StateMixin:
@@ -189,7 +219,7 @@ class StateMixin:
             except OSError:
                 pass
 
-    # ── State Persistence ───────────────────────────────────────────────
+    # ── Display Geometry ───────────────────────────────────────────────
 
     @staticmethod
     def _get_macos_display_rects():
@@ -230,7 +260,9 @@ class StateMixin:
     @staticmethod
     def _get_windows_display_rects():
         """Return list of (left, top, right, bottom) for each display via EnumDisplayMonitors.
-        Primary monitor (origin 0,0) is always first."""
+        Primary monitor (origin 0,0) is always first. Physical pixels under the
+        PER_MONITOR_AWARE_V2 context MyAgent.py sets before Tk loads — the same
+        units Tk's `wm geometry` reports, so saved positions compare directly."""
         try:
             user32 = ctypes.windll.user32
 
@@ -239,9 +271,11 @@ class StateMixin:
                             ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
 
             monitors = []
+            # BOOL CALLBACK MonitorEnumProc(HMONITOR, HDC, LPRECT, LPARAM) —
+            # the handles and LPARAM are pointer-sized on x64
             MONITORENUMPROC = ctypes.WINFUNCTYPE(
-                ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
-                ctypes.POINTER(RECT), ctypes.c_double)
+                ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.POINTER(RECT), ctypes.c_void_p)
 
             def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
                 r = lprcMonitor[0]
@@ -294,72 +328,342 @@ class StateMixin:
         return 0, 0, 1920, 1080
 
     @staticmethod
+    def _monitor_rects():
+        """Every monitor's rect, falling back to the virtual desktop as one rect."""
+        rects = StateMixin._get_display_rects()
+        if rects:
+            return list(rects)
+        vx, vy, vw, vh = StateMixin._get_virtual_screen_bounds()
+        return [(vx, vy, vx + vw, vy + vh)]
+
+    @staticmethod
+    def _primary_rect():
+        """The monitor containing the origin (the primary), else the first one."""
+        rects = StateMixin._monitor_rects()
+        for rect in rects:
+            left, top, right, bottom = rect
+            if left <= 0 < right and top <= 0 < bottom:
+                return rect
+        return rects[0]
+
+    @staticmethod
     def _get_monitor_config_key():
-        """Return a string key identifying the current monitor layout.
-
-        Uses EnumDisplayMonitors (Windows) or CoreGraphics (macOS) to capture
-        each monitor's bounding rect, producing a stable key like
-        '0,0,1920,1080|1920,0,3840,1080'. Different setups (docked vs
-        undocked, different monitor arrangements) produce different keys,
-        enabling per-configuration geometry persistence.
-        """
-        if IS_WINDOWS:
-            try:
-                user32 = ctypes.windll.user32
-
-                class RECT(ctypes.Structure):
-                    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
-                                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
-
-                monitors = []
-
-                # EnumDisplayMonitors callback: BOOL CALLBACK(HMONITOR, HDC, LPRECT, LPARAM)
-                MONITORENUMPROC = ctypes.WINFUNCTYPE(
-                    ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong,
-                    ctypes.POINTER(RECT), ctypes.c_double)
-
-                def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
-                    r = lprcMonitor[0]
-                    monitors.append((r.left, r.top, r.right, r.bottom))
-                    return 1  # continue enumeration
-
-                user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(callback), 0)
-                if monitors:
-                    monitors.sort()
-                    return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in monitors)
-            except Exception:
-                pass
-        else:
-            # macOS: use CoreGraphics to enumerate displays
-            rects = StateMixin._get_macos_display_rects()
-            if rects:
-                rects.sort()
-                return "|".join(f"{l},{t},{r},{b}" for l, t, r, b in rects)
+        """Return a string key identifying the current monitor layout, e.g.
+        '-2560,0,0,1440|0,0,2560,1440' — every monitor's rect (Win32
+        EnumDisplayMonitors / macOS CoreGraphics), sorted. Docked vs undocked,
+        a rearrangement, or a monitor that has dropped off the bus each
+        produce a different key, so every layout keeps its own set of window
+        positions."""
+        rects = StateMixin._get_display_rects()
+        if rects:
+            return "|".join(",".join(str(v) for v in rect) for rect in sorted(rects))
         # Fallback: use virtual screen bounds
         vx, vy, vw, vh = StateMixin._get_virtual_screen_bounds()
         return f"{vx},{vy},{vx + vw},{vy + vh}"
 
     @staticmethod
-    def _sanitize_geometry(geo, min_w=200, min_h=150):
-        """Validate a geometry string against the full virtual desktop (all monitors).
-
-        Rejects windows that are too small or positioned entirely off-screen.
-        Returns DEFAULT_GEOMETRY if unusable.
-        """
-        m = re.match(r'(\d+)x(\d+)\+(-?\d+)\+(-?\d+)', geo)
+    def _parse_geometry(geo):
+        """'WxH+X+Y' → (w, h, x, y), else None. X/Y may be negative — '+-723'
+        is how Tk reports a window left of (or above) the primary monitor. A
+        size-only string (DEFAULT_GEOMETRY) or Tk's right/bottom-anchored
+        '-X' form, which this app never writes, is not a restorable position."""
+        m = re.fullmatch(r"=?(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(geo or "").strip())
         if not m:
-            return DEFAULT_GEOMETRY
-        w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            return None
+        return tuple(int(g) for g in m.groups())
+
+    @staticmethod
+    def _geometry_visible(x, y, w, h):
+        """True when enough of the window's title bar lies on SOME monitor to
+        grab it. Checked per monitor rather than against the virtual desktop's
+        bounding box — an L-shaped layout has dead corners inside that box."""
+        for left, top, right, bottom in StateMixin._monitor_rects():
+            overlap_w = min(x + w, right) - max(x, left)
+            overlap_h = min(y + GEOMETRY_TITLE_STRIP, bottom) - max(y, top)
+            if overlap_w >= GEOMETRY_VISIBLE_W and overlap_h >= GEOMETRY_TITLE_VISIBLE_H:
+                return True
+        return False
+
+    @staticmethod
+    def _sanitize_geometry(geo, min_w=200, min_h=150):
+        """Return `geo` normalised if it is a usable position on the CURRENT
+        layout, else None — the caller then applies its own default (each
+        dialog has its own; the main window uses DEFAULT_GEOMETRY). Rejects
+        tiny windows and positions whose title bar no monitor shows."""
+        parsed = StateMixin._parse_geometry(geo)
+        if parsed is None:
+            return None
+        w, h, x, y = parsed
         if w < min_w or h < min_h:
-            return DEFAULT_GEOMETRY
-        # Check against virtual desktop spanning all monitors
-        vx, vy, vw, vh = StateMixin._get_virtual_screen_bounds()
-        visible_margin = 50
-        if x + w < vx + visible_margin or x > vx + vw - visible_margin:
-            return DEFAULT_GEOMETRY
-        if y + h < vy + visible_margin or y > vy + vh - visible_margin:
-            return DEFAULT_GEOMETRY
+            return None
+        if not StateMixin._geometry_visible(x, y, w, h):
+            return None
+        return f"{w}x{h}+{x}+{y}"
+
+    @staticmethod
+    def _clamp_to_monitor(x, y, w, h):
+        """Shift (x, y) so a w×h window sits inside the monitor containing that
+        point (the primary if none does)."""
+        home = StateMixin._primary_rect()
+        for rect in StateMixin._monitor_rects():
+            left, top, right, bottom = rect
+            if left <= x < right and top <= y < bottom:
+                home = rect
+                break
+        left, top, right, bottom = home
+        x = max(left, min(x, right - w))
+        y = max(top, min(y, bottom - h))
+        return x, y
+
+    # ── Window Geometry Persistence (main window + every dialog) ───────
+    #
+    # One mechanism for all six persisted windows: `_remember_geometry`
+    # captures a window's REAL geometry into a per-process cache,
+    # `_place_window` positions a dialog from that cache (or its default),
+    # and `_save_last_state` / `_load_last_state` move the cache to and
+    # from this instance's state file under the current monitor-layout key.
+
+    def _geo_cache(self):
+        """kind → last known NORMAL-state geometry (current layout)."""
+        cache = getattr(self, "_geometry_cache", None)
+        if cache is None:
+            cache = self._geometry_cache = {}
+        return cache
+
+    def _remember_geometry(self, kind, win):
+        """Cache `win`'s current geometry for `kind` — but only a REAL one: the
+        window must be mapped and in the normal state.
+
+        Why the guards (all three bit on Windows):
+        - a never-mapped root reports '1x1+X+Y' until Tk's first idle pass, so
+          the save in __init__ used to write a junk size that the next launch
+          rejected as too small — and the window fell back to the primary
+          monitor;
+        - a maximized window reports the ZOOMED size with the NORMAL position
+          ('2560x1417+-723+73'), a chimera that restored as a giant
+          un-maximized window straddling both monitors — instead the zoomed
+          flag is recorded and the last normal geometry kept;
+        - an iconified window still holds its normal geometry but is left
+          alone, so closing minimized-from-maximized still restores maximized.
+        Returns the cached geometry, or None when nothing was captured."""
+        try:
+            if not win.winfo_exists():
+                return None
+            state = win.state()
+        except tk.TclError:
+            return None
+        if kind == "main" and state in ("normal", "zoomed"):
+            self._main_zoomed = (state == "zoomed")
+        try:
+            if state != "normal" or not win.winfo_ismapped():
+                return None
+            geo = win.geometry()
+        except tk.TclError:
+            return None
+        parsed = self._parse_geometry(geo)
+        if parsed is None or parsed[0] <= 1 or parsed[1] <= 1:
+            return None
+        self._geo_cache()[kind] = geo
+        self._geometry_dirty = True
         return geo
+
+    def _saved_geometry(self, kind, min_w=200, min_h=150):
+        """The cached geometry for `kind`, if still visible on the current layout."""
+        geo = self._geo_cache().get(kind)
+        return self._sanitize_geometry(geo, min_w, min_h) if geo else None
+
+    def _place_window(self, win, kind, default_size, parent=None, min_size=(200, 150)):
+        """Position a dialog before it is shown: the saved geometry for `kind`
+        when still visible on this layout, else `default_size` (shrunk to fit
+        the monitor) centred on `parent` — the main window by default — and
+        clamped onto that monitor. A withdrawn parent (--headless) centres the
+        dialog on the primary monitor instead. Returns the geometry applied
+        (the PS Safety dialog re-applies it after mapping)."""
+        geo = self._saved_geometry(kind, *min_size)
+        if geo is None:
+            w, h = default_size
+            parent = parent if parent is not None else self.root
+            try:
+                mapped = bool(parent.winfo_ismapped())
+                px, py = parent.winfo_x(), parent.winfo_y()
+                pw, ph = parent.winfo_width(), parent.winfo_height()
+            except tk.TclError:
+                mapped = False
+            left, top, right, bottom = self._primary_rect()
+            if mapped:
+                cx, cy = px + pw // 2, py + ph // 2
+            else:
+                cx, cy = (left + right) // 2, (top + bottom) // 2
+            for rect in self._monitor_rects():
+                if rect[0] <= cx < rect[2] and rect[1] <= cy < rect[3]:
+                    left, top, right, bottom = rect
+                    break
+            w, h = min(w, right - left), min(h, bottom - top)
+            x, y = self._clamp_to_monitor(cx - w // 2, cy - h // 2, w, h)
+            geo = f"{w}x{h}+{x}+{y}"
+        win.geometry(geo)
+        return geo
+
+    def _open_geometry_windows(self):
+        """(kind, window) for every persisted window currently open."""
+        pairs = (("main", getattr(self, "root", None)),
+                 ("editor", getattr(self, "instruction_editor_window", None)),
+                 ("skills", getattr(self, "skills_editor_window", None)),
+                 ("ps_safety", getattr(self, "_ps_safety_dialog", None)),
+                 ("prompt", getattr(self, "_prompt_dialog", None)),
+                 ("confirm", getattr(self, "_confirm_dialog", None)))
+        out = []
+        for kind, win in pairs:
+            try:
+                if win is not None and win.winfo_exists():
+                    out.append((kind, win))
+            except tk.TclError:
+                pass
+        return out
+
+    def _build_geometry_entry(self):
+        """Snapshot of every window's geometry for the current layout: open
+        windows are re-captured live, closed ones contribute their cached
+        last-known geometry. Empty when nothing real was ever captured."""
+        for kind, win in self._open_geometry_windows():
+            self._remember_geometry(kind, win)
+        cache = self._geo_cache()
+        entry = {key: cache[kind] for kind, key in GEOMETRY_KINDS.items() if cache.get(kind)}
+        if entry:
+            entry["main_zoomed"] = bool(getattr(self, "_main_zoomed", False))
+            entry["saved_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        return entry
+
+    def _geometries_for_save(self, existing_geometries, config_key):
+        """The `geometries` dict to write. Other layouts' entries are preserved;
+        this layout's entry is replaced only once a real geometry has been
+        captured in this process (`_geometry_dirty`): a --headless run whose
+        window never showed, or a launch still unmapped, must not overwrite a
+        good entry with stale loaded values — possibly under a different key,
+        if a monitor came or went during the run."""
+        all_geos = dict(existing_geometries) if isinstance(existing_geometries, dict) else {}
+        if getattr(self, "_geometry_dirty", False):
+            entry = self._build_geometry_entry()
+            if entry:
+                all_geos[config_key] = entry
+                self._geo_log("save", geometry=entry.get("geometry"),
+                              zoomed=entry.get("main_zoomed"))
+            else:
+                self._geo_log("save-skip", why="no-real-geometry-captured")
+        else:
+            self._geo_log("save-skip", why="not-dirty",
+                          existing=(all_geos.get(config_key) or {}).get("geometry"))
+        return all_geos
+
+    def _select_geometry_entry(self, state, config_key):
+        """The layout entry to restore: this layout's own, else the legacy flat
+        fields, else the most recently saved layout whose main-window position
+        is still visible here — so a monitor that dropped off the bus, or a
+        first launch after rearranging, keeps the window where it was rather
+        than resetting it to the primary monitor."""
+        all_geos = state.get("geometries")
+        if not isinstance(all_geos, dict):
+            all_geos = {}
+        entry = all_geos.get(config_key)
+        if isinstance(entry, dict):
+            return entry
+        if "geometry" in state:  # pre-per-layout state file
+            return {k: state[k] for k in GEOMETRY_KINDS.values() if k in state}
+        by_recency = sorted(
+            (e for e in all_geos.values() if isinstance(e, dict)),
+            key=lambda e: str(e.get("saved_at", "")), reverse=True)
+        for entry in by_recency:
+            if self._sanitize_geometry(entry.get("geometry")):
+                return entry
+        return {}
+
+    def _default_main_geometry(self):
+        """DEFAULT_GEOMETRY explicitly centred on the primary monitor. Without
+        the +x+y the WM chooses the spot, which is NOT reliably the primary on
+        a multi-monitor box — the same reason every dialog computes its own
+        fallback position rather than leaving it to the WM."""
+        parsed = self._parse_geometry(DEFAULT_GEOMETRY)
+        if parsed:
+            w, h = parsed[0], parsed[1]
+        else:
+            w, h = 1050, 930
+        left, top, right, bottom = self._primary_rect()
+        w, h = min(w, right - left), min(h, bottom - top)
+        x, y = self._clamp_to_monitor(
+            left + (right - left - w) // 2, top + (bottom - top - h) // 2, w, h)
+        return f"{w}x{h}+{x}+{y}"
+
+    def _apply_geometry_entry(self, entry):
+        """Restore a layout entry: cache every window's geometry (dialogs are
+        re-validated when they open) and place the main window — its saved
+        position when visible, else centred on the primary monitor — re-
+        maximized if it was closed maximized."""
+        self._geo_log("restore-entry", geometry=entry.get("geometry"),
+                      zoomed=entry.get("main_zoomed"), keys=",".join(sorted(entry)))
+        cache = self._geo_cache()
+        for kind, key in GEOMETRY_KINDS.items():
+            geo = entry.get(key)
+            if self._parse_geometry(geo):
+                cache[kind] = geo
+        main = cache.get("main")
+        zoomed = entry.get("main_zoomed")
+        if zoomed is None and main:
+            # Entry written before the zoomed flag existed: a width equal to a
+            # monitor's is the old code's maximized chimera (zoomed size +
+            # normal position) — restore it maximized, at the default size.
+            w, h, x, y = self._parse_geometry(main)
+            if any(w == rect[2] - rect[0] for rect in self._get_display_rects()):
+                main = f"{DEFAULT_GEOMETRY.split('+')[0]}+{x}+{y}"
+                zoomed = True
+                self._geometry_dirty = True  # heal the file on the first save
+        geo = self._sanitize_geometry(main) if main else None
+        if geo:
+            cache["main"] = geo
+            self.root.geometry(geo)
+        else:
+            cache.pop("main", None)
+            geo = self._default_main_geometry()
+            self.root.geometry(geo)
+            self._geo_log("restore-default", applied=geo, rejected=main)
+        self._main_zoomed = bool(zoomed)
+        if self._main_zoomed:
+            try:
+                self.root.state("zoomed")
+            except tk.TclError:
+                self._main_zoomed = False
+        self._geo_log("restore-applied", applied=geo, zoomed=self._main_zoomed)
+
+    def _geo_log(self, event, **fields):
+        """Append one diagnostic line about a geometry save/restore. No-op
+        unless MYAGENT_GEOMETRY_DEBUG is set — see GEOMETRY_DEBUG."""
+        if not GEOMETRY_DEBUG:
+            return
+        try:
+            rotate_log_if_needed(GEOMETRY_LOG_FILE, GEOMETRY_LOG_MAX_BYTES)
+            inst = getattr(self, "_instance_num", "?")
+            try:
+                live = f"{self.root.state()}:{self.root.geometry()}" if self.root.winfo_exists() else "-"
+            except tk.TclError:
+                live = "-"
+            parts = [time.strftime("%Y-%m-%d %H:%M:%S"), f"inst{inst}", event,
+                     f"key={self._get_monitor_config_key()}", f"live={live}"]
+            parts += [f"{k}={v}" for k, v in fields.items()]
+            with open(GEOMETRY_LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(" | ".join(parts) + "\n")
+        except Exception:
+            pass
+
+    def _bind_geometry_tracking(self):
+        """Keep the main window's last NORMAL geometry current as it moves and
+        resizes, so closing it maximized (or minimized) still persists the
+        un-maximized spot. <Configure> on the root also fires for every
+        descendant widget, hence the identity check."""
+        def _on_configure(event):
+            if event.widget is self.root or str(event.widget) == ".":
+                self._remember_geometry("main", self.root)
+        self.root.bind("<Configure>", _on_configure, add="+")
+
+    # ── State Persistence ───────────────────────────────────────────────
 
     def _save_last_state(self):
         # Read existing state to preserve geometry entries for other monitor configs
@@ -411,38 +715,10 @@ class StateMixin:
                 "blocked_tools": sorted(getattr(self, "_blocked_tools", [])),
             },
         }
-        # Build geometry dict for current monitor configuration
-        config_key = self._get_monitor_config_key()
-        geo_entry = {"geometry": self.root.geometry()}
-        if self.instruction_editor_window and self.instruction_editor_window.winfo_exists():
-            geo_entry["editor_geometry"] = self.instruction_editor_window.geometry()
-        elif hasattr(self, '_last_editor_geometry') and self._last_editor_geometry:
-            geo_entry["editor_geometry"] = self._last_editor_geometry
-        # Capture live geometry from open dialogs, fall back to cached values
-        ps_dlg = getattr(self, '_ps_safety_dialog', None)
-        if ps_dlg and ps_dlg.winfo_exists():
-            geo_entry["ps_safety_dialog_geometry"] = ps_dlg.geometry()
-        elif getattr(self, '_last_ps_safety_geometry', None):
-            geo_entry["ps_safety_dialog_geometry"] = self._last_ps_safety_geometry
-        prompt_dlg = getattr(self, '_prompt_dialog', None)
-        if prompt_dlg and prompt_dlg.winfo_exists():
-            geo_entry["prompt_dialog_geometry"] = prompt_dlg.geometry()
-        elif getattr(self, '_last_prompt_dialog_geometry', None):
-            geo_entry["prompt_dialog_geometry"] = self._last_prompt_dialog_geometry
-        confirm_dlg = getattr(self, '_confirm_dialog', None)
-        if confirm_dlg and confirm_dlg.winfo_exists():
-            geo_entry["confirm_dialog_geometry"] = confirm_dlg.geometry()
-        elif getattr(self, '_last_confirm_dialog_geometry', None):
-            geo_entry["confirm_dialog_geometry"] = self._last_confirm_dialog_geometry
-        # Capture skills dialog geometry if open, otherwise use last saved
-        if self.skills_editor_window and self.skills_editor_window.winfo_exists():
-            geo_entry["skills_dialog_geometry"] = self.skills_editor_window.geometry()
-        elif getattr(self, '_last_skills_dialog_geometry', None):
-            geo_entry["skills_dialog_geometry"] = self._last_skills_dialog_geometry
-        # Merge into geometries dict (preserves other monitor configs)
-        all_geos = existing.get("geometries", {})
-        all_geos[config_key] = geo_entry
-        state["geometries"] = all_geos
+        # Window geometries, keyed by monitor layout (other layouts' entries
+        # are preserved; see _geometries_for_save for when this one is written)
+        state["geometries"] = self._geometries_for_save(
+            existing.get("geometries"), self._get_monitor_config_key())
         # Display checkboxes
         state["show_activity"] = self.show_activity.get()
         state["show_thinking"] = self.show_thinking.get()
@@ -476,35 +752,9 @@ class StateMixin:
         if not model_restored:
             # Fall back to state file's model params (for old instructions or no instruction)
             self._restore_model_params(state, state_file=True)
-        # Restore geometries for the current monitor configuration
-        config_key = self._get_monitor_config_key()
-        all_geos = state.get("geometries", {})
-        geo_entry = all_geos.get(config_key)
-        if not geo_entry and "geometry" in state:
-            # Backward compat: migrate old flat geometry fields
-            geo_entry = {k: state[k] for k in ("geometry", "editor_geometry",
-                         "prompt_dialog_geometry", "confirm_dialog_geometry",
-                         "ps_safety_dialog_geometry",
-                         "skills_dialog_geometry") if k in state}
-        if geo_entry:
-            geo = geo_entry.get("geometry")
-            if geo:
-                self.root.geometry(self._sanitize_geometry(geo))
-            editor_geo = geo_entry.get("editor_geometry")
-            if editor_geo:
-                self._last_editor_geometry = editor_geo
-            prompt_geo = geo_entry.get("prompt_dialog_geometry")
-            if prompt_geo:
-                self._last_prompt_dialog_geometry = prompt_geo
-            confirm_geo = geo_entry.get("confirm_dialog_geometry")
-            if confirm_geo:
-                self._last_confirm_dialog_geometry = confirm_geo
-            ps_safety_geo = geo_entry.get("ps_safety_dialog_geometry")
-            if ps_safety_geo:
-                self._last_ps_safety_geometry = ps_safety_geo
-            skills_geo = geo_entry.get("skills_dialog_geometry")
-            if skills_geo:
-                self._last_skills_dialog_geometry = skills_geo
+        # Restore window geometries for the current monitor layout
+        self._apply_geometry_entry(
+            self._select_geometry_entry(state, self._get_monitor_config_key()))
         # Restore display checkboxes
         if "show_activity" in state:
             self.show_activity.set(state["show_activity"])

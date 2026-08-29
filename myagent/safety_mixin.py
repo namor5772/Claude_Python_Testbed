@@ -209,7 +209,7 @@ class SafetyMixin:
         text_widget.configure(state="disabled")
 
         def _on_close():
-            self._last_ps_safety_geometry = dlg.geometry()
+            self._remember_geometry("ps_safety", dlg)
             self._ps_safety_dialog = None
             self._save_last_state()
             dlg.destroy()
@@ -218,21 +218,13 @@ class SafetyMixin:
 
         # Set geometry AFTER layout but BEFORE showing to prevent WM repositioning
         dlg.update_idletasks()
-        saved_geo = getattr(self, '_last_ps_safety_geometry', None)
-        if saved_geo:
-            geo = self._sanitize_geometry(saved_geo)
-        else:
-            w, h = 560, 1100
-            x = parent.winfo_x() + (parent.winfo_width() - w) // 2
-            y = parent.winfo_y() + (parent.winfo_height() - h) // 2
-            geo = f"{w}x{h}+{x}+{y}"
+        geo = self._place_window(dlg, "ps_safety", (560, 1100), parent=parent)
         # Apply geometry twice: before and after deiconify, because the embedded
         # checkbuttons in the Text widget request a large natural size that
         # overrides the width/height on map. The delayed re-apply wins.
         # Use after(100ms) instead of after_idle — on macOS the WM repositions
         # transient windows asynchronously after deiconify, so after_idle fires
         # too early and gets overridden.
-        dlg.geometry(geo)
         dlg.deiconify()
         dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
 
@@ -316,10 +308,7 @@ class SafetyMixin:
             btn_frame.grid(row=row, column=0, pady=(0, 15))
 
             def _capture_geo():
-                try:
-                    self._last_confirm_dialog_geometry = dlg.geometry()
-                except Exception:
-                    pass
+                self._remember_geometry("confirm", dlg)
                 self._confirm_dialog = None
 
             def on_yes():
@@ -341,15 +330,8 @@ class SafetyMixin:
 
             # Restore geometry AFTER all content is laid out to prevent layout shifts
             dlg.update_idletasks()
-            saved_geo = getattr(self, '_last_confirm_dialog_geometry', None)
-            if saved_geo:
-                dlg.geometry(self._sanitize_geometry(saved_geo))
-            else:
-                w = max(dlg.winfo_reqwidth(), 500)
-                h = min(dlg.winfo_reqheight(), 400)
-                x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-                y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-                dlg.geometry(f"{w}x{h}+{x}+{y}")
+            self._place_window(dlg, "confirm", (max(dlg.winfo_reqwidth(), 500),
+                                                min(dlg.winfo_reqheight(), 400)))
             dlg.deiconify()  # Show with correct geometry
 
         self.root.after(0, ask)
@@ -476,11 +458,8 @@ class SafetyMixin:
                 resp_text.bind("<Command-v>", on_paste)
 
             def _capture_and_close():
-                """Save dialog geometry before destroying."""
-                try:
-                    self._last_prompt_dialog_geometry = dlg.geometry()
-                except Exception:
-                    pass
+                """Cache the dialog geometry before destroying."""
+                self._remember_geometry("prompt", dlg)
                 self._prompt_dialog = None
 
             def on_inject(ev=None):
@@ -513,15 +492,8 @@ class SafetyMixin:
 
             # Restore geometry AFTER all content is laid out to prevent layout shifts
             dlg.update_idletasks()
-            saved_geo = getattr(self, '_last_prompt_dialog_geometry', None)
-            if saved_geo:
-                dlg.geometry(self._sanitize_geometry(saved_geo))
-            else:
-                w = max(dlg.winfo_reqwidth(), 500)
-                h = max(dlg.winfo_reqheight(), 400)
-                x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-                y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-                dlg.geometry(f"{w}x{h}+{x}+{y}")
+            self._place_window(dlg, "prompt", (max(dlg.winfo_reqwidth(), 500),
+                                               max(dlg.winfo_reqheight(), 400)))
             dlg.deiconify()  # Show with correct geometry
 
             resp_text.focus_set()

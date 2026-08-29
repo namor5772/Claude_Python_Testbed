@@ -455,11 +455,7 @@ class InstructionsMixin:
 
         # Restore geometry AFTER all content is laid out, then show
         win.update_idletasks()
-        editor_geo = getattr(self, '_last_editor_geometry', None)
-        if editor_geo:
-            win.geometry(self._sanitize_geometry(editor_geo, min_w=400, min_h=300))
-        else:
-            win.geometry("700x640")
+        self._place_window(win, "editor", (700, 640), min_size=(400, 300))
         win.deiconify()
 
     def _nullify_editor_widgets(self):
@@ -477,22 +473,16 @@ class InstructionsMixin:
         self.ps_safety_button = None
 
     def _capture_editor_geometry(self):
-        """Save editor window geometry for restore on next open."""
-        try:
-            self._last_editor_geometry = self.instruction_editor_window.geometry()
-        except Exception:
-            pass
+        """Cache the editor window's geometry for restore on next open."""
+        self._remember_geometry("editor", self.instruction_editor_window)
 
     def _close_editor(self):
         """Capture geometry, destroy the editor, and nullify widget refs."""
         self._capture_editor_geometry()
         # Capture PS Safety dialog geometry before editor destroy cascades to it
         ps_dlg = getattr(self, '_ps_safety_dialog', None)
-        if ps_dlg and ps_dlg.winfo_exists():
-            try:
-                self._last_ps_safety_geometry = ps_dlg.geometry()
-            except Exception:
-                pass
+        if ps_dlg is not None:
+            self._remember_geometry("ps_safety", ps_dlg)
         self.instruction_editor_window.destroy()
         self._ps_safety_dialog = None
         self._nullify_editor_widgets()

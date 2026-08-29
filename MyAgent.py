@@ -294,6 +294,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.agent_instruction_name = ""
 
         self.setup_ui()
+        self._bind_geometry_tracking()
         self._load_last_state()
 
         try:

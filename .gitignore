@@ -65,6 +65,10 @@ heartbeat.log*
 # UnreadSummary per-pass log (repo-root fallback on Windows; macOS logs to ~/Library/Logs)
 unread_summary.log*
 
+# MyAgent window-geometry diagnostic trace (per-machine; off by default,
+# opt in with MYAGENT_GEOMETRY_DEBUG=1 to debug window-placement reports)
+geometry_debug.log*
+
 # Claude Code config
 .claude/*
 !.claude/skills/

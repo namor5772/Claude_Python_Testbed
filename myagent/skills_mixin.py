@@ -414,7 +414,7 @@ class SkillsMixin:
         self.skills_editor_window = win
 
         def _on_skills_close():
-            self._last_skills_dialog_geometry = win.geometry()
+            self._remember_geometry("skills", win)
             self._save_last_state()
             win.destroy()
 
@@ -607,9 +607,5 @@ class SkillsMixin:
 
         # Restore geometry AFTER all content is laid out, then show
         win.update_idletasks()
-        saved_geo = getattr(self, '_last_skills_dialog_geometry', None)
-        if saved_geo:
-            win.geometry(self._sanitize_geometry(saved_geo, min_w=400, min_h=300))
-        else:
-            win.geometry("900x500")
+        self._place_window(win, "skills", (900, 500), parent=parent, min_size=(400, 300))
         win.deiconify()
