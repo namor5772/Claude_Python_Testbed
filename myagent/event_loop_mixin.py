@@ -240,6 +240,17 @@ class EventLoopMixin:
             self.root.after(200, self._finish_close)
             return
         self._save_last_state()
+        # Release the instance-number lock the moment persistent state is on
+        # disk — BEFORE the potentially slow browser/MCP cleanup and chat save.
+        # Otherwise a quick close-then-relaunch (common while a user is testing,
+        # and slower still when browser automation is cleaning up) finds
+        # agent_lock_1 still held by this exiting process, claims instance 2,
+        # and restores from agent_state_2.json — so the window reopens on the
+        # wrong monitor / at a stale size. The lock only governs the instance
+        # slot; freeing it once agent_state.json is written lets the relaunch
+        # reclaim THIS instance and its geometry. (Idempotent, so the belt-and-
+        # braces call is harmless if a later close path runs.)
+        self._release_instance_lock()
         self._auto_save_on_close()
         self._cleanup_browser()
         self._disconnect_mcp_servers()
