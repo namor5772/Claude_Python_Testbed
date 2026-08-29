@@ -296,6 +296,9 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.setup_ui()
         self._bind_geometry_tracking()
         self._load_last_state()
+        # Defend the restored position against external window managers
+        # (FancyZones et al.) that reposition new windows just after they map.
+        self._start_geometry_reassert()
 
         try:
             self._save_last_state()

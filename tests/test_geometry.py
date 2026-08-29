@@ -339,6 +339,8 @@ class ApplyEntry(unittest.TestCase):
         self.assertFalse(self.h._main_zoomed)
         # a restore is not a capture: nothing is written back until the window is real
         self.assertFalse(getattr(self.h, "_geometry_dirty", False))
+        # the restored spot is remembered so an external mover can be undone
+        self.assertEqual(self.h._reassert_geo, "679x930+-723+73")
 
     def test_an_off_screen_main_falls_back_to_the_default_centred_on_primary(self):
         with rects(SINGLE):
@@ -359,6 +361,8 @@ class ApplyEntry(unittest.TestCase):
             self.h._apply_geometry_entry({"geometry": "679x930+-723+73", "main_zoomed": True})
         self.assertEqual(self.root.calls, [("geometry", "679x930+-723+73"), ("state", "zoomed")])
         self.assertTrue(self.h._main_zoomed)
+        # a maximized restore is never monitor-reclaimed
+        self.assertIsNone(self.h._reassert_geo)
 
     def test_a_legacy_chimera_is_migrated_to_a_maximized_restore(self):
         # written by the old code from a maximized window: zoomed size + normal position
@@ -395,6 +399,60 @@ class Tracking(unittest.TestCase):
         self.assertEqual(h._geo_cache(), {})
         fn(mock.Mock(widget=root))
         self.assertEqual(h._geo_cache(), {"main": "679x930+-723+73"})
+
+
+class ReclaimMonitor(unittest.TestCase):
+    """The defense against an external window manager (FancyZones) that drifts a
+    freshly-restored window to another monitor just after it maps."""
+
+    def _armed(self, root, geo="750x930+-2000+220", zoomed=False, expired=False):
+        import time
+        return host(root=root, _reassert_geo=geo, _main_zoomed=zoomed,
+                    _reassert_until=(time.monotonic() - 1 if expired else time.monotonic() + 100))
+
+    def test_monitor_index_of_center(self):
+        with rects(DUAL):
+            h = host()
+            self.assertEqual(h._monitor_index_of_center(-2000, 220, 750, 930), 1)  # left
+            self.assertEqual(h._monitor_index_of_center(600, 200, 750, 930), 0)    # primary
+            self.assertEqual(h._monitor_index_of_center(9000, 9000, 100, 100), -1)  # nowhere
+
+    def test_cross_monitor_drift_is_reclaimed(self):
+        # window restored to S1 (-2000) but an external mover put it on S2 (1300)
+        root = FakeWin("750x930+1300+300")
+        h = self._armed(root)
+        with rects(DUAL):
+            h._maybe_reclaim_monitor()
+        self.assertEqual(root.calls, [("geometry", "750x930+-2000+220")])  # yanked back to S1
+
+    def test_same_monitor_nudge_is_left_alone(self):
+        # user nudged it a little, still on S1 — must NOT be fought
+        root = FakeWin("750x930+-1800+240")
+        h = self._armed(root)
+        with rects(DUAL):
+            h._maybe_reclaim_monitor()
+        self.assertEqual(root.calls, [])
+
+    def test_after_the_arm_window_it_does_nothing(self):
+        root = FakeWin("750x930+1300+300")   # drifted to S2
+        h = self._armed(root, expired=True)
+        with rects(DUAL):
+            h._maybe_reclaim_monitor()
+        self.assertEqual(root.calls, [])     # arm window closed → deliberate move honored
+
+    def test_zoomed_or_no_target_is_a_noop(self):
+        root = FakeWin("750x930+1300+300")
+        with rects(DUAL):
+            self._armed(root, zoomed=True)._maybe_reclaim_monitor()
+            host(root=root, _reassert_geo=None)._maybe_reclaim_monitor()
+        self.assertEqual(root.calls, [])
+
+    def test_minimized_window_is_not_touched(self):
+        root = FakeWin("750x930+1300+300", state="iconic")
+        h = self._armed(root)
+        with rects(DUAL):
+            h._maybe_reclaim_monitor()
+        self.assertEqual(root.calls, [])
 
 
 if __name__ == "__main__":

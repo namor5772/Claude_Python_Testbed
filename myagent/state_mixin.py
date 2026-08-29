@@ -631,7 +631,66 @@ class StateMixin:
                 self.root.state("zoomed")
             except tk.TclError:
                 self._main_zoomed = False
+        # Remember where we placed the window so _reassert_main_geometry can
+        # reclaim it if an external window manager (PowerToys FancyZones'
+        # "open on active monitor" / "move to last zone", DisplayFusion, …)
+        # yanks it to another monitor the moment it maps — the reason the main
+        # window drifted while the dialogs (which re-assert on show) did not.
+        self._reassert_geo = None if self._main_zoomed else geo
         self._geo_log("restore-applied", applied=geo, zoomed=self._main_zoomed)
+
+    def _monitor_index_of_center(self, x, y, w, h):
+        """Index (into _monitor_rects()) of the monitor holding the window's
+        centre, or -1 if it is off every monitor."""
+        cx, cy = x + w // 2, y + h // 2
+        for i, (left, top, right, bottom) in enumerate(self._monitor_rects()):
+            if left <= cx < right and top <= cy < bottom:
+                return i
+        return -1
+
+    # Seconds after launch during which the restored monitor is defended
+    # against an external mover; long enough to cover FancyZones acting on the
+    # map event, short enough never to fight a deliberate move.
+    REASSERT_WINDOW_SECS = 1.5
+
+    def _start_geometry_reassert(self):
+        """Arm the post-launch monitor-reclaim: open a short time window during
+        which `_maybe_reclaim_monitor` (driven by the root's <Configure> and a
+        few scheduled fallbacks) pulls the window back if an external mover
+        drifts it to another monitor. No-op for a maximized restore or when no
+        specific position was restored. Scheduled from __init__ after
+        _load_last_state."""
+        if not getattr(self, "_reassert_geo", None):
+            return
+        self._reassert_until = time.monotonic() + self.REASSERT_WINDOW_SECS
+        # <Configure> catches the drift the instant it happens; these fallbacks
+        # cover the case where the mover suppresses/coalesces that event.
+        for delay in (150, 400, 800, 1200, 1500):
+            self.root.after(delay, self._maybe_reclaim_monitor)
+
+    def _maybe_reclaim_monitor(self):
+        """Within the arm window, reclaim the restored spot ONLY when the window
+        has drifted to a DIFFERENT monitor than it was restored to — the
+        external-mover (FancyZones "open on active monitor") signature. A
+        same-monitor nudge is left alone, and after the window closes it does
+        nothing, so this never fights a deliberate move."""
+        geo = getattr(self, "_reassert_geo", None)
+        if not geo or getattr(self, "_main_zoomed", False):
+            return
+        if time.monotonic() > getattr(self, "_reassert_until", 0.0):
+            return
+        try:
+            if not self.root.winfo_exists() or self.root.state() != "normal":
+                return
+            cur = self._parse_geometry(self.root.geometry())
+            tgt = self._parse_geometry(geo)
+            if not (cur and tgt):
+                return
+            if self._monitor_index_of_center(*cur) != self._monitor_index_of_center(*tgt):
+                self.root.geometry(geo)
+                self._geo_log("reassert", target=geo, drifted_from=f"{cur[2]}+{cur[3]}")
+        except tk.TclError:
+            pass
 
     def _geo_log(self, event, **fields):
         """Append one diagnostic line about a geometry save/restore. No-op
@@ -661,6 +720,7 @@ class StateMixin:
         def _on_configure(event):
             if event.widget is self.root or str(event.widget) == ".":
                 self._remember_geometry("main", self.root)
+                self._maybe_reclaim_monitor()
         self.root.bind("<Configure>", _on_configure, add="+")
 
     # ── State Persistence ───────────────────────────────────────────────
