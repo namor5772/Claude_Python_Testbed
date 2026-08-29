@@ -384,7 +384,6 @@ class SafetyMixin:
             dlg.resizable(True, True)
 
             dlg.grid_rowconfigure(1, weight=1)
-            dlg.grid_rowconfigure(3, weight=1)
             dlg.grid_columnconfigure(0, weight=1)
 
             tk.Label(
@@ -420,7 +419,7 @@ class SafetyMixin:
 
             resp_text = tk.Text(
                 resp_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
-                relief="sunken", bd=1, height=6,
+                relief="sunken", bd=1, height=7,
             )
             resp_text.grid(row=0, column=0, sticky="nsew")
             resp_sb = tk.Scrollbar(resp_frame, command=resp_text.yview)
