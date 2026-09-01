@@ -44,6 +44,8 @@ try:
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
         GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
         ANTHROPIC_PRICING, APICOST_LOG_MAX_BYTES,
+        ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
+        ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
     from myagent.helpers import rotate_log_if_needed
@@ -59,6 +61,12 @@ except Exception:
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
     ANTHROPIC_PRICING = {}
     APICOST_LOG_MAX_BYTES = 100_000
+    # Claude Fable 5.1 beta surfaces (see myagent/constants.py for the why):
+    # preserved-thinking drop_block binding + server-side refusal fallbacks.
+    ANTHROPIC_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+    ANTHROPIC_THINKING_BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
+    ANTHROPIC_SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+    ANTHROPIC_SERVER_FALLBACKS = "default"
 
     def rotate_log_if_needed(log_path, max_bytes):
         return False  # no myagent package -> no rotation; the log just grows
@@ -269,7 +277,7 @@ SELFBOT_META_TOOLS = [
                 "thinking_mode": {
                     "type": "string",
                     "enum": ["off", "adaptive", "low", "medium", "high", "xhigh", "max"],
-                    "description": "Adaptive thinking mode for newer models (optional; create inherits current). Fable/Mythos 5 are always-on — 'off' is invalid there, use 'adaptive'.",
+                    "description": "Adaptive thinking mode for newer models (optional; create inherits current). Fable/Mythos 5 and 5.1 are always-on — 'off' is invalid there, use 'adaptive'.",
                 },
                 "desktop": {"type": "boolean", "description": "Bundle Desktop tools ON (default false on create)"},
                 "browser": {"type": "boolean", "description": "Bundle Browser tools ON (default false on create)"},
@@ -881,6 +889,7 @@ else:
 FALLBACK_MODELS = [
     "claude-opus-5",
     "claude-opus-4-8",
+    "claude-fable-5-1",
     "claude-fable-5",
     "claude-sonnet-5",
     "claude-sonnet-4-6",
@@ -889,6 +898,10 @@ FALLBACK_MODELS = [
 DEFAULT_MODEL = FALLBACK_MODELS[0]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
+# Betas every call carries (server-side web search + code execution, and the
+# Files API for the code-execution file outputs). The Fable/Mythos class
+# appends its own two — see _fable_features.
+ANTHROPIC_BETAS = ["web-search-2025-03-05", "code-execution-2025-08-25", "files-api-2025-04-14"]
 # Prompt-cache breakpoint marker. 5-minute TTL (the default) is deliberate:
 # writes cost 1.25x and match ANTHROPIC_PRICING's cache-write column exactly,
 # so _get_pricing's four-bucket cost stays accurate. A "ttl": "1h" variant
@@ -915,13 +928,15 @@ DEPRECATED_MODEL_PREFIXES = (
 )
 # Exact-match aliases for adaptive-thinking models; the version-parsed
 # _is_adaptive_model backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
-ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
+ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
+                            "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5", "claude-sonnet-4-6"}
-# Claude 5 Mythos-class (Fable 5 / Mythos 5): thinking is ALWAYS ON — the API
-# rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400, and
-# sampling params (temperature/top_p/top_k) are rejected unconditionally.
+# Claude 5 Mythos-class (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is ALWAYS ON —
+# the API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400,
+# and sampling params (temperature/top_p/top_k) are rejected unconditionally.
+# Prefix-matched, so claude-fable-5-1 (2026-08-28) needed no new entry.
 ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
 # Budget-based ("manual") extended thinking — Opus/Sonnet 4.5 and Haiku 4.5.
 # claude-3-5-sonnet is deliberately excluded: extended thinking arrived with
@@ -1259,6 +1274,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # any rejecting model the version parser doesn't know yet (e.g. a future
         # Haiku tier). Populated by the stream_worker BadRequest handler.
         self._no_temperature = set()
+        # Fable/Mythos beta surfaces ("block_binding", "fallbacks") this API key
+        # turned out not to be enrolled in (a 400 naming them). Learned once per
+        # process by the stream_worker 400 rungs; _fable_features stops sending.
+        self._anthropic_unsupported = set()
         self.prompt_editor_window = None
         self.skills_editor_window = None
         self._skills_refresh_list = None            # set while the Skills Manager is open
@@ -1817,8 +1836,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return None
 
     def _is_always_on_thinking(self, model_id=None):
-        """Fable 5 / Mythos 5: thinking is always on (disable / budget_tokens are
-        HTTP 400) and sampling params are rejected unconditionally."""
+        """Fable 5 / 5.1 and Mythos 5 / 5.1: thinking is always on (disable /
+        budget_tokens are HTTP 400) and sampling params are rejected
+        unconditionally. Prefix-matched, so new minors need no entry."""
         mid = model_id or self.model or ""
         return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
 
@@ -4909,20 +4929,28 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         request dict per the current model's capabilities. Shared by the live
         request and the debug-payload preview so the two never drift.
 
-        Handles the per-family quirks: Fable/Mythos 5 thinking is always on (a
+        Handles the per-family quirks: Fable/Mythos thinking is always on (a
         stale "off" still takes the thinking branch and is sent as plain
         adaptive); adaptive thinking asks for display="summarized" so the Show
-        Thinking pane isn't blank on Fable 5 / Opus 4.7+ (their default became
+        Thinking pane isn't blank on Fable / Opus 4.7+ (their default became
         "omitted"); Sonnet 5+ "Off" is an explicit disable (omitting `thinking`
         runs adaptive there); and Opus 4.7+ / Sonnet 5+ / Fable reject
-        temperature (HTTP 400), so it's skipped for them."""
+        temperature (HTTP 400), so it's skipped for them. The Fable/Mythos
+        class also carries Fable 5.1's `thinking.block_binding` (preserved
+        thinking) and a `fallbacks` value (server-side refusal fallbacks) —
+        see _fable_features; `fallbacks` sits here under its wire name so the
+        debug dump shows it, and stream_worker moves it into extra_body
+        because anthropic 0.84.0 has no typed kwarg for it."""
         model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
         always_on = self._is_always_on_thinking()
+        fable = self._fable_features()
         if self.thinking_enabled or always_on:
             support = self._model_supports_thinking()
             kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
             if support == "adaptive":
                 kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
+                if fable and fable["block_binding"]:
+                    kwargs["thinking"]["block_binding"] = fable["block_binding"]
                 if self.thinking_mode not in ("off", "adaptive"):
                     kwargs["output_config"] = {"effort": self.thinking_mode}
             elif support == "manual":
@@ -4933,6 +4961,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 kwargs["thinking"] = {"type": "disabled"}
             if not self._rejects_temperature() and self.model not in self._no_temperature:
                 kwargs["temperature"] = self.temperature
+        if fable and fable["fallbacks"]:
+            kwargs["fallbacks"] = fable["fallbacks"]
         return kwargs
 
     @staticmethod
@@ -5637,6 +5667,131 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 total += len(str(block)) // 4
         return total
 
+    # ── Claude Fable 5.1 harness surface (2026-09-02) ──────────────────────────
+    # In-file copies of AnthropicMixin._anthropic_fable_features / _refusal_note
+    # and helpers.strip_thinking_blocks / strip_pre_fallback_blocks — SelfBot
+    # keeps its own, like _trim_history_for_context and _cache_messages, because
+    # the myagent import is the optional/stubbed kind. Rationale for each lives
+    # in myagent/constants.py (the beta constants) and CLAUDE_MYAGENT.md.
+
+    def _fable_features(self):
+        """The Fable/Mythos-only request surface for this call, or None for
+        every other model: the beta headers to add plus the
+        `thinking.block_binding` (Fable 5.1's preserved-thinking check —
+        `drop_block` makes a history edit such as the overflow trim, a system
+        prompt switch or a tool-toggle change degrade instead of 400) and
+        `fallbacks` (server-side refusal fallbacks) values to send, minus any
+        surface this process has already seen the API reject
+        (`_anthropic_unsupported`, filled by the stream_worker 400 rungs)."""
+        if not self._is_always_on_thinking():
+            return None
+        unsupported = getattr(self, "_anthropic_unsupported", set())
+        features = {"betas": [], "block_binding": None, "fallbacks": None}
+        if "block_binding" not in unsupported:
+            features["betas"].append(ANTHROPIC_THINKING_BINDING_BETA)
+            features["block_binding"] = dict(ANTHROPIC_THINKING_BLOCK_BINDING)
+        if "fallbacks" not in unsupported:
+            features["betas"].append(ANTHROPIC_SERVER_FALLBACK_BETA)
+            features["fallbacks"] = ANTHROPIC_SERVER_FALLBACKS
+        return features
+
+    @staticmethod
+    def _refusal_note(stop_details, fallbacks_requested=False):
+        """The ⚠ line for a stop_reason="refusal" response. `stop_details` is
+        whatever rode on the final message_delta — a plain dict on anthropic
+        0.84.0 (untyped there, so the SDK snapshot never copies it and
+        stream_worker captures it off the event), an object on newer SDKs, or
+        None (branch on stop_reason, never on this)."""
+        def field(name):
+            if isinstance(stop_details, dict):
+                return stop_details.get(name)
+            return getattr(stop_details, name, None) if stop_details is not None else None
+        category = field("category")
+        explanation = field("explanation")
+        recommended = field("recommended_model")
+        note = "⚠ The model declined this request (stop_reason=refusal"
+        if category:
+            note += f", category={category}"
+        note += ")"
+        if explanation:
+            note += f": {explanation}"
+        note += "\n  Any partial output above is incomplete."
+        if fallbacks_requested:
+            note += " A server-side fallback was requested but no fallback model served it"
+            if recommended:
+                note += f" — the API suggests retrying directly on {recommended}"
+            note += "."
+        note += " Rephrase, or switch the model to claude-opus-5.\n"
+        return note
+
+    @staticmethod
+    def _block_type(block):
+        return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+
+    @staticmethod
+    def _block_field(block, name):
+        return block.get(name) if isinstance(block, dict) else getattr(block, name, None)
+
+    @classmethod
+    def _strip_thinking_blocks(cls, messages):
+        """Remove every thinking / redacted_thinking block from the assistant
+        turns of `messages` IN PLACE (text and tool_use blocks stay); returns
+        the count removed. The no-beta recovery for Fable 5.1's preserved-
+        thinking check: a replayed block whose conversation prefix changed is
+        a 400 ("Invalid `signature` in `thinking` block … bound to a different
+        conversation") on enforced accounts — strip once, retry once. A turn
+        that would end up empty is left alone (an empty content list is itself
+        a 400). Handles dict blocks (loaded chats) and SDK objects alike."""
+        removed = 0
+        for msg in messages:
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            kept = [b for b in content
+                    if cls._block_type(b) not in ("thinking", "redacted_thinking")]
+            if kept and len(kept) != len(content):
+                removed += len(content) - len(kept)
+                msg["content"] = kept
+        return removed
+
+    @classmethod
+    def _strip_pre_fallback_blocks(cls, blocks):
+        """Content blocks to echo back after a server-side refusal fallback
+        switched models mid-output (a `fallback` block marks each switch).
+        Before the LAST marker only text blocks and PAIRED server-tool blocks
+        survive — the declined model's thinking and tool_use blocks are
+        neither echoed nor (since the tool loop scans the returned list)
+        executed; everything after the boundary is the serving model's own
+        turn. The markers are dropped too (ignorable audit markers, and
+        anthropic 0.84.0 can't re-serialize the unknown block type). A
+        response with no marker is returned unchanged (same list object)."""
+        last = -1
+        for i, block in enumerate(blocks):
+            if cls._block_type(block) == "fallback":
+                last = i
+        if last < 0:
+            return blocks
+        pre = blocks[:last]
+        result_ids = {cls._block_field(b, "tool_use_id") for b in pre
+                      if (cls._block_type(b) or "").endswith("_tool_result")}
+        kept, kept_use_ids = [], set()
+        for block in pre:
+            btype = cls._block_type(block) or ""
+            if btype == "text":
+                kept.append(block)
+            elif btype == "server_tool_use":
+                bid = cls._block_field(block, "id")
+                if bid in result_ids:
+                    kept.append(block)
+                    kept_use_ids.add(bid)
+            elif btype.endswith("_tool_result"):
+                if cls._block_field(block, "tool_use_id") in kept_use_ids:
+                    kept.append(block)
+        kept.extend(b for b in blocks[last + 1:] if cls._block_type(b) != "fallback")
+        return kept
+
     def _trim_history_for_context(self, messages, reported_tokens=None, reported_max=None):
         """Drop the oldest conversation rounds so `messages` fits the context window.
 
@@ -5723,6 +5878,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     "tools": tools,
                 }
                 self._apply_thinking_params(api_kwargs)
+                # Fable 5.1 surface: `fallbacks` has no typed kwarg in anthropic
+                # 0.84.0 (a typed call would raise) — extra_body merges it into
+                # the JSON body as-is; the two extra betas ride the header.
+                fable = self._fable_features()
+                if "fallbacks" in api_kwargs:
+                    api_kwargs["extra_body"] = {"fallbacks": api_kwargs.pop("fallbacks")}
+                betas = ANTHROPIC_BETAS + (fable["betas"] if fable else [])
+                stripped_thinking = False  # one-shot guard for the signature-400 rung
+                stop_details = None
 
                 for attempt in range(max_retries):
                     # Rebuilt every attempt, not once above the loop: the retry
@@ -5732,9 +5896,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     # and the rolling breakpoints belong on the post-trim tail.
                     api_kwargs["messages"] = self._cache_messages(messages)
                     try:
-                        with self.client.beta.messages.stream(
-                                betas=["web-search-2025-03-05", "code-execution-2025-08-25", "files-api-2025-04-14"],
-                                **api_kwargs) as stream:
+                        with self.client.beta.messages.stream(betas=betas, **api_kwargs) as stream:
                             in_thinking = False
                             for event in stream:
                                 if event.type == "content_block_start":
@@ -5771,6 +5933,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                                     if in_thinking:
                                         self.queue.put({"type": "thinking_end"})
                                         in_thinking = False
+                                elif event.type == "message_delta":
+                                    # stop_details (refusal category/explanation) rides
+                                    # on the delta; anthropic 0.84.0's snapshot copies
+                                    # only stop_reason/stop_sequence, so read it here.
+                                    stop_details = getattr(event.delta, "stop_details", None) or stop_details
 
                             final_message = stream.get_final_message()
                         # Extract code execution outputs (images, stdout) from final message
@@ -5836,6 +6003,46 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                             })
                             full_text = ""
                             continue
+                        # Fable 5.1's preserved-thinking check: a replayed thinking
+                        # block whose conversation prefix changed (the trim above, a
+                        # system-prompt switch, a tool-toggle change, a reloaded chat
+                        # under a different prompt) is a 400 on enforced accounts.
+                        # The drop_block binding normally has the API drop such
+                        # blocks instead; this rung is the no-beta floor — strip and
+                        # retry once. Checked BEFORE the beta-surface rungs because
+                        # this error text also names block_binding as the remedy.
+                        if (e.status_code == 400 and "signature" in emsg and "thinking" in emsg
+                                and not stripped_thinking):
+                            stripped_thinking = True
+                            removed = self._strip_thinking_blocks(messages)
+                            if removed:
+                                self.queue.put({"type": "warning", "content":
+                                    f"⚠ The API rejected {removed} replayed thinking block(s) — "
+                                    "earlier history changed since they were produced. Retrying "
+                                    "without them; the model continues without that reasoning.\n"})
+                                full_text = ""
+                                continue
+                        # A Fable beta surface this API key isn't enrolled in (the
+                        # 400 names it): learn once for the process, drop it, retry.
+                        if e.status_code == 400 and fable and fable["fallbacks"] and "fallback" in emsg:
+                            self._anthropic_unsupported.add("fallbacks")
+                            fable["fallbacks"] = None
+                            api_kwargs.pop("extra_body", None)
+                            betas = [b for b in betas if b != ANTHROPIC_SERVER_FALLBACK_BETA]
+                            self._tool_info("Server-side refusal fallbacks are not available on "
+                                            "this API key — retrying without them...\n")
+                            full_text = ""
+                            continue
+                        if (e.status_code == 400 and fable and fable["block_binding"]
+                                and ("block_binding" in emsg or "thinking-binding" in emsg)):
+                            self._anthropic_unsupported.add("block_binding")
+                            fable["block_binding"] = None
+                            api_kwargs.get("thinking", {}).pop("block_binding", None)
+                            betas = [b for b in betas if b != ANTHROPIC_THINKING_BINDING_BETA]
+                            self._tool_info("Thinking-binding controls are not available on "
+                                            "this API key — retrying without them...\n")
+                            full_text = ""
+                            continue
                         if e.status_code == 529 and attempt < max_retries - 1:
                             wait = min(2 ** attempt * 10, 90)  # 10s, 20s, 40s, 80s, 90s, 90s… (capped)
                             self.queue.put({
@@ -5847,10 +6054,49 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         else:
                             raise
 
-                # --- API cost tracking (Anthropic) — accumulate this API call ---
+                # Preserved-thinking bookkeeping (Fable 5.1+, thinking-binding beta):
+                # with the header on, every response lists the replayed thinking
+                # blocks the API dropped before the model saw them (a history edit,
+                # or blocks from another model after a mid-chat model switch).
+                # Unbilled, but the model re-plans without that reasoning.
+                transformations = getattr(final_message, "input_transformations", None) or []
+                if transformations:
+                    reasons = sorted({str((t.get("reason") if isinstance(t, dict)
+                                           else getattr(t, "reason", None)) or "unknown")
+                                      for t in transformations})
+                    self._tool_info(f"API dropped {len(transformations)} replayed thinking block(s) "
+                                    f"({', '.join(reasons)}) — earlier history changed; the model "
+                                    "continues without that reasoning.\n")
+
+                # Server-side refusal fallback: `message.model` names the model that
+                # produced this message; a `fallback_message` entry in
+                # usage.iterations is the served-by signal (covers the sticky
+                # follow-up turns too, which carry no `fallback` content block).
+                served_model = getattr(final_message, "model", None) or self.model
                 usage = getattr(final_message, "usage", None)
+                iterations = getattr(usage, "iterations", None) or []
+                fallback_ran = any(
+                    (it.get("type") if isinstance(it, dict) else getattr(it, "type", None)) == "fallback_message"
+                    for it in iterations)
+                content_blocks = self._strip_pre_fallback_blocks(list(final_message.content))
+                if fallback_ran and final_message.stop_reason != "refusal":
+                    self.queue.put({"type": "warning", "content":
+                        f"⚠ {self.model} declined this request (safety classifier) — served by "
+                        f"{served_model} via server-side fallback; this call bills at "
+                        f"{served_model} rates.\n"})
+                # The Fable classifiers can decline a request with HTTP 200 and
+                # stop_reason="refusal" (pre-output: empty content, unbilled) — without
+                # this notice the reply would just be silently blank. With fallbacks
+                # on, a refusal here means the whole chain declined.
+                if final_message.stop_reason == "refusal":
+                    self.queue.put({"type": "warning", "content": self._refusal_note(
+                        stop_details, fallbacks_requested=bool(fable and fable["fallbacks"]))})
+
+                # --- API cost tracking (Anthropic) — accumulate this API call ---
                 if usage:
-                    pricing = self._get_pricing(self.model)
+                    # Priced by the model that actually served the call (an Opus-tier
+                    # fallback bills at ITS rates), falling back to the configured row.
+                    pricing = self._get_pricing(served_model) or self._get_pricing(self.model)
                     if pricing:
                         ci = getattr(usage, "input_tokens", 0) or 0
                         co = getattr(usage, "output_tokens", 0) or 0
@@ -5873,9 +6119,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
                 if final_message.stop_reason == "tool_use":
                     # Append the full assistant message (with tool_use blocks) to history
-                    messages.append({"role": "assistant", "content": final_message.content})
+                    messages.append({"role": "assistant", "content": content_blocks})
 
-                    tool_blocks = [b for b in final_message.content if b.type == "tool_use"]
+                    tool_blocks = [b for b in content_blocks if b.type == "tool_use"]
 
                     # -- Parallel-safe tools (network I/O, pure lookups) --
                     PARALLEL_SAFE = {"csv_search", "get_skill"}
@@ -5934,7 +6180,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     break
 
             self.messages = messages
-            self.messages.append({"role": "assistant", "content": full_text})
+            # A pre-output refusal leaves full_text empty; an empty assistant
+            # message would 400 the NEXT request ("all messages must have
+            # non-empty content"), so it is simply not appended — consecutive
+            # user turns are legal and the API merges them.
+            if full_text:
+                self.messages.append({"role": "assistant", "content": full_text})
             self.queue.put({"type": "complete"})
 
         except Exception as e:
