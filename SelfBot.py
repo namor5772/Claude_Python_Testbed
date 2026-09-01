@@ -2549,6 +2549,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if name not in prompts:
             messagebox.showwarning("Not found", f"No saved prompt named '{name}'.", parent=self.prompt_editor_window)
             return
+        # GUI-only guard (2026-09-02): a prompt is a whole saved environment
+        # (text + model params + tool toggles + skill modes + safety bypasses)
+        # in the OneDrive-shared store, gone from every machine with no undo.
+        # The manage_prompts tool's delete action is deliberately NOT gated —
+        # a tool delete is the model acting on an explicit instruction.
+        if not messagebox.askyesno(
+                "Delete system prompt",
+                f"Permanently delete the saved system prompt '{name}'?\n\n"
+                "Its text and bundled environment are removed from the shared store "
+                "on every synced machine. This cannot be undone.",
+                icon="warning", default="no", parent=self.prompt_editor_window):
+            return
         prompts.pop(name)
         self._save_prompts_to_disk(prompts)
         self._refresh_prompt_list()
@@ -2750,6 +2762,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 return
             name = skill_listbox.get(sel[0])[5:]
             if name in self.skills:
+                # GUI-only guard (2026-09-02): DELETE removes the skill's whole
+                # folder (SKILL.md plus any bundled files) from the OneDrive-
+                # shared tree on every machine, with no undo. The manage_skills
+                # tool's delete action is deliberately NOT gated — a tool delete
+                # is the model acting on an explicit instruction.
+                if not messagebox.askyesno(
+                        "Delete skill",
+                        f"Permanently delete the skill '{name}'?\n\n"
+                        "Its folder (SKILL.md and any bundled files) is removed from the "
+                        "shared skills tree on every synced machine. This cannot be undone.",
+                        icon="warning", default="no", parent=win):
+                    return
                 del self.skills[name]
                 _delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()
@@ -3104,6 +3128,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         fpath = self._chat_file_path(name)
         if not os.path.exists(fpath):
             messagebox.showwarning("Not found", f"No saved chat named '{name}'.")
+            return
+        # GUI-only guard (2026-09-02): a click on DELETE removes the chat's
+        # .json AND its .txt transcript from disk with no undo. No tool path
+        # reaches this handler, so nothing model-driven is affected.
+        if not messagebox.askyesno(
+                "Delete chat",
+                f"Permanently delete the saved chat '{name}'?\n\n"
+                "Its .json file and .txt transcript are removed from saved_chats/. "
+                "This cannot be undone.",
+                icon="warning", default="no", parent=self.root):
             return
         os.remove(fpath)
         # Also remove the associated .txt export if it exists
