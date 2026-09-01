@@ -481,6 +481,19 @@ class SkillsMixin:
                 return
             name = skill_listbox.get(sel[0])[5:]
             if name in self.skills:
+                # GUI-only guard (2026-09-02): DELETE removes the skill's whole
+                # folder (SKILL.md plus any bundled files) from the OneDrive-
+                # shared tree on every machine, with no undo. The manage_skills
+                # tool's delete branch is deliberately NOT gated — tool-driven
+                # deletes are the model acting on an explicit instruction, and
+                # an unattended run has nobody to answer a dialog.
+                if not messagebox.askyesno(
+                        "Delete skill",
+                        f"Permanently delete the skill '{name}'?\n\n"
+                        "Its folder (SKILL.md and any bundled files) is removed from the "
+                        "shared skills tree on every synced machine. This cannot be undone.",
+                        icon="warning", default="no", parent=win):
+                    return
                 del self.skills[name]
                 delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()

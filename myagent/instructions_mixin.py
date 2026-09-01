@@ -597,6 +597,19 @@ class InstructionsMixin:
         if name not in instructions:
             messagebox.showwarning("Not found", f"No saved instruction named '{name}'.", parent=self.instruction_editor_window)
             return
+        # GUI-only guard (2026-09-02): a click on DELETE is one slip away from
+        # losing an instruction from the OneDrive-shared store on every
+        # machine, with no undo. The manage_instructions tool's delete branch
+        # is deliberately NOT gated — tool-driven deletes are the model acting
+        # on an explicit instruction, and an unattended run has nobody to
+        # answer a dialog.
+        if not messagebox.askyesno(
+                "Delete instruction",
+                f"Permanently delete the saved instruction '{name}'?\n\n"
+                "It is removed from the shared store on every synced machine. "
+                "This cannot be undone.",
+                icon="warning", default="no", parent=self.instruction_editor_window):
+            return
         instructions.pop(name)
         self._save_instructions_to_disk(instructions)
         self._refresh_instruction_list()
