@@ -1,8 +1,9 @@
 ================================================================================
   MyAgent.py — API Model Pricing Reference
   All prices in USD per million tokens
-  Verified: April 12, 2026 — rate audits 2026-07-31 and 2026-08-25 (see the
-  dated notes in each section; constants.py is the source of truth)
+  Verified: April 12, 2026 — rate audits 2026-07-31 and 2026-08-25, Claude
+  Fable 5.1 row added 2026-09-02 (see the dated notes in each section;
+  constants.py is the source of truth)
 ================================================================================
 
 
@@ -12,19 +13,30 @@
 
   Anthropic models include prompt caching pricing (5-minute cache writes
   and cache reads). Cache writes cost 1.25x base input; cache reads cost
-  0.1x base input.
+  0.1x base input — except Claude Fable 5.1, whose cache reads are 0.025x.
 
   Claude 5 Family (Mythos-class tier above Opus)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
+  claude-fable-5-1       $10.00   $50.00   $12.50       $0.25
   claude-fable-5         $10.00   $50.00   $12.50       $1.00
   claude-mythos-5        $10.00   $50.00   $12.50       $1.00
 
-  (Fable 5 / Mythos 5: thinking is always on — MyAgent's Thinking combo has
-   no "Off" for them, temperature is never sent, and effort goes up to
-   Xhigh/Max. Safety classifiers may decline a request with
-   stop_reason="refusal"; MyAgent surfaces this as a ⚠ warning line.)
+  (Fable 5 / 5.1 and Mythos 5 / 5.1: thinking is always on — MyAgent's
+   Thinking combo has no "Off" for them, temperature is never sent, and
+   effort goes up to Xhigh/Max. Safety classifiers may decline a request
+   with stop_reason="refusal"; MyAgent surfaces this as a ⚠ warning line
+   and, since 2026-09-02, asks the API for a server-side fallback
+   (fallbacks="default"), so a declined call may be SERVED — and billed —
+   by an Opus-tier model: the cost line then prices that call at the
+   serving model's rates and a ⚠ line names it.
+   Fable 5.1 (added 2026-09-02; released 2026-08-28) is the one Anthropic
+   row whose cache reads are NOT 0.1x input: $0.25/MTok = 0.025x, a
+   quarter of Fable 5's rate and half of Opus 5's — which is why it has
+   its own row above the "claude-fable-5" prefix. Mythos 5.1's cache-read
+   rate was open at launch, so it deliberately falls through to the
+   mythos-5 row's conservative $1.00 until confirmed.)
 
   Claude 4.5+ Family (Current Generation)
   ──────────────────────────────────────────────────────────────────────────

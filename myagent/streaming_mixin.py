@@ -344,10 +344,12 @@ class StreamingMixin:
                 "messages": display_msgs,
             }
             model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-            # Mirror _stream_anthropic_call: Fable/Mythos 5 always take the
-            # thinking branch (thinking can't be disabled on them).
+            # Mirror _stream_anthropic_call: Fable/Mythos always take the
+            # thinking branch (thinking can't be disabled on them), and carry
+            # the 5.1 block-binding + fallbacks surface.
             always_on = (self.provider == "Anthropic"
                          and self._is_anthropic_always_on_thinking())
+            fable = self._anthropic_fable_features() if self.provider == "Anthropic" else None
             if self.thinking_enabled or always_on:
                 support = self._model_supports_thinking()
                 payload["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
@@ -355,6 +357,8 @@ class StreamingMixin:
                     payload["thinking"] = {"type": "adaptive"}
                     if self.provider == "Anthropic":
                         payload["thinking"]["display"] = "summarized"
+                        if fable and fable["block_binding"]:
+                            payload["thinking"]["block_binding"] = fable["block_binding"]
                     if self.thinking_mode not in ("off", "adaptive"):
                         payload["output_config"] = {"effort": self.thinking_mode}
                 elif support == "manual":
@@ -366,6 +370,8 @@ class StreamingMixin:
                         or (not self._anthropic_rejects_temperature()
                             and self.model not in self._anthropic_no_temperature)):
                     payload["temperature"] = self.temperature
+            if fable and fable["fallbacks"]:
+                payload["fallbacks"] = fable["fallbacks"]
         return self._debug_render(payload)
 
     def _get_tools(self):
@@ -1153,7 +1159,12 @@ class StreamingMixin:
                 # Accumulate cost
                 if usage:
                     had_usage = True
-                    pricing = self._get_pricing(self.provider, self.model)
+                    # Price by the model that actually produced the message when
+                    # the provider reports one (Anthropic: a server-side refusal
+                    # fallback serves the call on an Opus-tier model at ITS
+                    # rates), falling back to the configured model's row.
+                    pricing = (self._get_pricing(self.provider, usage.get("model") or self.model)
+                               or self._get_pricing(self.provider, self.model))
                     # xAI reports the authoritative billed cost per call
                     # (cost_in_usd_ticks → cost_usd, set in _stream_xai_events).
                     # Prefer it over the table estimate: it already includes

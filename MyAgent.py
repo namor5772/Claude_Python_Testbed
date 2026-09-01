@@ -198,6 +198,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # Anthropic models (Opus 4.7+) that removed temperature/top_p/top_k and 400
         # if sent. Same learn-once-skip-after pattern as the OpenAI cache above.
         self._anthropic_no_temperature = set()  # model_ids that rejected temperature
+        # Fable/Mythos beta surfaces ("block_binding", "fallbacks") the org turned
+        # out not to be enrolled in (a 400 naming them). Learned once per session
+        # by _stream_anthropic_call; _anthropic_fable_features stops sending them.
+        self._anthropic_unsupported = set()
         # Kimi models that rejected the reasoning_content round-trip with a 400
         # (a future model without Preserved Thinking support). Learn once, then
         # _kimi_include_reasoning skips sending reasoning back for that model.

@@ -36,6 +36,91 @@ def estimate_content_tokens(content):
     return total
 
 
+def _block_type(block):
+    """`type` of a content block that may be a dict (tool_result / translated
+    providers) or an Anthropic SDK block object (assistant turns, appended
+    verbatim from final_message.content)."""
+    return block.get("type") if isinstance(block, dict) else getattr(block, "type", None)
+
+
+def _block_field(block, name):
+    return block.get(name) if isinstance(block, dict) else getattr(block, name, None)
+
+
+def strip_thinking_blocks(messages):
+    """Remove every thinking / redacted_thinking block from the assistant turns
+    of `messages` IN PLACE (their text and tool_use blocks stay). Returns the
+    number of blocks removed.
+
+    The no-beta recovery for Claude Fable 5.1's preserved-thinking check: a 5.1
+    thinking block's signature is bound to the conversation prefix that produced
+    it, so replaying one after that prefix changed is a 400 ("Invalid `signature`
+    in `thinking` block ... bound to a different conversation") on enforced
+    accounts. Stripping the blocks and retrying once lets the turn proceed
+    without the reasoning they carried — a one-time recovery, not a steady
+    state (MyAgent's steady state is `block_binding: drop_block` under the
+    thinking-binding-controls beta, which has the API drop them instead). An
+    assistant turn that would end up EMPTY is left alone: an empty content list
+    is itself a 400, and the retry loop's one-shot guard then surfaces the
+    original error rather than looping."""
+    removed = 0
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        kept = [b for b in content
+                if _block_type(b) not in ("thinking", "redacted_thinking")]
+        if kept and len(kept) != len(content):
+            removed += len(content) - len(kept)
+            msg["content"] = kept
+    return removed
+
+
+def strip_pre_fallback_blocks(blocks):
+    """Content blocks to echo back from a response that switched models via a
+    server-side refusal fallback (a `fallback` block marks each switch point).
+
+    Everything the declined model produced BEFORE the last fallback block is
+    not part of the served response: its thinking / redacted_thinking and
+    tool_use blocks must not be echoed (the fallback model never saw them and
+    their ids would have no tool_result — the API's own echo rule), so only
+    text blocks and PAIRED server-tool blocks (a server_tool_use with its
+    *_tool_result before the boundary) survive from that partial; everything
+    after the boundary is the serving model's own turn and echoes normally. The
+    fallback markers are dropped too — the API treats them as ignorable audit
+    markers, and anthropic 0.84.0 parses the unknown block type into a
+    text-block shell it cannot re-serialize. Because the pre-boundary tool_use
+    blocks are gone, stream_worker's tool dispatch naturally executes only the
+    serving model's calls. A response with no fallback block is returned
+    unchanged (same list object)."""
+    last = -1
+    for i, block in enumerate(blocks):
+        if _block_type(block) == "fallback":
+            last = i
+    if last < 0:
+        return blocks
+    pre = blocks[:last]
+    result_ids = {_block_field(b, "tool_use_id") for b in pre
+                  if (_block_type(b) or "").endswith("_tool_result")}
+    kept, kept_use_ids = [], set()
+    for block in pre:
+        btype = _block_type(block) or ""
+        if btype == "text":
+            kept.append(block)
+        elif btype == "server_tool_use":
+            bid = _block_field(block, "id")
+            if bid in result_ids:
+                kept.append(block)
+                kept_use_ids.add(bid)
+        elif btype.endswith("_tool_result"):
+            if _block_field(block, "tool_use_id") in kept_use_ids:
+                kept.append(block)
+    kept.extend(b for b in blocks[last + 1:] if _block_type(b) != "fallback")
+    return kept
+
+
 def parse_overflow_counts(msg):
     """Extract (reported_tokens, reported_max) from a context-overflow 400
     message like 'prompt is too long: 1,597,842 tokens > 1,000,000 maximum'.

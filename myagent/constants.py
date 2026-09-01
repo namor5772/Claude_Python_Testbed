@@ -508,7 +508,7 @@ META_TOOLS = [
                 "thinking_effort": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "xhigh", "max"],
-                    "description": "Thinking effort level (optional for update; create inherits current). 'xhigh' needs Opus 4.7+/Fable 5 (or OpenAI gpt-5.2+); 'max' needs Anthropic Opus 4.6+/Fable 5.",
+                    "description": "Thinking effort level (optional for update; create inherits current). 'xhigh' needs Opus 4.7+/Fable 5+ (or OpenAI gpt-5.2+); 'max' needs Anthropic Opus 4.6+/Fable 5+.",
                 },
                 "thinking_budget": {
                     "type": "integer",
@@ -520,8 +520,8 @@ META_TOOLS = [
                     "description": (
                         "Thinking/reasoning mode (optional for update; create inherits current). "
                         "Anthropic adaptive: off/adaptive/low/medium/high/xhigh/max ('xhigh' Opus 4.7+/"
-                        "Fable 5; 'max' Opus 4.6+/Fable 5). Fable 5 / Mythos 5 have ALWAYS-ON thinking — "
-                        "'off' is invalid for them; use 'adaptive'. "
+                        "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 and Mythos 5 / 5.1 have "
+                        "ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
                         "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh. Lower-cased to "
                         "match the stored value."
                     ),
@@ -1296,6 +1296,7 @@ else:
 FALLBACK_MODELS = [
     "claude-opus-5",
     "claude-opus-4-8",
+    "claude-fable-5-1",
     "claude-fable-5",
     "claude-sonnet-5",
     "claude-sonnet-4-6",
@@ -1327,16 +1328,43 @@ ANTHROPIC_DEPRECATED_MODEL_PREFIXES = (
     "claude-3",              # every Claude 3.x — fully retired (last 2026-04-19)
     "claude-2",              # Claude 2.x — retired
 )
-ADAPTIVE_THINKING_MODELS = {"claude-fable-5", "claude-mythos-5",
+ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
+                            "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5", "claude-sonnet-4-6"}
-# Claude 5 Mythos-class models (Fable 5 / Mythos 5): thinking is ALWAYS ON.
-# The API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400 —
-# only omitting the param or {"type": "adaptive"} is accepted, and sampling
-# params (temperature/top_p/top_k) are rejected unconditionally. The UI drops
-# the "Off" mode for these and the streaming path always takes the thinking branch.
+# Claude 5 Mythos-class models (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is
+# ALWAYS ON. The API rejects thinking={"type": "disabled"} and budget_tokens with
+# HTTP 400 — only omitting the param or {"type": "adaptive"} is accepted, and
+# sampling params (temperature/top_p/top_k) are rejected unconditionally. The UI
+# drops the "Off" mode for these and the streaming path always takes the thinking
+# branch. Prefix-matched, so claude-fable-5-1 (2026-08-28) needed no new entry.
 ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
+# Claude Fable 5.1 / Mythos 5.1 added two beta surfaces that MyAgent sends for the
+# whole always-on class (Fable 5 / Mythos 5 accept both and simply never act on
+# the binding check), each learned-off per session by _stream_anthropic_call if
+# the org turns out not to be enrolled (see App._anthropic_unsupported):
+#   - PRESERVED THINKING: a 5.1 thinking block's signature is bound to the
+#     conversation prefix that produced it, so any history edit — MyAgent's
+#     context-overflow trim is one — invalidates every later block: a 400 on
+#     enforced accounts (created on/after 2026-08-31, and every account on future
+#     models). `block_binding.prefix_mismatch_behavior: "drop_block"` under this
+#     beta makes the API DROP the stale blocks (unbilled) and proceed, reporting
+#     each in the response's `input_transformations` — the production setting
+#     the migration guide recommends for a harness that degrades rather than
+#     fails. Live-verified 2026-09-02: a replayed block after a prefix edit came
+#     back HTTP 200 with reason=prefix_binding_mismatch.
+#   - SERVER-SIDE REFUSAL FALLBACKS: the Fable safety classifiers can decline a
+#     request (HTTP 200, stop_reason="refusal", possibly before any output).
+#     `fallbacks: "default"` under this beta re-runs the same request on an
+#     Opus-tier model inside the same call, routed by refusal category, so an
+#     unattended run completes instead of ending silently. The serving model
+#     comes back in message.model and bills at ITS rates — stream_worker prices
+#     each call by that id. Not typed in anthropic 0.84.0: sent via extra_body.
+ANTHROPIC_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
+ANTHROPIC_THINKING_BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
+ANTHROPIC_SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+ANTHROPIC_SERVER_FALLBACKS = "default"
 # Budget-based ("manual") extended thinking. Claude 3.5 Sonnet is intentionally
 # excluded: extended thinking arrived with Claude 3.7 / Claude 4, so sending a
 # thinking block to a 3.5 model returns HTTP 400. (Opus 4 / 4.1 / Sonnet 4 also
@@ -3052,7 +3080,14 @@ ANTHROPIC_PRICING = {
     # Retired generations (Claude 2.x/3.x/3.5, Opus 4.0/4.1, Sonnet 4.0) were
     # dropped in the 2026-07 audit — the API rejects their ids, so they can
     # never bill (Opus 4.1 retired 2026-08-05 and has left models.list()).
-    # Claude 5 family (Mythos-class tier above Opus)
+    # Claude 5 family (Mythos-class tier above Opus). Fable 5.1 (2026-08-28)
+    # keeps Fable 5's per-token rates but reads its prompt cache at $0.25/MTok
+    # (0.025x input — every other row is 0.1x), so it needs its OWN row: the
+    # longest-prefix match would otherwise bill 5.1's cache reads at Fable 5's
+    # $1.00, 4x too high. Mythos 5.1's cache-read rate was open at launch, so it
+    # deliberately falls through to the mythos-5 row (the conservative $1.00)
+    # until confirmed — over-reporting beats hiding spend in a cost tracker.
+    "claude-fable-5-1":    (10.00, 50.00, 12.50, 0.25),
     "claude-fable-5":      (10.00, 50.00, 12.50, 1.00),
     "claude-mythos-5":     (10.00, 50.00, 12.50, 1.00),
     # Opus 5 — drop-in successor to Opus 4.8 at the same rates

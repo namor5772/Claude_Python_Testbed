@@ -31,6 +31,17 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-fable-5"): {
             "input": 1e-05, "output": 5e-05,
             "cache_write": 1.25e-05, "cache_read": 1e-06},
+        # Fable 5.1: same per-token rates as Fable 5 but cache reads at
+        # $0.25/MTok (0.025x input) — it MUST out-rank the "claude-fable-5"
+        # prefix, or its cache reads would bill 4x too high.
+        ("Anthropic", "claude-fable-5-1"): {
+            "input": 1e-05, "output": 5e-05,
+            "cache_write": 1.25e-05, "cache_read": 2.5e-07},
+        # Mythos 5.1's cache-read rate was open at launch: it deliberately
+        # falls through to the mythos-5 row (the conservative $1.00).
+        ("Anthropic", "claude-mythos-5-1"): {
+            "input": 1e-05, "output": 5e-05,
+            "cache_write": 1.25e-05, "cache_read": 1e-06},
         # Launched as intro pricing through 2026-08-31 ($2/$10); the pricing
         # page made it the permanent standard rate (checked 2026-08-25) —
         # there is no September flip to $3/$15.

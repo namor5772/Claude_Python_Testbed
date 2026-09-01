@@ -16,6 +16,14 @@ from myagent.ui_mixin import UIMixin
 
 # model -> (always_on, rejects_temp, max_effort, xhigh_effort, adaptive, mode_values)
 EXPECTED = {
+    # Fable 5.1 / Mythos 5.1 (2026-08-28) ride the same prefix rules as Fable 5:
+    # always-on adaptive thinking, no sampling params, effort through Max
+    # (live Models API capability tree, 2026-09-02: effort low..max all True,
+    # thinking types enabled=False / adaptive=True).
+    "claude-fable-5-1":           (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-mythos-5-1":          (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-fable-5":             (True,  True,  True,  True,  True,
                                    ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-mythos-5":            (True,  True,  True,  True,  True,
@@ -48,6 +56,8 @@ EXPECTED = {
 
 # model -> omitting the thinking param runs adaptive (True) vs thinking-off
 THINKING_DEFAULT_ON = {
+    "claude-fable-5-1": True,
+    "claude-mythos-5-1": True,
     "claude-fable-5": True,
     "claude-mythos-5": True,
     # Opus 5 runs adaptive thinking on omission (unlike Opus 4.8/4.7) — the

@@ -17,7 +17,7 @@ Commit the current modifications and push to origin. Act fast — this is a simp
 4. Draft a one-line subject (under 70 chars, imperative present tense matching repo style) and optional 2-4 line body. Focus on the *why* — the diff shows the *what*.
 5. Commit via HEREDOC to preserve formatting, ending with:
    ```
-   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+   Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
    ```
 6. Push to the current branch's origin: `git push origin $(git rev-parse --abbrev-ref HEAD)`.
 7. Report: commit hash, subject, and the `<old>..<new>` range that was pushed.
