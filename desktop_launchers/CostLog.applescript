@@ -1,8 +1,9 @@
 -- API Cost Log.app — Desktop launcher that opens MyAgent's API cost log for examination.
 -- Per-machine artifact (absolute repo path); rebuild with rebuild.sh if the repo
 -- moves. Opens a Terminal pager (the bundled view_costlog.command) showing a spend
--- summary first (totals, today, this month, by provider, by model), then every
--- logged run — scrollable & searchable.
+-- summary first (totals, today, this month, then by machine / provider / model /
+-- instruction — over all history and again for the current month only), then
+-- every logged run — scrollable & searchable.
 --
 -- Deliberately TCC-free: `open -a Terminal` of a .command launches Terminal with
 -- no "control Terminal" Apple Events consent — which a `tell application

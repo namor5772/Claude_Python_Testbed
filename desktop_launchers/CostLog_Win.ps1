@@ -1,7 +1,9 @@
 # CostLog_Win.ps1 -- Desktop-shortcut viewer for the MyAgent/SelfBot API cost
 # log (Windows twin of CostLog.applescript / view_costlog.command). Shows a
-# spend summary first (grand total, today, this month, by machine, by provider,
-# by model), then every run most-recent-first WITH its individual cost -- the
+# spend summary first (grand total, today, this month, then by machine, by
+# provider, by model and by instruction -- each rollup twice since 2026-09-02:
+# once over all history, once over the current month only, under a THIS MONTH
+# heading), then every run most-recent-first WITH its individual cost -- the
 # per-run cost column is rendered with fixed-width format strings, placed
 # before the model name, so a narrow console can never drop it (see the FULL
 # LOG comment below). Since 2026-08-03 each machine
@@ -82,6 +84,40 @@ if (Test-Path -LiteralPath $repoLog) {
     $logs += [pscustomobject]@{ Path = $repoLog; Machine = "$env:COMPUTERNAME (unmigrated)" }
 }
 
+# One rollup block -- by machine, by provider, by model and (only for rows
+# that carry a name) by instruction, each highest spend first -- for a row
+# set. Called twice since 2026-09-02: over every row (the lifetime block,
+# whose output is unchanged) and over the current month's rows. $qual lands
+# in each heading ("By machine (this month):", "By model (this month; highest
+# spend first):") so the two blocks stay distinguishable while paging.
+function Get-Rollups([object[]]$set, [string]$qual) {
+    $sfx  = if ($qual) { " ($qual)" } else { '' }
+    $lead = if ($qual) { "$qual; " } else { '' }
+    $lines = @('', "  By machine${sfx}:")
+    $lines += @($set | Group-Object Machine |
+        Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
+        ForEach-Object { '    {0,-24} ${1,10:N4}  ({2} runs)' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+    $lines += @('', "  By provider${sfx}:")
+    $lines += @($set | Group-Object Provider |
+        Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
+        ForEach-Object { '    {0,-12} ${1,10:N4}  ({2} runs)' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+    $lines += @('', "  By model (${lead}highest spend first):")
+    $lines += @($set | Group-Object Model |
+        Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
+        ForEach-Object { '    {0,-32} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+    # Only rows that carry an instruction name (2026-08-16 lines onward;
+    # ad-hoc runs and older history have none) -- a "(none)" bucket would
+    # just restate the block's total for as long as the old lines dominate.
+    $named = @($set | Where-Object { $_.Instr -ne '' })
+    if ($named.Count -gt 0) {
+        $lines += @('', "  By instruction (${lead}highest spend first; runs logged with a name):")
+        $lines += @($named | Group-Object Instr |
+            Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
+            ForEach-Object { '    {0,-40} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+    }
+    return $lines
+}
+
 try {
     if ($logs.Count -eq 0) {
         Write-Host "No API cost log found."
@@ -124,33 +160,23 @@ try {
         $total    = ($rows | Measure-Object Cost -Sum).Sum
         $today    = (Get-Date).ToString('yyyy-MM-dd')
         $month    = (Get-Date).ToString('yyyy-MM')
+        $monthRows = @($rows | Where-Object { $_.Time.StartsWith($month) })
         $todaySum = [double]($rows | Where-Object { $_.Time.StartsWith($today) } | Measure-Object Cost -Sum).Sum
-        $monthSum = [double]($rows | Where-Object { $_.Time.StartsWith($month) } | Measure-Object Cost -Sum).Sum
+        $monthSum = [double]($monthRows | Measure-Object Cost -Sum).Sum
         $out += ('  {0} runs - ${1:N4} total' -f $rows.Count, $total)
         $out += ('  span: {0}  ->  {1}' -f $rows[0].Time, $rows[-1].Time)
         $out += ('  today ({0}):      ${1:N4}' -f $today, $todaySum)
         $out += ('  this month ({0}): ${1:N4}' -f $month, $monthSum)
-        $out += @('', '  By machine:')
-        $out += ($rows | Group-Object Machine |
-            Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
-            ForEach-Object { '    {0,-24} ${1,10:N4}  ({2} runs)' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
-        $out += @('', '  By provider:')
-        $out += ($rows | Group-Object Provider |
-            Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
-            ForEach-Object { '    {0,-12} ${1,10:N4}  ({2} runs)' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
-        $out += @('', '  By model (highest spend first):')
-        $out += ($rows | Group-Object Model |
-            Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
-            ForEach-Object { '    {0,-32} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
-        # Only rows that carry an instruction name (2026-08-16 lines onward;
-        # ad-hoc runs and older history have none) -- a "(none)" bucket would
-        # just restate the grand total for as long as the old lines dominate.
-        $named = @($rows | Where-Object { $_.Instr -ne '' })
-        if ($named.Count -gt 0) {
-            $out += @('', '  By instruction (highest spend first; runs logged with a name):')
-            $out += ($named | Group-Object Instr |
-                Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
-                ForEach-Object { '    {0,-40} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+        $out += Get-Rollups $rows ''
+        # The same four rollups over the current month only (2026-09-02): the
+        # lifetime block is dominated by history, so it can't show where THIS
+        # month's spend is going.
+        $out += @('', "THIS MONTH ($month)")
+        if ($monthRows.Count -eq 0) {
+            $out += '  (no runs logged this month)'
+        } else {
+            $out += ('  {0} runs - ${1:N4}' -f $monthRows.Count, $monthSum)
+            $out += Get-Rollups $monthRows 'this month'
         }
     }
     $out += @('', ('=' * 21 + ' FULL LOG (most recent first) ' + '=' * 21), '')

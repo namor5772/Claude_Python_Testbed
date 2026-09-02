@@ -24,7 +24,7 @@ affected either way — launchd runs the venv python directly.)
 | `My Agent.app` | `MyAgent_launcher.applescript` | `icon_myagent_master.png` (blue robot face — googly eyes, gold-tipped antenna) | Launches `MyAgent.py` detached. No launch-or-focus: MyAgent is multi-instance by design (each claims the lowest free lock number), so every double-click starts a fresh agent |
 | `SelfBot.app` | `SelfBot_launcher.applescript` | `icon_selfbot_master.png` (anxious cross-eyed googly robot; its thought bubble holds a smaller copy of itself, and *its* bubble a smaller copy again — a self-referential Droste recursion) | Launches a NEW `SelfBot.py` instance each time (solo). No launch-or-focus: SelfBot is a two-instance app (the second self-chats with the first), so double-click twice for the pair — SelfBot.py cascades the 2nd window so they don't stack. The auto-positioned side-by-side duo layout is `LaunchSelfBot.bat`'s job |
 | `Heartbeat Log.app` | `HeartbeatLog.applescript` (+ `view_heartbeat.command`) | `icon_heartbeat_master.png` (EKG monitor with a googly-eyed heart) | Opens `~/Library/Logs/myagent/heartbeat.log` in a Terminal pager — meaningful events first (idle `nothing found` ticks hidden), then the full log; scrollable & searchable in `less`. A *viewer*, not a runner |
-| `API Cost Log.app` | `CostLog.applescript` (+ `view_costlog.command`) | `icon_costlog_master.png` (gold `$` coin with googly eyes on money-green, rising cost bars) | Opens the API cost log in a Terminal pager — aggregating every machine's `APICostLog_<machine>.txt` from `<OneDrive>/MyAppShare` (plus any unmigrated repo-root `APICostLog.txt`): a spend summary first (grand total, today, this month, by machine, by provider, by model), then every run most-recent-first. A *viewer*, not a runner |
+| `API Cost Log.app` | `CostLog.applescript` (+ `view_costlog.command`) | `icon_costlog_master.png` (gold `$` coin with googly eyes on money-green, rising cost bars) | Opens the API cost log in a Terminal pager — aggregating every machine's `APICostLog_<machine>.txt` from `<OneDrive>/MyAppShare` (plus any unmigrated repo-root `APICostLog.txt`): a spend summary first (grand total, today, this month, by machine, by provider, by model, by instruction — each rollup over all history and again for the current month only), then every run most-recent-first. A *viewer*, not a runner |
 | `TodoList.app` | `TodoList_launcher.applescript` | `icon_todolist_master.png` (clipboard with a googly-eyed pencil ticking the last urgent item) | Launches `TodoList.py` detached; launch-or-focus like CSVEditor — TodoList's `todos.json` is OneDrive-synced, so a second local instance would race the first's 5-second sync poll |
 | `TodoList (Native).app` | `TodoListNative_launcher.applescript` | `icon_todolist_native_master.png` (the same clipboard with a deep-blue `C++` badge top-left, derived by `make_todolist_native_icon.py`) | Launches `TodoList.exe` — the native C++/Cocoa port built from `TodoList.mm` by `./build_todolist_native.sh` (repo root; run it once per machine, the binary is gitignored). Launch-or-focus across BOTH implementations: it focuses a running `TodoList.exe` *or* `TodoList.py` before launching, since either pair would race the shared 5-second sync poll. Shows a "build it first" dialog if the exe is missing |
 
@@ -124,7 +124,9 @@ syncs them all everywhere — see `myagent/datapaths.py`), so
 repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
 `awk -F';'` builds a spend summary — grand total, today, this month, by
 machine, by provider, by model (highest spend first) and, for rows that carry
-one, by instruction — before listing every run most-recent-first **with its
+one, by instruction, then (since 2026-09-02) the same four rollups again over
+the current month only under a `THIS MONTH (yyyy-MM)` heading, each block
+built by one shared `rollups` shell function — before listing every run most-recent-first **with its
 individual cost** via `column -t -s';'` (columns: DATE/TIME, MACHINE, PROVIDER,
 COST(USD), TIME(sec), CALLS, MODEL, PARAMETERS, INSTRUCTION; empty mid-row
 fields print as `-` because BSD `column -t` collapses consecutive delimiters).
@@ -358,7 +360,9 @@ events first via `-notmatch 'nothing found'`, then the full log);
 `CostLog_Win.ps1` aggregates every machine's `;`-delimited
 `APICostLog_<machine>.txt` from `<OneDrive>\MyAppShare` (plus any unmigrated
 repo-root `APICostLog.txt`) into a spend summary (grand total, today, this
-month, by machine, by provider, by model, by instruction) then lists every run
+month, by machine, by provider, by model, by instruction — and, since
+2026-09-02, those four rollups again over the current month only under a
+`THIS MONTH` heading, both blocks from one `Get-Rollups` function) then lists every run
 most-recent-first with its cost, TIME(sec), CALLS, MODEL, PARAMETERS and
 INSTRUCTION columns (fixed-width format strings, console widened to 190 best-effort). Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On

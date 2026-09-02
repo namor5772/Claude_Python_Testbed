@@ -2,7 +2,9 @@
 # view_costlog.command — opened by the "API Cost Log" desktop launcher.
 #
 # Shows the MyAgent/SelfBot API cost log for examination: a spend summary first
-# (grand total, today, this month, by machine, by provider, by model), then
+# (grand total, today, this month, then by machine, by provider, by model and
+# by instruction — each rollup twice since 2026-09-02: once over all history,
+# once over the current month only, under a THIS MONTH heading), then
 # every logged run (most recent first) WITH its individual cost, in a
 # scrollable, searchable pager. The cost column sits before the model name so
 # a narrow terminal wraps only the model tail, never hides the cost (matching
@@ -94,6 +96,47 @@ for i in "${!LOGS[@]}"; do
     NF>=8 { print $0 ";" M }' "${LOGS[$i]}"
 done | sort -t';' -k1,1 > "$MERGED"
 
+# One rollup bucket — "    <key> $<sum>  (<count><suffix>)" lines, highest
+# spend first — over the merged rows whose timestamp starts with $2 ("" =
+# every row), keyed on merged field $1 (2 provider, 3 model, 7 instruction,
+# 9 machine); $3 pads the key column, $4 is the count suffix (" runs" / "").
+# Rows with an empty key are skipped (only ever the instruction field). The
+# format string is built in the shell (awk -v turns its \n into a newline)
+# rather than with printf's "*" width, which not every awk supports.
+bucket() {
+  local fmt="    %-$3s \$%10.4f  (%d$4)\n"
+  awk -F';' -v K="$1" -v P="$2" 'NF>=9 && substr($1,1,length(P))==P && $K!="" { m[$K]+=$4; c[$K]++ }
+    END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
+    | sort -rn | awk -F'\t' -v FMT="$fmt" '{ printf FMT, $2, $1+0, $3 }'
+}
+
+# One rollup block — by machine, by provider, by model and (only when a row
+# carries a name) by instruction — over the rows whose timestamp starts with
+# $1. Called twice since 2026-09-02: with "" (the lifetime block) and with
+# the current "YYYY-MM" (the THIS MONTH block). $2 is the heading qualifier
+# ("" / "this month") so the two blocks stay distinguishable while paging.
+rollups() {
+  local sfx="" lead=""
+  if [ -n "$2" ]; then sfx=" ($2)"; lead="$2; "; fi
+  echo
+  echo "  By machine${sfx}:"
+  bucket 9 "$1" 24 " runs"
+  echo
+  echo "  By provider${sfx}:"
+  bucket 2 "$1" 12 " runs"
+  echo
+  echo "  By model (${lead}highest spend first):"
+  bucket 3 "$1" 32 ""
+  # Only rows that carry an instruction name (2026-08-16 lines onward; ad-hoc
+  # runs and older history have none) — a "(none)" bucket would just restate
+  # the block's total for as long as the old lines dominate.
+  if awk -F';' -v P="$1" 'NF>=9 && substr($1,1,length(P))==P && $7!="" { found=1 } END { exit !found }' "$MERGED"; then
+    echo
+    echo "  By instruction (${lead}highest spend first; runs logged with a name):"
+    bucket 7 "$1" 40 ""
+  fi
+}
+
 {
   echo "API Cost Log — all machines"
   printf '  sources:'
@@ -102,42 +145,38 @@ done | sort -t';' -k1,1 > "$MERGED"
   echo "════════════════════════════════════════════════════════════════════════════"
   echo
   echo "SUMMARY"
-  awk -F';' -v TODAY="$(date +%Y-%m-%d)" -v MONTH="$(date +%Y-%m)" '
-    NF>=9 {
-      c=$4+0; total+=c; n++;
-      mach[$9]+=c; machn[$9]++;
-      prov[$2]+=c; provn[$2]++;
-      d=substr($1,1,10); mo=substr($1,1,7);
-      if (d==TODAY) today+=c;
-      if (mo==MONTH) month+=c;
-      if (n==1) first=$1;
-      last=$1;
-    }
-    END {
-      if (n==0) { print "  (no priced runs logged yet)"; exit }
-      printf "  %d runs · $%.4f total\n", n, total;
-      printf "  span: %s  →  %s\n", first, last;
-      printf "  today (%s):      $%.4f\n", TODAY, today+0;
-      printf "  this month (%s): $%.4f\n", MONTH, month+0;
-      print "";
-      print "  By machine:";
-      for (m in mach) printf "    %-24s $%10.4f  (%d runs)\n", m, mach[m], machn[m];
-      print "";
-      print "  By provider:";
-      for (p in prov) printf "    %-12s $%10.4f  (%d runs)\n", p, prov[p], provn[p];
-    }' "$MERGED"
-  echo
-  echo "  By model (highest spend first):"
-  awk -F';' 'NF>=9 { m[$3]+=$4; c[$3]++ } END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
-    | sort -rn | awk -F'\t' '{ printf "    %-32s $%10.4f  (%d)\n", $2, $1+0, $3 }'
-  # Only rows that carry an instruction name (2026-08-16 lines onward; ad-hoc
-  # runs and older history have none) — a "(none)" bucket would just restate
-  # the grand total for as long as the old lines dominate.
-  if awk -F';' 'NF>=9 && $7!="" { found=1 } END { exit !found }' "$MERGED"; then
+  TODAY="$(date +%Y-%m-%d)"; MONTH="$(date +%Y-%m)"
+  if awk -F';' 'NF>=9 { found=1 } END { exit !found }' "$MERGED"; then
+    awk -F';' -v TODAY="$TODAY" -v MONTH="$MONTH" '
+      NF>=9 {
+        c=$4+0; total+=c; n++;
+        d=substr($1,1,10); mo=substr($1,1,7);
+        if (d==TODAY) today+=c;
+        if (mo==MONTH) month+=c;
+        if (n==1) first=$1;
+        last=$1;
+      }
+      END {
+        printf "  %d runs · $%.4f total\n", n, total;
+        printf "  span: %s  →  %s\n", first, last;
+        printf "  today (%s):      $%.4f\n", TODAY, today+0;
+        printf "  this month (%s): $%.4f\n", MONTH, month+0;
+      }' "$MERGED"
+    rollups "" ""
+    # The same four rollups over the current month only (2026-09-02): the
+    # lifetime block is dominated by history, so it can't show where THIS
+    # month's spend is going.
     echo
-    echo "  By instruction (highest spend first; runs logged with a name):"
-    awk -F';' 'NF>=9 && $7!="" { m[$7]+=$4; c[$7]++ } END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
-      | sort -rn | awk -F'\t' '{ printf "    %-40s $%10.4f  (%d)\n", $2, $1+0, $3 }'
+    echo "THIS MONTH ($MONTH)"
+    if awk -F';' -v MONTH="$MONTH" 'NF>=9 && substr($1,1,7)==MONTH { found=1 } END { exit !found }' "$MERGED"; then
+      awk -F';' -v MONTH="$MONTH" 'NF>=9 && substr($1,1,7)==MONTH { s+=$4; n++ }
+        END { printf "  %d runs · $%.4f\n", n, s }' "$MERGED"
+      rollups "$MONTH" "this month"
+    else
+      echo "  (no runs logged this month)"
+    fi
+  else
+    echo "  (no priced runs logged yet)"
   fi
   echo
   echo "═════════════════════ FULL LOG (most recent first) ═════════════════════"
