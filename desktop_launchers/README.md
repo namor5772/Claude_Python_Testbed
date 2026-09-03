@@ -145,6 +145,8 @@ first" analog is the totals rather than a `grep -v`. Icon master from `make_cost
 
 ## Windows
 
+`ProtonBridge_Watchdog_Win.ps1` is not a shortcut but a Task Scheduler job (Windows only, no macOS twin — launchd `KeepAlive` would be the Mac equivalent): it starts Proton Bridge's launcher (`proton-bridge.exe --no-window`) when no `bridge.exe` process exists, so a Bridge quit from the tray or crashed doesn't leave the localhost IMAP server dead until the next login (Bridge's own "start on login" is only a Startup-folder shortcut, and it comes up ~3 min after logon). Register it once with `-Register` — task `ProtonBridge_Watchdog`, at logon +2 min then every 15 min, `MultipleInstances IgnoreNew`; a copy of the XML is kept in `C:\Users\<you>\TaskScheduler_Backups\`. Verified 2026-09-03: with Bridge stopped, firing the task brought `bridge.exe` and port 1143 back within 20 s and the next `UnreadSummary.py --dry-run` listed the Proton account with 0 account errors.
+
 `UnreadSummary_Win.ps1` is the Windows twin of `UnreadSummary.applescript`:
 it runs `UnreadSummary.py` with the venv python in a hidden window, then a
 success chime + self-dismissing dialog with the run's log line (from
