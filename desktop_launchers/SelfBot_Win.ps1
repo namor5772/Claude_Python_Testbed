@@ -12,8 +12,11 @@
 # two self-chatting windows; for the auto-positioned side-by-side duo layout with
 # name/focus wiring, use LaunchSelfBot.bat at the repo root instead.
 #
-# The desktop shortcut targets:
-#   powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden
+# The desktop shortcut targets a headless conhost, NOT powershell.exe
+# -WindowStyle Hidden: powershell.exe is a console program whose window Windows
+# creates before that switch is parsed, so a bare powershell target flashed a
+# console on every click (measured and fixed 2026-09-03):
+#   conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass
 #       -File "<repo>\desktop_launchers\SelfBot_Win.ps1"
 
 $repoDir = Split-Path -Parent $PSScriptRoot

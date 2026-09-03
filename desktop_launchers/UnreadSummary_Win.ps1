@@ -4,8 +4,11 @@
 # showing the run's log line; failure -> blocking error dialog with the log
 # tail. On Windows the script logs to <repo>\unread_summary.log.
 #
-# The desktop shortcut targets:
-#   powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden
+# The desktop shortcut targets a headless conhost, NOT powershell.exe
+# -WindowStyle Hidden: powershell.exe is a console program whose window Windows
+# creates before that switch is parsed, so a bare powershell target flashed a
+# console on every click (measured and fixed 2026-09-03):
+#   conhost.exe --headless powershell.exe -NoProfile -ExecutionPolicy Bypass
 #       -File "<repo>\desktop_launchers\UnreadSummary_Win.ps1"
 # Unlike the AppleScript (absolute repo path patched in by rebuild.sh), the
 # repo is resolved from this file's own location, so any clone works as-is;

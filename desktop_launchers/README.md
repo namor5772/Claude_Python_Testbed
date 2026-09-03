@@ -155,6 +155,19 @@ on failure. Unlike the AppleScript it needs no path patching — the repo is
 resolved from the script's own location — so only the Desktop shortcut is
 per-machine. `-DryRun` passes `--dry-run` through for a read-only test.
 
+Every hidden launcher's shortcut below targets `conhost.exe --headless powershell.exe …`
+rather than `powershell.exe -WindowStyle Hidden`. powershell.exe is a console
+program, so Windows creates its console window before PowerShell parses that
+switch, and a bare powershell target flashed a console for ~0.25 s on every
+click (measured 2026-09-03 by polling `EnumWindows` while launching the `.lnk`
+— the same defect made the `ProtonBridge_Watchdog` task flash a Terminal window
+every 15 minutes). A headless conhost hands the script a pseudoconsole with no
+window. Re-measured after the change: every launcher comes up with only its own
+app window, launch-or-focus still works through the extra hop (the
+foreground-activation right propagates down the process chain), and the Unread
+digest's inner `python.exe` stays hidden too. Only the two log viewers, which
+want a visible console, keep a plain `powershell.exe` target.
+
 `icon_unread.ico` is rendered from the same 1024px master (sizes
 256/128/64/48/32/16). Regenerate with:
 
@@ -168,8 +181,8 @@ Recreate the Desktop shortcut on a new machine (run from the repo root):
 $repo = (Get-Location).Path
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Unread Summary.lnk'))
-$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\UnreadSummary_Win.ps1`""
+$lnk.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+$lnk.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$repo\desktop_launchers\UnreadSummary_Win.ps1`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_unread.ico,0"
 $lnk.WindowStyle = 7
@@ -198,8 +211,8 @@ Recreate the Desktop shortcut on a new machine (run from the repo root):
 $repo = (Get-Location).Path
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'CSV Editor.lnk'))
-$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\CSVEditor_Win.ps1`""
+$lnk.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+$lnk.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$repo\desktop_launchers\CSVEditor_Win.ps1`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_csv.ico,0"
 $lnk.WindowStyle = 7
@@ -221,8 +234,10 @@ it with:
 .venv\Scripts\python.exe -c "from PIL import Image; Image.open(r'desktop_launchers\icon_todolist_master.png').convert('RGBA').save(r'desktop_launchers\icon_todolist.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
 ```
 
-There is no `TodoList_Win.ps1` — the Desktop shortcut targets the repo-root
-`LaunchTodoList.bat` directly. Recreate it on a new machine (run from the repo
+There is no `TodoList_Win.ps1` — the Desktop shortcut runs the repo-root
+`LaunchTodoList.bat` under `conhost.exe --headless cmd.exe /c …` (a batch file
+needs cmd.exe, whose console flashed on click exactly like a bare powershell
+target's). Recreate it on a new machine (run from the repo
 root; note `[Environment]::GetFolderPath('Desktop')` — the Desktop may be
 OneDrive-redirected):
 
@@ -230,7 +245,8 @@ OneDrive-redirected):
 $repo = (Get-Location).Path
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'TodoList.lnk'))
-$lnk.TargetPath = "$repo\LaunchTodoList.bat"
+$lnk.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+$lnk.Arguments = "--headless cmd.exe /c `"$repo\LaunchTodoList.bat`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_todolist.ico,0"
 $lnk.WindowStyle = 7
@@ -280,8 +296,8 @@ Recreate the Desktop shortcut on a new machine (run from the repo root):
 $repo = (Get-Location).Path
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'TodoList (Native).lnk'))
-$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\TodoListNative_Win.ps1`""
+$lnk.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+$lnk.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$repo\desktop_launchers\TodoListNative_Win.ps1`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_todolist_native.ico,0"
 $lnk.WindowStyle = 7
@@ -310,8 +326,8 @@ Recreate the Desktop shortcut on a new machine (run from the repo root):
 $repo = (Get-Location).Path
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'My Agent.lnk'))
-$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\MyAgent_Win.ps1`""
+$lnk.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+$lnk.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$repo\desktop_launchers\MyAgent_Win.ps1`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_myagent.ico,0"
 $lnk.WindowStyle = 7
@@ -346,8 +362,8 @@ Recreate the Desktop shortcut on a new machine (run from the repo root):
 $repo = (Get-Location).Path
 $ws = New-Object -ComObject WScript.Shell
 $lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'SelfBot.lnk'))
-$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$repo\desktop_launchers\SelfBot_Win.ps1`""
+$lnk.TargetPath = "$env:SystemRoot\System32\conhost.exe"
+$lnk.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$repo\desktop_launchers\SelfBot_Win.ps1`""
 $lnk.WorkingDirectory = $repo
 $lnk.IconLocation = "$repo\desktop_launchers\icon_selfbot.ico,0"
 $lnk.WindowStyle = 7
@@ -389,8 +405,9 @@ can't be driven non-interactively, but it shares the cost viewer's display path)
 ```
 
 Recreate the Desktop shortcuts on a new machine (run from the repo root). These
-are **viewers**, so each shortcut opens a **visible** window — no
-`-WindowStyle Hidden`, and `WindowStyle = 1` (normal) instead of `7`:
+are **viewers**, so each shortcut opens a **visible** window — a plain
+`powershell.exe` target (no headless conhost, no `-WindowStyle Hidden`), and
+`WindowStyle = 1` (normal) instead of `7`:
 
 ```powershell
 $repo = (Get-Location).Path
