@@ -11,6 +11,15 @@
 # every 15 minutes) by the block at the bottom, run once with -Register:
 #   powershell -ExecutionPolicy Bypass -File ProtonBridge_Watchdog_Win.ps1 -Register
 #
+# The task's action is "conhost.exe --headless powershell.exe ...", NOT
+# "powershell.exe -WindowStyle Hidden": powershell.exe is a console program,
+# so Windows creates its console (a Windows Terminal window when Terminal is
+# the default host) before PowerShell ever parses that switch, and an
+# interactive-session task flashed a Terminal window on every 15-minute run
+# (measured 2026-09-03: ~0.5 s each, and under Terminal the switch never hid
+# it at all). A headless conhost hands the script a pseudoconsole that has no
+# window, so nothing appears.
+#
 # Idempotent: bridge.exe is the headless server the GUI launcher spawns; if
 # it is alive there is nothing to do. The launcher itself refuses a second
 # instance (bridge-v3.lock), so a spurious start is harmless too.
@@ -24,8 +33,10 @@ $TaskName = "ProtonBridge_Watchdog"
 
 if ($Register) {
     $scriptPath = $MyInvocation.MyCommand.Path
-    $action  = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$scriptPath`""
+    # Headless conhost = no console window at all (see the header comment).
+    $conhost = Join-Path $env:SystemRoot "System32\conhost.exe"
+    $action  = New-ScheduledTaskAction -Execute $conhost `
+        -Argument "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`""
     $logon   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $logon.Delay = "PT2M"      # let the Startup-folder shortcut go first
     $repeat  = New-ScheduledTaskTrigger -Once -At (Get-Date).Date `
