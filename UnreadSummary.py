@@ -51,8 +51,10 @@ Usage:
                                      # no downloads, no mark/trash, no send
 
 Designed for launchd/Task Scheduler (e.g. daily at 07:00); exits 0 on a
-normal pass (even with per-account errors — they're visible in the email),
-1 on a fatal failure such as the summary send itself failing.
+normal pass (even with per-account errors — they're visible in the email AND
+logged one per account as "ACCOUNT ERROR <account>: <reason>", e.g. Proton
+Bridge not running), 1 on a fatal failure such as the summary send itself
+failing.
 """
 
 import argparse
@@ -907,6 +909,12 @@ def main():
             conn.logout()
         except Exception:
             pass
+
+    # One line per failed account so heartbeat.log-style triage works from
+    # the log alone (e.g. "Proton Bridge not running" without opening the
+    # emailed summary). The summary line below still carries the count.
+    for account, reason in errors.items():
+        log(f"ACCOUNT ERROR {account}: {reason}")
 
     body = build_body(account_order, entries_by_account, errors, args.dry_run)
     subject = f"{SUBJECT_PREFIX} - {datetime.now():%Y-%m-%d %H:%M:%S}"
