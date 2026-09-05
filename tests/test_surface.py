@@ -91,17 +91,12 @@ METHODS = {
         "_has_reasoning_none", "_has_reasoning_xhigh", "_is_gpt5_chat_model",
         "_is_gpt5_family", "_is_openai_reasoning_model", "_parse_gpt5_minor",
         "_stream_responses", "_stream_responses_call",
-        # The Responses translators moved here from StreamingMixin on
-        # 2026-09-06 (GPT-6 wiring) so SelfBot can inherit the whole OpenAI
-        # provider from this one mixin; MyAgent's App inherits both, so its
-        # surface is unchanged.
-        "_messages_to_responses", "_tools_to_responses",
     },
     "GeminiMixin": {"_stream_gemini_call"},
     "StreamingMixin": {
         "_execute_tool", "_get_pricing", "_get_tools", "_log_api_cost",
-        "_make_serializable", "_payload_for_display",
-        "_tool_info", "_weak_desktop_combo_warning",
+        "_make_serializable", "_messages_to_responses", "_payload_for_display",
+        "_tool_info", "_tools_to_responses", "_weak_desktop_combo_warning",
         "stream_worker",
     },
 }
