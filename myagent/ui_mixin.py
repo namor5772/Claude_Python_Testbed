@@ -270,23 +270,13 @@ class UIMixin:
                 self._thinking_mode_label.config(text="Reasoning")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
-                # Build values based on model capabilities. -pro variants reject
-                # 'none' and 'low' with HTTP 400 — minimum supported effort is 'medium'.
-                if "-pro" in self.model and self._is_gpt5_family():
-                    values = ["Medium", "High"]
-                elif self._openai_always_reasoning():
-                    # GPT-6: reasoning can't be switched off — 'none' and
-                    # 'minimal' are HTTP 400 (probed live 2026-09-06), so the
-                    # ladder starts at Low.
-                    values = ["Low", "Medium", "High"]
-                else:
-                    values = ["None", "Low", "Medium", "High"]
-                if self._has_reasoning_xhigh():
-                    values.append("Xhigh")
-                # GPT-5.6+ add "max" above xhigh (live-probed 2026-08-25: all
-                # three 5.6 tiers accept it, gpt-5.5 / 5.4 reject it).
-                if self._has_reasoning_max():
-                    values.append("Max")
+                # Per-model rungs from the pure, unit-tested helper: the -pro
+                # tiers Medium/High ('none'/'low' are HTTP 400), the GPT-6
+                # family Low..Max with no None (always-reasoning — 'none' /
+                # 'minimal' are HTTP 400, probed live 2026-09-06), GPT-5.1+
+                # None..High plus Xhigh (5.2+/codex-max) and Max (5.6+,
+                # live-probed 2026-08-25: all three 5.6 tiers accept it).
+                values = self._openai_reasoning_values()
                 self._thinking_mode_combo["values"] = values
                 # Validate current selection: an effort above this model's
                 # ceiling (Max/Xhigh saved against a 5.6, now on a 5.5) steps
@@ -824,7 +814,10 @@ class UIMixin:
                 if mode == "off" and not self._anthropic_rejects_temperature():
                     parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "OpenAI":
-            parts.append(f"reasoning={mode.capitalize() or 'None'}")
+            # An always-reasoning model (GPT-6) sends the floor-coerced effort
+            # for a stale None/minimal — report what actually goes on the wire.
+            shown = self._openai_effective_effort() if self._openai_always_reasoning() else mode
+            parts.append(f"reasoning={shown.capitalize() or 'None'}")
             if self._has_openai_verbosity():
                 parts.append(f"verbosity={self.text_verbosity}")
             if mode in ("", "none") and self._gpt5_supports_temp_at_none():

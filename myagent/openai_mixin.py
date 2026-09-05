@@ -345,6 +345,86 @@ class OpenAIMixin:
             return "low"
         return effort
 
+    def _openai_model_params(self, commit=False):
+        """The reasoning / temperature / text.verbosity params for the current
+        OpenAI model — the ONE builder behind both the live request
+        (_stream_responses_call, commit=True) and the Debug payload
+        (_payload_for_display, commit=False), so the dump can never drift
+        from the wire (it had: the dump never showed text.verbosity, and the
+        gpt-5.1+ none/temperature detail was approximated — caught by
+        tests/test_gpt6_params.py, 2026-09-06).
+
+        Per family: the always-reasoning GPT-6 tiers send `reasoning` only,
+        never temperature, with a stale rung floor-coerced to "low"
+        (_openai_effective_effort); GPT-5.1+ always send `reasoning` (even
+        "none") and, at none, temperature (the user's on 5.4+, fixed 1.0
+        before); GPT-5.0 sends reasoning when enabled and temperature 1.0;
+        the o-series reasoning when enabled; non-reasoning ids temperature
+        except the -chat Instant variants; every gpt-5 / gpt-6 id adds
+        text.verbosity.
+
+        Returns (params, notice): `notice` is the one-shot Activity line for a
+        coerced GPT-6 effort. With commit=True the coerced value is written
+        back to thinking_effort / thinking_mode / thinking_enabled so the
+        title and cost-log params report what was sent (and the notice does
+        not repeat on the run's later calls); the display path never
+        mutates state."""
+        params = {}
+        notice = None
+        if self._openai_always_reasoning():
+            effort = self._openai_effective_effort()
+            if effort != (self.thinking_effort or "").lower():
+                notice = (f"{self.model} has no reasoning='{self.thinking_effort}' "
+                          f"rung — sending '{effort}' instead.\n")
+                if commit:
+                    self.thinking_effort = effort
+                    self.thinking_mode = effort
+                    self.thinking_enabled = True
+            params["reasoning"] = {"effort": effort, "summary": "auto"}
+        elif self._has_reasoning_none():
+            # GPT-5.1+: always send reasoning param, even with effort="none"
+            params["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+            if self.thinking_effort == "none":
+                # gpt-5.4+ supports user temperature at effort=none; older models fixed at 1.0
+                params["temperature"] = (self.temperature if self._gpt5_supports_temp_at_none()
+                                         else 1.0)
+        elif self._is_gpt5_family():
+            # GPT-5.0: always reasoning, temp fixed at 1.0
+            if self.thinking_enabled:
+                params["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+            params["temperature"] = 1.0
+        elif self._is_openai_reasoning_model():
+            if self.thinking_enabled:
+                params["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
+        elif not self._is_gpt5_chat_model():
+            # gpt-5.x-chat Instant models don't support temperature
+            params["temperature"] = self.temperature
+        # Verbosity for all gpt-5 / gpt-6 models (including -chat Instant variants)
+        if self._has_openai_verbosity():
+            params["text"] = {"verbosity": self.text_verbosity}
+        return params, notice
+
+    def _openai_reasoning_values(self, model_id=None):
+        """Reasoning-combobox rungs (display labels) for a model that gets the
+        extended combobox, mirroring what _stream_responses_call will accept:
+        the -pro tiers Medium/High only ('none' and 'low' are HTTP 400); the
+        GPT-6 family Low..Max with NO None (always-reasoning — 'none' and
+        'minimal' are HTTP 400, probed live 2026-09-06); GPT-5.1+ None/Low/
+        Medium/High, plus Xhigh (5.2+ and codex-max, not mini/nano) and Max
+        (5.6+). Pure, so the UI gate is unit-testable without Tk."""
+        mid = model_id or self.model
+        if "-pro" in mid and self._is_gpt5_family(mid):
+            values = ["Medium", "High"]
+        elif self._openai_always_reasoning(mid):
+            values = ["Low", "Medium", "High"]
+        else:
+            values = ["None", "Low", "Medium", "High"]
+        if self._has_reasoning_xhigh(mid):
+            values.append("Xhigh")
+        if self._has_reasoning_max(mid):
+            values.append("Max")
+        return values
+
     def _has_reasoning_xhigh(self, model_id=None):
         """Check if model supports reasoning.effort='xhigh'."""
         mid = model_id or self.model
@@ -409,8 +489,6 @@ class OpenAIMixin:
         if unsupported:
             responses_tools = [t for t in responses_tools if t.get("type") not in unsupported]
         responses_input = self._messages_to_responses(messages)
-        is_reasoning = self._is_openai_reasoning_model()
-        has_none = self._has_reasoning_none()
 
         api_kwargs = {
             "model": self.model,
@@ -420,43 +498,14 @@ class OpenAIMixin:
             "store": False,
             "include": ["code_interpreter_call.outputs"],
         }
-        if self._openai_always_reasoning():
-            # GPT-6: reasoning can't be disabled ('none' / 'minimal' are 400)
-            # and temperature is rejected outright — effort only, never temp.
-            # A stale rung (an instruction saved on a 5.x model) is coerced to
-            # the ladder floor and written back so the title / cost-log params
-            # report what was actually sent; the notice fires once per run.
-            effort = self._openai_effective_effort()
-            if effort != (self.thinking_effort or "").lower():
-                self._tool_info(f"{self.model} has no reasoning='{self.thinking_effort}' "
-                                f"rung — sending '{effort}' instead.\n")
-                self.thinking_effort = effort
-                self.thinking_mode = effort
-                self.thinking_enabled = True
-            api_kwargs["reasoning"] = {"effort": effort, "summary": "auto"}
-        elif has_none:
-            # GPT-5.1+: always send reasoning param, even with effort="none"
-            api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
-            if self.thinking_effort == "none":
-                # gpt-5.4+ supports user temperature at effort=none; older models fixed at 1.0
-                if self._gpt5_supports_temp_at_none():
-                    api_kwargs["temperature"] = self.temperature
-                else:
-                    api_kwargs["temperature"] = 1.0
-        elif self._is_gpt5_family():
-            # GPT-5.0: always reasoning, temp fixed at 1.0
-            if self.thinking_enabled:
-                api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
-            api_kwargs["temperature"] = 1.0
-        elif is_reasoning and self.thinking_enabled:
-            api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
-        elif not is_reasoning:
-            # gpt-5.x-chat Instant models don't support temperature
-            if not self._is_gpt5_chat_model():
-                api_kwargs["temperature"] = self.temperature
-        # Verbosity for all gpt-5 models (including -chat Instant variants)
-        if self._has_openai_verbosity():
-            api_kwargs["text"] = {"verbosity": self.text_verbosity}
+        # reasoning / temperature / text.verbosity — the shared per-family
+        # builder (also feeds the Debug payload); commit=True writes a
+        # floor-coerced GPT-6 effort back to the live state and hands back
+        # the one-shot Activity notice for it.
+        params, notice = self._openai_model_params(commit=True)
+        if notice:
+            self._tool_info(notice)
+        api_kwargs.update(params)
 
         FIRST_CONTENT_TIMEOUT = 180
         WAITING_MSG_INTERVAL = 15

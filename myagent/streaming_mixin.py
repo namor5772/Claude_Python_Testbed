@@ -288,16 +288,11 @@ class StreamingMixin:
             }
             if self.provider == "OpenAI":
                 payload["include"] = ["code_interpreter_call.outputs"]
-                is_reasoning = self._is_openai_reasoning_model()
-                if self._openai_always_reasoning():
-                    # GPT-6: mirror _stream_responses_call — effort always
-                    # (floor-coerced), temperature never.
-                    payload["reasoning"] = {"effort": self._openai_effective_effort(),
-                                            "summary": "auto"}
-                elif is_reasoning and self.thinking_enabled:
-                    payload["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
-                elif not is_reasoning:
-                    payload["temperature"] = self.temperature
+                # The same per-family builder _stream_responses_call uses
+                # (reasoning / temperature / text.verbosity), read-only here —
+                # the dump shows exactly what the wire will carry.
+                params, _notice = self._openai_model_params()
+                payload.update(params)
             else:
                 # xAI — mirror _stream_xai_call: temperature always, reasoning
                 # only for families with an effort knob.

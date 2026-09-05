@@ -128,7 +128,10 @@
    unknown future gpt-6 tier is unpriced rather than mispriced, as with 5.6.
    Declaring the web_search_preview + code_interpreter server tools adds
    ~5.6K tokens of tool definitions to every request — written to the cache
-   at $12.50/M on the first call of a run, read back at $1/M thereafter.)
+   at $12.50/M on the first call of a run, read back at $1/M thereafter.
+   A screenshot at MyAgent's 2048-px OpenAI cap is ~1.8K tokens, also above
+   the 1024-token cache floor: written at $12.50/M when first sent, read at
+   $1/M on the later turns that re-send it.)
 
   GPT-5.6 Family (Current — three durable tiers, terra is the default)
   ──────────────────────────────────────────────────────────────────────────
