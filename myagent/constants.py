@@ -508,7 +508,7 @@ META_TOOLS = [
                 "thinking_effort": {
                     "type": "string",
                     "enum": ["low", "medium", "high", "xhigh", "max"],
-                    "description": "Thinking effort level (optional for update; create inherits current). 'xhigh' needs Opus 4.7+/Fable 5+ (or OpenAI gpt-5.2+); 'max' needs Anthropic Opus 4.6+/Fable 5+.",
+                    "description": "Thinking effort level (optional for update; create inherits current). 'xhigh' needs Opus 4.7+/Fable 5+ (or OpenAI gpt-5.2+/gpt-6); 'max' needs Anthropic Opus 4.6+/Fable 5+ (or OpenAI gpt-5.6+/gpt-6).",
                 },
                 "thinking_budget": {
                     "type": "integer",
@@ -522,8 +522,9 @@ META_TOOLS = [
                         "Anthropic adaptive: off/adaptive/low/medium/high/xhigh/max ('xhigh' Opus 4.7+/"
                         "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 and Mythos 5 / 5.1 have "
                         "ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
-                        "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh. Lower-cased to "
-                        "match the stored value."
+                        "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh (max on 5.6+); "
+                        "gpt-6 is ALWAYS-reasoning — low/medium/high/xhigh/max, 'none' is "
+                        "invalid there. Lower-cased to match the stored value."
                     ),
                 },
                 "blocked_tools": {
@@ -1378,23 +1379,34 @@ ADAPTIVE_MODE_VALUES = ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Ma
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 # GPT-5.6 (2026-07-09) ships as three durable capability tiers: sol
 # (flagship, $4/$20), terra (balanced everyday, $2/$12), luna (fast/cheap,
-# $0.20/$1.20) — rates per OPENAI_PRICING, re-trued 2026-08-25. Terra
-# default. All three accept reasoning.effort none..xhigh AND "max" (probed
+# $0.20/$1.20) — rates per OPENAI_PRICING, re-trued 2026-08-25. Terra stays
+# the default. All three accept reasoning.effort none..xhigh AND "max" (probed
 # live 2026-08-25; gpt-5.5 / 5.4 reject "max") — see _has_reasoning_max.
-OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
-                          "gpt-5.5", "gpt-5.4"]
+# GPT-6 Astra (gpt-6-astra, released 2026-09-03: $10/$50, 1.05M context,
+# 128K output) is the new flagship, listed second so the far cheaper terra
+# keeps the default slot. Probed live 2026-09-06: ALWAYS-reasoning — effort
+# low/medium/high/xhigh/max only ("none" and "minimal" are HTTP 400),
+# temperature rejected unconditionally, text.verbosity accepted, and the
+# web_search_preview / code_interpreter server tools accepted — see
+# OpenAIMixin._openai_always_reasoning. Its usage also reports BILLED cache
+# writes (cache_write_tokens at $12.50/M — the 4th OPENAI_PRICING element).
+OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-5.6-sol",
+                          "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
 # o-series prefixes stay HERE (params wiring) even though the picker no longer
 # lists them — a saved instruction pinning o3 etc. keeps correct reasoning
 # params until the actual API shutdowns (see OPENAI_RESPONSES_PREFIXES).
-OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+# "gpt-6" (2026-09-06): the GPT-6 family reasons unconditionally.
+OPENAI_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5", "gpt-6")
 # Model families that support the Responses API AND are still worth offering.
 # 2026-07 audit: gpt-4.5 left the API 2025-07; gpt-4o retired 2026-02-16; the
 # entire o-series is scheduled out (o1 / o1-pro / o3-mini / o4-mini shut down
 # 2026-10-23, o3 / o3-pro 2026-12-11 — all replaced by gpt-5.6) so it is
 # dropped from the picker. gpt-3.5 / gpt-4 base / gpt-4-turbo never supported
-# the Responses API and retire 2026-10-23 anyway.
-OPENAI_RESPONSES_PREFIXES = ("gpt-4.1", "gpt-5")
+# the Responses API and retire 2026-10-23 anyway. "gpt-6" added 2026-09-06
+# (gpt-6-astra, Responses-only like the 5.x tiers) — without it the picker
+# silently dropped the new flagship from the live models.list().
+OPENAI_RESPONSES_PREFIXES = ("gpt-4.1", "gpt-5", "gpt-6")
 # Scheduled-retirement ids that still pass the family prefixes above —
 # _fetch_openai_models drops them from the picker even though the API still
 # serves some of them (policy: retiring models are removed ahead of their
@@ -3129,6 +3141,19 @@ OPENAI_PRICING = {
     # entered at gpt-5.5's $5/$30 — it is $4/$20 (cached $0.40). The 5.5/5.6
     # tiers bill 2x input / 1.5x output above 272K input tokens; the table
     # keeps the ≤272K tier (same convention as gemini-3.1-pro / grok >200K).
+    # GPT-6 Astra (2026-09-03; $10/$50, cached $1.00) — the first OpenAI
+    # model that BILLS cache writes: $12.50/M = 1.25x input, Anthropic-style,
+    # carried as a 4th element (input, output, cached_input, cache_write).
+    # _get_pricing exposes it as "cache_write" only when present, and
+    # _openai_usage_dict moves written tokens out of the input bucket only
+    # for models that carry the rate — on the 3-tuple families a write is
+    # just full-rate input, as before. Verified live 2026-09-06: both
+    # cache_write_tokens and cached_tokens are SUBSETS of input_tokens (2420
+    # of 2423 written on a first call, read back on the repeat). The >272K
+    # long-context tier (2x input/cache, 1.5x output) is not modelled, same
+    # convention as 5.5/5.6. No bare "gpt-6" family row, for the same reason
+    # as 5.6 below: an unknown future gpt-6 tier is unpriced, not mispriced.
+    "gpt-6-astra":         (10.00, 50.00, 1.00, 12.50),
     # GPT-5.6 family — no bare "gpt-5.6" id exists (only the three tiers), so
     # there is deliberately no family fallback row: an unknown future 5.6 id
     # gets no cost line rather than a wrong one.

@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import threading
 
@@ -7,10 +8,12 @@ import openai
 from myagent.constants import (
     OPENAI_DEPRECATED_MODEL_IDS,
     OPENAI_DEPRECATED_MODEL_PREFIXES,
+    OPENAI_PRICING,
     OPENAI_REASONING_PREFIXES,
     OPENAI_RESPONSES_PREFIXES,
     OPENAI_FALLBACK_MODELS,
     _HAS_DESKTOP,
+    resolve_price,
 )
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
@@ -18,7 +21,7 @@ from myagent.retry_util import rate_limit_backoff, server_error_backoff
 class OpenAIMixin:
 
     @staticmethod
-    def _openai_usage_dict(usage):
+    def _openai_usage_dict(usage, cache_write_billed=False):
         """Normalize a Responses-API usage object into stream_worker's buckets.
 
         OpenAI caches AUTOMATICALLY above ~1024 tokens — no client opt-in, so
@@ -32,9 +35,16 @@ class OpenAIMixin:
         overlapping totals would double-charge every cached token. Verified live
         2026-07-31: input_tokens=2714 with cached_tokens=2711 inside it.
 
-        `cache_write_tokens` is also reported but deliberately ignored — OpenAI
-        does not bill for cache writes (no such column on the pricing page),
-        unlike Anthropic's 1.25x write.
+        `cache_write_tokens` is a subset of input_tokens too (verified live on
+        gpt-6-astra 2026-09-06: 2420 of 2423 written on a first call, read back
+        on the repeat). Whether it leaves the input bucket depends on the model:
+        the GPT-5 / 4.1 families do not bill writes (no column on the pricing
+        page — a written token is ordinary full-rate input), so it stays put
+        and no cache_creation key is emitted. GPT-6 Astra bills writes at 1.25x
+        ($12.50/M), so with ``cache_write_billed`` (the caller decides from the
+        pricing row — _openai_bills_cache_writes) the written tokens move to a
+        disjoint ``cache_creation_input_tokens`` bucket for stream_worker's
+        cache_write rate, exactly like Anthropic's.
 
         Returns None when there is no usage to report. Dict fallbacks cover
         older/looser SDK shapes.
@@ -43,17 +53,40 @@ class OpenAIMixin:
             return None
         total_in = getattr(usage, "input_tokens", 0) or 0
         details = getattr(usage, "input_tokens_details", None)
-        cached = 0
-        if details is not None:
-            cached = (getattr(details, "cached_tokens", None)
-                      or (details.get("cached_tokens") if isinstance(details, dict) else None)
-                      or 0)
-        cached = min(cached, total_in)  # never let a bad report go negative
-        return {
+
+        def _detail(name):
+            if details is None:
+                return 0
+            return (getattr(details, name, None)
+                    or (details.get(name) if isinstance(details, dict) else None)
+                    or 0)
+
+        cached = min(_detail("cached_tokens"), total_in)  # never let a bad report go negative
+        out = {
             "input_tokens": total_in - cached,
             "output_tokens": getattr(usage, "output_tokens", 0) or 0,
             "cache_read_input_tokens": cached,
         }
+        if cache_write_billed:
+            written = min(_detail("cache_write_tokens"), total_in - cached)
+            out["input_tokens"] -= written
+            out["cache_creation_input_tokens"] = written
+        return out
+
+    def _openai_bills_cache_writes(self, model_id=None):
+        """True when the model's OPENAI_PRICING row carries a cache-write rate
+        (a 4th element — GPT-6 Astra). Decided from the pricing table itself so
+        the usage normalizer and the cost accumulator can never disagree about
+        whether written tokens leave the input bucket."""
+        mid = model_id or self.model or ""
+        best, best_len = None, 0
+        for prefix, prices in OPENAI_PRICING.items():
+            if mid.startswith(prefix) and len(prefix) > best_len:
+                best, best_len = prices, len(prefix)
+        if best is None:
+            return False
+        entry = resolve_price(best)
+        return len(entry) > 3 and entry[3] is not None
 
     def _stream_responses(self, api_kwargs, label_emitted):
         """Stream an OpenAI Responses API call, accumulating text and tool calls.
@@ -203,11 +236,169 @@ class OpenAIMixin:
         usage_dict = None
         try:
             final_resp = stream.get_final_response()
-            usage_dict = self._openai_usage_dict(getattr(final_resp, "usage", None))
+            usage_dict = self._openai_usage_dict(
+                getattr(final_resp, "usage", None),
+                cache_write_billed=self._openai_bills_cache_writes())
         except Exception:
             pass
 
         return full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict
+
+    # --- Responses-API translators (moved here from streaming_mixin 2026-09-06) ---
+    # Pure functions of their arguments (no self state): the internal history
+    # stays Anthropic-style and is translated only at the wire. Owned by the
+    # OpenAI mixin because it is the Responses caller; xAI reuses them (its API
+    # is Responses-shaped), and SelfBot gets them by inheriting this mixin.
+    def _tools_to_responses(self, tools):
+        """Convert Anthropic tool schemas to OpenAI Responses API format."""
+        return [
+            {
+                "type": "function",
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
+                "strict": False,
+            }
+            for tool in tools
+        ]
+
+    def _messages_to_responses(self, messages):
+        """Convert internal Anthropic-format messages to Responses API input format.
+
+        Key differences from Chat Completions:
+        - No system message (system prompt moves to 'instructions' parameter)
+        - User images use input_text/input_image content types
+        - Assistant tool calls become top-level function_call items
+        - Tool results become top-level function_call_output items
+        """
+        result = []
+
+        for msg in messages:
+            role = msg["role"]
+            content = msg.get("content")
+
+            if role == "user":
+                if isinstance(content, str):
+                    result.append({"role": "user", "content": content})
+                elif isinstance(content, list):
+                    # Check if this is a tool_result list
+                    has_tool_result = any(
+                        (isinstance(b, dict) and b.get("type") == "tool_result") for b in content
+                    )
+                    if has_tool_result:
+                        # Collect any images from tool results to send as a
+                        # separate user message after all function_call_output
+                        # items.  GPT models process images more reliably from
+                        # user messages than from function_call_output content.
+                        deferred_images = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                tc_content = block.get("content", "")
+                                call_id = block.get("tool_use_id", "")
+                                # Handle content that is a list (e.g. with image blocks)
+                                if isinstance(tc_content, list):
+                                    text_parts = []
+                                    for part in tc_content:
+                                        if isinstance(part, dict) and part.get("type") == "image":
+                                            src = part.get("source", {})
+                                            data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                                            deferred_images.append({
+                                                "type": "input_image",
+                                                "image_url": data_url,
+                                            })
+                                        elif isinstance(part, dict) and part.get("type") == "text":
+                                            text_parts.append(part.get("text", ""))
+                                        else:
+                                            text_parts.append(str(part))
+                                    result.append({
+                                        "type": "function_call_output",
+                                        "call_id": call_id,
+                                        "output": "\n".join(text_parts),
+                                    })
+                                else:
+                                    result.append({
+                                        "type": "function_call_output",
+                                        "call_id": call_id,
+                                        "output": str(tc_content) if tc_content else "",
+                                    })
+                        # Send deferred images as a user message so the model
+                        # processes them through its normal vision pipeline
+                        if deferred_images:
+                            # Extract dimensions from the tool output text
+                            dims_hint = ""
+                            for item in reversed(result):
+                                out = item.get("output", "")
+                                if isinstance(out, str):
+                                    m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", out)
+                                    if m:
+                                        w, h = m.group(1), m.group(2)
+                                        dims_hint = f" ({w}x{h} pixels)"
+                                        break
+                            hint_text = (
+                                f"Below is the screenshot image{dims_hint} returned by the "
+                                "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
+                                "is (0, 0), X increases rightward, Y increases downward. "
+                                "When calling mouse_click, use the pixel (x, y) coordinates "
+                                "as they appear in THIS image — they are automatically "
+                                "scaled to actual screen coordinates."
+                            )
+                            result.append({
+                                "role": "user",
+                                "content": [
+                                    {"type": "input_text", "text": hint_text},
+                                    *deferred_images,
+                                ],
+                            })
+                    else:
+                        # User message with text + images
+                        parts = []
+                        for block in content:
+                            if isinstance(block, dict):
+                                if block.get("type") == "text":
+                                    parts.append({"type": "input_text", "text": block.get("text", "")})
+                                elif block.get("type") == "image":
+                                    src = block.get("source", {})
+                                    data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
+                                    parts.append({
+                                        "type": "input_image",
+                                        "image_url": data_url,
+                                    })
+                            elif isinstance(block, str):
+                                parts.append({"type": "input_text", "text": block})
+                        result.append({"role": "user", "content": parts})
+
+            elif role == "assistant":
+                if isinstance(content, str):
+                    result.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
+                elif isinstance(content, list):
+                    # Collect text and tool_use blocks separately
+                    text_parts = []
+                    func_calls = []
+                    for block in content:
+                        # Handle both Pydantic objects and dicts
+                        btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
+                        if btype == "text":
+                            t = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else "")
+                            if t:
+                                text_parts.append(t)
+                        elif btype == "tool_use":
+                            bid = getattr(block, "id", None) or (block.get("id") if isinstance(block, dict) else "")
+                            bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
+                            binput = getattr(block, "input", None) or (block.get("input") if isinstance(block, dict) else {})
+                            func_calls.append({
+                                "type": "function_call",
+                                "call_id": bid,
+                                "name": bname,
+                                "arguments": json.dumps(binput),
+                            })
+                        # Skip thinking/redacted_thinking blocks
+                    combined_text = "\n".join(text_parts)
+                    if combined_text:
+                        result.append({"role": "assistant", "content": [{"type": "output_text", "text": combined_text}]})
+                    # Function calls are top-level items in Responses API
+                    result.extend(func_calls)
+
+        return result
 
     def _fetch_openai_models(self):
         """Fetch available OpenAI chat models suitable for agentic tool use."""
@@ -282,9 +473,39 @@ class OpenAIMixin:
         mid = model_id or self.model
         return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 1
 
+    def _is_gpt6_family(self, model_id=None):
+        """GPT-6 family — gpt-6-astra (2026-09-03) and any later gpt-6.x tier.
+        Anchored so a hypothetical "gpt-60" can't match, and a -chat Instant
+        variant is excluded like _is_gpt5_family."""
+        mid = model_id or self.model or ""
+        return bool(re.match(r"gpt-6(?:[.-]|$)", mid)) and "-chat" not in mid
+
+    def _openai_always_reasoning(self, model_id=None):
+        """Models whose reasoning cannot be switched off: reasoning.effort is
+        low/medium/high/xhigh/max ONLY ("none" and "minimal" are HTTP 400) and
+        temperature is rejected unconditionally — the GPT-6 family, probed live
+        on gpt-6-astra 2026-09-06. They get the Reasoning combobox without a
+        None rung, and _stream_responses_call always sends `reasoning` and
+        never `temperature`."""
+        return self._is_gpt6_family(model_id)
+
+    def _openai_effective_effort(self):
+        """The reasoning.effort to send for an always-reasoning model: the
+        current effort, or the ladder floor "low" when the saved value is a
+        rung the model lacks (a "none" / "minimal" carried over from a GPT-5.x
+        instruction — headless runs never pass through the combobox coercion
+        in ui_mixin). The reactive 400 rung in _stream_responses_call remains
+        the backstop for anything else."""
+        effort = (getattr(self, "thinking_effort", "") or "").lower()
+        if effort in ("none", "minimal", "off", "adaptive", ""):
+            return "low"
+        return effort
+
     def _has_reasoning_xhigh(self, model_id=None):
         """Check if model supports reasoning.effort='xhigh'."""
         mid = model_id or self.model
+        if self._is_gpt6_family(mid):
+            return True  # gpt-6-astra: low..xhigh..max, probed live 2026-09-06
         if not self._is_gpt5_family(mid):
             return False
         if "codex-max" in mid:
@@ -300,8 +521,10 @@ class OpenAIMixin:
         with "Unsupported value: 'max' is not supported with the ... model",
         probed live 2026-08-25). Version-gated at minor >= 6 so a future 5.7
         keeps it; the reactive 400 handler in _stream_responses_call is the
-        backstop if a later tier drops it."""
+        backstop if a later tier drops it. The GPT-6 family accepts it too."""
         mid = model_id or self.model
+        if self._is_gpt6_family(mid):
+            return True
         return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 6
 
     def _gpt5_supports_temp_at_none(self, model_id=None):
@@ -315,9 +538,10 @@ class OpenAIMixin:
         return mid.startswith("gpt-5") and "-chat" in mid
 
     def _has_openai_verbosity(self, model_id=None):
-        """Check if model supports text.verbosity (all gpt-5 family including -chat)."""
+        """Check if model supports text.verbosity (all gpt-5 family including
+        -chat, and gpt-6 — accepted by gpt-6-astra, probed live 2026-09-06)."""
         mid = model_id or self.model
-        return mid.startswith("gpt-5")
+        return mid.startswith(("gpt-5", "gpt-6"))
 
     def _stream_responses_call(self, messages, max_retries, label_emitted):
         """Execute one OpenAI Responses API call with streaming and retry logic.
@@ -352,7 +576,21 @@ class OpenAIMixin:
             "store": False,
             "include": ["code_interpreter_call.outputs"],
         }
-        if has_none:
+        if self._openai_always_reasoning():
+            # GPT-6: reasoning can't be disabled ('none' / 'minimal' are 400)
+            # and temperature is rejected outright — effort only, never temp.
+            # A stale rung (an instruction saved on a 5.x model) is coerced to
+            # the ladder floor and written back so the title / cost-log params
+            # report what was actually sent; the notice fires once per run.
+            effort = self._openai_effective_effort()
+            if effort != (self.thinking_effort or "").lower():
+                self._tool_info(f"{self.model} has no reasoning='{self.thinking_effort}' "
+                                f"rung — sending '{effort}' instead.\n")
+                self.thinking_effort = effort
+                self.thinking_mode = effort
+                self.thinking_enabled = True
+            api_kwargs["reasoning"] = {"effort": effort, "summary": "auto"}
+        elif has_none:
             # GPT-5.1+: always send reasoning param, even with effort="none"
             api_kwargs["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
             if self.thinking_effort == "none":

@@ -37,22 +37,26 @@ import concurrent.futures
 # verbatim. They share state with the host only through self.root / self.queue /
 # self._disabled_confirm_patterns, so SelfBot's App can host them directly. All
 # optional: a missing myagent package (or missing provider libs) degrades to
-# disabled checkboxes with the feature simply absent. These tools are
-# Anthropic-only in SelfBot (SelfBot has no other provider).
+# disabled checkboxes with the feature simply absent. The same block brings in
+# MyAgent's OpenAIMixin (2026-09-06): SelfBot stays Claude-first, but the GPT-6
+# family rides the inherited Responses caller + translators + gpt-* detection
+# helpers — see _is_openai_model / OPENAI_SELFBOT_MODEL_PREFIXES below.
 try:
     from myagent.constants import (
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
         GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-        ANTHROPIC_PRICING, APICOST_LOG_MAX_BYTES,
+        ANTHROPIC_PRICING, OPENAI_PRICING, APICOST_LOG_MAX_BYTES,
         ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
         ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
+        resolve_price,
     )
-    from myagent.helpers import rotate_log_if_needed
+    from myagent.helpers import rotate_log_if_needed, _ToolBlock
     from myagent.mcp_mixin import MCPMixin
     from myagent.gmail_mixin import GmailMixin
     from myagent.protonmail_mixin import ProtonMailMixin
     from myagent.outlook_mixin import OutlookMixin
+    from myagent.openai_mixin import OpenAIMixin
     _HAS_MYAGENT_TOOLS = True
 except Exception:
     _HAS_MYAGENT_TOOLS = False
@@ -60,7 +64,11 @@ except Exception:
     GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
     ANTHROPIC_PRICING = {}
+    OPENAI_PRICING = {}
     APICOST_LOG_MAX_BYTES = 100_000
+
+    def resolve_price(entry, today=None):
+        return entry  # no DatedPrice entries without the package
     # Claude Fable 5.1 beta surfaces (see myagent/constants.py for the why):
     # preserved-thinking drop_block binding + server-side refusal fallbacks.
     ANTHROPIC_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
@@ -82,6 +90,24 @@ except Exception:
 
     class OutlookMixin:
         pass
+
+    class OpenAIMixin:
+        pass
+
+    class _ToolBlock:  # unreachable without the package (no OpenAI path) — import parity only
+        def __init__(self, name, id, input):
+            self.name, self.id, self.input, self.type = name, id, input, "tool_use"
+
+# --- Optional OpenAI SDK (the GPT-6 provider path, 2026-09-06) --------------
+# Core dependency of the repo (requirements.txt), guarded anyway: without it
+# — or without OPENAI_API_KEY — the picker is the Anthropic-only list of old.
+try:
+    import openai
+    import httpx
+    _HAS_OPENAI_SDK = True
+except Exception:
+    openai = httpx = None
+    _HAS_OPENAI_SDK = False
 
 _HAS_DESKTOP = True
 try:
@@ -265,7 +291,7 @@ SELFBOT_META_TOOLS = [
                     "type": "string",
                     "description": "Prompt text (required for create, optional for update)",
                 },
-                "model": {"type": "string", "description": "Anthropic model id to bundle (optional; create inherits the current model)"},
+                "model": {"type": "string", "description": "Model id to bundle — a Claude id, or a GPT-6 id such as gpt-6-astra (optional; create inherits the current model)"},
                 "temperature": {"type": "number", "description": "Temperature 0.0-1.0 (optional; create inherits current)"},
                 "thinking_enabled": {"type": "boolean", "description": "Enable extended thinking (optional; create inherits current)"},
                 "thinking_effort": {
@@ -896,6 +922,16 @@ FALLBACK_MODELS = [
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
+# OpenAI models SelfBot offers (2026-09-06): the GPT-6 family only, appended
+# after the Claude ids and routed by id prefix (there is no Provider combobox
+# — see _is_openai_model). Its always-reasoning contract (reasoning.effort
+# low..max, never temperature — probed live on gpt-6-astra) is what the
+# toolbar implements; the GPT-5.x none/minimal/temperature matrix is NOT
+# ported, so those ids are deliberately not listed even though the key could
+# reach them. The live models.list() is filtered by prefix; the fallback
+# serves a listing failure. Display names are the ids.
+OPENAI_SELFBOT_MODEL_PREFIXES = ("gpt-6",)
+OPENAI_SELFBOT_FALLBACK_MODELS = ["gpt-6-astra"]
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
 # Betas every call carries (server-side web search + code execution, and the
@@ -1204,7 +1240,7 @@ def _get_window_pid(hwnd):
     return 0
 
 
-class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
+class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, OpenAIMixin):
     def __init__(self, root):
         self.root = root
         self.root.title("Claude SelfBot")
@@ -1221,10 +1257,24 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         # Initialize API client and state
         self.client = anthropic.Anthropic()
+        # OpenAI (GPT-6) — optional second provider, selected by model id. The
+        # same timeout profile as MyAgent's client (connect 10 s, 120 s between
+        # stream chunks) so a stalled stream raises instead of hanging forever.
+        self.openai_client = None
+        if _HAS_OPENAI_SDK and _HAS_MYAGENT_TOOLS and os.environ.get("OPENAI_API_KEY"):
+            self.openai_client = openai.OpenAI(
+                timeout=httpx.Timeout(600.0, connect=10.0, read=120.0))
+        # State the inherited OpenAI Responses caller reads: SelfBot has no Stop
+        # button (the flag just stays False), no verbosity widget (the API
+        # default "medium" is what gets sent), and the learn-once cache of
+        # server-side tools a model 400'd on (model_id → set of tool types).
+        self.stop_requested = False
+        self.text_verbosity = "medium"
+        self._openai_unsupported_tools = {}
         self.messages = []
         self.queue = queue.Queue()
         self.streaming = False
-        self._session_cost = 0.0  # cumulative Anthropic API cost for this process (logged on close)
+        self._session_cost = 0.0  # cumulative API cost (Anthropic + OpenAI) for this process (logged on close)
         self._session_calls = 0   # API calls made by this process (the "Call #N" counter, summed across every message) — logged beside the cost
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
@@ -1283,7 +1333,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._skills_refresh_list = None            # set while the Skills Manager is open
         self._last_skills_dialog_geometry = None    # persisted Skills Manager geometry
         self.skills = self._load_skills()
-        self.available_models = self._fetch_available_models()
+        # Claude ids first (live list, deprecated ids hidden), then the GPT-6
+        # family when an OpenAI client exists — one picker, routed by id.
+        self.available_models = (self._fetch_available_models()
+                                 + self._fetch_selfbot_openai_models())
 
         # Detect second instance
         if IS_WINDOWS:
@@ -1749,6 +1802,48 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self._model_display_names = {}
             return list(FALLBACK_MODELS)
 
+    def _fetch_selfbot_openai_models(self):
+        """The GPT-6 family from the live OpenAI models.list(), filtered by
+        OPENAI_SELFBOT_MODEL_PREFIXES (a -chat Instant variant, should one
+        appear, is excluded — it would not follow the always-reasoning
+        contract). [] without an OpenAI client; the fallback list serves a
+        listing failure. Display names are the ids, registered alongside the
+        Anthropic display names so the one picker maps both ways."""
+        if not self.openai_client:
+            return []
+        try:
+            ids = sorted(m.id for m in self.openai_client.models.list().data
+                         if m.id.startswith(OPENAI_SELFBOT_MODEL_PREFIXES)
+                         and "-chat" not in m.id)
+        except Exception:
+            ids = []
+        ids = ids or list(OPENAI_SELFBOT_FALLBACK_MODELS)
+        for mid in ids:
+            self._model_display_names.setdefault(mid, mid)
+        return ids
+
+    def _is_openai_model(self, model_id=None):
+        """SelfBot routes by model id rather than a Provider combobox: gpt-*
+        ids take the OpenAI Responses path (the inherited OpenAIMixin),
+        everything else the Anthropic Messages path."""
+        return (model_id or self.model or "").startswith("gpt-")
+
+    def _model_provider(self, model_id=None):
+        """Provider label for the cost log's 2nd field."""
+        return "OpenAI" if self._is_openai_model(model_id) else "Anthropic"
+
+    def _openai_mode_values(self, model_id=None):
+        """Reasoning combobox rungs for a GPT model: Low / Medium / High, plus
+        Xhigh and Max where the inherited detection helpers say the model
+        accepts them (all five on gpt-6-astra). No Off and no None — the GPT-6
+        family cannot stop reasoning ('none' is HTTP 400)."""
+        values = ["Low", "Medium", "High"]
+        if self._has_reasoning_xhigh(model_id):
+            values.append("Xhigh")
+        if self._has_reasoning_max(model_id):
+            values.append("Max")
+        return values
+
     def _on_model_selected(self, event=None):
         # Map display name back to model ID
         selected_display = self._model_var.get()
@@ -1762,6 +1857,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             # Hide checkbox + strength, show mode combobox
             self._thinking_check.pack_forget()
             self._thinking_strength_combo.pack_forget()
+            self._thinking_mode_label.config(text="Thinking")
             self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
             self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
             # Per-model values: always-on models (Fable/Mythos 5) drop "Off";
@@ -1773,6 +1869,26 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 # Xhigh/Max coerces down to High.
                 coerced = "Adaptive" if self._thinking_mode_var.get() == "Off" else "High"
                 self._thinking_mode_var.set(coerced)
+            self._on_thinking_mode_changed()
+        elif support == "extended":
+            # GPT-6 (always-reasoning): the same mode combobox relabelled
+            # "Reasoning", Low..Max with no Off — 'none' is HTTP 400 — and the
+            # temperature spinbox disabled (rejected unconditionally, never
+            # sent). Checkbox + budget combo hidden as for adaptive models.
+            self._thinking_check.pack_forget()
+            self._thinking_strength_combo.pack_forget()
+            self._thinking_mode_label.config(text="Reasoning")
+            self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
+            self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+            values = self._openai_mode_values()
+            self._thinking_mode_combo["values"] = values
+            current = self._thinking_mode_var.get()
+            if current not in values:
+                # A Claude setting carried over (Off / Adaptive) takes the
+                # floor; an unsupported top rung steps down to the highest
+                # offered rather than to the floor.
+                self._thinking_mode_var.set(
+                    values[-1] if current in ("Max", "Xhigh") else values[0])
             self._on_thinking_mode_changed()
         elif support == "manual":
             # Hide mode combobox, show checkbox + strength
@@ -1916,6 +2032,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
     def _model_supports_thinking(self, model_id=None):
         mid = model_id or self.model
+        # GPT models: MyAgent's "extended" kind — the Reasoning combobox
+        # (Low..Max for the always-reasoning GPT-6 family, see _openai_mode_values).
+        if self._is_openai_model(mid):
+            return "extended"
         # Exact-match set catches undated aliases; the version-parsed helper
         # backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
         if mid in ADAPTIVE_THINKING_MODELS or self._is_adaptive_model(mid):
@@ -1943,9 +2063,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if val == "Off":
             self.thinking_enabled = False
             self.thinking_mode = "off"
-            # Opus 4.7+, Sonnet 5+, and Fable/Mythos reject temperature even with
-            # thinking off — keep the spinbox disabled for them (it's never sent).
-            self._set_temp_state("disabled" if self._rejects_temperature() else "normal")
+            # Opus 4.7+, Sonnet 5+, Fable/Mythos and every GPT-6 id reject
+            # temperature even with thinking off — keep the spinbox disabled
+            # for them (it's never sent).
+            self._set_temp_state("disabled" if (self._rejects_temperature()
+                                                 or self._is_openai_model()) else "normal")
         elif val == "Adaptive":
             self.thinking_enabled = True
             self.thinking_mode = "adaptive"
@@ -4945,6 +5067,27 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if isinstance(content, list):
                 _truncate_images(content)
 
+        if self._is_openai_model():
+            # Mirror the inherited _stream_responses_call's wire shape (the
+            # translators run on the image-truncated copy, so the data URLs
+            # in the dump are short too).
+            tools = self._get_tools()
+            responses_tools = self._tools_to_responses(tools) if tools else []
+            responses_tools.append({"type": "web_search_preview"})
+            if not (self.desktop_enabled.get() and _HAS_DESKTOP):
+                responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+            payload = {
+                "model": self.model,
+                "input": self._messages_to_responses(display_msgs),
+                "instructions": self._build_system_prompt(),
+                "tools": responses_tools,
+                "store": False,
+                "include": ["code_interpreter_call.outputs"],
+                "reasoning": {"effort": self._openai_effective_effort(), "summary": "auto"},
+                "text": {"verbosity": self.text_verbosity},
+            }
+            return self._debug_render(payload)
+
         payload = {
             "model": self.model,
             "stream": True,
@@ -5900,6 +6043,28 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 had_thinking = False
                 max_retries = 10
 
+                if self._is_openai_model():
+                    # --- OpenAI (GPT-6) round trip: MyAgent's Responses caller,
+                    # inherited from OpenAIMixin — its own retry ladder (429/5xx
+                    # backoff, first-content timeout, the reactive 400 rungs for
+                    # temperature / server tools / reasoning.effort), the
+                    # web_search_preview + code_interpreter server tools (the
+                    # latter stripped while Desktop tools are on, same as
+                    # MyAgent), and content blocks already in Anthropic shape.
+                    # Everything Anthropic-specific below (cache breakpoints,
+                    # the Fable surfaces, the overflow trim) is bypassed.
+                    stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage = \
+                        self._stream_responses_call(messages, max_retries, label_emitted)
+                    self._track_openai_cost(usage)
+                    if stop_reason == "tool_use":
+                        messages.append({"role": "assistant", "content": content_blocks})
+                        tool_blocks = [_ToolBlock(b["name"], b["id"], b["input"])
+                                       for b in content_blocks if b.get("type") == "tool_use"]
+                        messages.append({"role": "user",
+                                         "content": self._run_tool_blocks(tool_blocks)})
+                        continue  # the model streams its reply to the tool results next
+                    break  # end_turn
+
                 # Build API kwargs dynamically
                 tools = self._get_tools()
                 # Add Anthropic server-side tools
@@ -6154,60 +6319,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 if final_message.stop_reason == "tool_use":
                     # Append the full assistant message (with tool_use blocks) to history
                     messages.append({"role": "assistant", "content": content_blocks})
-
                     tool_blocks = [b for b in content_blocks if b.type == "tool_use"]
-
-                    # -- Parallel-safe tools (network I/O, pure lookups) --
-                    PARALLEL_SAFE = {"csv_search", "get_skill"}
-
-                    # Log all tool calls up front
-                    for block in tool_blocks:
-                        tool_call_detail = json.dumps(
-                            {"tool": block.name, "id": block.id, "input": block.input},
-                            indent=2,
-                        )
-                        self.queue.put({"type": "tool_call_debug", "content": tool_call_detail})
-
-                    # Partition into parallel-safe vs sequential, preserving original index
-                    parallel_items = []   # [(index, block), ...]
-                    sequential_items = [] # [(index, block), ...]
-                    for idx, block in enumerate(tool_blocks):
-                        if block.name in PARALLEL_SAFE:
-                            parallel_items.append((idx, block))
-                        else:
-                            sequential_items.append((idx, block))
-
-                    # Pre-allocate results list to preserve original order
-                    tool_results_ordered = [None] * len(tool_blocks)
-
-                    # Execute parallel-safe tools concurrently
-                    if parallel_items:
-                        if len(parallel_items) > 1:
-                            self._tool_info(f"Running {len(parallel_items)} tools in parallel...\n")
-                        with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_items)) as executor:
-                            future_map = {}
-                            for idx, block in parallel_items:
-                                future = executor.submit(self._execute_tool, block)
-                                future_map[future] = (idx, block)
-                            for future in concurrent.futures.as_completed(future_map):
-                                idx, block = future_map[future]
-                                result = future.result()
-                                tool_results_ordered[idx] = {
-                                    "type": "tool_result",
-                                    "tool_use_id": block.id,
-                                    "content": result,
-                                }
-
-                    # Execute sequential tools one at a time, in order
-                    for idx, block in sequential_items:
-                        result = self._execute_tool(block)
-                        tool_results_ordered[idx] = {
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                        }
-
-                    messages.append({"role": "user", "content": tool_results_ordered})
+                    messages.append({"role": "user",
+                                     "content": self._run_tool_blocks(tool_blocks)})
                     # Continue the loop — Claude will stream its response using the tool results
                 else:
                     # Normal end_turn — we're done
@@ -6225,6 +6339,64 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
 
+    def _run_tool_blocks(self, tool_blocks):
+        """Execute one assistant turn's tool_use blocks and return the
+        tool_result list in the original order. Shared by the Anthropic and
+        OpenAI branches of stream_worker — the blocks arrive as SDK objects or
+        _ToolBlock wrappers, the same .name/.id/.input face. Parallel-safe
+        tools (network I/O, pure lookups) fan out on a thread pool; everything
+        else (desktop, browser, run_command) runs sequentially, in order."""
+        PARALLEL_SAFE = {"csv_search", "get_skill"}
+        # Log all tool calls up front
+        for block in tool_blocks:
+            self.queue.put({"type": "tool_call_debug", "content": json.dumps(
+                {"tool": block.name, "id": block.id, "input": block.input}, indent=2)})
+        parallel_items = [(i, b) for i, b in enumerate(tool_blocks) if b.name in PARALLEL_SAFE]
+        sequential_items = [(i, b) for i, b in enumerate(tool_blocks) if b.name not in PARALLEL_SAFE]
+        results = [None] * len(tool_blocks)  # pre-allocated to preserve original order
+        if parallel_items:
+            if len(parallel_items) > 1:
+                self._tool_info(f"Running {len(parallel_items)} tools in parallel...\n")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_items)) as executor:
+                future_map = {executor.submit(self._execute_tool, b): (i, b) for i, b in parallel_items}
+                for future in concurrent.futures.as_completed(future_map):
+                    i, b = future_map[future]
+                    results[i] = {"type": "tool_result", "tool_use_id": b.id,
+                                  "content": future.result()}
+        for i, b in sequential_items:
+            results[i] = {"type": "tool_result", "tool_use_id": b.id,
+                          "content": self._execute_tool(b)}
+        return results
+
+    def _track_openai_cost(self, usage):
+        """Price one OpenAI call from the normalized usage dict the inherited
+        _stream_responses_call returns — input net of cached / written tokens,
+        cache_read_input_tokens, and cache_creation_input_tokens on the rows
+        that bill writes (GPT-6 Astra, $12.50/M) — and post the same
+        cost_update the Anthropic branch does, so the running session total
+        and the close-time cost-log line cover both providers."""
+        if not usage:
+            return
+        pricing = self._get_pricing(self.model)
+        if not pricing:
+            return
+        ci = usage.get("input_tokens", 0)
+        co = usage.get("output_tokens", 0)
+        cw = usage.get("cache_creation_input_tokens", 0)
+        cr = usage.get("cache_read_input_tokens", 0)
+        call_cost = (ci * pricing["input"] + co * pricing["output"]
+                     + cw * pricing.get("cache_write", 0) + cr * pricing.get("cache_read", 0))
+        self._session_cost += call_cost
+        self.queue.put({
+            "type": "cost_update",
+            "call_cost": call_cost,
+            "total_cost": self._session_cost,
+            "input_tokens": ci,
+            "output_tokens": co,
+            "cache_write_tokens": cw,
+            "cache_read_tokens": cr,
+        })
+
     def _tool_info(self, message):
         """Post a tool_info activity line to the GUI queue.
 
@@ -6237,17 +6409,31 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
     @staticmethod
     def _get_pricing(model_name):
-        """Longest-prefix Anthropic pricing lookup → a per-token dict, or None. Uses
-        MyAgent's ANTHROPIC_PRICING table (per-MTok 4-tuples: input, output,
-        cache_write, cache_read) so the two apps' pricing stays in sync."""
+        """Longest-prefix pricing lookup → a per-token dict, or None. Claude ids
+        use MyAgent's ANTHROPIC_PRICING (per-MTok 4-tuples: input, output,
+        cache_write, cache_read); gpt-* ids use OPENAI_PRICING (input, output,
+        cached_input[, cache_write] — a None slot means the model has no such
+        tier and the key is left out, so the accumulator's .get(…, 0) prices
+        those tokens unpriced rather than free). Both tables are imported from
+        myagent.constants so the two apps' pricing stays in sync."""
+        table = OPENAI_PRICING if model_name.startswith("gpt-") else ANTHROPIC_PRICING
         best, best_len = None, 0
-        for prefix, prices in ANTHROPIC_PRICING.items():
+        for prefix, prices in table.items():
             if model_name.startswith(prefix) and len(prefix) > best_len:
                 best, best_len = prices, len(prefix)
         if best is None:
             return None
-        pt = tuple(p / 1_000_000 for p in best)
-        return {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
+        if table is ANTHROPIC_PRICING:
+            pt = tuple(p / 1_000_000 for p in best)
+            return {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
+        best = resolve_price(best)
+        pt = tuple(None if p is None else p / 1_000_000 for p in best)
+        priced = {"input": pt[0], "output": pt[1]}
+        if len(pt) > 2 and pt[2] is not None:
+            priced["cache_read"] = pt[2]
+        if len(pt) > 3 and pt[3] is not None:
+            priced["cache_write"] = pt[3]
+        return priced
 
     def _get_model_param_summary(self):
         """Compact string of the parameters actually in effect — SelfBot's
@@ -6259,7 +6445,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         parts = []
         support = self._model_supports_thinking()
         mode = (self.thinking_mode or "").lower()
-        if support == "adaptive":
+        if support == "extended":
+            # GPT-6: the reasoning effort actually sent (a stale Claude mode is
+            # floor-coerced exactly as _stream_responses_call does); no
+            # temperature (rejected) and no verbosity widget (API default).
+            parts.append(f"reasoning={self._openai_effective_effort().capitalize()}")
+        elif support == "adaptive":
             if mode == "off" and self._is_always_on_thinking():
                 parts.append("mode=Adaptive")
             else:
@@ -6303,8 +6494,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             prompt = " ".join(str(getattr(self, "system_prompt_name", "") or "")
                               .split()).replace(";", ",")
             calls = getattr(self, "_session_calls", 0)
-            line = (f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params};;"
-                    f"{prompt};{calls}\n")
+            line = (f"{timestamp};{self._model_provider()};{self.model};{total_cost:.4f};"
+                    f"{params};;{prompt};{calls}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
@@ -6375,6 +6566,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 elif msg["type"] == "text_delta":
                     self._current_response_text += msg["content"]
                     self._chat_insert((msg["content"], "assistant"), newline_first=False)
+                elif msg["type"] == "ci_code" and not self.show_activity.get():
+                    pass
+                elif msg["type"] == "ci_code":
+                    # OpenAI code_interpreter code (the inherited Responses
+                    # stream posts it) — one readable block, Activity-gated
+                    self._chat_insert((msg["content"] + "\n", "tool_info"))
                 elif msg["type"] == "ci_image":
                     # Code execution image — decode/download, display inline, and save
                     try:

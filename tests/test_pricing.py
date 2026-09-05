@@ -68,6 +68,16 @@ class TestGetPricing(unittest.TestCase):
                                     "output": 20.00 / 1_000_000,
                                     "cache_read": 0.40 / 1_000_000},
         ("OpenAI", "gpt-5.6-unknown-tier"): None,
+        # GPT-6 Astra (2026-09-03) is the first OpenAI row with a BILLED
+        # cache-write rate (4th element, 1.25x input like Anthropic) — the
+        # only OpenAI result that carries a cache_write key. Verified against
+        # the live pricing page 2026-09-06.
+        ("OpenAI", "gpt-6-astra"): {"input": 10.00 / 1_000_000,
+                                    "output": 50.00 / 1_000_000,
+                                    "cache_read": 1.00 / 1_000_000,
+                                    "cache_write": 12.50 / 1_000_000},
+        # ...and no bare "gpt-6" family row, same policy as 5.6
+        ("OpenAI", "gpt-6-unknown-tier"): None,
         # Arithmetic form (like the Kimi cases below) wherever the naive
         # literal would miss the live float-division repr — see the docstring.
         ("OpenAI", "gpt-5.6-terra"): {"input": 2.00 / 1_000_000,

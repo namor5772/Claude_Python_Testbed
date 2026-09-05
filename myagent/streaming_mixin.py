@@ -1,6 +1,5 @@
 import json
 import copy
-import re
 import concurrent.futures
 import os
 import time
@@ -28,157 +27,6 @@ class StreamingMixin:
     def _tool_info(self, message):
         """Post a tool_info activity line to the GUI queue (shared by all mixins)."""
         self.queue.put({"type": "tool_info", "content": message})
-
-    def _tools_to_responses(self, tools):
-        """Convert Anthropic tool schemas to OpenAI Responses API format."""
-        return [
-            {
-                "type": "function",
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("input_schema", {"type": "object", "properties": {}}),
-                "strict": False,
-            }
-            for tool in tools
-        ]
-
-    def _messages_to_responses(self, messages):
-        """Convert internal Anthropic-format messages to Responses API input format.
-
-        Key differences from Chat Completions:
-        - No system message (system prompt moves to 'instructions' parameter)
-        - User images use input_text/input_image content types
-        - Assistant tool calls become top-level function_call items
-        - Tool results become top-level function_call_output items
-        """
-        result = []
-
-        for msg in messages:
-            role = msg["role"]
-            content = msg.get("content")
-
-            if role == "user":
-                if isinstance(content, str):
-                    result.append({"role": "user", "content": content})
-                elif isinstance(content, list):
-                    # Check if this is a tool_result list
-                    has_tool_result = any(
-                        (isinstance(b, dict) and b.get("type") == "tool_result") for b in content
-                    )
-                    if has_tool_result:
-                        # Collect any images from tool results to send as a
-                        # separate user message after all function_call_output
-                        # items.  GPT models process images more reliably from
-                        # user messages than from function_call_output content.
-                        deferred_images = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "tool_result":
-                                tc_content = block.get("content", "")
-                                call_id = block.get("tool_use_id", "")
-                                # Handle content that is a list (e.g. with image blocks)
-                                if isinstance(tc_content, list):
-                                    text_parts = []
-                                    for part in tc_content:
-                                        if isinstance(part, dict) and part.get("type") == "image":
-                                            src = part.get("source", {})
-                                            data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
-                                            deferred_images.append({
-                                                "type": "input_image",
-                                                "image_url": data_url,
-                                            })
-                                        elif isinstance(part, dict) and part.get("type") == "text":
-                                            text_parts.append(part.get("text", ""))
-                                        else:
-                                            text_parts.append(str(part))
-                                    result.append({
-                                        "type": "function_call_output",
-                                        "call_id": call_id,
-                                        "output": "\n".join(text_parts),
-                                    })
-                                else:
-                                    result.append({
-                                        "type": "function_call_output",
-                                        "call_id": call_id,
-                                        "output": str(tc_content) if tc_content else "",
-                                    })
-                        # Send deferred images as a user message so the model
-                        # processes them through its normal vision pipeline
-                        if deferred_images:
-                            # Extract dimensions from the tool output text
-                            dims_hint = ""
-                            for item in reversed(result):
-                                out = item.get("output", "")
-                                if isinstance(out, str):
-                                    m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", out)
-                                    if m:
-                                        w, h = m.group(1), m.group(2)
-                                        dims_hint = f" ({w}x{h} pixels)"
-                                        break
-                            hint_text = (
-                                f"Below is the screenshot image{dims_hint} returned by the "
-                                "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
-                                "is (0, 0), X increases rightward, Y increases downward. "
-                                "When calling mouse_click, use the pixel (x, y) coordinates "
-                                "as they appear in THIS image — they are automatically "
-                                "scaled to actual screen coordinates."
-                            )
-                            result.append({
-                                "role": "user",
-                                "content": [
-                                    {"type": "input_text", "text": hint_text},
-                                    *deferred_images,
-                                ],
-                            })
-                    else:
-                        # User message with text + images
-                        parts = []
-                        for block in content:
-                            if isinstance(block, dict):
-                                if block.get("type") == "text":
-                                    parts.append({"type": "input_text", "text": block.get("text", "")})
-                                elif block.get("type") == "image":
-                                    src = block.get("source", {})
-                                    data_url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
-                                    parts.append({
-                                        "type": "input_image",
-                                        "image_url": data_url,
-                                    })
-                            elif isinstance(block, str):
-                                parts.append({"type": "input_text", "text": block})
-                        result.append({"role": "user", "content": parts})
-
-            elif role == "assistant":
-                if isinstance(content, str):
-                    result.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
-                elif isinstance(content, list):
-                    # Collect text and tool_use blocks separately
-                    text_parts = []
-                    func_calls = []
-                    for block in content:
-                        # Handle both Pydantic objects and dicts
-                        btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
-                        if btype == "text":
-                            t = getattr(block, "text", None) or (block.get("text") if isinstance(block, dict) else "")
-                            if t:
-                                text_parts.append(t)
-                        elif btype == "tool_use":
-                            bid = getattr(block, "id", None) or (block.get("id") if isinstance(block, dict) else "")
-                            bname = getattr(block, "name", None) or (block.get("name") if isinstance(block, dict) else "")
-                            binput = getattr(block, "input", None) or (block.get("input") if isinstance(block, dict) else {})
-                            func_calls.append({
-                                "type": "function_call",
-                                "call_id": bid,
-                                "name": bname,
-                                "arguments": json.dumps(binput),
-                            })
-                        # Skip thinking/redacted_thinking blocks
-                    combined_text = "\n".join(text_parts)
-                    if combined_text:
-                        result.append({"role": "assistant", "content": [{"type": "output_text", "text": combined_text}]})
-                    # Function calls are top-level items in Responses API
-                    result.extend(func_calls)
-
-        return result
 
     def _make_serializable(self, obj):
         if hasattr(obj, "model_dump"):
@@ -289,7 +137,12 @@ class StreamingMixin:
             if self.provider == "OpenAI":
                 payload["include"] = ["code_interpreter_call.outputs"]
                 is_reasoning = self._is_openai_reasoning_model()
-                if is_reasoning and self.thinking_enabled:
+                if self._openai_always_reasoning():
+                    # GPT-6: mirror _stream_responses_call — effort always
+                    # (floor-coerced), temperature never.
+                    payload["reasoning"] = {"effort": self._openai_effective_effort(),
+                                            "summary": "auto"}
+                elif is_reasoning and self.thinking_enabled:
                     payload["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
                 elif not is_reasoning:
                     payload["temperature"] = self.temperature
@@ -897,7 +750,9 @@ class StreamingMixin:
         Returns a dict with per-token prices, or None if no match.
         Anthropic: {input, output, cache_write, cache_read}
         OpenAI/Gemini: {input, output, cache_read} — cache_read omitted for the
-        few models with no cached tier (the OpenAI -pro ids, priced None)
+        few models with no cached tier (the OpenAI -pro ids, priced None);
+        plus cache_write for the OpenAI rows that bill writes (a 4th tuple
+        element — GPT-6 Astra, 2026-09-06)
         xAI/Moonshot: {input, output} — both providers supply an authoritative
         per-call cost that already nets out their cached-input discount, so a
         table rate would never be consulted.
@@ -936,6 +791,13 @@ class StreamingMixin:
         # accumulator's pricing.get("cache_read", 0) falls back to unpriced.
         if len(per_token) > 2 and best_match[2] is not None:
             priced["cache_read"] = per_token[2]
+        # A 4th element is a BILLED cache-write rate (OpenAI GPT-6 Astra:
+        # $12.50/M, 1.25x input — added 2026-09-06). Exposed only when present:
+        # _openai_usage_dict moves written tokens into cache_creation_input_tokens
+        # only for these rows (see _openai_bills_cache_writes), so a 3-tuple
+        # family never sees a cache_write key and its writes stay full-rate input.
+        if len(per_token) > 3 and best_match[3] is not None:
+            priced["cache_write"] = per_token[3]
         return priced
 
     def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,

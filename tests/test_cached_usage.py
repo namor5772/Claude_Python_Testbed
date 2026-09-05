@@ -34,6 +34,9 @@ class OpenAIUsageCase(unittest.TestCase):
         self.assertEqual(out["input_tokens"] + out["cache_read_input_tokens"], 2714)
 
     def test_cache_miss_reports_zero_cached(self):
+        # GPT-5 / 4.1 families: a cache WRITE is ordinary full-rate input (no
+        # write rate on the pricing page), so the written tokens stay in the
+        # input bucket and no cache_creation key is emitted.
         usage = SimpleNamespace(
             input_tokens=2714, output_tokens=5,
             input_tokens_details=SimpleNamespace(cached_tokens=0,
@@ -41,6 +44,40 @@ class OpenAIUsageCase(unittest.TestCase):
         out = OpenAIMixin._openai_usage_dict(usage)
         self.assertEqual(out["input_tokens"], 2714)
         self.assertEqual(out["cache_read_input_tokens"], 0)
+        self.assertNotIn("cache_creation_input_tokens", out)
+
+    def test_billed_cache_writes_leave_the_input_bucket(self):
+        # GPT-6 Astra bills writes at 1.25x (2026-09-06). Live shape on the
+        # first call of a 2423-token prompt: cache_write_tokens=2420 INSIDE
+        # input_tokens — with cache_write_billed the written tokens move to a
+        # disjoint cache_creation bucket for stream_worker's cache_write rate.
+        usage = SimpleNamespace(
+            input_tokens=2423, output_tokens=5,
+            input_tokens_details=SimpleNamespace(cached_tokens=0,
+                                                 cache_write_tokens=2420))
+        out = OpenAIMixin._openai_usage_dict(usage, cache_write_billed=True)
+        self.assertEqual(out, {"input_tokens": 3, "output_tokens": 5,
+                               "cache_read_input_tokens": 0,
+                               "cache_creation_input_tokens": 2420})
+        # ...and the repeat call reads it back: 2420 cached, 0 written
+        usage2 = SimpleNamespace(
+            input_tokens=2423, output_tokens=5,
+            input_tokens_details=SimpleNamespace(cached_tokens=2420,
+                                                 cache_write_tokens=0))
+        out2 = OpenAIMixin._openai_usage_dict(usage2, cache_write_billed=True)
+        self.assertEqual(out2, {"input_tokens": 3, "output_tokens": 5,
+                                "cache_read_input_tokens": 2420,
+                                "cache_creation_input_tokens": 0})
+        # Buckets are disjoint and sum back to the provider's total
+        self.assertEqual(sum(v for k, v in out.items() if k != "output_tokens"), 2423)
+
+    def test_overreported_write_never_goes_negative(self):
+        usage = SimpleNamespace(input_tokens=10, output_tokens=1,
+                                input_tokens_details=SimpleNamespace(cached_tokens=8,
+                                                                     cache_write_tokens=999))
+        out = OpenAIMixin._openai_usage_dict(usage, cache_write_billed=True)
+        self.assertEqual((out["input_tokens"], out["cache_read_input_tokens"],
+                          out["cache_creation_input_tokens"]), (0, 8, 2))
 
     def test_missing_details_is_not_fatal(self):
         usage = SimpleNamespace(input_tokens=100, output_tokens=7)

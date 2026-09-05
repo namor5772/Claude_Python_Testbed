@@ -95,9 +95,13 @@
   bill; it just wasn't reported here, which OVERSTATED every OpenAI line in
   APICostLog.txt. Cached input is 1/10 of input on the GPT-5 families and 1/4
   on GPT-4.1; the -pro tiers (gpt-5.5-pro / gpt-5.2-pro / gpt-5-pro) have NO
-  cached tier. Cache WRITES are free (no column on the pricing page), unlike
-  Anthropic's 1.25x. Tracked via input_tokens_details.cached_tokens, which is a
-  SUBSET of input_tokens and so is subtracted before pricing.
+  cached tier. Cache WRITES are free on the GPT-5 / GPT-4.1 families (no
+  column on the pricing page) — but GPT-6 Astra BILLS them at 1.25x input
+  ($12.50/M, Anthropic-style), carried as the 4th element of its row (below)
+  and moved out of the input bucket only for rows that carry the rate.
+  Tracked via input_tokens_details.cached_tokens / cache_write_tokens, both
+  SUBSETS of input_tokens and so subtracted before pricing (verified live
+  2026-09-06: 2420 of 2423 tokens written on a first call, read on the repeat).
 
   2026-07-31 RATE AUDIT — eight entries were wrong and are corrected below:
   gpt-5.2, gpt-5.2-pro, gpt-5.1, gpt-4.1-mini, gpt-4.1-nano and codex-mini all
@@ -111,6 +115,20 @@
   KNOWN STALE: this file still lists models the 2026-07 audit removed from
   OPENAI_PRICING (gpt-4o, gpt-4.5, the o-series, the gpt-5.0 base tiers) —
   constants.py is the source of truth for what actually prices.
+
+  GPT-6 Family (Flagship — gpt-6-astra, released 2026-09-03, wired 2026-09-06)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output    Cached   Cache write
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-6-astra            $10.00   $50.00    $1.00    $12.50
+  (Standard tier, ≤272K input. Above 272K: 2x input & cache, 1.5x output;
+   Fast mode 2x everything — neither modelled. 1.05M context, 128K output.
+   Always-reasoning: effort low/medium/high/xhigh/max — "none"/"minimal" are
+   HTTP 400 — and temperature is rejected. No bare "gpt-6" family row: an
+   unknown future gpt-6 tier is unpriced rather than mispriced, as with 5.6.
+   Declaring the web_search_preview + code_interpreter server tools adds
+   ~5.6K tokens of tool definitions to every request — written to the cache
+   at $12.50/M on the first call of a run, read back at $1/M thereafter.)
 
   GPT-5.6 Family (Current — three durable tiers, terra is the default)
   ──────────────────────────────────────────────────────────────────────────

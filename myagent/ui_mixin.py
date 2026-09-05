@@ -274,6 +274,11 @@ class UIMixin:
                 # 'none' and 'low' with HTTP 400 — minimum supported effort is 'medium'.
                 if "-pro" in self.model and self._is_gpt5_family():
                     values = ["Medium", "High"]
+                elif self._openai_always_reasoning():
+                    # GPT-6: reasoning can't be switched off — 'none' and
+                    # 'minimal' are HTTP 400 (probed live 2026-09-06), so the
+                    # ladder starts at Low.
+                    values = ["Low", "Medium", "High"]
                 else:
                     values = ["None", "Low", "Medium", "High"]
                 if self._has_reasoning_xhigh():
@@ -396,7 +401,10 @@ class UIMixin:
         mid = model_id or self.model
         if self.provider == "OpenAI":
             if self._is_openai_reasoning_model(mid):
-                if self._has_reasoning_none(mid):
+                # The Reasoning combobox: GPT-5.1+ (has a None rung) and the
+                # always-reasoning GPT-6 family (Low..Max, no None); the
+                # o-series / GPT-5.0 keep the checkbox + effort combo.
+                if self._has_reasoning_none(mid) or self._openai_always_reasoning(mid):
                     return "extended"
                 return "adaptive"
             return None
@@ -779,8 +787,9 @@ class UIMixin:
             elif mode in ("off", "none"):
                 if self.provider == "Anthropic" and self._anthropic_rejects_temperature():
                     show_temp = False  # Opus 4.7+ removed temperature (400 if sent)
-                elif self.provider != "OpenAI" or not self._is_gpt5_family():
-                    show_temp = True  # non-gpt5 models
+                elif self.provider != "OpenAI" or not (self._is_gpt5_family()
+                                                        or self._openai_always_reasoning()):
+                    show_temp = True  # non-gpt5/gpt-6 models
                 elif mode == "none" and self._gpt5_supports_temp_at_none():
                     show_temp = True  # gpt-5.4+ with effort=none
             if show_temp:
