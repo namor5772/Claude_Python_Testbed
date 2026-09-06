@@ -3141,25 +3141,31 @@ OPENAI_PRICING = {
     # entered at gpt-5.5's $5/$30 — it is $4/$20 (cached $0.40). The 5.5/5.6
     # tiers bill 2x input / 1.5x output above 272K input tokens; the table
     # keeps the ≤272K tier (same convention as gemini-3.1-pro / grok >200K).
-    # GPT-6 Astra (2026-09-03; $10/$50, cached $1.00) — the first OpenAI
-    # model that BILLS cache writes: $12.50/M = 1.25x input, Anthropic-style,
-    # carried as a 4th element (input, output, cached_input, cache_write).
-    # _get_pricing exposes it as "cache_write" only when present, and
-    # _openai_usage_dict moves written tokens out of the input bucket only
-    # for models that carry the rate — on the 3-tuple families a write is
-    # just full-rate input, as before. Verified live 2026-09-06: both
-    # cache_write_tokens and cached_tokens are SUBSETS of input_tokens (2420
-    # of 2423 written on a first call, read back on the repeat). The >272K
-    # long-context tier (2x input/cache, 1.5x output) is not modelled, same
-    # convention as 5.5/5.6. No bare "gpt-6" family row, for the same reason
-    # as 5.6 below: an unknown future gpt-6 tier is unpriced, not mispriced.
+    # CACHE WRITES ARE BILLED FROM GPT-5.6 ON — 1.25x input, Anthropic-style,
+    # carried as a 4th element (input, output, cached_input, cache_write):
+    # terra $2.50 / sol $5.00 / luna $0.25 / gpt-6-astra $12.50 per the
+    # pricing page re-read 2026-09-06 (the write premium arrived with GPT-5.6
+    # GA on 2026-07-09, alongside a 1,024-token cache floor; the 5.5 / 5.4 /
+    # 5.2 / 5.1 / 5.0 / 4.1 rows list NO write price and keep 3-tuples — a
+    # written token there is ordinary full-rate input). Until this re-read
+    # the 5.6 rows were 3-tuples, under-pricing every 5.6 cache write by 25%.
+    # _get_pricing exposes the rate as "cache_write" only when present, and
+    # _openai_usage_dict moves written tokens out of the input bucket only for
+    # rows that carry it (_openai_bills_cache_writes). Verified live
+    # 2026-09-06 on both terra and astra: cache_write_tokens and cached_tokens
+    # are SUBSETS of input_tokens (2420 of 2423 written on a first call, read
+    # back on the repeat). The >272K long-context tier (2x input/cache, 1.5x
+    # output on 5.5/5.6/6) is not modelled — table keeps the ≤272K tier.
+    # GPT-6 Astra (2026-09-03; $10/$50, cached $1.00, write $12.50). No bare
+    # "gpt-6" family row, for the same reason as 5.6 below: an unknown future
+    # gpt-6 tier is unpriced, not mispriced.
     "gpt-6-astra":         (10.00, 50.00, 1.00, 12.50),
     # GPT-5.6 family — no bare "gpt-5.6" id exists (only the three tiers), so
     # there is deliberately no family fallback row: an unknown future 5.6 id
     # gets no cost line rather than a wrong one.
-    "gpt-5.6-sol":         (4.00, 20.00, 0.40),
-    "gpt-5.6-terra":       (2.00, 12.00, 0.20),
-    "gpt-5.6-luna":        (0.20, 1.20, 0.02),
+    "gpt-5.6-sol":         (4.00, 20.00, 0.40, 5.00),
+    "gpt-5.6-terra":       (2.00, 12.00, 0.20, 2.50),
+    "gpt-5.6-luna":        (0.20, 1.20, 0.02, 0.25),
     # GPT-5.5 family
     "gpt-5.5-pro":         (30.00, 180.00, None),
     "gpt-5.5":             (5.00, 30.00, 0.50),

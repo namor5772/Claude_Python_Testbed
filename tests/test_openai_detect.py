@@ -98,9 +98,12 @@ class TestOpenAIDetect(unittest.TestCase):
             self.assertEqual(p._openai_effective_effort(), rung)
 
     def test_cache_write_billing_follows_the_pricing_row(self):
-        # Only GPT-6 Astra carries a 4th (cache-write) pricing element.
-        self.assertTrue(self.p._openai_bills_cache_writes("gpt-6-astra"))
-        for mid in ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.5", "gpt-4.1",
+        # OpenAI bills cache writes from GPT-5.6 on (1.25x input): the 5.6
+        # tiers and GPT-6 Astra carry a 4th pricing element; the older
+        # families list no write price (pricing page re-read 2026-09-06).
+        for mid in ("gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"):
+            self.assertTrue(self.p._openai_bills_cache_writes(mid), mid)
+        for mid in ("gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-4.1",
                     "gpt-5.5-pro", "gpt-6-unpriced-tier", "o3"):
             self.assertFalse(self.p._openai_bills_cache_writes(mid), mid)
 

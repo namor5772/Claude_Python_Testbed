@@ -34,9 +34,10 @@ class OpenAIUsageCase(unittest.TestCase):
         self.assertEqual(out["input_tokens"] + out["cache_read_input_tokens"], 2714)
 
     def test_cache_miss_reports_zero_cached(self):
-        # GPT-5 / 4.1 families: a cache WRITE is ordinary full-rate input (no
-        # write rate on the pricing page), so the written tokens stay in the
-        # input bucket and no cache_creation key is emitted.
+        # Families before GPT-5.6 (5.5 / 5.4 / 5.2 / 5.1 / 4.1): a cache WRITE
+        # is ordinary full-rate input (no write price on the pricing page), so
+        # the written tokens stay in the input bucket and no cache_creation
+        # key is emitted.
         usage = SimpleNamespace(
             input_tokens=2714, output_tokens=5,
             input_tokens_details=SimpleNamespace(cached_tokens=0,
@@ -47,8 +48,10 @@ class OpenAIUsageCase(unittest.TestCase):
         self.assertNotIn("cache_creation_input_tokens", out)
 
     def test_billed_cache_writes_leave_the_input_bucket(self):
-        # GPT-6 Astra bills writes at 1.25x (2026-09-06). Live shape on the
-        # first call of a 2423-token prompt: cache_write_tokens=2420 INSIDE
+        # GPT-5.6 and later bill writes at 1.25x (pricing page re-read
+        # 2026-09-06). Live shape — identical on gpt-5.6-terra and
+        # gpt-6-astra — on the first call of a 2423-token prompt:
+        # cache_write_tokens=2420 INSIDE
         # input_tokens — with cache_write_billed the written tokens move to a
         # disjoint cache_creation bucket for stream_worker's cache_write rate.
         usage = SimpleNamespace(

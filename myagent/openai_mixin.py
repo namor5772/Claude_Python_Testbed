@@ -38,13 +38,14 @@ class OpenAIMixin:
         `cache_write_tokens` is a subset of input_tokens too (verified live on
         gpt-6-astra 2026-09-06: 2420 of 2423 written on a first call, read back
         on the repeat). Whether it leaves the input bucket depends on the model:
-        the GPT-5 / 4.1 families do not bill writes (no column on the pricing
-        page — a written token is ordinary full-rate input), so it stays put
-        and no cache_creation key is emitted. GPT-6 Astra bills writes at 1.25x
-        ($12.50/M), so with ``cache_write_billed`` (the caller decides from the
-        pricing row — _openai_bills_cache_writes) the written tokens move to a
-        disjoint ``cache_creation_input_tokens`` bucket for stream_worker's
-        cache_write rate, exactly like Anthropic's.
+        the families before GPT-5.6 do not bill writes (no write price on the
+        pricing page — a written token is ordinary full-rate input), so it
+        stays put and no cache_creation key is emitted. GPT-5.6 and later bill
+        writes at 1.25x (terra $2.50/M, gpt-6-astra $12.50/M — pricing page
+        re-read 2026-09-06), so with ``cache_write_billed`` (the caller decides
+        from the pricing row — _openai_bills_cache_writes) the written tokens
+        move to a disjoint ``cache_creation_input_tokens`` bucket for
+        stream_worker's cache_write rate, exactly like Anthropic's.
 
         Returns None when there is no usage to report. Dict fallbacks cover
         older/looser SDK shapes.
@@ -75,7 +76,8 @@ class OpenAIMixin:
 
     def _openai_bills_cache_writes(self, model_id=None):
         """True when the model's OPENAI_PRICING row carries a cache-write rate
-        (a 4th element — GPT-6 Astra). Decided from the pricing table itself so
+        (a 4th element — the GPT-5.6 tiers and GPT-6 Astra, which bill writes
+        at 1.25x input). Decided from the pricing table itself so
         the usage normalizer and the cost accumulator can never disagree about
         whether written tokens leave the input bucket."""
         mid = model_id or self.model or ""
@@ -333,17 +335,46 @@ class OpenAIMixin:
         never `temperature`."""
         return self._is_gpt6_family(model_id)
 
-    def _openai_effective_effort(self):
-        """The reasoning.effort to send for an always-reasoning model: the
-        current effort, or the ladder floor "low" when the saved value is a
-        rung the model lacks (a "none" / "minimal" carried over from a GPT-5.x
-        instruction — headless runs never pass through the combobox coercion
-        in ui_mixin). The reactive 400 rung in _stream_responses_call remains
-        the backstop for anything else."""
-        effort = (getattr(self, "thinking_effort", "") or "").lower()
-        if effort in ("none", "minimal", "off", "adaptive", ""):
-            return "low"
-        return effort
+    _OPENAI_EFFORT_LADDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+    @staticmethod
+    def _openai_nearest_effort(requested, supported):
+        """Map a saved reasoning effort onto the rungs a model actually
+        accepts (``supported``, ascending, as _openai_reasoning_values yields
+        them lower-cased). A supported value passes through; "off" /
+        "adaptive" / "" (a Claude setting carried over) become the model's
+        quietest rung ("none" where it exists, else the floor); "minimal"
+        (GPT-5.0 only) becomes "low" — it means "reason a little", not "don't
+        reason" — else the floor; a value above the ceiling (Max on a 5.5,
+        Xhigh on a mini) steps down to the top rung; a value below the floor
+        (None on a -pro tier) steps up to it; anything unknown takes the
+        floor. Pure — shared by the request builder, the Reasoning combobox
+        coercion and the reactive 400 rung, so all three agree."""
+        req = (requested or "").lower()
+        if req in supported:
+            return req
+        if req in ("off", "adaptive", ""):
+            return "none" if "none" in supported else supported[0]
+        if req == "minimal":
+            return "low" if "low" in supported else supported[0]
+        ladder = OpenAIMixin._OPENAI_EFFORT_LADDER
+        if req not in ladder:
+            return supported[0]
+        below = [s for s in supported if s in ladder and ladder.index(s) <= ladder.index(req)]
+        return below[-1] if below else supported[0]
+
+    def _openai_effective_effort(self, model_id=None):
+        """The reasoning.effort to actually send for a model with the extended
+        Reasoning combobox: the saved effort when the model accepts it, else
+        the nearest rung it does (_openai_nearest_effort against
+        _openai_reasoning_values) — a "none" / "minimal" carried onto GPT-6 →
+        "low"; on GPT-5.1+ a stale "minimal" → "low", "off" → "none", a "max"
+        saved on a 5.6 and run on a 5.5 → "xhigh". Headless runs never pass
+        through the combobox coercion in ui_mixin, so this is what keeps them
+        from a 400 round trip; the reactive rung in _stream_responses_call
+        remains the backstop for anything the table doesn't know."""
+        supported = [v.lower() for v in self._openai_reasoning_values(model_id)]
+        return self._openai_nearest_effort(getattr(self, "thinking_effort", ""), supported)
 
     def _openai_model_params(self, commit=False):
         """The reasoning / temperature / text.verbosity params for the current
@@ -371,7 +402,11 @@ class OpenAIMixin:
         mutates state."""
         params = {}
         notice = None
-        if self._openai_always_reasoning():
+
+        def coerced_effort():
+            # The nearest rung this model accepts; a changed value gets the
+            # one-shot notice and (live path only) is written back.
+            nonlocal notice
             effort = self._openai_effective_effort()
             if effort != (self.thinking_effort or "").lower():
                 notice = (f"{self.model} has no reasoning='{self.thinking_effort}' "
@@ -379,12 +414,17 @@ class OpenAIMixin:
                 if commit:
                     self.thinking_effort = effort
                     self.thinking_mode = effort
-                    self.thinking_enabled = True
-            params["reasoning"] = {"effort": effort, "summary": "auto"}
+                    self.thinking_enabled = effort != "none"
+            return effort
+
+        if self._openai_always_reasoning():
+            # GPT-6: reasoning can't be disabled, temperature never accepted
+            params["reasoning"] = {"effort": coerced_effort(), "summary": "auto"}
         elif self._has_reasoning_none():
             # GPT-5.1+: always send reasoning param, even with effort="none"
-            params["reasoning"] = {"effort": self.thinking_effort, "summary": "auto"}
-            if self.thinking_effort == "none":
+            effort = coerced_effort()
+            params["reasoning"] = {"effort": effort, "summary": "auto"}
+            if effort == "none":
                 # gpt-5.4+ supports user temperature at effort=none; older models fixed at 1.0
                 params["temperature"] = (self.temperature if self._gpt5_supports_temp_at_none()
                                          else 1.0)
@@ -566,16 +606,18 @@ class OpenAIMixin:
                         full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                             self._stream_responses(api_kwargs, label_emitted)
                         break  # success
-                # Some models reject specific reasoning.effort values (e.g. -pro
-                # variants reject 'none' and 'low'). Parse the supported values
-                # out of the error and retry with the lowest one.
+                # A model the table doesn't know rejected the reasoning.effort
+                # value. Parse the supported values out of the error and retry
+                # with the NEAREST accepted rung (a Max above the ceiling steps
+                # down to the top rung, not to none — same rule as the builder
+                # and the combobox).
                 if "reasoning.effort" in err_str and "reasoning" in api_kwargs:
                     sup_match = _re.search(r"[Ss]upported values are:\s*([^.]+)", err_str)
                     if sup_match:
                         supported = _re.findall(r"'([^']+)'", sup_match.group(1))
                         if supported:
                             old_effort = api_kwargs["reasoning"].get("effort", "?")
-                            new_effort = supported[0]
+                            new_effort = self._openai_nearest_effort(old_effort, supported)
                             api_kwargs["reasoning"]["effort"] = new_effort
                             self.queue.put({
                                 "type": "tool_info",

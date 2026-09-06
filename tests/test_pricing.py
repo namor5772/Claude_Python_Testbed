@@ -64,14 +64,16 @@ class TestGetPricing(unittest.TestCase):
         # entered at gpt-5.5's $5/$30 but bills $4/$20 (cached $0.40). There
         # is no bare "gpt-5.6" family row any more — an unknown 5.6 id is
         # unpriced rather than mispriced.
+        # OpenAI BILLS cache writes from GPT-5.6 on (1.25x input, like
+        # Anthropic) — the 5.6 tiers and gpt-6-astra carry a 4th element and
+        # are the only OpenAI results with a cache_write key. Pricing page
+        # re-read 2026-09-06 (the 5.6 rows had been 3-tuples, under-pricing
+        # every 5.6 cache write by 25%).
         ("OpenAI", "gpt-5.6-sol"): {"input": 4.00 / 1_000_000,
                                     "output": 20.00 / 1_000_000,
-                                    "cache_read": 0.40 / 1_000_000},
+                                    "cache_read": 0.40 / 1_000_000,
+                                    "cache_write": 5.00 / 1_000_000},
         ("OpenAI", "gpt-5.6-unknown-tier"): None,
-        # GPT-6 Astra (2026-09-03) is the first OpenAI row with a BILLED
-        # cache-write rate (4th element, 1.25x input like Anthropic) — the
-        # only OpenAI result that carries a cache_write key. Verified against
-        # the live pricing page 2026-09-06.
         ("OpenAI", "gpt-6-astra"): {"input": 10.00 / 1_000_000,
                                     "output": 50.00 / 1_000_000,
                                     "cache_read": 1.00 / 1_000_000,
@@ -82,10 +84,12 @@ class TestGetPricing(unittest.TestCase):
         # literal would miss the live float-division repr — see the docstring.
         ("OpenAI", "gpt-5.6-terra"): {"input": 2.00 / 1_000_000,
                                       "output": 12.00 / 1_000_000,
-                                      "cache_read": 0.20 / 1_000_000},
+                                      "cache_read": 0.20 / 1_000_000,
+                                      "cache_write": 2.50 / 1_000_000},
         ("OpenAI", "gpt-5.6-luna"): {"input": 0.20 / 1_000_000,
                                      "output": 1.20 / 1_000_000,
-                                     "cache_read": 0.02 / 1_000_000},
+                                     "cache_read": 0.02 / 1_000_000,
+                                     "cache_write": 0.25 / 1_000_000},
         ("OpenAI", "gpt-5.2"): {"input": 1.75e-06, "output": 1.4e-05,
                                 "cache_read": 1.75e-07},
         ("OpenAI", "gpt-5.1"): {"input": 1.25e-06, "output": 1e-05,

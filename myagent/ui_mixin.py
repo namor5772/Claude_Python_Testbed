@@ -278,14 +278,16 @@ class UIMixin:
                 # live-probed 2026-08-25: all three 5.6 tiers accept it).
                 values = self._openai_reasoning_values()
                 self._thinking_mode_combo["values"] = values
-                # Validate current selection: an effort above this model's
-                # ceiling (Max/Xhigh saved against a 5.6, now on a 5.5) steps
-                # down to its top rung; anything else (None on a -pro tier)
-                # takes the lowest.
+                # Validate current selection against this model's rungs with
+                # the same nearest-rung rule the request builder applies: a
+                # Max/Xhigh above the ceiling (saved on a 5.6, now on a 5.5)
+                # steps down to the top rung, None on a -pro tier steps up to
+                # Medium, a Claude Off/Adaptive becomes None (or Low on GPT-6),
+                # a GPT-5.0 Minimal becomes Low.
                 current = self._thinking_mode_var.get()
                 if current not in values:
-                    self._thinking_mode_var.set(
-                        values[-1] if current in ("Max", "Xhigh") else values[0])
+                    nearest = self._openai_nearest_effort(current, [v.lower() for v in values])
+                    self._thinking_mode_var.set(nearest.capitalize())
                 self._on_thinking_mode_changed()
                 # Show verbosity after mode combo
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
@@ -814,13 +816,15 @@ class UIMixin:
                 if mode == "off" and not self._anthropic_rejects_temperature():
                     parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "OpenAI":
-            # An always-reasoning model (GPT-6) sends the floor-coerced effort
-            # for a stale None/minimal — report what actually goes on the wire.
-            shown = self._openai_effective_effort() if self._openai_always_reasoning() else mode
-            parts.append(f"reasoning={shown.capitalize() or 'None'}")
+            # Report the effort that actually goes on the wire: the request
+            # builder maps a stale value onto the nearest rung this model
+            # accepts (None/minimal → Low on GPT-6, minimal → Low and off →
+            # None on 5.1+, a Max above the ceiling → the top rung).
+            shown = self._openai_effective_effort()
+            parts.append(f"reasoning={shown.capitalize()}")
             if self._has_openai_verbosity():
                 parts.append(f"verbosity={self.text_verbosity}")
-            if mode in ("", "none") and self._gpt5_supports_temp_at_none():
+            if shown == "none" and self._gpt5_supports_temp_at_none():
                 parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "xAI":
             # Mirror _stream_xai_call: reasoning knob + temperature always sent.

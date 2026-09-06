@@ -95,13 +95,18 @@
   bill; it just wasn't reported here, which OVERSTATED every OpenAI line in
   APICostLog.txt. Cached input is 1/10 of input on the GPT-5 families and 1/4
   on GPT-4.1; the -pro tiers (gpt-5.5-pro / gpt-5.2-pro / gpt-5-pro) have NO
-  cached tier. Cache WRITES are free on the GPT-5 / GPT-4.1 families (no
-  column on the pricing page) — but GPT-6 Astra BILLS them at 1.25x input
-  ($12.50/M, Anthropic-style), carried as the 4th element of its row (below)
-  and moved out of the input bucket only for rows that carry the rate.
-  Tracked via input_tokens_details.cached_tokens / cache_write_tokens, both
-  SUBSETS of input_tokens and so subtracted before pricing (verified live
-  2026-09-06: 2420 of 2423 tokens written on a first call, read on the repeat).
+  cached tier. Cache WRITES are BILLED from GPT-5.6 on at 1.25x input
+  (terra $2.50 / sol $5.00 / luna $0.25 / gpt-6-astra $12.50 per M — pricing
+  page re-read 2026-09-06; the write premium arrived with GPT-5.6 GA on
+  2026-07-09 together with a 1,024-token cache floor, 2,048 on older models),
+  carried as the 4th element of those rows and moved out of the input bucket
+  only for rows that carry the rate. The 5.5 / 5.4 / 5.2 / 5.1 / 4.1 rows
+  list NO write price — a written token there is ordinary full-rate input.
+  Until 2026-09-06 the 5.6 rows were 3-tuples: every 5.6 cache write since
+  GA was under-priced by 25%. Tracked via input_tokens_details.cached_tokens
+  / cache_write_tokens, both SUBSETS of input_tokens and so subtracted before
+  pricing (verified live 2026-09-06 on terra AND astra: 2420 of 2423 tokens
+  written on a first call, read on the repeat).
 
   2026-07-31 RATE AUDIT — eight entries were wrong and are corrected below:
   gpt-5.2, gpt-5.2-pro, gpt-5.1, gpt-4.1-mini, gpt-4.1-nano and codex-mini all
@@ -135,12 +140,16 @@
 
   GPT-5.6 Family (Current — three durable tiers, terra is the default)
   ──────────────────────────────────────────────────────────────────────────
-  Model Prefix           Input    Output    Cached
+  Model Prefix           Input    Output    Cached   Cache write
   ──────────────────────────────────────────────────────────────────────────
-  gpt-5.6-sol            $4.00    $20.00    $0.40    [was $5.00/$30.00 —
-                                                      gpt-5.5's numbers]
-  gpt-5.6-terra          $2.00    $12.00    $0.20
-  gpt-5.6-luna           $0.20    $1.20     $0.02
+  gpt-5.6-sol            $4.00    $20.00    $0.40    $5.00   [was $5.00/$30.00
+                                                              — gpt-5.5's numbers]
+  gpt-5.6-terra          $2.00    $12.00    $0.20    $2.50
+  gpt-5.6-luna           $0.20    $1.20     $0.02    $0.25
+  (Cache-write column added 2026-09-06 — billed at 1.25x input since GA, see
+   the CACHED INPUT note above. terra per its model page: 1.05M context, 128K
+   output, knowledge cutoff 2026-02-16; effort none/low/medium/high/xhigh/max
+   — "minimal" is HTTP 400 — and temperature ONLY at effort=none.)
   (No bare "gpt-5.6" id exists, so there is no family fallback row: an
    unknown future 5.6 tier is unpriced rather than mispriced.)
 

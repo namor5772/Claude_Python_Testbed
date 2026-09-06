@@ -899,7 +899,7 @@ class StreamingMixin:
         OpenAI/Gemini: {input, output, cache_read} — cache_read omitted for the
         few models with no cached tier (the OpenAI -pro ids, priced None);
         plus cache_write for the OpenAI rows that bill writes (a 4th tuple
-        element — GPT-6 Astra, 2026-09-06)
+        element — the GPT-5.6 tiers and GPT-6 Astra, 1.25x input; 2026-09-06)
         xAI/Moonshot: {input, output} — both providers supply an authoritative
         per-call cost that already nets out their cached-input discount, so a
         table rate would never be consulted.
@@ -938,8 +938,9 @@ class StreamingMixin:
         # accumulator's pricing.get("cache_read", 0) falls back to unpriced.
         if len(per_token) > 2 and best_match[2] is not None:
             priced["cache_read"] = per_token[2]
-        # A 4th element is a BILLED cache-write rate (OpenAI GPT-6 Astra:
-        # $12.50/M, 1.25x input — added 2026-09-06). Exposed only when present:
+        # A 4th element is a BILLED cache-write rate (OpenAI from GPT-5.6 on:
+        # 1.25x input — terra $2.50/M, gpt-6-astra $12.50/M; added
+        # 2026-09-06). Exposed only when present:
         # _openai_usage_dict moves written tokens into cache_creation_input_tokens
         # only for these rows (see _openai_bills_cache_writes), so a 3-tuple
         # family never sees a cache_write key and its writes stay full-rate input.

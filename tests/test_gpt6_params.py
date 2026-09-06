@@ -143,6 +143,7 @@ class RequestParams(unittest.TestCase):
     def test_gpt56_paths_are_untouched(self):
         # GPT-5.6 with reasoning=None: 'none' goes through and temperature is
         # sent (5.4+ accept it at none) — the GPT-6 branch must not intercept.
+        # (The full terra surface is tests/test_gpt56_params.py.)
         h = _ReqHost(model="gpt-5.6-terra", effort="none", enabled=False)
         h.call()
         self.assertEqual(h.sent[0]["reasoning"], {"effort": "none", "summary": "auto"})
