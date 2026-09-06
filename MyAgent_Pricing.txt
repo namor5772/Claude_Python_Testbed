@@ -147,9 +147,10 @@
   gpt-5.6-terra          $2.00    $12.00    $0.20    $2.50
   gpt-5.6-luna           $0.20    $1.20     $0.02    $0.25
   (Cache-write column added 2026-09-06 — billed at 1.25x input since GA, see
-   the CACHED INPUT note above. terra per its model page: 1.05M context, 128K
-   output, knowledge cutoff 2026-02-16; effort none/low/medium/high/xhigh/max
-   — "minimal" is HTTP 400 — and temperature ONLY at effort=none.)
+   the CACHED INPUT note above. All three tiers per their model pages: 1.05M
+   context, 128K output, knowledge cutoff 2026-02-16, effort none/low/medium
+   (default)/high/xhigh/max — "minimal" is HTTP 400 on every tier — and
+   temperature ONLY at effort=none; probed live on sol, terra and luna.)
   (No bare "gpt-5.6" id exists, so there is no family fallback row: an
    unknown future 5.6 tier is unpriced rather than mispriced.)
 

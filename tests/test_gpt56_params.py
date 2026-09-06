@@ -1,6 +1,7 @@
-"""Characterization tests for the gpt-5.6-terra parameter surface (2026-09-06
-audit — the same layers as tests/test_gpt6_params.py, whose hosts are
-reused), against the contract probed live with the real key:
+"""Characterization tests for the GPT-5.6 family's parameter surface — terra
+(2026-09-06 audit), then sol and luna the same day — the same layers as
+tests/test_gpt6_params.py, whose hosts are reused. Against the contract probed
+live with the real key on ALL THREE tiers:
 
   * reasoning.effort accepts none/low/medium/high/xhigh/max — "minimal" is
     HTTP 400 ("Supported values are: 'none', 'low', 'medium', 'high',
@@ -10,8 +11,9 @@ reused), against the contract probed live with the real key:
   * text.verbosity low/medium/high, reasoning.summary detailed, the
     web_search_preview + code_interpreter server tools are all accepted;
   * cache_write_tokens / cached_tokens are subsets of input_tokens, and the
-    pricing page lists a BILLED cache-write rate ($2.50/M = 1.25x input) —
-    so terra's row is a 4-tuple and its writes leave the input bucket.
+    pricing page lists a BILLED cache-write rate (1.25x input: terra $2.50,
+    sol $5.00, luna $0.25 per M) — so the rows are 4-tuples and written
+    tokens leave the input bucket.
 
 Also pins the nearest-rung coercion shared by the request builder, the
 Reasoning combobox and the reactive 400 rung (_openai_nearest_effort).
@@ -24,52 +26,64 @@ from myagent.streaming_mixin import StreamingMixin
 from tests.test_gpt6_params import _ReqHost, _UIHost
 
 TERRA = "gpt-5.6-terra"
+# tier -> (input, output, cached_input, cache_write) per M, pricing page 2026-09-06
+TIERS = {
+    "gpt-5.6-terra": (2.00, 12.00, 0.20, 2.50),
+    "gpt-5.6-sol": (4.00, 20.00, 0.40, 5.00),
+    "gpt-5.6-luna": (0.20, 1.20, 0.02, 0.25),
+}
 RUNGS = ["none", "low", "medium", "high", "xhigh", "max"]
 
 
 class RequestParams(unittest.TestCase):
 
     def test_every_rung_is_sent_verbatim_temperature_only_at_none(self):
-        for rung in RUNGS:
-            with self.subTest(rung=rung):
-                h = _ReqHost(model=TERRA, effort=rung, enabled=(rung != "none"))
-                h.call()
-                (kw,) = h.sent
-                self.assertEqual(kw["reasoning"], {"effort": rung, "summary": "auto"})
-                if rung == "none":
-                    self.assertEqual(kw["temperature"], 0.7)   # 5.4+: the user's value
-                else:
-                    self.assertNotIn("temperature", kw)
-                self.assertEqual(kw["text"], {"verbosity": "medium"})
-                self.assertIs(kw["store"], False)
-                self.assertEqual([t["type"] for t in kw["tools"]],
-                                 ["function", "web_search_preview", "code_interpreter"])
-                self.assertEqual(h.infos(), [])
-                self.assertEqual((h.thinking_effort, h.thinking_mode), (rung, rung))
+        for tier in TIERS:
+            for rung in RUNGS:
+                with self.subTest(tier=tier, rung=rung):
+                    h = _ReqHost(model=tier, effort=rung, enabled=(rung != "none"))
+                    h.call()
+                    (kw,) = h.sent
+                    self.assertEqual(kw["model"], tier)
+                    self.assertEqual(kw["reasoning"], {"effort": rung, "summary": "auto"})
+                    if rung == "none":
+                        self.assertEqual(kw["temperature"], 0.7)   # 5.4+: the user's value
+                    else:
+                        self.assertNotIn("temperature", kw)
+                    self.assertEqual(kw["text"], {"verbosity": "medium"})
+                    self.assertIs(kw["store"], False)
+                    self.assertEqual([t["type"] for t in kw["tools"]],
+                                     ["function", "web_search_preview", "code_interpreter"])
+                    self.assertEqual(h.infos(), [])
+                    self.assertEqual((h.thinking_effort, h.thinking_mode), (rung, rung))
 
     def test_stale_minimal_becomes_low(self):
-        # "minimal" is GPT-5.0 only — terra rejects it; the builder sends the
-        # nearest rung, writes it back, and notices once per run.
-        h = _ReqHost(model=TERRA, effort="minimal", enabled=True)
-        h.call()
-        self.assertEqual(h.sent[0]["reasoning"]["effort"], "low")
-        self.assertNotIn("temperature", h.sent[0])
-        self.assertEqual((h.thinking_effort, h.thinking_mode, h.thinking_enabled),
-                         ("low", "low", True))
-        notices = h.infos()
-        self.assertEqual(len(notices), 1)
-        self.assertIn("no reasoning='minimal' rung", notices[0])
-        h.call()
-        self.assertEqual(h.infos(), [])
+        # "minimal" is GPT-5.0 only — every 5.6 tier rejects it; the builder
+        # sends the nearest rung, writes it back, and notices once per run.
+        for tier in TIERS:
+            with self.subTest(tier=tier):
+                h = _ReqHost(model=tier, effort="minimal", enabled=True)
+                h.call()
+                self.assertEqual(h.sent[0]["reasoning"]["effort"], "low")
+                self.assertNotIn("temperature", h.sent[0])
+                self.assertEqual((h.thinking_effort, h.thinking_mode, h.thinking_enabled),
+                                 ("low", "low", True))
+                notices = h.infos()
+                self.assertEqual(len(notices), 1)
+                self.assertIn("no reasoning='minimal' rung", notices[0])
+                h.call()
+                self.assertEqual(h.infos(), [])
 
     def test_stale_claude_off_becomes_none_with_temperature(self):
-        h = _ReqHost(model=TERRA, effort="off", enabled=False)
-        h.call()
-        self.assertEqual(h.sent[0]["reasoning"]["effort"], "none")
-        self.assertEqual(h.sent[0]["temperature"], 0.7)
-        self.assertEqual((h.thinking_effort, h.thinking_mode, h.thinking_enabled),
-                         ("none", "none", False))
-        self.assertEqual(len(h.infos()), 1)
+        for tier in TIERS:
+            with self.subTest(tier=tier):
+                h = _ReqHost(model=tier, effort="off", enabled=False)
+                h.call()
+                self.assertEqual(h.sent[0]["reasoning"]["effort"], "none")
+                self.assertEqual(h.sent[0]["temperature"], 0.7)
+                self.assertEqual((h.thinking_effort, h.thinking_mode, h.thinking_enabled),
+                                 ("none", "none", False))
+                self.assertEqual(len(h.infos()), 1)
 
     def test_max_saved_on_a_56_steps_down_on_a_55(self):
         h = _ReqHost(model="gpt-5.5", effort="max", enabled=True)
@@ -88,12 +102,16 @@ class RequestParams(unittest.TestCase):
 
 class CostRow(unittest.TestCase):
 
-    def test_terra_bills_cache_writes(self):
-        h = _ReqHost(model=TERRA)
-        self.assertTrue(h._openai_bills_cache_writes())
-        self.assertEqual(StreamingMixin._get_pricing("OpenAI", TERRA),
-                         {"input": 2.00 / 1_000_000, "output": 12.00 / 1_000_000,
-                          "cache_read": 0.20 / 1_000_000, "cache_write": 2.50 / 1_000_000})
+    def test_every_tier_bills_cache_writes(self):
+        for tier, (inp, out, cached, write) in TIERS.items():
+            with self.subTest(tier=tier):
+                self.assertTrue(_ReqHost(model=tier)._openai_bills_cache_writes())
+                self.assertEqual(StreamingMixin._get_pricing("OpenAI", tier),
+                                 {"input": inp / 1_000_000, "output": out / 1_000_000,
+                                  "cache_read": cached / 1_000_000,
+                                  "cache_write": write / 1_000_000})
+                # the write premium is exactly 1.25x input on every tier
+                self.assertAlmostEqual(write, inp * 1.25, places=9)
 
     def test_terra_call_cost_with_writes_and_reads(self):
         # The SelfBot smoke's live shapes, priced at terra's rates: call 1
@@ -119,33 +137,40 @@ class CostRow(unittest.TestCase):
 class DebugPayload(unittest.TestCase):
 
     def test_payload_mirrors_the_request(self):
-        h = _ReqHost(model=TERRA, effort="none", enabled=False, verbosity="low")
-        text = h._payload_for_display([{"role": "user", "content": "hi"}])
-        self.assertIn('"effort": "none"', text)
-        self.assertIn('"temperature": 0.7', text)
-        self.assertIn('"verbosity": "low"', text)
-        h = _ReqHost(model=TERRA, effort="minimal", enabled=True)
-        text = h._payload_for_display([{"role": "user", "content": "hi"}])
-        self.assertIn('"effort": "low"', text)              # coerced like the request...
-        self.assertEqual(h.thinking_effort, "minimal")      # ...but the dump never mutates state
-        self.assertNotIn("temperature", text)
+        for tier in TIERS:
+            with self.subTest(tier=tier):
+                h = _ReqHost(model=tier, effort="none", enabled=False, verbosity="low")
+                text = h._payload_for_display([{"role": "user", "content": "hi"}])
+                self.assertIn('"effort": "none"', text)
+                self.assertIn('"temperature": 0.7', text)
+                self.assertIn('"verbosity": "low"', text)
+                h = _ReqHost(model=tier, effort="minimal", enabled=True)
+                text = h._payload_for_display([{"role": "user", "content": "hi"}])
+                self.assertIn('"effort": "low"', text)              # coerced like the request...
+                self.assertEqual(h.thinking_effort, "minimal")      # ...but the dump never mutates state
+                self.assertNotIn("temperature", text)
 
 
 class Exposed(unittest.TestCase):
 
     def test_reasoning_combobox(self):
-        h = _UIHost(model=TERRA)
-        self.assertEqual(h._model_supports_thinking(), "extended")
-        self.assertEqual(h._openai_reasoning_values(), ["None", "Low", "Medium", "High", "Xhigh", "Max"])
+        for tier in TIERS:
+            with self.subTest(tier=tier):
+                h = _UIHost(model=tier)
+                self.assertEqual(h._model_supports_thinking(), "extended")
+                self.assertEqual(h._openai_reasoning_values(),
+                                 ["None", "Low", "Medium", "High", "Xhigh", "Max"])
 
     def test_param_summary(self):
         self.assertEqual(_UIHost(model=TERRA, mode="none")._get_model_param_summary(),
                          "reasoning=None verbosity=medium temp=0.7")
-        self.assertEqual(_UIHost(model=TERRA, mode="max", verbosity="high")._get_model_param_summary(),
+        self.assertEqual(_UIHost(model="gpt-5.6-sol", mode="max", verbosity="high")._get_model_param_summary(),
                          "reasoning=Max verbosity=high")
         # stale values report what the wire will carry
         self.assertEqual(_UIHost(model=TERRA, mode="minimal")._get_model_param_summary(),
                          "reasoning=Low verbosity=medium")
+        self.assertEqual(_UIHost(model="gpt-5.6-luna", mode="off")._get_model_param_summary(),
+                         "reasoning=None verbosity=medium temp=0.7")
         self.assertEqual(_UIHost(model="gpt-5.5", mode="max")._get_model_param_summary(),
                          "reasoning=Xhigh verbosity=medium")
 
@@ -204,6 +229,21 @@ class SavedEntry(unittest.TestCase):
                          ("max", "max", True))
         self.assertEqual(h.text_verbosity, "low")
         self.assertEqual(h._get_model_param_summary(), "reasoning=Max verbosity=low")
+
+    def test_claude_off_entry_on_sol_restores_headless(self):
+        # An instruction saved on a Claude model (mode "off") re-pointed at sol:
+        # restore keeps the saved value (no combobox headless), but every
+        # wire-facing reader already says None + temperature, and the model
+        # list check accepts sol.
+        h = _UIHost(model=TERRA, mode="max")
+        h.available_models = ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra"]
+        h._restore_model_params(dict(self.ENTRY, model="gpt-5.6-sol", thinking_effort="off",
+                                     thinking_mode="off", text_verbosity="low"))
+        self.assertEqual(h.model, "gpt-5.6-sol")
+        self.assertEqual((h.thinking_mode, h.thinking_enabled), ("off", False))
+        self.assertEqual(h._openai_effective_effort(), "none")
+        self.assertEqual(h._get_model_param_summary(), "reasoning=None verbosity=low temp=0.7")
+        self.assertEqual(h._model_drift_warnings, [])
 
 
 if __name__ == "__main__":
