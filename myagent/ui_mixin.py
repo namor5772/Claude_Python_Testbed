@@ -49,17 +49,21 @@ class UIMixin:
 
         # Instruction / START / STOP are a "last pressed" group: their commands
         # are wired by _track_toolbar_presses below, through the highlighter.
-        self.instruction_button = tk.Button(chat_toolbar, text="Instruction")
+        # One shared font, so all three look identical at startup — only the
+        # pressed one ever goes bold (its bold twin is derived from this).
+        toolbar_font = ("Arial", 10)
+        self.instruction_button = tk.Button(
+            chat_toolbar, text="Instruction", font=toolbar_font,
+        )
         self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self._start_button = tk.Button(
-            chat_toolbar, text="START", width=8, font=("Arial", 10),
+            chat_toolbar, text="START", width=8, font=toolbar_font,
         )
         self._start_button.pack(side=tk.LEFT, padx=(0, 5))
 
         self._stop_button = tk.Button(
-            chat_toolbar, text="STOP", width=8,
-            font=("Arial", 10, "bold"), state="disabled",
+            chat_toolbar, text="STOP", width=8, font=toolbar_font, state="disabled",
         )
         self._stop_button.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -185,10 +189,10 @@ class UIMixin:
         was created with. Pressing one paints it TOOLBAR_ACTIVE_BG with a bold
         face and puts each other button back to its resting look: the
         creation-time background and its own font at regular weight. Only the
-        weight changes — the bold twin is derived from the button's own font,
-        so the Instruction button (TkDefaultFont) and START/STOP (Arial 10)
-        each keep their family and size. The wrapper repaints BEFORE running
-        the command, so a command that opens a dialog can't delay it.
+        weight changes — both twins are derived from the button's own font
+        (never a hardcoded face), so each button keeps whatever family and
+        size it was created with. The wrapper repaints BEFORE running the
+        command, so a command that opens a dialog can't delay it.
         """
         self._toolbar_styles = {}
         for button, command in buttons_and_commands:

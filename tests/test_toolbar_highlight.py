@@ -4,13 +4,13 @@ The Instruction / START / STOP buttons on MyAgent's top row are one group: the
 button pressed most recently wears a light-blue background and a bold face,
 and the other two are put back to their resting look — the background they
 were created with and their own font at regular weight. Nothing is repainted
-at startup, so the buttons first appear exactly as created (STOP's bold,
-disabled face included).
+at startup, so the buttons first appear exactly as created: all three in the
+same regular Arial 10, STOP disabled.
 
 These are the only tests in the suite that need a Tk root, because the
 highlight is nothing but widget configuration. They build the three buttons
-the way setup_ui does (default font / Arial 10 / Arial 10 bold) on a withdrawn
-root and skip cleanly where no display is available.
+the way setup_ui does on a withdrawn root and skip cleanly where no display
+is available.
 """
 
 import tkinter as tk
@@ -19,6 +19,8 @@ import unittest
 from tests._util import stub
 from myagent.constants import TOOLBAR_ACTIVE_BG
 from myagent.ui_mixin import UIMixin
+
+TOOLBAR_FONT = ("Arial", 10)   # the one font setup_ui gives all three buttons
 
 
 def _actual(button, option):
@@ -36,10 +38,10 @@ class ToolbarHighlightTests(unittest.TestCase):
         self.root.withdraw()
         self.pressed = []
         self.app = stub(UIMixin)
-        self.instruction = tk.Button(self.root, text="Instruction")
-        self.start = tk.Button(self.root, text="START", width=8, font=("Arial", 10))
+        self.instruction = tk.Button(self.root, text="Instruction", font=TOOLBAR_FONT)
+        self.start = tk.Button(self.root, text="START", width=8, font=TOOLBAR_FONT)
         self.stop = tk.Button(
-            self.root, text="STOP", width=8, font=("Arial", 10, "bold"), state="disabled",
+            self.root, text="STOP", width=8, font=TOOLBAR_FONT, state="disabled",
         )
         self.buttons = (self.instruction, self.start, self.stop)
         self.created_look = {
@@ -55,15 +57,19 @@ class ToolbarHighlightTests(unittest.TestCase):
     def tearDown(self):
         self.root.destroy()
 
-    def test_startup_look_is_untouched(self):
+    def test_startup_look_is_untouched_and_identical(self):
         # Tracking the group repaints nothing: bg, font spec and state are
-        # exactly what the buttons were created with — STOP still bold.
+        # exactly what the buttons were created with — and the three were
+        # created alike, so at startup they share one regular-weight font.
         for button in self.buttons:
             self.assertEqual(
                 (button.cget("bg"), button.cget("font"), str(button.cget("state"))),
                 self.created_look[button],
             )
-        self.assertEqual(_actual(self.stop, "-weight"), "bold")
+            self.assertEqual(_actual(button, "-weight"), "normal")
+            self.assertEqual(_actual(button, "-family"), "Arial")
+            self.assertEqual(int(_actual(button, "-size")), 10)
+        self.assertEqual(len({str(b.cget("font")) for b in self.buttons}), 1)
         self.assertEqual(self.pressed, [])
 
     def test_press_paints_light_blue_bold_and_runs_the_command(self):
@@ -82,23 +88,25 @@ class ToolbarHighlightTests(unittest.TestCase):
         self.assertEqual(self.pressed, ["start", "instruction"])
         self.assertEqual(self.instruction.cget("bg"), TOOLBAR_ACTIVE_BG)
         self.assertEqual(_actual(self.instruction, "-weight"), "bold")
-        self.assertEqual(self.start.cget("bg"), self.default_bg)
-        self.assertEqual(self.start.cget("activebackground"), self.default_bg)
-        self.assertEqual(_actual(self.start, "-weight"), "normal")
-        # STOP was created bold; at rest in the group it is regular like the rest.
-        self.assertEqual(self.stop.cget("bg"), self.default_bg)
-        self.assertEqual(_actual(self.stop, "-weight"), "normal")
-        self.assertEqual(_actual(self.stop, "-family"), "Arial")
+        for resting in (self.start, self.stop):
+            self.assertEqual(resting.cget("bg"), self.default_bg)
+            self.assertEqual(resting.cget("activebackground"), self.default_bg)
+            self.assertEqual(_actual(resting, "-weight"), "normal")
+            self.assertEqual(_actual(resting, "-family"), "Arial")
+            self.assertEqual(int(_actual(resting, "-size")), 10)
 
-    def test_instruction_bold_twin_keeps_the_default_face(self):
-        # The Instruction button has no explicit font, so its bold face must be
-        # built from TkDefaultFont's real family/size — not from Arial.
+    def test_bold_twin_is_derived_from_the_buttons_own_font(self):
+        # The helper must never hardcode a face: a button created without an
+        # explicit font (TkDefaultFont — Segoe UI 9 on Windows) gets a bold
+        # twin with THAT family/size, so a per-button font choice is honoured.
         default_family = self.root.tk.call("font", "actual", "TkDefaultFont", "-family")
         default_size = self.root.tk.call("font", "actual", "TkDefaultFont", "-size")
-        self.instruction.invoke()
-        self.assertEqual(_actual(self.instruction, "-family"), default_family)
-        self.assertEqual(_actual(self.instruction, "-size"), default_size)
-        self.assertEqual(_actual(self.instruction, "-weight"), "bold")
+        plain = tk.Button(self.root, text="plain")
+        stub(UIMixin)._track_toolbar_presses((plain, lambda: None))
+        plain.invoke()
+        self.assertEqual(_actual(plain, "-family"), default_family)
+        self.assertEqual(_actual(plain, "-size"), default_size)
+        self.assertEqual(_actual(plain, "-weight"), "bold")
 
     def test_disabled_button_cannot_be_pressed(self):
         self.stop.invoke()  # disabled at startup, like the real STOP
