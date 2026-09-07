@@ -56,6 +56,7 @@ class SafetyMixin:
         self.messages.append({"role": "user", "content": content})
         self.streaming = True
         self._start_button.config(state="disabled")
+        self._stop_button.config(state="normal")
         self.instruction_button.config(state="disabled")
 
         thread = threading.Thread(
@@ -64,9 +65,10 @@ class SafetyMixin:
         thread.start()
 
     def _stop_agent(self):
-        # STOP is never disabled (it stays a plain enabled button), so a press
-        # while idle only sets a flag that the next _start_agent resets.
         self.stop_requested = True
+        # Unpressable until the next run enables it again (it never looks
+        # disabled — see the STOP button's creation in ui_mixin).
+        self._stop_button.config(state="disabled")
 
     def append_message(self, role, content, filenames=None):
         self.chat_display.config(state="normal")

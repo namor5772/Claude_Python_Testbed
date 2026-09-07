@@ -51,8 +51,6 @@ class UIMixin:
         # are wired by _track_toolbar_presses below, through the highlighter.
         # One shared font, so all three look identical at startup — only the
         # pressed one ever goes bold (its bold twin is derived from this).
-        # STOP is never disabled: pressing it while idle just sets the stop
-        # flag, which the next _start_agent resets.
         toolbar_font = ("Arial", 10)
         self.instruction_button = tk.Button(
             chat_toolbar, text="Instruction", font=toolbar_font,
@@ -64,9 +62,15 @@ class UIMixin:
         )
         self._start_button.pack(side=tk.LEFT, padx=(0, 5))
 
+        # STOP is disabled whenever it can't be used (idle, or already pressed
+        # for this run): a disabled button ignores clicks, Space/Return and
+        # invoke(), and Tab traversal skips it. It must never LOOK disabled,
+        # though — its disabled text colour is set to its normal one, so the
+        # disabled look IS the normal look and it matches the other two.
         self._stop_button = tk.Button(
-            chat_toolbar, text="STOP", width=8, font=toolbar_font,
+            chat_toolbar, text="STOP", width=8, font=toolbar_font, state="disabled",
         )
+        self._stop_button.config(disabledforeground=self._stop_button.cget("fg"))
         self._stop_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self._track_toolbar_presses(
