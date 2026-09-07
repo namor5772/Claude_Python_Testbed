@@ -16,7 +16,7 @@ if IS_WINDOWS:
             pass
 
 import tkinter as tk
-from tkinter import messagebox, filedialog, ttk
+from tkinter import font as tkfont, messagebox, filedialog, ttk
 import anthropic
 import threading
 import queue
@@ -46,6 +46,7 @@ try:
         ANTHROPIC_PRICING, APICOST_LOG_MAX_BYTES,
         ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
         ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
+        TOOLBAR_ACTIVE_BG,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
     from myagent.helpers import rotate_log_if_needed
@@ -67,6 +68,9 @@ except Exception:
     ANTHROPIC_THINKING_BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
     ANTHROPIC_SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01"
     ANTHROPIC_SERVER_FALLBACKS = "default"
+    # Background of the toolbar button pressed most recently (the "last
+    # pressed" group — see App._track_toolbar_presses).
+    TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
 
     def rotate_log_if_needed(log_path, max_bytes):
         return False  # no myagent package -> no rotation; the log just grows
@@ -1439,8 +1443,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
         # Not packed yet — _on_model_selected() will show/hide as needed
 
-        tk.Button(model_toolbar, text="NEW CHAT", command=self._new_chat, width=10).pack(side=tk.RIGHT, padx=(5, 0))
-        tk.Button(model_toolbar, text="DELETE", command=self._delete_chat, width=8).pack(side=tk.RIGHT, padx=(10, 5))
+        # The main window's seven plain buttons (DELETE / NEW CHAT here, SAVE on
+        # row 2, the four on the button bar) are a "last pressed" group with one
+        # shared font — their commands are wired by _track_toolbar_presses at
+        # the end of the button bar, through the highlighter. The red/green
+        # Auto toggle stays out of it: its colour IS its state.
+        toolbar_font = ("Arial", 10)
+        self.new_chat_button = tk.Button(model_toolbar, text="NEW CHAT", width=10, font=toolbar_font)
+        self.new_chat_button.pack(side=tk.RIGHT, padx=(5, 0))
+        self.delete_chat_button = tk.Button(model_toolbar, text="DELETE", width=8, font=toolbar_font)
+        self.delete_chat_button.pack(side=tk.RIGHT, padx=(10, 5))
 
         # Names toolbar (row 0)
         names_toolbar = tk.Frame(self.root)
@@ -1506,7 +1518,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.chat_name_entry.pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry.bind("<Return>", lambda e: self._save_chat())
 
-        tk.Button(chat_toolbar, text="SAVE", command=self._save_chat, width=6).pack(side=tk.LEFT, padx=(0, 15))
+        self.save_chat_button = tk.Button(chat_toolbar, text="SAVE", width=6, font=toolbar_font)
+        self.save_chat_button.pack(side=tk.LEFT, padx=(0, 15))
 
         tk.Label(chat_toolbar, text="Load Chat", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         self._chat_combo_var = tk.StringVar()
@@ -1593,13 +1606,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         button_frame.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         self.attach_button = tk.Button(
-            button_frame, text="Attach Images", command=self.attach_image, width=14
+            button_frame, text="Attach Images", width=14, font=toolbar_font,
         )
         self.attach_button.pack(side=tk.LEFT, padx=(5, 5))
 
-
         self.prompt_button = tk.Button(
-            button_frame, text="System Prompt", command=self.open_prompt_editor, width=14
+            button_frame, text="System Prompt", width=14, font=toolbar_font,
         )
         self.prompt_button.pack(side=tk.LEFT, padx=(5, 5))
 
@@ -1614,15 +1626,25 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         else:
             skills_label = "Skills"
         self.skills_button = tk.Button(
-            button_frame, text=skills_label, command=self.open_skills_editor, padx=10
+            button_frame, text=skills_label, padx=10, font=toolbar_font,
         )
         self.skills_button.pack(side=tk.LEFT, padx=(5, 5))
 
         self.ps_safety_button = tk.Button(
-            button_frame, text="Safety", command=self._open_ps_safety_dialog, padx=10
+            button_frame, text="Safety", padx=10, font=toolbar_font,
         )
         self.ps_safety_button.pack(side=tk.LEFT, padx=(0, 5))
         self._update_ps_safety_button()
+
+        self._track_toolbar_presses(
+            (self.delete_chat_button, self._delete_chat),
+            (self.new_chat_button, self._new_chat),
+            (self.save_chat_button, self._save_chat),
+            (self.attach_button, self.attach_image),
+            (self.prompt_button, self.open_prompt_editor),
+            (self.skills_button, self.open_skills_editor),
+            (self.ps_safety_button, self._open_ps_safety_dialog),
+        )
 
         # Checkbox row (below buttons)
         checkbox_frame = tk.Frame(self.root)
@@ -2632,6 +2654,51 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if x < sw and y < sh and x + w > 0 and y + h > 0:
             return f"{w}x{h}+{x}+{y}"
         return f"{w}x{h}"
+
+    # ── Toolbar "last pressed" highlight (in-file copy of ui_mixin's) ──────
+
+    def _track_toolbar_presses(self, *buttons_and_commands):
+        """Make the given (button, command) pairs a "last pressed" group.
+
+        Nothing is repainted here, so at startup every button keeps the look it
+        was created with. Pressing one paints it TOOLBAR_ACTIVE_BG with a bold
+        face and puts each other button back to its resting look: the
+        creation-time background and its own font at regular weight. Only the
+        weight changes — both twins are derived from the button's own font
+        (never a hardcoded face), so each button keeps whatever family and
+        size it was created with. The wrapper repaints BEFORE running the
+        command, so a command that opens a dialog can't delay it.
+        """
+        self._toolbar_styles = {}
+        for button, command in buttons_and_commands:
+            rest_font = tkfont.Font(root=button, font=button.cget("font"))
+            rest_font.configure(weight="normal")
+            bold_font = tkfont.Font(root=button, font=button.cget("font"))
+            bold_font.configure(weight="bold")
+            self._toolbar_styles[button] = {
+                "rest": {
+                    "bg": button.cget("bg"),
+                    "activebackground": button.cget("activebackground"),
+                    # macOS Aqua ignores bg on the button face; the highlight
+                    # frame around it is the one part that does take a colour.
+                    "highlightbackground": button.cget("highlightbackground"),
+                    "font": rest_font,
+                },
+                "active": {
+                    "bg": TOOLBAR_ACTIVE_BG,
+                    "activebackground": TOOLBAR_ACTIVE_BG,
+                    "highlightbackground": TOOLBAR_ACTIVE_BG,
+                    "font": bold_font,
+                },
+            }
+            button.config(
+                command=lambda b=button, c=command: self._press_toolbar_button(b, c))
+
+    def _press_toolbar_button(self, button, command):
+        """Repaint the group for a press of `button`, then run its command."""
+        for other, styles in self._toolbar_styles.items():
+            other.config(**styles["active" if other is button else "rest"])
+        command()
 
     def _update_skills_button(self):
         on_count = sum(1 for s in self.skills.values() if s.get("mode") == "enabled")
