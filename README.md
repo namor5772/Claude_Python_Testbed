@@ -127,7 +127,7 @@ Architecture notes live in [.claude/rules/CLAUDE_SELFBOT.md](.claude/rules/CLAUD
 
 ## MyAgent.py — Autonomous AI Task Agent
 
-A fire-and-forget task runner: you write an **Instruction** (the task), pick a **Provider + Model**, press **START**, and the agent loops — calling tools, reading results, calling more tools — until the task is done. You are a passive observer unless the agent explicitly asks for input via its `user_prompt` dialog.
+A fire-and-forget task runner: you write an **Instruction** (the task), pick a **Provider + Model**, press **START**, and the agent loops — calling tools, reading results, calling more tools — until the task is done. You are a passive observer unless the agent explicitly asks for input via its `user_prompt` dialog. The three toolbar buttons — **Instruction**, **START**, **STOP** — show which one you pressed last: it turns light blue with a bold label while the other two return to their plain look.
 
 ### How the agentic loop works
 

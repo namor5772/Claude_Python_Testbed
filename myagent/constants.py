@@ -3324,6 +3324,9 @@ OLLAMA_PRICING = {}
 PROVIDERS = ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
+# Background of the toolbar button pressed most recently (Instruction / START /
+# STOP form a "last pressed" group — see UIMixin._track_toolbar_presses).
+TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
 
 # _BASE_DIR points to the project root (parent of the myagent/ package)

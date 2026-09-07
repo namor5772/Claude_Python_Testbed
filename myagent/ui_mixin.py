@@ -1,7 +1,8 @@
 import tkinter as tk
+from tkinter import font as tkfont
 
 from myagent.constants import (
-    MONO_FONT, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
+    MONO_FONT, TOOLBAR_ACTIVE_BG, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     ANTHROPIC_DEPRECATED_MODEL_PREFIXES,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
@@ -46,22 +47,27 @@ class UIMixin:
         chat_toolbar = tk.Frame(self.root)
         chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
 
-        self.instruction_button = tk.Button(
-            chat_toolbar, text="Instruction", command=self.open_instruction_editor,
-        )
+        # Instruction / START / STOP are a "last pressed" group: their commands
+        # are wired by _track_toolbar_presses below, through the highlighter.
+        self.instruction_button = tk.Button(chat_toolbar, text="Instruction")
         self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
 
         self._start_button = tk.Button(
-            chat_toolbar, text="START", command=self._start_agent, width=8,
-            font=("Arial", 10),
+            chat_toolbar, text="START", width=8, font=("Arial", 10),
         )
         self._start_button.pack(side=tk.LEFT, padx=(0, 5))
 
         self._stop_button = tk.Button(
-            chat_toolbar, text="STOP", command=self._stop_agent, width=8,
+            chat_toolbar, text="STOP", width=8,
             font=("Arial", 10, "bold"), state="disabled",
         )
         self._stop_button.pack(side=tk.LEFT, padx=(0, 8))
+
+        self._track_toolbar_presses(
+            (self.instruction_button, self.open_instruction_editor),
+            (self._start_button, self._start_agent),
+            (self._stop_button, self._stop_agent),
+        )
 
         self._update_title()
 
@@ -170,6 +176,50 @@ class UIMixin:
         )
         self.diag_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+    # ── Toolbar "last pressed" highlight ────────────────────────────────
+
+    def _track_toolbar_presses(self, *buttons_and_commands):
+        """Make the given (button, command) pairs a "last pressed" group.
+
+        Nothing is repainted here, so at startup every button keeps the look it
+        was created with. Pressing one paints it TOOLBAR_ACTIVE_BG with a bold
+        face and puts each other button back to its resting look: the
+        creation-time background and its own font at regular weight. Only the
+        weight changes — the bold twin is derived from the button's own font,
+        so the Instruction button (TkDefaultFont) and START/STOP (Arial 10)
+        each keep their family and size. The wrapper repaints BEFORE running
+        the command, so a command that opens a dialog can't delay it.
+        """
+        self._toolbar_styles = {}
+        for button, command in buttons_and_commands:
+            rest_font = tkfont.Font(root=button, font=button.cget("font"))
+            rest_font.configure(weight="normal")
+            bold_font = tkfont.Font(root=button, font=button.cget("font"))
+            bold_font.configure(weight="bold")
+            self._toolbar_styles[button] = {
+                "rest": {
+                    "bg": button.cget("bg"),
+                    "activebackground": button.cget("activebackground"),
+                    # macOS Aqua ignores bg on the button face; the highlight
+                    # frame around it is the one part that does take a colour.
+                    "highlightbackground": button.cget("highlightbackground"),
+                    "font": rest_font,
+                },
+                "active": {
+                    "bg": TOOLBAR_ACTIVE_BG,
+                    "activebackground": TOOLBAR_ACTIVE_BG,
+                    "highlightbackground": TOOLBAR_ACTIVE_BG,
+                    "font": bold_font,
+                },
+            }
+            button.config(
+                command=lambda b=button, c=command: self._press_toolbar_button(b, c))
+
+    def _press_toolbar_button(self, button, command):
+        """Repaint the group for a press of `button`, then run its command."""
+        for other, styles in self._toolbar_styles.items():
+            other.config(**styles["active" if other is button else "rest"])
+        command()
 
     # ── Model / Thinking Helpers ────────────────────────────────────────
 
