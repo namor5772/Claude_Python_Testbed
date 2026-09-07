@@ -209,13 +209,11 @@ class EventLoopMixin:
                     self.chat_display.config(state="disabled")
                     self.streaming = False
                     self._start_button.config(state="normal")
-                    self._stop_button.config(state="disabled")
                     self.instruction_button.config(state="normal")
                 elif msg["type"] == "error":
                     self._chat_insert((f"Error: {msg['content']}\n\n", "error"))
                     self.streaming = False
                     self._start_button.config(state="normal")
-                    self._stop_button.config(state="disabled")
                     self.instruction_button.config(state="normal")
         except queue.Empty:
             pass

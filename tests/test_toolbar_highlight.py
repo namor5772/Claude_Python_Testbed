@@ -5,19 +5,25 @@ button pressed most recently wears a light-blue background and a bold face,
 and the other two are put back to their resting look — the background they
 were created with and their own font at regular weight. Nothing is repainted
 at startup, so the buttons first appear exactly as created: all three in the
-same regular Arial 10, STOP disabled.
+same regular Arial 10, all three enabled. STOP is never disabled — a press
+while idle only sets the stop flag, which the next run resets.
 
-These are the only tests in the suite that need a Tk root, because the
-highlight is nothing but widget configuration. They build the three buttons
-the way setup_ui does on a withdrawn root and skip cleanly where no display
-is available.
+The widget tests are the only ones in the suite that need a Tk root, because
+the highlight is nothing but widget configuration. They build the three
+buttons the way setup_ui does on a withdrawn root and skip cleanly where no
+display is available. The STOP-never-disabled tests run without Tk.
 """
 
+import pathlib
 import tkinter as tk
 import unittest
+from unittest import mock
 
 from tests._util import stub
+import myagent
+from myagent import safety_mixin
 from myagent.constants import TOOLBAR_ACTIVE_BG
+from myagent.safety_mixin import SafetyMixin
 from myagent.ui_mixin import UIMixin
 
 TOOLBAR_FONT = ("Arial", 10)   # the one font setup_ui gives all three buttons
@@ -40,9 +46,7 @@ class ToolbarHighlightTests(unittest.TestCase):
         self.app = stub(UIMixin)
         self.instruction = tk.Button(self.root, text="Instruction", font=TOOLBAR_FONT)
         self.start = tk.Button(self.root, text="START", width=8, font=TOOLBAR_FONT)
-        self.stop = tk.Button(
-            self.root, text="STOP", width=8, font=TOOLBAR_FONT, state="disabled",
-        )
+        self.stop = tk.Button(self.root, text="STOP", width=8, font=TOOLBAR_FONT)
         self.buttons = (self.instruction, self.start, self.stop)
         self.created_look = {
             b: (b.cget("bg"), b.cget("font"), str(b.cget("state"))) for b in self.buttons
@@ -60,12 +64,14 @@ class ToolbarHighlightTests(unittest.TestCase):
     def test_startup_look_is_untouched_and_identical(self):
         # Tracking the group repaints nothing: bg, font spec and state are
         # exactly what the buttons were created with — and the three were
-        # created alike, so at startup they share one regular-weight font.
+        # created alike, so at startup they share one regular-weight font
+        # and are all enabled (STOP included).
         for button in self.buttons:
             self.assertEqual(
                 (button.cget("bg"), button.cget("font"), str(button.cget("state"))),
                 self.created_look[button],
             )
+            self.assertEqual(str(button.cget("state")), "normal")
             self.assertEqual(_actual(button, "-weight"), "normal")
             self.assertEqual(_actual(button, "-family"), "Arial")
             self.assertEqual(int(_actual(button, "-size")), 10)
@@ -108,27 +114,34 @@ class ToolbarHighlightTests(unittest.TestCase):
         self.assertEqual(_actual(plain, "-size"), default_size)
         self.assertEqual(_actual(plain, "-weight"), "bold")
 
-    def test_disabled_button_cannot_be_pressed(self):
-        self.stop.invoke()  # disabled at startup, like the real STOP
-        self.assertEqual(self.pressed, [])
-        self.assertEqual(self.stop.cget("bg"), self.created_look[self.stop][0])
-        self.stop.config(state="normal")
+    def test_stop_is_pressable_at_startup_and_a_disabled_button_is_not(self):
+        # STOP is never disabled, so it can be pressed straight after launch.
         self.stop.invoke()
         self.assertEqual(self.pressed, ["stop"])
         self.assertEqual(self.stop.cget("bg"), TOOLBAR_ACTIVE_BG)
         self.assertEqual(_actual(self.stop, "-weight"), "bold")
+        # START is disabled for the duration of a run (_start_agent); Tk's
+        # invoke() is a no-op on a disabled button, so nothing repaints.
+        self.start.config(state="disabled")
+        self.start.invoke()
+        self.assertEqual(self.pressed, ["stop"])
         self.assertEqual(self.start.cget("bg"), self.default_bg)
-        self.assertEqual(self.instruction.cget("bg"), self.default_bg)
+        self.assertEqual(self.stop.cget("bg"), TOOLBAR_ACTIVE_BG)
+        self.start.config(state="normal")
+        self.start.invoke()
+        self.assertEqual(self.pressed, ["stop", "start"])
+        self.assertEqual(self.start.cget("bg"), TOOLBAR_ACTIVE_BG)
+        self.assertEqual(self.stop.cget("bg"), self.default_bg)
 
     def test_highlight_survives_state_toggles(self):
-        # _start_agent disables START while running and the run's end
-        # re-enables it; neither touches the paint, so START stays the
-        # last-pressed button until another one is pressed.
+        # _start_agent disables START + Instruction while running and the
+        # run's end re-enables them; neither touches the paint, so START
+        # stays the last-pressed button until another one is pressed.
         self.start.invoke()
         self.start.config(state="disabled")
-        self.stop.config(state="normal")
+        self.instruction.config(state="disabled")
         self.start.config(state="normal")
-        self.stop.config(state="disabled")
+        self.instruction.config(state="normal")
         self.assertEqual(self.start.cget("bg"), TOOLBAR_ACTIVE_BG)
         self.assertEqual(_actual(self.start, "-weight"), "bold")
 
@@ -139,6 +152,44 @@ class ToolbarHighlightTests(unittest.TestCase):
         self.assertEqual(self.start.cget("bg"), TOOLBAR_ACTIVE_BG)
         self.assertEqual(_actual(self.start, "-weight"), "bold")
         self.assertEqual(self.instruction.cget("bg"), self.default_bg)
+
+
+class StopNeverDisabledTests(unittest.TestCase):
+    """STOP stays a plain enabled button through the whole run lifecycle."""
+
+    def test_stop_agent_sets_the_flag_and_leaves_the_button_alone(self):
+        app = stub(SafetyMixin, stop_requested=False, _stop_button=mock.Mock())
+        app._stop_agent()
+        self.assertTrue(app.stop_requested)
+        app._stop_button.config.assert_not_called()
+
+    def test_start_agent_disables_start_and_instruction_only(self):
+        app = stub(
+            SafetyMixin, streaming=False, agent_instruction="do the thing",
+            messages=[], stop_requested=True, chat_display=mock.Mock(),
+            pending_images=[], _start_button=mock.Mock(), _stop_button=mock.Mock(),
+            instruction_button=mock.Mock(), stream_worker=lambda *args: None,
+        )
+        with mock.patch.object(safety_mixin.threading, "Thread") as thread:
+            app._start_agent()
+        thread.return_value.start.assert_called_once()
+        self.assertFalse(app.stop_requested)   # a stale idle STOP press is reset
+        self.assertTrue(app.streaming)
+        app._start_button.config.assert_called_once_with(state="disabled")
+        app.instruction_button.config.assert_called_once_with(state="disabled")
+        app._stop_button.config.assert_not_called()
+
+    def test_no_module_but_the_creator_touches_the_stop_button(self):
+        # Static pin: after creation nothing may reconfigure STOP — not the
+        # run-end branches of check_queue, not _stop_agent, nothing. Only the
+        # module that creates and tracks it may mention it at all.
+        package = pathlib.Path(myagent.__file__).parent
+        sources = list(package.glob("*.py")) + [package.parent / "MyAgent.py"]
+        offenders = sorted(
+            p.name for p in sources
+            if p.name != "ui_mixin.py" and "_stop_button" in p.read_text(encoding="utf-8")
+        )
+        self.assertEqual(offenders, [])
 
 
 if __name__ == "__main__":
