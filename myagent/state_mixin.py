@@ -767,10 +767,16 @@ class StateMixin:
                 "thinking_budget": self.thinking_budget,
                 "thinking_mode": self.thinking_mode,
                 "text_verbosity": self.text_verbosity,
-                # NOTE: skill modes are intentionally NOT snapshotted here. skills.json
-                # is the sticky source of truth for skill modes (loaded by _load_skills);
-                # duplicating them in this snapshot caused launch to overwrite the user's
-                # global modes via _restore_skill_modes. See SkillsMixin._restore_skill_modes.
+                # The live per-skill modes ride along like every other field of
+                # the applied environment, so a relaunch comes back on the same
+                # skill layout the last Apply / Save / -l run left (2026-09-07).
+                # They were deliberately omitted from 2026-06-04 to 2026-09-06,
+                # which made every relaunch fall back to the skills tree's
+                # GLOBAL modes -- the one part of the applied instruction that
+                # did not survive a restart. Restoring them is safe because
+                # _restore_skill_modes is session-only: it never writes to the
+                # skills tree, which stays the sticky source of the global modes.
+                "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
                 "disabled_confirm_patterns": sorted(getattr(self, "_disabled_confirm_patterns", [])),
                 "blocked_tools": sorted(getattr(self, "_blocked_tools", [])),
             },
@@ -804,6 +810,17 @@ class StateMixin:
         applied = state.get("applied_instruction")
         model_restored = False
         if applied and applied.get("text"):
+            if "skill_modes" not in applied and instr_name:
+                # A snapshot written before 2026-09-07 carries no skill modes
+                # (see _save_last_state). Take them once from the named
+                # instruction on disk -- the same source an explicit Apply
+                # reads -- so the first launch after the upgrade already lands
+                # on the instruction's skill layout rather than the tree's
+                # global one; the next periodic save writes them into the
+                # snapshot and this branch never runs again.
+                disk_entry = self._load_saved_instructions().get(instr_name) or {}
+                if disk_entry.get("skill_modes"):
+                    applied = dict(applied, skill_modes=disk_entry["skill_modes"])
             model_restored = self._apply_instruction_entry(instr_name, applied)
         elif instr_name:
             instructions = self._load_saved_instructions()
