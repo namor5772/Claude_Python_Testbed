@@ -794,32 +794,43 @@ def format_entry(n, entry):
 
 
 def build_body(account_order, entries_by_account, errors, dry_run):
+    """The emailed digest: a header, then the TOTAL section, then the
+    per-account enumeration, closed by a bare divider. The enumeration is
+    rendered FIRST so the TOTAL line that precedes it in the email can quote
+    the exact count of entries that follow (n is the last sequence number
+    used — the count can never drift from the numbering it introduces).
+    TOTAL moved up from the footer on 2026-09-10 so the count, the
+    SPECIFYING tally and any ERRORS line are read before the list."""
     now = datetime.now()
+    listing = []
+    n = 0
+    for account, label in account_order:
+        listing += ["", SUB, f"Account: {label}", SUB]
+        if account in errors:
+            listing += ["", f"ERROR: {errors[account]}"]
+            continue
+        entries = entries_by_account.get(account, [])
+        if not entries:
+            listing += ["", "No unread emails."]
+        for entry in entries:
+            n += 1
+            listing += ["", format_entry(n, entry)]
+    matched = [e for es in entries_by_account.values() for e in es if e.get("spec")]
+
     out = [DIV, "COMPREHENSIVE LIST OF UNREAD EMAILS", DIV,
            f"Generated {now:%Y-%m-%d %H:%M:%S} by UnreadSummary.py",
            "(deterministic, no LLM — summaries are each",
            "email's opening text)"]
     if dry_run:
         out.append("*** DRY RUN: no emails were modified ***")
-    n = 0
-    for account, label in account_order:
-        out += ["", SUB, f"Account: {label}", SUB]
-        if account in errors:
-            out += ["", f"ERROR: {errors[account]}"]
-            continue
-        entries = entries_by_account.get(account, [])
-        if not entries:
-            out += ["", "No unread emails."]
-        for entry in entries:
-            n += 1
-            out += ["", format_entry(n, entry)]
-    matched = [e for es in entries_by_account.values() for e in es if e.get("spec")]
     out += ["", DIV,
             f"TOTAL: {n} unread email(s) across {len(account_order)} account(s); "
             f"{len(matched)} SPECIFYING match(es)"]
     if errors:
-        out.append(f"ERRORS: {len(errors)} account(s) unreadable — see above")
+        out.append(f"ERRORS: {len(errors)} account(s) unreadable — see below")
     out.append(DIV)
+    out += listing
+    out += ["", DIV]
     return "\n".join(out)
 
 
