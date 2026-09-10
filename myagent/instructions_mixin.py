@@ -9,6 +9,7 @@ from myagent.constants import (
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
 from myagent.datapaths import absorb_conflict_forks, load_store, save_store
+from myagent.keyboard import bind_mnemonics
 
 
 class InstructionsMixin:
@@ -197,26 +198,21 @@ class InstructionsMixin:
         self.instruction_editor_window = win
 
         # Row 0: Save row
-        tk.Label(win, text="Save Instruction", font=("Arial", 10)).grid(
-            row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="w"
-        )
+        save_label = tk.Label(win, text="Save Instruction", font=("Arial", 10))
+        save_label.grid(row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="w")
         self._instr_name_entry = tk.Entry(win, font=("Arial", 10), width=30)
         self._instr_name_entry.grid(row=0, column=1, padx=5, pady=(10, 5), sticky="ew")
 
-        tk.Button(win, text="SAVE", command=self._save_instruction, width=6).grid(
-            row=0, column=2, padx=5, pady=(10, 5)
-        )
-        tk.Button(win, text="DELETE", command=self._delete_instruction, width=6).grid(
-            row=0, column=3, padx=5, pady=(10, 5)
-        )
-        tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=6).grid(
-            row=0, column=4, padx=(5, 10), pady=(10, 5)
-        )
+        save_btn = tk.Button(win, text="SAVE", command=self._save_instruction, width=6)
+        save_btn.grid(row=0, column=2, padx=5, pady=(10, 5))
+        delete_btn = tk.Button(win, text="DELETE", command=self._delete_instruction, width=6)
+        delete_btn.grid(row=0, column=3, padx=5, pady=(10, 5))
+        clear_btn = tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=6)
+        clear_btn.grid(row=0, column=4, padx=(5, 10), pady=(10, 5))
 
         # Row 1: Load row
-        tk.Label(win, text="Load Instruction", font=("Arial", 10)).grid(
-            row=1, column=0, padx=(10, 5), pady=5, sticky="w"
-        )
+        load_label = tk.Label(win, text="Load Instruction", font=("Arial", 10))
+        load_label.grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
         self._instr_combo_var = tk.StringVar()
         self._instr_combo = ttk.Combobox(
             win, textvariable=self._instr_combo_var, state="readonly",
@@ -232,23 +228,9 @@ class InstructionsMixin:
         )
         _apply_btn.grid(row=1, column=2, padx=5, pady=5)
 
-        # Row 2: Text editor
-        self._instr_text = tk.Text(win, wrap=tk.WORD, font=(MONO_FONT, 10))
-        self._instr_text.grid(
-            row=2, column=0, columnspan=5, sticky="nsew", padx=10, pady=(5, 5)
-        )
-        instr_scrollbar = tk.Scrollbar(win, command=self._instr_text.yview)
-        instr_scrollbar.grid(row=2, column=5, sticky="ns", pady=(5, 5), padx=(0, 5))
-        self._instr_text.config(yscrollcommand=instr_scrollbar.set)
-        # Ctrl+V with an image on the clipboard attaches it (text pastes normally)
-        self._instr_text.bind("<Control-v>", self._on_editor_paste_image)
-        self._instr_text.bind("<Control-V>", self._on_editor_paste_image)
-        if not IS_WINDOWS:
-            self._instr_text.bind("<Command-v>", self._on_editor_paste_image)
-
-        # Row 3: Model / provider controls
+        # Row 2: Model / provider controls
         model_frame = tk.Frame(win)
-        model_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        model_frame.grid(row=2, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         available_providers = [p for p in PROVIDERS
                                if (p == "Anthropic" and self._has_anthropic)
@@ -264,7 +246,8 @@ class InstructionsMixin:
         self._provider_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
 
-        tk.Label(model_frame, text="Model", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        model_label = tk.Label(model_frame, text="Model", font=("Arial", 10))
+        model_label.pack(side=tk.LEFT, padx=(0, 5))
         display_names = [self._get_display_name(mid) for mid in self._model_id_list]
         self._model_combo = ttk.Combobox(
             model_frame, textvariable=self._model_var, state="readonly",
@@ -331,9 +314,9 @@ class InstructionsMixin:
         # Apply current thinking/temp widget states
         self._on_model_selected()
 
-        # Row 4: Tool toggle checkboxes
+        # Row 3: Tool toggle checkboxes
         checks_frame = tk.Frame(win)
-        checks_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        checks_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get() if _HAS_DESKTOP else False)
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
@@ -399,9 +382,9 @@ class InstructionsMixin:
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
-        # Row 5: Skills + Shell/PS Safety buttons
+        # Row 4: Skills + Shell/PS Safety buttons
         buttons_frame = tk.Frame(win)
-        buttons_frame.grid(row=5, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        buttons_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         self.skills_button = tk.Button(
             buttons_frame, text="Skills", command=self.open_skills_editor, padx=10
@@ -415,18 +398,20 @@ class InstructionsMixin:
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
         self._update_ps_safety_button()
 
-        # Row 6: Image management — same layout as the Agent Request dialog:
+        # Row 5: Image management — same layout as the Agent Request dialog:
         # buttons stacked on the left, listbox filling the width to the right
         img_frame = tk.Frame(win)
-        img_frame.grid(row=6, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 5))
+        img_frame.grid(row=5, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 5))
         img_frame.grid_columnconfigure(2, weight=1)
 
-        tk.Button(
+        attach_btn = tk.Button(
             img_frame, text="Attach Images", command=self.attach_image, width=15
-        ).grid(row=0, column=0, padx=(0, 5), sticky="nw")
-        tk.Button(
+        )
+        attach_btn.grid(row=0, column=0, padx=(0, 5), sticky="nw")
+        remove_btn = tk.Button(
             img_frame, text="Remove Selected", command=self._remove_selected_images, width=15
-        ).grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
+        )
+        remove_btn.grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
 
         self._instr_image_listbox = tk.Listbox(
             img_frame, height=3, font=("Arial", 9), foreground="#6a1b9a",
@@ -437,11 +422,57 @@ class InstructionsMixin:
         img_list_scrollbar.grid(row=0, column=3, rowspan=2, sticky="ns")
         self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
 
+        # Row 6: Text editor — the bottom row (since 2026-09-10) and the only
+        # weighted one, so resizing the window grows the text area alone.
+        # Created last so Tab traversal follows the visual order.
+        self._instr_text = tk.Text(win, wrap=tk.WORD, font=(MONO_FONT, 10))
+        self._instr_text.grid(
+            row=6, column=0, columnspan=5, sticky="nsew", padx=10, pady=(5, 10)
+        )
+        instr_scrollbar = tk.Scrollbar(win, command=self._instr_text.yview)
+        instr_scrollbar.grid(row=6, column=5, sticky="ns", pady=(5, 10), padx=(0, 5))
+        self._instr_text.config(yscrollcommand=instr_scrollbar.set)
+        # Ctrl+V with an image on the clipboard attaches it (text pastes normally)
+        self._instr_text.bind("<Control-v>", self._on_editor_paste_image)
+        self._instr_text.bind("<Control-V>", self._on_editor_paste_image)
+        if not IS_WINDOWS:
+            self._instr_text.bind("<Command-v>", self._on_editor_paste_image)
+
         # (Apply button is in row 1, to the right of the Load combo)
 
         # Grid weights
         win.grid_columnconfigure(1, weight=1)
-        win.grid_rowconfigure(2, weight=1)
+        win.grid_rowconfigure(6, weight=1)
+
+        # Keyboard operation (myagent/keyboard.py): Alt+letter for every
+        # button and labelled field (Alt+P provider, Alt+E the text area —
+        # the two without a label to underline), Ctrl+S = SAVE, Ctrl+Enter =
+        # Apply (also from inside the text, where plain Enter is a newline).
+        # Escape / Ctrl+Tab leave the text area (class binding); the editor
+        # never closes on Escape, since closing discards the draft.
+        bind_mnemonics(win, {
+            "s": save_btn, "d": delete_btn, "c": clear_btn, "a": _apply_btn,
+            "n": (save_label, self._instr_name_entry),
+            "l": (load_label, self._instr_combo),
+            "m": (model_label, self._model_combo),
+            "p": self._provider_combo,
+            "k": self.skills_button, "f": self.ps_safety_button,
+            "i": attach_btn, "r": remove_btn,
+            "e": self._instr_text,
+        })
+
+        def _save_key(event):
+            self._save_instruction()
+            return "break"
+
+        def _apply_key(event):
+            self._apply_instruction()
+            return "break"
+
+        win.bind("<Control-s>", _save_key)
+        for widget in (win, self._instr_text):
+            widget.bind("<Control-Return>", _apply_key)
+            widget.bind("<Control-KP_Enter>", _apply_key)
 
         # Work on a copy of images so closing without Apply discards changes
         self._editor_images = list(self.pending_images)
@@ -457,6 +488,9 @@ class InstructionsMixin:
         win.update_idletasks()
         self._place_window(win, "editor", (700, 640), min_size=(400, 300))
         win.deiconify()
+        # Initial focus: the text area, cursor at the end of the instruction
+        self._instr_text.mark_set("insert", "end-1c")
+        self._instr_text.focus_set()
 
     def _nullify_editor_widgets(self):
         """Clear editor widget references so _has_model_widgets() returns False."""
@@ -498,9 +532,10 @@ class InstructionsMixin:
     def _size_instr_dropdown(self):
         """postcommand for the Load Instruction combobox: fit the popdown's
         rows into the space between the combobox and the bottom edge of the
-        instruction text widget, so a tall editor shows more instructions but
-        the list never covers the model/tool/button rows below the text area.
-        Recomputed on every open — row 2 is the editor's stretchy row."""
+        instruction text widget — the editor's bottom row since 2026-09-10 —
+        so a tall editor shows more instructions but the list never hangs
+        below the editor window. Recomputed on every open — row 6 is the
+        editor's stretchy row."""
         combo = self._instr_combo
         rows = 10  # Tk's default popdown height, kept if the probe fails
         try:

@@ -5,6 +5,7 @@ from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
                                COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
 from myagent.datapaths import delete_skill_tree_entry, load_skills_tree, save_skills_tree
+from myagent.keyboard import bind_mnemonics
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
 # absorb OneDrive conflict forks on disk, + the spawn itself) so several
@@ -423,7 +424,8 @@ class SkillsMixin:
         top = tk.Frame(win)
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
 
-        tk.Label(top, text="Skill Name", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        name_label = tk.Label(top, text="Skill Name", font=("Arial", 10))
+        name_label.pack(side=tk.LEFT, padx=(0, 5))
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
@@ -509,18 +511,25 @@ class SkillsMixin:
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
 
-        # Packed side=RIGHT in reverse order so the visual left-to-right order
-        # stays SAVE, DELETE, NEW while the buttons hug the right edge. The
-        # name_entry above (fill=X, expand) absorbs all the space in between.
-        tk.Button(top, text="NEW", command=new_skill, width=5).pack(side=tk.RIGHT, padx=2)
-        tk.Button(top, text="DELETE", command=delete_skill, width=7).pack(side=tk.RIGHT, padx=2)
-        tk.Button(top, text="SAVE", command=save_skill, width=6).pack(side=tk.RIGHT, padx=2)
+        # The three buttons hug the right edge (their frame packs RIGHT; the
+        # name_entry above, fill=X + expand, absorbs the space in between) but
+        # are created left-to-right INSIDE it, so Tab order matches the visual
+        # SAVE, DELETE, NEW — creation order is Tab order.
+        btn_row = tk.Frame(top)
+        btn_row.pack(side=tk.RIGHT)
+        save_btn = tk.Button(btn_row, text="SAVE", command=save_skill, width=6)
+        save_btn.pack(side=tk.LEFT, padx=2)
+        delete_btn = tk.Button(btn_row, text="DELETE", command=delete_skill, width=7)
+        delete_btn.pack(side=tk.LEFT, padx=2)
+        new_btn = tk.Button(btn_row, text="NEW", command=new_skill, width=5)
+        new_btn.pack(side=tk.LEFT, padx=2)
 
         # Description row: the what+when trigger signal shown in the system
         # prompt for on_demand skills (Agent-Skills style). Optional.
         desc_row = tk.Frame(win)
         desc_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-        tk.Label(desc_row, text="Description", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5), anchor="n")
+        desc_label = tk.Label(desc_row, text="Description", font=("Arial", 10))
+        desc_label.pack(side=tk.LEFT, padx=(0, 5), anchor="n")
         # Three word-wrapped rows so long what+when descriptions are readable
         # (they routinely run to two sentences); newlines a user types here
         # are normalized to spaces on SAVE — descriptions are single-line.
@@ -618,7 +627,27 @@ class SkillsMixin:
 
         refresh_list()
 
+        # Keyboard operation (myagent/keyboard.py): Alt+letter for the
+        # buttons and labelled fields (Alt+L the list, Alt+T the text — the
+        # two without a label to underline), Ctrl+S = SAVE; Space on the list
+        # cycles the selected skill's mode (above). Escape / Ctrl+Tab leave
+        # the text boxes (class binding); the window never closes on Escape,
+        # since closing discards unsaved edits.
+        bind_mnemonics(win, {
+            "s": save_btn, "d": delete_btn, "n": new_btn, "c": toggle_btn,
+            "k": (name_label, name_entry),
+            "e": (desc_label, desc_entry),
+            "l": skill_listbox, "t": text_editor,
+        })
+
+        def _save_key(event):
+            save_skill()
+            return "break"
+
+        win.bind("<Control-s>", _save_key)
+
         # Restore geometry AFTER all content is laid out, then show
         win.update_idletasks()
         self._place_window(win, "skills", (900, 500), parent=parent, min_size=(400, 300))
         win.deiconify()
+        skill_listbox.focus_set()  # initial focus: browse the skills with the arrow keys

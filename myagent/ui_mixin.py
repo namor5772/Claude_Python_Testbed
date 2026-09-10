@@ -9,6 +9,7 @@ from myagent.constants import (
     ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
+from myagent.keyboard import bind_mnemonics, install_class_bindings
 
 
 class UIMixin:
@@ -81,13 +82,19 @@ class UIMixin:
 
         self._update_title()
 
-        tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        save_chat_label = tk.Label(chat_toolbar, text="Save Chat as", font=("Arial", 10))
+        save_chat_label.pack(side=tk.LEFT, padx=(0, 5))
         self.chat_name_entry = tk.Entry(chat_toolbar, font=("Arial", 10))
         self.chat_name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
 
         # Row 1: Chat display
+        # takefocus=1 keeps the read-only output pane a Tab stop (Tk skips a
+        # disabled widget otherwise) so it can be scrolled and copied from the
+        # keyboard; the 1-px highlight ring is its only visible focus cue,
+        # since a disabled Text shows no insertion cursor.
         self.chat_display = tk.Text(
-            self.root, wrap=tk.WORD, state="disabled", font=("Arial", 11)
+            self.root, wrap=tk.WORD, state="disabled", font=("Arial", 11),
+            takefocus=1, highlightthickness=1,
         )
         self.chat_display.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=10)
 
@@ -185,6 +192,19 @@ class UIMixin:
             font=("Arial", 9),
         )
         self.diag_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Keyboard operation (2026-09-10, myagent/keyboard.py): the once-per-
+        # root class bindings (Escape leaves any field, Return presses any
+        # button), this window's Alt+letter mnemonics, and the initial focus —
+        # on Instruction, where Tab would land first anyway.
+        install_class_bindings(self.root)
+        bind_mnemonics(self.root, {
+            "i": self.instruction_button,
+            "s": self._start_button,
+            "t": self._stop_button,
+            "c": (save_chat_label, self.chat_name_entry),
+        })
+        self.instruction_button.focus_set()
 
     # ── Toolbar "last pressed" highlight ────────────────────────────────
 

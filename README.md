@@ -21,7 +21,7 @@ The main residents:
 - [Quick Start (new machine)](#quick-start-new-machine)
 - [SelfBot.py](#selfbotpy--claude-chatbot--dual-instance-self-chat)
 - [MyAgent.py](#myagentpy--autonomous-ai-task-agent)
-  - [Agentic loop](#how-the-agentic-loop-works) · [Command line](#command-line-launch) · [Providers](#providers--model-controls) · [Ollama](#ollama-local-inference) · [Tools](#tool-catalog) · [MCP](#mcp-integration) · [Gmail](#gmail-integration-native-google-tools) · [Proton / IMAP](#proton-mail--imap-integration) · [Outlook](#outlook--microsoft-365-integration) · [Excel](#excel-live-workbook-integration) · [Cost tracking](#api-cost-tracking) · [Architecture](#architecture-mixins)
+  - [Agentic loop](#how-the-agentic-loop-works) · [Command line](#command-line-launch) · [Providers](#providers--model-controls) · [Ollama](#ollama-local-inference) · [Tools](#tool-catalog) · [MCP](#mcp-integration) · [Gmail](#gmail-integration-native-google-tools) · [Proton / IMAP](#proton-mail--imap-integration) · [Outlook](#outlook--microsoft-365-integration) · [Excel](#excel-live-workbook-integration) · [Cost tracking](#api-cost-tracking) · [Keyboard](#keyboard-operation-no-mouse-needed) · [Architecture](#architecture-mixins)
 - [Zero-token automation](#zero-token-automation-unreadsummarypy--heartbeatpy)
 - [Scheduling background runs](#scheduling-background-runs-launchd--task-scheduler)
 - [Account_Activity_WBC.py](#account_activity_wbcpy--bank-transaction-extractor)
@@ -380,6 +380,104 @@ The **API Cost Log** desktop viewers (`CostLog_Win.ps1` / `view_costlog.command`
 - **Retry & timeouts** — same 429/529 exponential backoff as SelfBot, plus a 180-s first-content timeout with elapsed-time ticker, OpenAI timeout retries, reactive caches for models that reject `temperature` or specific server-side tools.
 - **Context-overflow compaction (Anthropic)** — a 400 `prompt is too long` mid-task no longer ends the run: the oldest conversation rounds are dropped in place (cutting only at real user-turn boundaries so `tool_use`/`tool_result` pairs are never orphaned, always keeping the last two rounds) and the call retries — SelfBot's sliding-window recovery, ported to `myagent/helpers.py`. Only when even the recent context alone overflows does the run end, with an actionable switch-to-a-1M-model message.
 
+### Keyboard operation (no mouse needed)
+
+Since 2026-09-10 every MyAgent window — the main window and all five dialogs — can be driven entirely from the keyboard. Tk already makes every control a Tab stop; `myagent/keyboard.py` adds the pieces Tk leaves out (a way out of a text box, Enter on buttons, Alt+letter shortcuts, and traversal of the Safety dialog's scrolled checkboxes). Three rules cover everything:
+
+1. **Tab / Shift+Tab move between controls in visual order.** The focused control is marked: buttons and checkboxes get a thin ring, text fields show the blinking cursor, lists highlight the active row. Read-only panes (the main output pane, the confirm dialog's command box, the Agent Request's message box) are Tab stops too, so they scroll and copy from the keyboard.
+2. **Escape leaves the field you are in — the safe way out of a text box.** Inside a text box Tab *types* a tab, so Escape moves the focus to the next control instead. It never inserts, deletes, submits or closes anything (Ctrl+Tab / Ctrl+Shift+Tab, Tk's own bindings, do the same forwards / backwards). The same Escape leaves a single-line entry, the temperature spinbox or a dropdown, so "Escape = leave this field" holds everywhere. Because Escape is reserved for that, **no window that holds a draft closes on Escape**: the Instruction Editor and Skills Manager close only via [X] or Alt+F4, exactly as before. The two dialogs where nothing can be lost do close on Escape — the Safety dialog (every toggle is saved as it happens) and the command-confirmation dialog (Escape = Deny).
+3. **Enter presses the focused button, Space toggles the focused checkbox, and Alt+<underlined letter> presses a button or jumps to a field from anywhere in its window.** The underlines are always visible (Tk draws them permanently, unlike native Windows controls that reveal them on Alt). A disabled button ignores Enter and its Alt-letter just as it ignores a click — STOP, for instance, only while a run is active.
+
+**Keys that work everywhere**
+
+| Key | Does |
+|---|---|
+| Tab / Shift+Tab | next / previous control (visual order) |
+| Escape — in a text box, entry, spinbox or dropdown | leave the field: focus moves to the next control, nothing changes |
+| Ctrl+Tab / Ctrl+Shift+Tab — in a text box | same, forwards / backwards |
+| Enter | press the focused button |
+| Space | press the focused button / toggle the focused checkbox |
+| Alt+<underlined letter> | press that button / jump to that field |
+| Down — on a dropdown | open the list; arrows move, Enter picks, Escape closes the list |
+| Up / Down — on the temperature spinbox | step the value |
+| Arrows, PgUp / PgDn, Ctrl+Home / End, Shift+arrows, Ctrl+C — in a read-only pane | scroll, select, copy |
+| Alt+F4 | close the window, same as [X] |
+
+**Main window** — opens with the focus on Instruction. Tab order: Instruction → START → STOP (only while running) → Save Chat as → output pane → Debug … Diag.
+
+| Key | Does |
+|---|---|
+| Alt+I | Instruction — opens the editor |
+| Alt+S | START |
+| Alt+T | STOP (pressable only during a run) |
+| Alt+C | jump to the "Save Chat as" name |
+
+**Instruction Editor** — opens with the focus in the instruction text, cursor at the end. Tab order: text → name → SAVE → DELETE → CLEAR → Load list → Apply → provider → model → thinking / temperature / verbosity controls (whichever the model shows) → the tool checkboxes → Skills → Safety → Attach Images → Remove Selected → image list → back to the text. Escape in the text lands on the name field (the text is the last stop, so it wraps); Shift+Tab from the name field gets back to the text.
+
+| Key | Does |
+|---|---|
+| Alt+N | Save Instruction name |
+| Alt+S, Ctrl+S | SAVE (to the shared store) |
+| Alt+D | DELETE (asks first) |
+| Alt+C | CLEAR the draft |
+| Alt+L | Load Instruction list — Down opens it, arrows + Enter load one (its text, images, tool toggles, provider / model come with it) |
+| Alt+A, Ctrl+Enter | Apply — commits the draft to the session and closes the editor; Ctrl+Enter works even inside the text, where plain Enter is a newline |
+| Alt+P / Alt+M | provider / model dropdowns |
+| Alt+K / Alt+F | Skills / Safety |
+| Alt+I / Alt+R | Attach Images / Remove Selected (arrows and Shift+arrows select in the image list) |
+| Alt+E | the instruction text |
+
+**Skills Manager** — opens with the focus on the skill list. Tab order: list → skill text → name → SAVE → DELETE → NEW → description → Cycle Mode → list.
+
+| Key | Does |
+|---|---|
+| Up / Down — in the list | browse; the selected skill loads into the name / description / text fields |
+| Space — in the list | cycle the selected skill's mode (disabled → on → on-demand) |
+| Alt+C | Cycle Mode (same thing, from anywhere in the window) |
+| Alt+K / Alt+E / Alt+T | name / description / skill text |
+| Alt+L | the list |
+| Alt+S, Ctrl+S | SAVE |
+| Alt+D | DELETE (asks first) |
+| Alt+N | NEW — clears the fields for a fresh skill |
+
+**Safety dialog** — opens with the focus on the first checkbox.
+
+| Key | Does |
+|---|---|
+| Tab / Shift+Tab, Down / Up | next / previous checkbox, scrolling it into view as needed |
+| Space | toggle (saved immediately, for the current instruction) |
+| Escape | close |
+
+**Confirm Command** (a guarded shell command wants approval) — opens with the focus on **Deny**, so a reflexive Enter is the safe answer. Tab order: Deny → Allow → the command text (scrollable).
+
+| Key | Does |
+|---|---|
+| Enter | press the focused button (Deny, unless you moved) |
+| Alt+D / Alt+A | Deny / Allow |
+| Escape | Deny |
+
+**Agent Request** (the agent asks you something via `user_prompt`) — opens with the focus in the reply box. Tab order: reply → Attach Images → Remove Selected → image list → the agent's message (scrollable).
+
+| Key | Does |
+|---|---|
+| Enter | send the reply |
+| Ctrl+Enter | newline inside the reply |
+| Escape — in the reply | leave the reply box without sending (Tab on to the buttons; Shift+Tab back) |
+| Alt+I / Alt+R | Attach Images / Remove Selected; Ctrl+V pastes a clipboard image as an attachment |
+| Alt+F4 | dismiss — the agent is told you did not respond |
+
+The remaining questions MyAgent asks — the Yes / No confirmations for destructive mail actions, "Delete this skill / instruction?", and the warning boxes — are native message boxes: Tab or arrows + Enter, Escape = No.
+
+**Walkthrough: run a saved instruction without touching the mouse**
+
+1. **Alt+I** opens the Instruction Editor (focus lands in the text).
+2. **Alt+L**, **Down** opens the Load Instruction list; arrows pick, **Enter** loads it.
+3. Optional: **Alt+E** to edit the text, **Escape** when done; **Tab** on to the tool checkboxes and **Space** to toggle one.
+4. **Alt+A** (or **Ctrl+Enter**) applies and closes the editor.
+5. **Alt+S** starts the run; **Alt+T** stops it. **Tab** to the output pane to scroll back through it while it runs.
+6. If the agent asks something, type the answer and press **Enter**. If it wants to run a guarded command, **Enter** denies and **Alt+A** allows.
+7. **Alt+C** and type a name in "Save Chat as": the chat is saved under it when you close MyAgent (Alt+F4).
+
 ### Architecture (mixins)
 
 `MyAgent.py` (~350 lines) holds only `__init__` and the entry point; the `App` class inherits from **23 mixins** in `myagent/` (~20,000 lines total), all sharing state through `self.*`:
@@ -388,7 +486,7 @@ The **API Cost Log** desktop viewers (`CostLog_Win.ps1` / `view_costlog.command`
 |---|---|
 | `constants.py` (3.3K lines) | Tool schemas (TOOLS / DESKTOP / BROWSER / META), safety patterns, model constants, pricing tables, capability flags |
 | `helpers.py` | `HTMLTextExtractor`, `_ToolBlock` (gives OpenAI/Gemini dict tool-calls the same `.name/.id/.input` face as Anthropic's Pydantic blocks) |
-| `retry_util.py` / `mail_common.py` | The two shared non-mixin modules: the 429 / 5xx exponential-backoff schedule the Anthropic, OpenAI and Gemini callers share (Ollama keeps its own), and the single destructive-action `confirm_action` dialog the three mail mixins share (honours the per-instruction confirm-bypass list, posts a `⚠ … confirm bypassed` audit line when skipped, and parks the run clock via `input_wait_timer`) |
+| `retry_util.py` / `mail_common.py` / `keyboard.py` | The three shared non-mixin modules: the 429 / 5xx exponential-backoff schedule the Anthropic, OpenAI and Gemini callers share (Ollama keeps its own); the single destructive-action `confirm_action` dialog the three mail mixins share (honours the per-instruction confirm-bypass list, posts a `⚠ … confirm bypassed` audit line when skipped, and parks the run clock via `input_wait_timer`); and the keyboard-operation helpers every window builder uses (Escape leaves any field, Enter presses any button, Alt+letter mnemonics, embedded-checkbox traversal — see Keyboard operation above) |
 | `ui_mixin` / `state_mixin` / `event_loop_mixin` | Widget construction, instance locks + geometry persistence, queue polling |
 | `instructions_mixin` / `skills_mixin` | Instruction CRUD + editor, skills CRUD + system-prompt assembly |
 | `streaming_mixin` | The agentic loop, tool dispatch, pricing lookup, message translation |

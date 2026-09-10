@@ -8,6 +8,7 @@ from myagent.constants import (
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
 )
 from myagent.helpers import extract_text_from_html, input_wait_timer
+from myagent.keyboard import bind_mnemonics, link_embedded_checkbuttons
 
 from ddgs import DDGS
 import httpx
@@ -140,8 +141,10 @@ class SafetyMixin:
         scrollbar.config(command=text_widget.yview)
         text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        cbs = []  # every embedded checkbutton, in display order (keyboard traversal)
+
         # Section 1: shell command patterns (regex-based, matched in _check_command_safety)
-        shell_label = "── PowerShell command patterns ──" if IS_WINDOWS else "── Shell command patterns ──"
+        shell_label ="── PowerShell command patterns ──" if IS_WINDOWS else "── Shell command patterns ──"
         text_widget.insert("end", shell_label + "\n")
         for pattern in COMMAND_CONFIRM:
             var = tk.BooleanVar(value=pattern not in self._disabled_confirm_patterns)
@@ -152,6 +155,7 @@ class SafetyMixin:
             )
             text_widget.window_create("end", window=cb, stretch=True)
             text_widget.insert("end", "\n")
+            cbs.append(cb)
 
         # Section 2: Gmail destructive tools (tool-name match, checked in _confirm_gmail_action).
         # Only shown when google support is available — keeps the dialog clean
@@ -167,6 +171,7 @@ class SafetyMixin:
                 )
                 text_widget.window_create("end", window=cb, stretch=True)
                 text_widget.insert("end", "\n")
+                cbs.append(cb)
 
         # Section 3: IMAP mail destructive tools (Proton Bridge, WebCentral,
         # any IMAP/SMTP account) — same checkbox pattern, checked in
@@ -192,6 +197,7 @@ class SafetyMixin:
                 )
                 text_widget.window_create("end", window=cb, stretch=True)
                 text_widget.insert("end", "\n")
+                cbs.append(cb)
 
         # Section 4: Outlook / Microsoft 365 destructive tools (Microsoft Graph)
         # — same checkbox + per-instruction bypass pattern, checked in
@@ -207,6 +213,7 @@ class SafetyMixin:
                 )
                 text_widget.window_create("end", window=cb, stretch=True)
                 text_widget.insert("end", "\n")
+                cbs.append(cb)
 
         text_widget.configure(state="disabled")
 
@@ -217,6 +224,12 @@ class SafetyMixin:
             dlg.destroy()
 
         dlg.protocol("WM_DELETE_WINDOW", _on_close)
+        # Keyboard operation: Tab / Shift+Tab / Down / Up walk the checkboxes
+        # (scrolling each into view — Tk's own traversal skips a widget that
+        # is scrolled out of sight), Space toggles, Escape closes (nothing
+        # here is a draft: every toggle is saved as it happens).
+        link_embedded_checkbuttons(text_widget, cbs)
+        dlg.bind("<Escape>", lambda e: _on_close())
 
         # Set geometry AFTER layout but BEFORE showing to prevent WM repositioning
         dlg.update_idletasks()
@@ -229,6 +242,8 @@ class SafetyMixin:
         # too early and gets overridden.
         dlg.deiconify()
         dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
+        if cbs:
+            cbs[0].focus_set()  # initial focus: the first checkbox
 
     def _toggle_confirm_pattern(self, pattern, var):
         if var.get():
@@ -293,6 +308,7 @@ class SafetyMixin:
             cmd_text = tk.Text(
                 text_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
                 relief="sunken", bd=1, height=10,
+                takefocus=1, highlightthickness=1,  # a Tab stop though read-only
             )
             cmd_text.grid(row=0, column=0, sticky="nsew")
             cmd_sb = tk.Scrollbar(text_frame, command=cmd_text.yview)
@@ -325,16 +341,24 @@ class SafetyMixin:
                 event.set()
                 dlg.destroy()
 
-            tk.Button(btn_frame, text="Deny", command=on_no, width=10).pack(side=tk.LEFT, padx=10)
-            tk.Button(btn_frame, text="Allow", command=on_yes, width=10).pack(side=tk.LEFT, padx=10)
+            deny_btn = tk.Button(btn_frame, text="Deny", command=on_no, width=10)
+            deny_btn.pack(side=tk.LEFT, padx=10)
+            allow_btn = tk.Button(btn_frame, text="Allow", command=on_yes, width=10)
+            allow_btn.pack(side=tk.LEFT, padx=10)
 
             dlg.protocol("WM_DELETE_WINDOW", on_no)
+            # Keyboard operation: Deny has the initial focus, so a reflexive
+            # Enter is the safe answer; Alt+D / Alt+A press the buttons and
+            # Escape denies, like a message box.
+            bind_mnemonics(dlg, {"d": deny_btn, "a": allow_btn})
+            dlg.bind("<Escape>", lambda e: on_no())
 
             # Restore geometry AFTER all content is laid out to prevent layout shifts
             dlg.update_idletasks()
             self._place_window(dlg, "confirm", (max(dlg.winfo_reqwidth(), 500),
                                                 min(dlg.winfo_reqheight(), 400)))
             dlg.deiconify()  # Show with correct geometry
+            deny_btn.focus_set()
 
         self.root.after(0, ask)
         # Time parked on the user's Allow/Deny doesn't count as run time
@@ -383,6 +407,7 @@ class SafetyMixin:
             msg_text = tk.Text(
                 msg_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
                 relief="sunken", bd=1, height=6,
+                takefocus=1, highlightthickness=1,  # a Tab stop though read-only
             )
             msg_text.grid(row=0, column=0, sticky="nsew")
             msg_sb = tk.Scrollbar(msg_frame, command=msg_text.yview)
@@ -420,8 +445,6 @@ class SafetyMixin:
             img_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 10))
             img_frame.grid_columnconfigure(2, weight=1)
 
-            img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
-
             def _refresh_prompt_images():
                 img_listbox.delete(0, tk.END)
                 for _data, _mt, filename in attached_images:
@@ -436,13 +459,19 @@ class SafetyMixin:
                     del attached_images[idx]
                 _refresh_prompt_images()
 
-            tk.Button(
+            attach_btn = tk.Button(
                 img_frame, text="Attach Images", command=on_attach_images, width=15,
-            ).grid(row=0, column=0, padx=(0, 5), sticky="nw")
-            tk.Button(
+            )
+            attach_btn.grid(row=0, column=0, padx=(0, 5), sticky="nw")
+            remove_btn = tk.Button(
                 img_frame, text="Remove Selected", command=on_remove_images, width=15,
-            ).grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
+            )
+            remove_btn.grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
+            # Created after the buttons so Tab order follows the visual order
+            # (buttons, then the list), as in the instruction editor.
+            img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
+            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with
@@ -487,7 +516,10 @@ class SafetyMixin:
                 resp_text.insert(tk.INSERT, "\n")
                 return "break"
 
+            # Enter sends the reply (the keypad Enter too); Ctrl+Enter is a
+            # newline; Escape leaves the box without sending (class binding).
             resp_text.bind("<Return>", on_inject)
+            resp_text.bind("<KP_Enter>", on_inject)
             resp_text.bind("<Control-Return>", on_newline)
             resp_text.bind("<Control-KP_Enter>", on_newline)
             dlg.protocol("WM_DELETE_WINDOW", on_close)
