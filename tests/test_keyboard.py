@@ -3,9 +3,9 @@
 MyAgent must be usable without a mouse. Tk already makes every control a Tab
 stop; this module pins what keyboard.py adds on top:
 
-* Escape inside a text box / entry / spinbox / combobox moves the focus to the
-  next control and changes nothing — the safe way out of a Text widget, where
-  Tab types a tab (Ctrl+Tab, Tk's own binding, still works too).
+* Escape inside a text box / entry / spinbox / combobox / tree list moves the
+  focus to the next control and changes nothing — the safe way out of a Text
+  widget, where Tab types a tab (Ctrl+Tab, Tk's own binding, still works too).
 * Return presses the focused button, like Space; a disabled button ignores it.
 * Alt+<letter> mnemonics press a button / toggle a checkbutton / focus a
   field, without drawing any underline cue on the widgets.
@@ -80,6 +80,8 @@ class EscapeLeavesFieldTests(_TkCase):
         self.spin.pack()
         self.combo = ttk.Combobox(self.root, values=["a", "b"], state="readonly")
         self.combo.pack()
+        self.tree = ttk.Treeview(self.root, height=2)   # the Load Instruction list
+        self.tree.pack()
         self.after = tk.Button(self.root, text="after")
         self.after.pack()
         self.window_escapes = []
@@ -103,9 +105,9 @@ class EscapeLeavesFieldTests(_TkCase):
         self.key(self.text, "<Control-Tab>")
         self.assertIs(self.root.focus_get(), self.entry)
 
-    def test_escape_leaves_an_entry_a_spinbox_and_a_combobox_too(self):
+    def test_escape_leaves_an_entry_a_spinbox_a_combobox_and_a_tree_too(self):
         for field, following in ((self.entry, self.spin), (self.spin, self.combo),
-                                 (self.combo, self.after)):
+                                 (self.combo, self.tree), (self.tree, self.after)):
             self.focus(field)
             self.key(field, "<Escape>")
             self.assertIs(self.root.focus_get(), following, field.winfo_class())

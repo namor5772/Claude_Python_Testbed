@@ -792,6 +792,11 @@ class StateMixin:
         state["debug_enabled"] = self.debug_enabled.get()
         state["tool_calls_enabled"] = self.tool_calls_enabled.get()
         state["diag_enabled"] = self.diag_enabled.get()
+        # The Instruction Editor's Load Instruction list (2026-09-11): which
+        # sections are collapsed, and the list pane's width (its sash position)
+        state["collapsed_sections"] = sorted(getattr(self, "_collapsed_sections", None) or ())
+        if getattr(self, "_instr_list_width", None):
+            state["instruction_list_width"] = self._instr_list_width
         with open(self._state_file, "w", encoding="utf-8") as f:
             json.dump(state, f, indent=2)
 
@@ -845,6 +850,11 @@ class StateMixin:
             self.tool_calls_enabled.set(state["tool_calls_enabled"])
         if "diag_enabled" in state:
             self.diag_enabled.set(state["diag_enabled"])
+        # Load Instruction list layout state (see _save_last_state)
+        self._collapsed_sections = {
+            s for s in (state.get("collapsed_sections") or []) if isinstance(s, str)}
+        width = state.get("instruction_list_width")
+        self._instr_list_width = width if isinstance(width, int) and width > 0 else None
 
     def _periodic_save(self):
         try:

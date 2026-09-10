@@ -7,7 +7,8 @@ adds only the three things Tk leaves out, plus one workaround:
   Escape moves the keyboard focus to the next control instead. It never
   inserts, deletes, submits or closes anything. Ctrl+Tab / Ctrl+Shift+Tab (Tk's
   own Text bindings) do the same forwards / backwards. The same Escape leaves
-  an Entry, a Spinbox and a Combobox too, so "Escape = leave this field" holds
+  an Entry, a Spinbox, a Combobox and a Treeview (the Instruction Editor's
+  Load Instruction list) too, so "Escape = leave this field" holds
   everywhere. Installed ONCE per Tk instance as class bindings
   (`install_class_bindings`), so every field in every window, including ones
   added later, behaves alike.
@@ -33,7 +34,7 @@ _INVOKE = {
     "Radiobutton": "tk::CheckRadioInvoke",
 }
 
-_FIELD_CLASSES = ("Text", "Entry", "Spinbox", "TCombobox")
+_FIELD_CLASSES = ("Text", "Entry", "Spinbox", "TCombobox", "Treeview")
 
 
 def install_class_bindings(root):

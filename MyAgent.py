@@ -285,6 +285,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.thinking_mode = "off"  # off/adaptive/low/medium/high/max (for adaptive models)
         self.text_verbosity = "medium"  # low/medium/high (for gpt-5 family)
         self.instruction_editor_window = None
+        # The editor's Load Instruction list (2026-09-11): the width of its
+        # pane and the sections the user collapsed, both kept in agent_state.json
+        self._instr_list_width = None
+        self._collapsed_sections = set()
         self.skills_editor_window = None
         self._skills_refresh_list = None
         self.skills = self._load_skills()
