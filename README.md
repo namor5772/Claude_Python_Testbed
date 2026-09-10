@@ -607,7 +607,7 @@ Full details in [desktop_launchers/README.md](desktop_launchers/README.md).
 
 This repo is developed *with* Claude Code and configured *for* it:
 
-- **CLAUDE.md** — project conventions and commands. The three per-app architecture files live in `.claude/rules/` (`CLAUDE_SELFBOT.md`, `CLAUDE_MYAGENT.md`, `CLAUDE_ACCOUNT.md`) with `paths` frontmatter, so each loads only when a session touches its app's files instead of costing every session ~21k tokens of context.
+- **CLAUDE.md** — project conventions and commands. The four architecture files live in `.claude/rules/` (`CLAUDE_SELFBOT.md`, `CLAUDE_MYAGENT.md`, `CLAUDE_ACCOUNT.md`, and since 2026-09-10 `CLAUDE_CLOSE_CHROME.md` for the two browser-closing scripts) with `paths` frontmatter, so each loads only when a session touches its files instead of costing every session ~21k tokens of context; a nested `desktop_launchers/CLAUDE.md` (same day) loads only when a session works under that folder.
 - **Project-scoped slash commands** in `.claude/skills/` (plus one in `.claude/commands/`; all tracked — they work from any fresh clone):
 
 | Command | What it does |
