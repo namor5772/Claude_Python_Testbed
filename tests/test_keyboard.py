@@ -7,8 +7,8 @@ stop; this module pins what keyboard.py adds on top:
   next control and changes nothing — the safe way out of a Text widget, where
   Tab types a tab (Ctrl+Tab, Tk's own binding, still works too).
 * Return presses the focused button, like Space; a disabled button ignores it.
-* Alt+<letter> mnemonics press a button / toggle a checkbutton / focus the
-  field a label names, with the letter underlined on the button or label.
+* Alt+<letter> mnemonics press a button / toggle a checkbutton / focus a
+  field, without drawing any underline cue on the widgets.
 * Checkbuttons embedded in a scrolled Text (the Safety dialog) are walked with
   Tab / Shift+Tab / Down / Up, each scrolled into view first.
 
@@ -156,30 +156,22 @@ class MnemonicTests(_TkCase):
         self.flag = tk.BooleanVar(value=False)
         self.check = tk.Checkbutton(self.root, text="Show Thinking", variable=self.flag)
         self.check.pack()
-        self.label = tk.Label(self.root, text="Save Chat as")
-        self.label.pack()
         self.entry = tk.Entry(self.root)
         self.entry.pack()
         self.text = tk.Text(self.root, height=2)
         self.text.pack()
-        # Direct (unlabelled) field targets: an entry and a combobox both
-        # answer cget("text") with their -textvariable (Tk abbreviation
-        # matching), yet have no -underline — binding them must not raise.
-        self.field = tk.Entry(self.root)
-        self.field.pack()
         self.combo = ttk.Combobox(self.root, values=["x", "y"], state="readonly")
         self.combo.pack()
         self.settle()
         keyboard.bind_mnemonics(self.root, {
-            "i": self.button, "h": self.check, "c": (self.label, self.entry), "e": self.text,
-            "f": self.field, "p": self.combo,
+            "i": self.button, "h": self.check, "c": self.entry, "e": self.text, "p": self.combo,
         })
 
-    def test_the_letter_is_underlined_on_the_button_or_the_label(self):
-        self.assertEqual(int(self.button.cget("underline")), 0)   # Instruction
-        self.assertEqual(int(self.check.cget("underline")), 1)    # Show Thinking
-        self.assertEqual(int(self.label.cget("underline")), 5)    # Save Chat as
-        self.assertEqual(int(self.entry.cget("underline")) if "underline" in self.entry.keys() else -1, -1)
+    def test_no_underline_cue_is_drawn(self):
+        # The user prefers plain buttons: the letters live in the README, not
+        # on the widgets (-1 is Tk's "no underline").
+        self.assertEqual(int(self.button.cget("underline")), -1)
+        self.assertEqual(int(self.check.cget("underline")), -1)
 
     def test_alt_letter_presses_toggles_or_focuses_from_anywhere_in_the_window(self):
         self.focus(self.entry)
@@ -193,11 +185,9 @@ class MnemonicTests(_TkCase):
         self.key(self.entry, "<Alt-E>")  # case-insensitive
         self.assertIs(self.root.focus_get(), self.text)
 
-    def test_unlabelled_fields_are_focused_without_an_underline_cue(self):
+    def test_a_combobox_target_is_focused(self):
         self.focus(self.entry)
-        self.key(self.entry, "<Alt-f>")
-        self.assertIs(self.root.focus_get(), self.field)
-        self.key(self.field, "<Alt-p>")
+        self.key(self.entry, "<Alt-p>")
         self.assertIs(self.root.focus_get(), self.combo)
 
     def test_a_disabled_button_and_an_unbound_letter_do_nothing(self):

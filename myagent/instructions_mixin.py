@@ -198,8 +198,9 @@ class InstructionsMixin:
         self.instruction_editor_window = win
 
         # Row 0: Save row
-        save_label = tk.Label(win, text="Save Instruction", font=("Arial", 10))
-        save_label.grid(row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="w")
+        tk.Label(win, text="Save Instruction", font=("Arial", 10)).grid(
+            row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="w"
+        )
         self._instr_name_entry = tk.Entry(win, font=("Arial", 10), width=30)
         self._instr_name_entry.grid(row=0, column=1, padx=5, pady=(10, 5), sticky="ew")
 
@@ -211,8 +212,9 @@ class InstructionsMixin:
         clear_btn.grid(row=0, column=4, padx=(5, 10), pady=(10, 5))
 
         # Row 1: Load row
-        load_label = tk.Label(win, text="Load Instruction", font=("Arial", 10))
-        load_label.grid(row=1, column=0, padx=(10, 5), pady=5, sticky="w")
+        tk.Label(win, text="Load Instruction", font=("Arial", 10)).grid(
+            row=1, column=0, padx=(10, 5), pady=5, sticky="w"
+        )
         self._instr_combo_var = tk.StringVar()
         self._instr_combo = ttk.Combobox(
             win, textvariable=self._instr_combo_var, state="readonly",
@@ -246,8 +248,7 @@ class InstructionsMixin:
         self._provider_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._provider_combo.bind("<<ComboboxSelected>>", self._on_provider_changed)
 
-        model_label = tk.Label(model_frame, text="Model", font=("Arial", 10))
-        model_label.pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(model_frame, text="Model", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         display_names = [self._get_display_name(mid) for mid in self._model_id_list]
         self._model_combo = ttk.Combobox(
             model_frame, textvariable=self._model_var, state="readonly",
@@ -445,16 +446,16 @@ class InstructionsMixin:
         win.grid_rowconfigure(6, weight=1)
 
         # Keyboard operation (myagent/keyboard.py): Alt+letter for every
-        # button and labelled field (Alt+P provider, Alt+E the text area —
-        # the two without a label to underline), Ctrl+S = SAVE, Ctrl+Enter =
-        # Apply (also from inside the text, where plain Enter is a newline).
-        # Escape / Ctrl+Tab leave the text area (class binding); the editor
-        # never closes on Escape, since closing discards the draft.
+        # button and field (the letters are tabled in the README — nothing is
+        # underlined), Ctrl+S = SAVE, Ctrl+Enter = Apply (also from inside
+        # the text, where plain Enter is a newline). Escape / Ctrl+Tab leave
+        # the text area (class binding); the editor never closes on Escape,
+        # since closing discards the draft.
         bind_mnemonics(win, {
             "s": save_btn, "d": delete_btn, "c": clear_btn, "a": _apply_btn,
-            "n": (save_label, self._instr_name_entry),
-            "l": (load_label, self._instr_combo),
-            "m": (model_label, self._model_combo),
+            "n": self._instr_name_entry,
+            "l": self._instr_combo,
+            "m": self._model_combo,
             "p": self._provider_combo,
             "k": self.skills_button, "f": self.ps_safety_button,
             "i": attach_btn, "r": remove_btn,

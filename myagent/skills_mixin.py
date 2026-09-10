@@ -424,8 +424,7 @@ class SkillsMixin:
         top = tk.Frame(win)
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
 
-        name_label = tk.Label(top, text="Skill Name", font=("Arial", 10))
-        name_label.pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(top, text="Skill Name", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
@@ -528,8 +527,7 @@ class SkillsMixin:
         # prompt for on_demand skills (Agent-Skills style). Optional.
         desc_row = tk.Frame(win)
         desc_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-        desc_label = tk.Label(desc_row, text="Description", font=("Arial", 10))
-        desc_label.pack(side=tk.LEFT, padx=(0, 5), anchor="n")
+        tk.Label(desc_row, text="Description", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5), anchor="n")
         # Three word-wrapped rows so long what+when descriptions are readable
         # (they routinely run to two sentences); newlines a user types here
         # are normalized to spaces on SAVE — descriptions are single-line.
@@ -628,15 +626,14 @@ class SkillsMixin:
         refresh_list()
 
         # Keyboard operation (myagent/keyboard.py): Alt+letter for the
-        # buttons and labelled fields (Alt+L the list, Alt+T the text — the
-        # two without a label to underline), Ctrl+S = SAVE; Space on the list
-        # cycles the selected skill's mode (above). Escape / Ctrl+Tab leave
-        # the text boxes (class binding); the window never closes on Escape,
-        # since closing discards unsaved edits.
+        # buttons and fields (the letters are tabled in the README — nothing
+        # is underlined), Ctrl+S = SAVE; Space on the list cycles the
+        # selected skill's mode (above). Escape / Ctrl+Tab leave the text
+        # boxes (class binding); the window never closes on Escape, since
+        # closing discards unsaved edits.
         bind_mnemonics(win, {
             "s": save_btn, "d": delete_btn, "n": new_btn, "c": toggle_btn,
-            "k": (name_label, name_entry),
-            "e": (desc_label, desc_entry),
+            "k": name_entry, "e": desc_entry,
             "l": skill_listbox, "t": text_editor,
         })
 

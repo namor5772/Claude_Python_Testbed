@@ -13,9 +13,10 @@ adds only the three things Tk leaves out, plus one workaround:
   added later, behaves alike.
 * **Return presses the focused button** (Tk only had Space), through the same
   `tk::ButtonInvoke` Space uses, so it flashes exactly like a click.
-* **Alt+letter mnemonics** (`bind_mnemonics`): the letter is underlined on the
-  button or on the label naming a field, and Alt+<letter> anywhere in that
-  window presses the button or focuses the field.
+* **Alt+letter accelerators** (`bind_mnemonics`): Alt+<letter> anywhere in a
+  window presses a button or focuses a field. No underline cue is drawn on
+  the widgets (the user prefers the plain look); the letters are documented
+  per window in the README's Keyboard operation section.
 * `link_embedded_checkbuttons`: the Safety dialog keeps its checkbuttons inside
   a scrolled Text, and Tk's Tab traversal skips a widget scrolled out of view,
   so Tab / Shift+Tab / Down / Up step through them and scroll each into view.
@@ -83,22 +84,18 @@ def press(widget):
 def bind_mnemonics(window, mapping):
     """Alt+<letter> accelerators for one window.
 
-    `mapping` maps a letter to a target widget, or to a `(label, target)` pair
-    for a field named by a separate Label. The letter is underlined in the
-    target's text (the label's, for a pair): the first matching character,
-    case-insensitive; a widget with no such text is bound without a cue.
-    Alt+<letter> anywhere in `window` then presses the target if it is a
-    button / checkbutton (a no-op while it is disabled, like a click), or
-    focuses it otherwise. Letters are case-insensitive and must be unique
-    within the window.
+    `mapping` maps a letter to a target widget. Alt+<letter> anywhere in
+    `window` presses the target if it is a button / checkbutton (a no-op
+    while it is disabled, like a click), or focuses it otherwise. Letters
+    are case-insensitive and must be unique within the window. Nothing is
+    drawn on the widgets: no underline cue (the user prefers the plain
+    look), so the letters are documented per window in the README.
     """
     targets = {}
-    for letter, spec in mapping.items():
+    for letter, target in mapping.items():
         letter = letter.lower()
         if letter in targets:
             raise ValueError(f"duplicate mnemonic {letter!r} in {window}")
-        label, target = spec if isinstance(spec, tuple) else (spec, spec)
-        _underline(label, letter)
         targets[letter] = target
 
     def on_alt(event):
@@ -113,18 +110,6 @@ def bind_mnemonics(window, mapping):
 
     window.bind("<Alt-KeyPress>", on_alt)
     return targets
-
-
-def _underline(widget, letter):
-    # Only a widget that can show an underline (button, checkbutton, label)
-    # gets one. Probing -text alone is not enough: Tk accepts unique option
-    # abbreviations, so an entry or combobox answers "-text" with its
-    # -textvariable and would then choke on -underline.
-    if "underline" not in widget.keys():
-        return
-    index = str(widget.cget("text")).lower().find(letter)
-    if index >= 0:
-        widget.configure(underline=index)
 
 
 def link_embedded_checkbuttons(text_widget, checkbuttons):

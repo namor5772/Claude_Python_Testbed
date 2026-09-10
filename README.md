@@ -386,7 +386,7 @@ Since 2026-09-10 every MyAgent window — the main window and all five dialogs �
 
 1. **Tab / Shift+Tab move between controls in visual order.** The focused control is marked: buttons and checkboxes get a thin ring, text fields show the blinking cursor, lists highlight the active row. Read-only panes (the main output pane, the confirm dialog's command box, the Agent Request's message box) are Tab stops too, so they scroll and copy from the keyboard.
 2. **Escape leaves the field you are in — the safe way out of a text box.** Inside a text box Tab *types* a tab, so Escape moves the focus to the next control instead. It never inserts, deletes, submits or closes anything (Ctrl+Tab / Ctrl+Shift+Tab, Tk's own bindings, do the same forwards / backwards). The same Escape leaves a single-line entry, the temperature spinbox or a dropdown, so "Escape = leave this field" holds everywhere. Because Escape is reserved for that, **no window that holds a draft closes on Escape**: the Instruction Editor and Skills Manager close only via [X] or Alt+F4, exactly as before. The two dialogs where nothing can be lost do close on Escape — the Safety dialog (every toggle is saved as it happens) and the command-confirmation dialog (Escape = Deny).
-3. **Enter presses the focused button, Space toggles the focused checkbox, and Alt+<underlined letter> presses a button or jumps to a field from anywhere in its window.** The underlines are always visible (Tk draws them permanently, unlike native Windows controls that reveal them on Alt). A disabled button ignores Enter and its Alt-letter just as it ignores a click — STOP, for instance, only while a run is active.
+3. **Enter presses the focused button, Space toggles the focused checkbox, and Alt+letter presses a button or jumps to a field from anywhere in its window.** The letters are listed per window below; they are deliberately not underlined on the buttons, to keep the plain look. A disabled button ignores Enter and its Alt+letter just as it ignores a click — STOP, for instance, is pressable only while a run is active.
 
 **Keys that work everywhere**
 
@@ -397,7 +397,7 @@ Since 2026-09-10 every MyAgent window — the main window and all five dialogs �
 | Ctrl+Tab / Ctrl+Shift+Tab — in a text box | same, forwards / backwards |
 | Enter | press the focused button |
 | Space | press the focused button / toggle the focused checkbox |
-| Alt+<underlined letter> | press that button / jump to that field |
+| Alt+letter (see the per-window tables) | press that button / jump to that field |
 | Down — on a dropdown | open the list; arrows move, Enter picks, Escape closes the list |
 | Up / Down — on the temperature spinbox | step the value |
 | Arrows, PgUp / PgDn, Ctrl+Home / End, Shift+arrows, Ctrl+C — in a read-only pane | scroll, select, copy |
