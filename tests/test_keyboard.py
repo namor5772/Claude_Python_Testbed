@@ -80,7 +80,7 @@ class EscapeLeavesFieldTests(_TkCase):
         self.spin.pack()
         self.combo = ttk.Combobox(self.root, values=["a", "b"], state="readonly")
         self.combo.pack()
-        self.tree = ttk.Treeview(self.root, height=2)   # the Load Instruction list
+        self.tree = ttk.Treeview(self.root, height=2)   # the Instructions list
         self.tree.pack()
         self.after = tk.Button(self.root, text="after")
         self.after.pack()

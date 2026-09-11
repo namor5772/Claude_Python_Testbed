@@ -10,7 +10,7 @@ is the model acting on an explicit instruction. These tests pin both halves:
 the button path prompts and honours "No"; the tool paths never touch the
 messagebox at all.
 
-Since 2026-09-11 the editor's DELETE takes its name from the Load Instruction
+Since 2026-09-11 the editor's DELETE takes its name from the Instructions
 LIST's selection (a page row) rather than the old combobox; a selected section
 header is refused outright — a section is only its pages.
 """

@@ -1,7 +1,7 @@
-"""Sections and row order for the Load Instruction list (2026-09-11).
+"""Sections and row order for the Instructions list (2026-09-11).
 
 The saved instructions in agent_instructions.json are a name-keyed dict, so
-the store itself has no order. The Instruction Editor's Load Instruction list
+the store itself has no order. The Instruction Editor's Instructions list
 shows them the way OneNote shows pages in sections: every instruction (a
 "page") sits in a named section, the sections are listed in a fixed order,
 and the pages within a section keep the order the user gave them.

@@ -1,5 +1,5 @@
 """Characterization tests for myagent/instruction_layout.py (2026-09-11): the
-sections-and-order model behind the Instruction Editor's Load Instruction
+sections-and-order model behind the Instruction Editor's Instructions
 list. Pure dict-in / dict-out — no Tk, no files.
 
 The layout lives on the entries themselves ("section" / "order"), so these

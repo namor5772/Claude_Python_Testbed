@@ -1,4 +1,4 @@
-"""Characterization tests for the Instruction Editor's Load Instruction LIST
+"""Characterization tests for the Instruction Editor's Instructions LIST
 (instructions_mixin.py, 2026-09-11) — the widget half of the sections-and-pages
 model whose pure half is tests/test_instruction_layout.py.
 
@@ -134,6 +134,29 @@ class SelectionTests(_TreeCase):
         self.assertEqual(self.host._section_for_new_page(STORE), "Weather")
         self.host._select_instruction_row(("section", ""))
         self.assertEqual(self.host._section_for_new_page(STORE), "")
+
+
+class BuildTests(unittest.TestCase):
+    """The real builder (_build_instruction_list) on a withdrawn root: what
+    the user reads over the list."""
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.withdraw()
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_the_list_is_headed_instructions(self):
+        # "Instructions" since 2026-09-12: the first day's "Load Instruction"
+        # (the old combobox's label) read like a button to press, when
+        # selecting a page is the load.
+        host = stub(InstructionsMixin)
+        host._build_instruction_list(tk.Frame(self.root))
+        self.assertEqual(host._instr_tree.heading("#0", "text"), "Instructions")
 
 
 if __name__ == "__main__":

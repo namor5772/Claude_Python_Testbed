@@ -416,7 +416,7 @@ class InstructionsMixin:
 
         # Row 5: the bottom row (since 2026-09-10) and the only weighted one,
         # so resizing the window grows it alone. Since 2026-09-11 it is a
-        # two-pane split — the Load Instruction list on the left (sections
+        # two-pane split — the Instructions list on the left (sections
         # and their pages, OneNote-style; the model is instruction_layout.py),
         # the instruction text on the right — with a draggable sash whose
         # position is remembered per instance (agent_state.json). The list is
@@ -528,7 +528,7 @@ class InstructionsMixin:
         self._remember_geometry("editor", self.instruction_editor_window)
 
     def _close_editor(self):
-        """Capture geometry (and the Load Instruction pane's width, i.e. the
+        """Capture geometry (and the Instructions pane's width, i.e. the
         sash position), destroy the editor, and nullify widget refs."""
         self._capture_editor_geometry()
         try:
@@ -551,7 +551,7 @@ class InstructionsMixin:
         except Exception:
             pass
 
-    # ── Load Instruction list: sections and pages (2026-09-11) ──────────
+    # ── Instructions list: sections and pages (2026-09-11) ──────────────
     #
     # The list replaced the Load Instruction combobox (whose "arbitrary" order
     # was the store's dict order). It is a ttk.Treeview: one header row per
@@ -577,7 +577,10 @@ class InstructionsMixin:
         style.configure("Instr.Treeview.Heading", font=("Arial", 10))
         tree = ttk.Treeview(pane, show="tree headings", selectmode="browse",
                             style="Instr.Treeview")
-        tree.heading("#0", text="Load Instruction", anchor="w")
+        # "Instructions" since 2026-09-12: the first day's heading, "Load
+        # Instruction" (the old combobox's label carried over), read like a
+        # button to press — when selecting a page IS the load.
+        tree.heading("#0", text="Instructions", anchor="w")
         tree.column("#0", stretch=True, minwidth=80)
         tree.grid(row=0, column=0, sticky="nsew")
         list_scrollbar = tk.Scrollbar(pane, command=tree.yview)
@@ -1036,7 +1039,7 @@ class InstructionsMixin:
         self._refresh_image_listbox()
 
     def _on_instruction_selected(self, event=None):
-        """<<TreeviewSelect>> on the Load Instruction list: load the selected
+        """<<TreeviewSelect>> on the Instructions list: load the selected
         page into the editor. Tk QUEUES this event (it fires later, and every
         pending one sees the final selection), so a flag around the list's
         own programmatic selections could not silence it; instead the load is
