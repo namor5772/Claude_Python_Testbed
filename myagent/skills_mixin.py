@@ -6,6 +6,7 @@ from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
 from myagent.datapaths import delete_skill_tree_entry, load_skills_tree, save_skills_tree
 from myagent.keyboard import bind_mnemonics
+from myagent.ui_mixin import list_title_band
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
 # absorb OneDrive conflict forks on disk, + the spawn itself) so several
@@ -536,17 +537,22 @@ class SkillsMixin:
 
         left = tk.Frame(win)
         left.grid(row=2, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
-        left.grid_rowconfigure(1, weight=1)
+        left.grid_rowconfigure(2, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
         # Cycle Mode sits ABOVE the list, sized to its label and left-aligned
         toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
         toggle_btn.grid(row=0, column=0, sticky="w", pady=(0, 5))
 
+        # The SKILLS band caps the list (2026-09-12, the Instructions list's
+        # twin — see ui_mixin.list_title_band): the list proper's width, not
+        # the scrollbar's, which runs the full height beside band and list
+        skills_band = list_title_band(left, "SKILLS")
+        skills_band.grid(row=1, column=0, sticky="ew")
         skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
-        skill_listbox.grid(row=1, column=0, sticky="nsew")
+        skill_listbox.grid(row=2, column=0, sticky="nsew")
         list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
-        list_scrollbar.grid(row=1, column=1, sticky="ns")
+        list_scrollbar.grid(row=1, column=1, rowspan=2, sticky="ns")
         skill_listbox.config(yscrollcommand=list_scrollbar.set)
 
         def refresh_list():

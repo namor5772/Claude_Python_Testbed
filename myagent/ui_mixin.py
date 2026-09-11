@@ -12,6 +12,28 @@ from myagent.constants import (
 from myagent.keyboard import bind_mnemonics, install_class_bindings
 
 
+# ── List title bands (2026-09-12) ───────────────────────────────────────
+#
+# The title over a list is a fixed band, not a ttk heading: a plain Label
+# reacts to nothing, whereas a native heading lit up on hover and click — the
+# theme engine paints its normal / hot / pressed looks, the Treeview class
+# bindings drive them, and its -background is ignored, so it cannot hold one
+# look — and read like a button to press. The blue is the vista theme's
+# PRESSED header-item fill, sampled that day (hover is #d9ebf9), so a band
+# wears the colour a clicked heading showed, on every OS; it is one list row
+# tall (Arial 10 + 8 px). The caller grids it over the list proper only —
+# never the scrollbar, which runs the full height beside band and list.
+LIST_TITLE_BG = "#bcdcf4"
+
+
+def list_title_band(parent, text):
+    """The uppercase title band over a list — INSTRUCTIONS (Instruction
+    Editor), SKILLS (Skills Manager). Returned ungridded: the caller places
+    it in the list's column."""
+    return tk.Label(parent, text=text.upper(), anchor="w", font=("Arial", 10),
+                    background=LIST_TITLE_BG, padx=5, pady=4, borderwidth=0)
+
+
 class UIMixin:
 
     # ── UI Setup ────────────────────────────────────────────────────────

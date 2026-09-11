@@ -14,6 +14,7 @@ from myagent.instruction_layout import (
     normalize_section, rename_section, renumber, rows, section_of, sections,
 )
 from myagent.keyboard import bind_mnemonics
+from myagent.ui_mixin import list_title_band
 
 
 class InstructionsMixin:
@@ -572,22 +573,15 @@ class InstructionsMixin:
         pane.grid_columnconfigure(0, weight=1)
         style = ttk.Style(pane)
         row_font = tkfont.Font(root=pane, font=("Arial", 10))
-        # The title is a fixed band, not a ttk heading (since 2026-09-12): a
-        # plain Label reacts to nothing, whereas a heading lit up on hover and
-        # click — the theme engine paints its normal / hot / pressed looks and
-        # the Treeview class bindings drive them, so it cannot hold one look —
-        # and its first text, "Load Instruction" (the old combobox's label
-        # carried over), read like a button to press, when selecting a page IS
-        # the load. The blue is the vista theme's PRESSED header-item fill,
-        # sampled 2026-09-12 (hover is #d9ebf9), so the band keeps the colour
-        # a clicked heading showed, on every OS. The band is one row tall and
-        # covers the list proper only — not the scrollbar, which runs the full
-        # height beside band and tree as it did beside the old heading (the
-        # first cut spanned the scrollbar too; the user asked for the list's
-        # width the same day).
-        self._instr_heading = tk.Label(
-            pane, text="INSTRUCTIONS", anchor="w", font=("Arial", 10),
-            background="#bcdcf4", padx=5, pady=4, borderwidth=0)
+        # The title is a fixed band, not a ttk heading (since 2026-09-12; the
+        # why is at ui_mixin.list_title_band). Its first text, "Load
+        # Instruction" (the old combobox's label carried over), read like a
+        # button to press, when selecting a page IS the load. It covers the
+        # list proper only — not the scrollbar, which runs the full height
+        # beside band and tree as it did beside the old heading (the first
+        # cut spanned the scrollbar too; the user asked for the list's width
+        # the same day).
+        self._instr_heading = list_title_band(pane, "INSTRUCTIONS")
         self._instr_heading.grid(row=0, column=0, sticky="ew")
         # A shallow indent (Tk's default is 20 px) leaves long names more room
         style.configure("Instr.Treeview", font=("Arial", 10), indent=10,
