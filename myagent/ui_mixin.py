@@ -2,7 +2,8 @@ import tkinter as tk
 from tkinter import font as tkfont
 
 from myagent.constants import (
-    MONO_FONT, TOOLBAR_ACTIVE_BG, FALLBACK_MODELS, DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
+    MONO_FONT, TOOLBAR_ACTIVE_BG, LIST_TITLE_BG, FALLBACK_MODELS, DEFAULT_MODEL,
+    OPENAI_DEFAULT_MODEL,
     ANTHROPIC_DEPRECATED_MODEL_PREFIXES,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
@@ -18,12 +19,15 @@ from myagent.keyboard import bind_mnemonics, install_class_bindings
 # reacts to nothing, whereas a native heading lit up on hover and click — the
 # theme engine paints its normal / hot / pressed looks, the Treeview class
 # bindings drive them, and its -background is ignored, so it cannot hold one
-# look — and read like a button to press. The blue is the vista theme's
-# PRESSED header-item fill, sampled that day (hover is #d9ebf9), so a band
-# wears the colour a clicked heading showed, on every OS; it is one list row
-# tall (Arial 10 + 8 px). The caller grids it over the list proper only —
-# never the scrollbar, which runs the full height beside band and list.
-LIST_TITLE_BG = "#bcdcf4"
+# look — and read like a button to press. The blue, LIST_TITLE_BG
+# (constants.py), is the vista theme's PRESSED header-item fill, sampled that
+# day (hover is #d9ebf9), so a band wears the colour a clicked heading
+# showed, on every OS; it is one list row tall (Arial 10 + 8 px). The caller
+# grids it over the list proper only — never the scrollbar, which runs the
+# full height beside band and list. SelfBot's Skills Manager wears one too,
+# through an IN-FILE COPY of this function (its myagent import is the
+# optional kind), pinned byte-identical by tests/test_selfbot_list_title_band.py
+# — change both together.
 
 
 def list_title_band(parent, text):

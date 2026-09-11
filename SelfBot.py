@@ -46,7 +46,7 @@ try:
         ANTHROPIC_PRICING, APICOST_LOG_MAX_BYTES,
         ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
         ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
-        TOOLBAR_ACTIVE_BG,
+        TOOLBAR_ACTIVE_BG, LIST_TITLE_BG,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
     from myagent.helpers import rotate_log_if_needed
@@ -71,6 +71,9 @@ except Exception:
     # Background of the toolbar button pressed most recently (the "last
     # pressed" group — see App._track_toolbar_presses).
     TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
+    # Fill of the SKILLS band over the Skills Manager's list (see
+    # list_title_band): the blue a clicked ttk heading shows
+    LIST_TITLE_BG = "#bcdcf4"
 
     def rotate_log_if_needed(log_path, max_bytes):
         return False  # no myagent package -> no rotation; the log just grows
@@ -1197,6 +1200,21 @@ LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lo
 INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_inject.txt")
 AUTO_MSG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_auto_msg.json")
 
+
+
+# ── List title band (2026-09-12) — an in-file copy of ui_mixin's ──────────
+# The SKILLS band over the Skills Manager's list is the band MyAgent's two
+# lists wear (the why — a native ttk heading lights up on hover and click and
+# cannot hold one look — is at ui_mixin.list_title_band). Byte-identical to
+# the original by tests/test_selfbot_list_title_band.py (SelfBot's convention:
+# the myagent import is the optional kind); LIST_TITLE_BG is try-imported from
+# myagent.constants with a literal fallback in the stub block above.
+def list_title_band(parent, text):
+    """The uppercase title band over a list — INSTRUCTIONS (Instruction
+    Editor), SKILLS (Skills Manager). Returned ungridded: the caller places
+    it in the list's column."""
+    return tk.Label(parent, text=text.upper(), anchor="w", font=("Arial", 10),
+                    background=LIST_TITLE_BG, padx=5, pady=4, borderwidth=0)
 
 
 def _get_window_pid(hwnd):
@@ -2874,19 +2892,25 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         desc_entry = tk.Text(desc_row, font=("Arial", 10), height=3, wrap="word", undo=True)
         desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        # Left panel: Cycle Mode button ABOVE the listbox
+        # Left panel: Cycle Mode button ABOVE the listbox, the SKILLS band
+        # between them (2026-09-12, the band MyAgent's two lists wear —
+        # list_title_band is an in-file copy of ui_mixin's): the list proper's
+        # width, not the scrollbar's, which runs the full height beside band
+        # and list
         left = tk.Frame(win)
         left.grid(row=2, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
-        left.grid_rowconfigure(1, weight=1)
+        left.grid_rowconfigure(2, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
         toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
         toggle_btn.grid(row=0, column=0, sticky="w", pady=(0, 5))
 
+        skills_band = list_title_band(left, "SKILLS")
+        skills_band.grid(row=1, column=0, sticky="ew")
         skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
-        skill_listbox.grid(row=1, column=0, sticky="nsew")
+        skill_listbox.grid(row=2, column=0, sticky="nsew")
         list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
-        list_scrollbar.grid(row=1, column=1, sticky="ns")
+        list_scrollbar.grid(row=1, column=1, rowspan=2, sticky="ns")
         skill_listbox.config(yscrollcommand=list_scrollbar.set)
 
         def refresh_list():

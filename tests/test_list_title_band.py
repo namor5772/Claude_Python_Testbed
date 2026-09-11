@@ -14,7 +14,8 @@ import pathlib
 import tkinter as tk
 import unittest
 
-from myagent.ui_mixin import LIST_TITLE_BG, list_title_band
+from myagent.constants import LIST_TITLE_BG
+from myagent.ui_mixin import list_title_band
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 

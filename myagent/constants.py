@@ -3327,6 +3327,12 @@ MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 # Background of the toolbar button pressed most recently (Instruction / START /
 # STOP form a "last pressed" group — see UIMixin._track_toolbar_presses).
 TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
+# Fill of the fixed uppercase title band over a list (INSTRUCTIONS in the
+# Instruction Editor, SKILLS in both Skills Managers — see ui_mixin's
+# list_title_band and SelfBot's in-file copy): the vista theme's PRESSED
+# header-item fill, sampled 2026-09-12 (hover is #d9ebf9) — the blue a clicked
+# ttk heading showed, held permanently on every OS.
+LIST_TITLE_BG = "#bcdcf4"
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
 
 # _BASE_DIR points to the project root (parent of the myagent/ package)
