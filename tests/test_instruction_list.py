@@ -155,7 +155,9 @@ class BuildTests(unittest.TestCase):
         # hover and click, and its first text, "Load Instruction", read like
         # a button to press); a plain Label band sits above it instead:
         # INSTRUCTIONS on the blue a clicked heading showed, one row tall,
-        # with nothing bound on it or on its class — it reacts to nothing.
+        # over the list proper only (the scrollbar runs the full height beside
+        # band and tree), with nothing bound on it or on its class — it
+        # reacts to nothing.
         host = stub(InstructionsMixin)
         pane = tk.Frame(self.root)
         host._build_instruction_list(pane)
@@ -167,8 +169,12 @@ class BuildTests(unittest.TestCase):
         self.assertEqual(band.bind(), ())
         self.assertEqual(self.root.bind_class("Label"), ())
         self.assertEqual(int(band.grid_info()["row"]), 0)
-        self.assertEqual(int(band.grid_info()["columnspan"]), 2)
+        self.assertEqual(int(band.grid_info()["column"]), 0)
+        self.assertEqual(int(band.grid_info()["columnspan"]), 1)
         self.assertEqual(int(tree.grid_info()["row"]), 1)
+        (scrollbar,) = pane.grid_slaves(row=0, column=1)
+        self.assertIsInstance(scrollbar, tk.Scrollbar)
+        self.assertEqual(int(scrollbar.grid_info()["rowspan"]), 2)
         self.assertEqual(int(pane.grid_rowconfigure(1)["weight"]), 1)
 
 

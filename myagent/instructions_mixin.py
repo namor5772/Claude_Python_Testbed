@@ -580,11 +580,15 @@ class InstructionsMixin:
         # carried over), read like a button to press, when selecting a page IS
         # the load. The blue is the vista theme's PRESSED header-item fill,
         # sampled 2026-09-12 (hover is #d9ebf9), so the band keeps the colour
-        # a clicked heading showed, on every OS; the band is one row tall.
+        # a clicked heading showed, on every OS. The band is one row tall and
+        # covers the list proper only — not the scrollbar, which runs the full
+        # height beside band and tree as it did beside the old heading (the
+        # first cut spanned the scrollbar too; the user asked for the list's
+        # width the same day).
         self._instr_heading = tk.Label(
             pane, text="INSTRUCTIONS", anchor="w", font=("Arial", 10),
             background="#bcdcf4", padx=5, pady=4, borderwidth=0)
-        self._instr_heading.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self._instr_heading.grid(row=0, column=0, sticky="ew")
         # A shallow indent (Tk's default is 20 px) leaves long names more room
         style.configure("Instr.Treeview", font=("Arial", 10), indent=10,
                         rowheight=row_font.metrics("linespace") + 6)
@@ -592,10 +596,8 @@ class InstructionsMixin:
                             style="Instr.Treeview")
         tree.column("#0", stretch=True, minwidth=80)
         tree.grid(row=1, column=0, sticky="nsew")
-        # The scrollbar starts beside the tree, under the band (as Explorer's
-        # does under its column headers)
         list_scrollbar = tk.Scrollbar(pane, command=tree.yview)
-        list_scrollbar.grid(row=1, column=1, sticky="ns")
+        list_scrollbar.grid(row=0, column=1, rowspan=2, sticky="ns")
         tree.config(yscrollcommand=list_scrollbar.set)
         # Section headers are bold on a grey band, the Unfiled header italic
         # on the same band, and pages alternate white / off-white — the row
