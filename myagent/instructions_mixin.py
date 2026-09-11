@@ -561,30 +561,41 @@ class InstructionsMixin:
     # unit-tested); everything here is widgets and gestures.
 
     def _build_instruction_list(self, pane):
-        """Build the list inside `pane`: the tree, its scrollbar, and the
-        ▲ / ▼ / Section… buttons under it. Gestures: selecting a page loads
+        """Build the list inside `pane`: the INSTRUCTIONS band, the tree under
+        it with its scrollbar, and the ▲ / ▼ / Section… buttons under those.
+        Gestures: selecting a page loads
         it into the editor (as choosing it in the old combobox did), Enter on
         a page jumps to the text, Alt+Up / Alt+Down move the selected page
         (or section) a step, a row can be dragged onto another row, and each
         section's open / closed state is remembered in agent_state.json."""
-        pane.grid_rowconfigure(0, weight=1)
+        pane.grid_rowconfigure(1, weight=1)
         pane.grid_columnconfigure(0, weight=1)
         style = ttk.Style(pane)
         row_font = tkfont.Font(root=pane, font=("Arial", 10))
+        # The title is a fixed band, not a ttk heading (since 2026-09-12): a
+        # plain Label reacts to nothing, whereas a heading lit up on hover and
+        # click — the theme engine paints its normal / hot / pressed looks and
+        # the Treeview class bindings drive them, so it cannot hold one look —
+        # and its first text, "Load Instruction" (the old combobox's label
+        # carried over), read like a button to press, when selecting a page IS
+        # the load. The blue is the vista theme's PRESSED header-item fill,
+        # sampled 2026-09-12 (hover is #d9ebf9), so the band keeps the colour
+        # a clicked heading showed, on every OS; the band is one row tall.
+        self._instr_heading = tk.Label(
+            pane, text="INSTRUCTIONS", anchor="w", font=("Arial", 10),
+            background="#bcdcf4", padx=5, pady=4, borderwidth=0)
+        self._instr_heading.grid(row=0, column=0, columnspan=2, sticky="ew")
         # A shallow indent (Tk's default is 20 px) leaves long names more room
         style.configure("Instr.Treeview", font=("Arial", 10), indent=10,
                         rowheight=row_font.metrics("linespace") + 6)
-        style.configure("Instr.Treeview.Heading", font=("Arial", 10))
-        tree = ttk.Treeview(pane, show="tree headings", selectmode="browse",
+        tree = ttk.Treeview(pane, show="tree", selectmode="browse",
                             style="Instr.Treeview")
-        # "Instructions" since 2026-09-12: the first day's heading, "Load
-        # Instruction" (the old combobox's label carried over), read like a
-        # button to press — when selecting a page IS the load.
-        tree.heading("#0", text="Instructions", anchor="w")
         tree.column("#0", stretch=True, minwidth=80)
-        tree.grid(row=0, column=0, sticky="nsew")
+        tree.grid(row=1, column=0, sticky="nsew")
+        # The scrollbar starts beside the tree, under the band (as Explorer's
+        # does under its column headers)
         list_scrollbar = tk.Scrollbar(pane, command=tree.yview)
-        list_scrollbar.grid(row=0, column=1, sticky="ns")
+        list_scrollbar.grid(row=1, column=1, sticky="ns")
         tree.config(yscrollcommand=list_scrollbar.set)
         # Section headers are bold on a grey band, the Unfiled header italic
         # on the same band, and pages alternate white / off-white — the row
@@ -596,7 +607,7 @@ class InstructionsMixin:
         self._instr_tree = tree
 
         btn_row = tk.Frame(pane)
-        btn_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 0))
+        btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
         up_btn = tk.Button(btn_row, text="▲", width=3,
                            command=lambda: self._move_selected_instruction(-1))
         up_btn.pack(side=tk.LEFT)

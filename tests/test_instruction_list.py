@@ -137,8 +137,8 @@ class SelectionTests(_TreeCase):
 
 
 class BuildTests(unittest.TestCase):
-    """The real builder (_build_instruction_list) on a withdrawn root: what
-    the user reads over the list."""
+    """The real builder (_build_instruction_list) on a withdrawn root: the
+    title band the user reads over the list."""
 
     def setUp(self):
         try:
@@ -150,13 +150,26 @@ class BuildTests(unittest.TestCase):
     def tearDown(self):
         self.root.destroy()
 
-    def test_the_list_is_headed_instructions(self):
-        # "Instructions" since 2026-09-12: the first day's "Load Instruction"
-        # (the old combobox's label) read like a button to press, when
-        # selecting a page is the load.
+    def test_the_title_is_a_fixed_uppercase_band_not_a_heading(self):
+        # Since 2026-09-12 the tree shows no heading (a heading lit up on
+        # hover and click, and its first text, "Load Instruction", read like
+        # a button to press); a plain Label band sits above it instead:
+        # INSTRUCTIONS on the blue a clicked heading showed, one row tall,
+        # with nothing bound on it or on its class — it reacts to nothing.
         host = stub(InstructionsMixin)
-        host._build_instruction_list(tk.Frame(self.root))
-        self.assertEqual(host._instr_tree.heading("#0", "text"), "Instructions")
+        pane = tk.Frame(self.root)
+        host._build_instruction_list(pane)
+        tree, band = host._instr_tree, host._instr_heading
+        show = tuple(str(s) for s in self.root.tk.splitlist(tree.cget("show")))
+        self.assertEqual(show, ("tree",))
+        self.assertEqual(band.cget("text"), "INSTRUCTIONS")
+        self.assertEqual(band.cget("background"), "#bcdcf4")
+        self.assertEqual(band.bind(), ())
+        self.assertEqual(self.root.bind_class("Label"), ())
+        self.assertEqual(int(band.grid_info()["row"]), 0)
+        self.assertEqual(int(band.grid_info()["columnspan"]), 2)
+        self.assertEqual(int(tree.grid_info()["row"]), 1)
+        self.assertEqual(int(pane.grid_rowconfigure(1)["weight"]), 1)
 
 
 if __name__ == "__main__":
