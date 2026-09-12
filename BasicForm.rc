@@ -1,0 +1,6 @@
+// BasicForm.rc — resources embedded into BasicForm.exe by build_basicform.ps1:
+// the app icon (id 1: loaded by the window class for the title bar / taskbar /
+// Alt-Tab, and shown by Explorer and the Desktop shortcut) and the
+// side-by-side manifest (comctl32 v6 theming + system DPI awareness).
+1 ICON "desktop_launchers\\icon_basicform.ico"
+1 24 "BasicForm.manifest"
