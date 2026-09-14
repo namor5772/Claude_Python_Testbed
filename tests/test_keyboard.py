@@ -11,6 +11,9 @@ stop; this module pins what keyboard.py adds on top:
   field, without drawing any underline cue on the widgets.
 * Checkbuttons embedded in a scrolled Text (the Safety dialog) are walked with
   Tab / Shift+Tab / Down / Up, each scrolled into view first.
+* On macOS every tk.Button created after `install_focus_ring_defaults` gets a
+  3-px focus ring, the width from which Aqua draws it (Tk's own 1-px one is a
+  stray black line on Tk 9.0.3 / macOS 26); other platforms are untouched.
 
 The widget tests need a real Tk root that HOLDS the keyboard focus, because a
 synthetic key event is delivered to the focus window: the root is a fully
@@ -171,9 +174,10 @@ class MnemonicTests(_TkCase):
 
     def test_no_underline_cue_is_drawn(self):
         # The user prefers plain buttons: the letters live in the README, not
-        # on the widgets (-1 is Tk's "no underline").
-        self.assertEqual(int(self.button.cget("underline")), -1)
-        self.assertEqual(int(self.check.cget("underline")), -1)
+        # on the widgets. Tk's "no underline" reads back as -1 on Tk 8.6 and
+        # as an empty string on Tk 9 (the macOS venv since 2026-09).
+        for widget in (self.button, self.check):
+            self.assertIn(str(widget.cget("underline")), ("-1", ""))
 
     def test_alt_letter_presses_toggles_or_focuses_from_anywhere_in_the_window(self):
         self.focus(self.entry)
@@ -242,6 +246,49 @@ class EmbeddedCheckbuttonTests(_TkCase):
         self.assertIs(self.root.focus_get(), self.cbs[0])
 
 
+class FocusRingDefaultTests(unittest.TestCase):
+    """On macOS a later tk.Button gets a ring Aqua draws; elsewhere nothing moves.
+
+    The option database only fills options at creation, so the fix must run
+    before the first button exists (the wiring scan pins that), an existing
+    widget keeps its value, and an explicit thickness on a widget still wins.
+    A withdrawn root is enough here: nothing needs the keyboard focus.
+    """
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.withdraw()
+        self.aqua = self.root.tk.call("tk", "windowingsystem") == "aqua"
+        self.before = tk.Button(self.root)  # exists before the call
+        self.defaults = {
+            cls: int(cls(self.root).cget("highlightthickness"))
+            for cls in (tk.Button, tk.Checkbutton, tk.Text)
+        }
+        keyboard.install_focus_ring_defaults(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_a_later_button_gets_3px_on_aqua_and_the_default_elsewhere(self):
+        later = tk.Button(self.root)
+        expected = 3 if self.aqua else self.defaults[tk.Button]
+        self.assertEqual(int(later.cget("highlightthickness")), expected)
+
+    def test_an_existing_button_and_an_explicit_thickness_are_left_alone(self):
+        self.assertEqual(int(self.before.cget("highlightthickness")),
+                         self.defaults[tk.Button])
+        explicit = tk.Button(self.root, highlightthickness=1)
+        self.assertEqual(int(explicit.cget("highlightthickness")), 1)
+
+    def test_no_other_class_is_touched(self):
+        for cls in (tk.Checkbutton, tk.Text):
+            self.assertEqual(int(cls(self.root).cget("highlightthickness")),
+                             self.defaults[cls], cls.__name__)
+
+
 class WiringTests(unittest.TestCase):
     """Every window builder uses the helpers (a static scan, no Tk needed)."""
 
@@ -252,6 +299,10 @@ class WiringTests(unittest.TestCase):
                          "skills_mixin.py", "safety_mixin.py")
         }
         self.assertIn("install_class_bindings(self.root)", src["ui_mixin.py"])
+        # The macOS focus-ring default is installed before the first button
+        # exists (the option database only fills options at creation).
+        self.assertLess(src["ui_mixin.py"].index("install_focus_ring_defaults(self.root)"),
+                        src["ui_mixin.py"].index("tk.Button("))
         for name, text in src.items():
             self.assertIn("bind_mnemonics(", text, name)
         self.assertIn("link_embedded_checkbuttons(text_widget, cbs)", src["safety_mixin.py"])

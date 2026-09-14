@@ -1,7 +1,7 @@
 """Keyboard operation of MyAgent's windows (2026-09-10): the mouse is optional.
 
 Every control is already a Tab stop (Tk's default traversal), so this module
-adds only the three things Tk leaves out, plus one workaround:
+adds only the three things Tk leaves out, plus two workarounds:
 
 * **A safe way out of a text box.** Inside a Text widget Tab TYPES a tab, so
   Escape moves the keyboard focus to the next control instead. It never
@@ -21,6 +21,14 @@ adds only the three things Tk leaves out, plus one workaround:
 * `link_embedded_checkbuttons`: the Safety dialog keeps its checkbuttons inside
   a scrolled Text, and Tk's Tab traversal skips a widget scrolled out of view,
   so Tab / Shift+Tab / Down / Up step through them and scroll each into view.
+* `install_focus_ring_defaults`: on macOS, a button focus ring Tk can actually
+  draw. Tk 9.0.3 on macOS 26 draws the default 1-px ring of a focused
+  tk.Button shifted by its frame's offset — a stray black line across a
+  button near the window's top-left, no ring at all further down
+  (2026-09-15) — so there every tk.Button gets a 3-px ring, the width from
+  which Tk leaves the drawing to Aqua, which paints the system's rounded
+  blue ring where it belongs. Windows draws its dotted ring correctly and is
+  untouched. SelfBot carries a byte-identical in-file copy.
 
 Everything here is plain widget configuration on Tk objects: no App state, so
 the helpers are shared by every mixin that builds a window and are unit-tested
@@ -35,6 +43,35 @@ _INVOKE = {
 }
 
 _FIELD_CLASSES = ("Text", "Entry", "Spinbox", "TCombobox", "Treeview")
+
+
+def install_focus_ring_defaults(root):
+    """Once per Tk instance, BEFORE any button exists: a focus ring Tk can draw.
+
+    A focused tk.Button wears a ring `highlightthickness` wide. Under 3 Tk
+    draws that ring itself, and Tk 9.0.3 on macOS 26 (2026-09-15) draws it
+    shifted up-left by the parent frame's offset within the window: on a
+    button whose frame sits within a button's size of the window's top-left
+    corner only the ring's bottom and right edges land inside the widget — a
+    stray black line struck through the label with a tick at one corner (the
+    artefact over MyAgent's Instruction at startup, which holds the initial
+    focus, and over SelfBot's Skills Manager SAVE / DELETE / NEW) — and on
+    any button further down the ring misses the widget entirely, so there is
+    no focus cue at all (SelfBot's main-window buttons). From 3 up Tk leaves
+    the ring to Aqua, which draws its own rounded blue one in the right place
+    (probed live: 1 and 2 garbage or nothing; 3, 4 and 6 the system ring).
+    So on Aqua the option database gives every LATER tk.Button a thickness
+    of 3. An explicit `highlightthickness=` on a widget still wins (SelfBot's
+    Auto toggle keeps its 0), a widget that already exists is not touched,
+    and no other class is (ttk buttons have no such option; checkbuttons
+    draw nothing wrong at their default). Windows and X11 draw their default
+    ring correctly (the dotted rectangle) and are left alone. One deliberate
+    side effect on the Mac: the ring area is also the frame the toolbar
+    paints light blue for its "last pressed" button, so that frame is 3 px
+    there, and each button grows 2 px per side.
+    """
+    if root.tk.call("tk", "windowingsystem") == "aqua":
+        root.option_add("*Button.highlightThickness", 3)
 
 
 def install_class_bindings(root):

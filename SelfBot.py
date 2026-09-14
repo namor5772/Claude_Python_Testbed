@@ -1217,6 +1217,45 @@ def list_title_band(parent, text):
                     background=LIST_TITLE_BG, padx=5, pady=4, borderwidth=0)
 
 
+# ── Button focus ring on macOS (2026-09-15) — an in-file copy of keyboard.py's ──
+# Tk 9.0.3 on macOS 26 draws a focused tk.Button's own 1-px focus ring shifted
+# by the parent frame's offset: an L-shaped black line struck through a button
+# whose frame sits near the window's top-left (the Skills Manager's SAVE /
+# DELETE / NEW, at (10, 10)), no ring at all on the main window's seven. From
+# 3 px Aqua draws the ring itself, in the right place. Byte-identical to
+# myagent/keyboard.py's by tests/test_selfbot_focus_ring.py (SelfBot's
+# convention: the myagent import is the optional kind); called first in
+# setup_ui, before any button exists, because the option database only fills
+# options at creation. The Auto toggle's explicit highlightthickness=0 wins.
+def install_focus_ring_defaults(root):
+    """Once per Tk instance, BEFORE any button exists: a focus ring Tk can draw.
+
+    A focused tk.Button wears a ring `highlightthickness` wide. Under 3 Tk
+    draws that ring itself, and Tk 9.0.3 on macOS 26 (2026-09-15) draws it
+    shifted up-left by the parent frame's offset within the window: on a
+    button whose frame sits within a button's size of the window's top-left
+    corner only the ring's bottom and right edges land inside the widget — a
+    stray black line struck through the label with a tick at one corner (the
+    artefact over MyAgent's Instruction at startup, which holds the initial
+    focus, and over SelfBot's Skills Manager SAVE / DELETE / NEW) — and on
+    any button further down the ring misses the widget entirely, so there is
+    no focus cue at all (SelfBot's main-window buttons). From 3 up Tk leaves
+    the ring to Aqua, which draws its own rounded blue one in the right place
+    (probed live: 1 and 2 garbage or nothing; 3, 4 and 6 the system ring).
+    So on Aqua the option database gives every LATER tk.Button a thickness
+    of 3. An explicit `highlightthickness=` on a widget still wins (SelfBot's
+    Auto toggle keeps its 0), a widget that already exists is not touched,
+    and no other class is (ttk buttons have no such option; checkbuttons
+    draw nothing wrong at their default). Windows and X11 draw their default
+    ring correctly (the dotted rectangle) and are left alone. One deliberate
+    side effect on the Mac: the ring area is also the frame the toolbar
+    paints light blue for its "last pressed" button, so that frame is 3 px
+    there, and each button grows 2 px per side.
+    """
+    if root.tk.call("tk", "windowingsystem") == "aqua":
+        root.option_add("*Button.highlightThickness", 3)
+
+
 def _get_window_pid(hwnd):
     """Get the process ID that owns a given window handle."""
     if IS_WINDOWS:
@@ -1399,6 +1438,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.root.after(500, self._poll_auto_msg)
 
     def setup_ui(self):
+        # Before the first button exists: on macOS the option database gives
+        # every tk.Button a focus ring Aqua draws (the in-file copy above).
+        install_focus_ring_defaults(self.root)
+
         # Grid weights for resizing
         self.root.grid_rowconfigure(0, weight=0, minsize=40)
         self.root.grid_rowconfigure(1, weight=0)

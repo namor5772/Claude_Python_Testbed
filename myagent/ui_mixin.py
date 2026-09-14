@@ -10,7 +10,9 @@ from myagent.constants import (
     ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
-from myagent.keyboard import bind_mnemonics, install_class_bindings
+from myagent.keyboard import (
+    bind_mnemonics, install_class_bindings, install_focus_ring_defaults,
+)
 
 
 # ── List title bands (2026-09-12) ───────────────────────────────────────
@@ -43,6 +45,11 @@ class UIMixin:
     # ── UI Setup ────────────────────────────────────────────────────────
 
     def setup_ui(self):
+        # Before the first button exists (myagent/keyboard.py): on macOS the
+        # option database gives every tk.Button a focus ring Aqua draws — the
+        # Tk-drawn default came out as a black line across the focused
+        # Instruction button (Tk 9.0.3 / macOS 26). A no-op elsewhere.
+        install_focus_ring_defaults(self.root)
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_rowconfigure(2, weight=0)
