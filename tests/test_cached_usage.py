@@ -23,21 +23,16 @@ import unittest
 from types import SimpleNamespace
 
 from myagent.gemini_mixin import GeminiMixin
-from myagent.kimi_mixin import KimiMixin
 from myagent.openai_mixin import OpenAIMixin
 from myagent.streaming_mixin import StreamingMixin
 from myagent.xai_mixin import XAIMixin
-
-
-class _KimiHost(KimiMixin, StreamingMixin):
-    """_kimi_usage_dict reaches for self.model and the static _get_pricing."""
+from tests._util import stub
+from tests.test_kimi_detect import _CostStub
 
 
 def _kimi(model="kimi-k3"):
-    host = _KimiHost.__new__(_KimiHost)
-    host.provider = "Moonshot"
-    host.model = model
-    return host
+    """_kimi_usage_dict reaches for self.model and the static _get_pricing."""
+    return stub(_CostStub, provider="Moonshot", model=model)
 
 
 class OpenAIUsageCase(unittest.TestCase):
@@ -188,10 +183,14 @@ class XAIUsageCase(unittest.TestCase):
         self.assertAlmostEqual(out["cost_usd"], 0.232148, places=9)
         self.assertAlmostEqual(table, out["cost_usd"], places=6)
 
-    def test_no_cache_hit_omits_the_key(self):
+    def test_no_cache_hit_reports_zero_cached(self):
+        # The contract is the disjoint sum, not the key's presence:
+        # stream_worker .get()s every bucket with a 0 default.
         usage = SimpleNamespace(input_tokens=100, output_tokens=7)
-        self.assertEqual(XAIMixin._xai_usage_dict(usage),
-                         {"input_tokens": 100, "output_tokens": 7})
+        out = XAIMixin._xai_usage_dict(usage)
+        self.assertEqual((out["input_tokens"], out["output_tokens"],
+                          out.get("cache_read_input_tokens", 0)), (100, 7, 0))
+        self.assertNotIn("cost_usd", out)
 
     def test_overreported_cache_never_goes_negative(self):
         usage = SimpleNamespace(input_tokens=10, output_tokens=1,

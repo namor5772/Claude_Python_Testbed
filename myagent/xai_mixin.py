@@ -57,6 +57,7 @@ from myagent.constants import (
     XAI_REASONING_EFFORT,
     _HAS_DESKTOP,
 )
+from myagent.helpers import responses_usage_dict
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -107,33 +108,18 @@ class XAIMixin:
     def _xai_usage_dict(usage):
         """Normalize a Responses-API usage object into stream_worker's buckets.
 
-        xAI reports the cache hit under input_tokens_details.cached_tokens as
-        a SUBSET of input_tokens (the OpenAI shape, not Anthropic's disjoint
-        one) — the cost log itself proves it: the 2026-09-15 grok-4.6 row
-        (input 246,964 with cached 183,424 inside, output 2,226) reproduces
-        its authoritative $0.2321 from the table rates ONLY under the subset
-        reading. Until 2026-09-15 the gross count was passed through —
-        harmless while cost_usd was the only thing consumed, but the cost
-        log's TOK-IN field (2026-09-14) then counted every cached token twice
-        and the viewers' blended $/MTok came out low by the cache share
-        ($0.54 shown vs $0.93 real on that row). Subtracted here, clamped so
-        a bad report can't go negative, exactly like _openai_usage_dict.
+        xAI speaks OpenAI's Responses usage shape — cached_tokens a SUBSET of
+        input_tokens — so the disjoint-bucket subtraction is the shared
+        helpers.responses_usage_dict (the 2026-09-15 grok-4.6 row in
+        tests/test_cached_usage.py is the proof it is a subset: the table
+        rates reproduce its authoritative cost only under that reading).
 
         xAI extras (the SDK's pydantic models keep unknown fields, so plain
         getattr works): cost_in_usd_ticks is the AUTHORITATIVE billed cost
         (1 tick = $1e-10) including the cache discount and the flat $0.005
         per server-tool invocation — stream_worker prefers it over the table
         estimate; num_server_side_tools_used feeds the activity notice."""
-        total_in = getattr(usage, "input_tokens", 0) or 0
-        details = getattr(usage, "input_tokens_details", None)
-        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
-        cached = min(cached, total_in)  # never let a bad report go negative
-        usage_dict = {
-            "input_tokens": total_in - cached,
-            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
-        }
-        if cached:
-            usage_dict["cache_read_input_tokens"] = cached
+        usage_dict = responses_usage_dict(usage)
         ticks = getattr(usage, "cost_in_usd_ticks", None)
         if isinstance(ticks, (int, float)) and ticks >= 0:
             usage_dict["cost_usd"] = ticks / 1e10

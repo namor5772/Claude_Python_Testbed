@@ -237,10 +237,7 @@ class CostLogRunFieldsTests(unittest.TestCase):
         # Must not propagate: stream_worker owns its exception path.
         host.stream_worker([{"role": "user", "content": "go"}])
 
-        msgs = []
-        while not host.queue.empty():
-            msgs.append(host.queue.get_nowait())
-        errs = [str(m.get("content")) for m in msgs
+        errs = [str(m.get("content")) for m in self._drain_queue(host)
                 if m.get("type") == "error"]
         self.assertTrue(any("EARLY BOOM" in e for e in errs), errs)
         self.assertFalse(any("not associated" in e or "not defined" in e

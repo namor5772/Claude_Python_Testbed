@@ -408,15 +408,11 @@ class KimiMixin:
             cached = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
         cached = min(cached, input_tokens)
         # prompt_tokens is the GROSS prompt with the cache hits inside it (the
-        # OpenAI shape, not Anthropic's disjoint one), so the emitted input
-        # bucket is the MISS count: stream_worker's buckets are disjoint, and
-        # since 2026-09-14 they are written to the cost log as TOK-IN /
-        # CACHE-R, where the gross figure counted every cached token twice
-        # (fixed 2026-09-15). The cost formula below always subtracted — only
-        # the reported bucket lagged, unnoticed while cost_usd was all that
-        # was consumed.
-        usage_dict = {"input_tokens": input_tokens - cached,
-                      "output_tokens": output_tokens}
+        # OpenAI shape), so the emitted input bucket is the MISS count —
+        # stream_worker's buckets are disjoint (pinned by DisjointContractCase
+        # in tests/test_cached_usage.py).
+        miss = input_tokens - cached
+        usage_dict = {"input_tokens": miss, "output_tokens": output_tokens}
         if cached:
             usage_dict["cache_read_input_tokens"] = cached
         pricing = self._get_pricing("Moonshot", self.model)
@@ -428,7 +424,7 @@ class KimiMixin:
                     hit_rate = rate / 1_000_000
                     best_len = len(prefix)
             usage_dict["cost_usd"] = (
-                (input_tokens - cached) * pricing["input"]
+                miss * pricing["input"]
                 + cached * hit_rate
                 + output_tokens * pricing["output"])
         return usage_dict

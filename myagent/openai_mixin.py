@@ -15,6 +15,7 @@ from myagent.constants import (
     _HAS_DESKTOP,
     resolve_price,
 )
+from myagent.helpers import responses_usage_dict
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -26,53 +27,13 @@ class OpenAIMixin:
 
         OpenAI caches AUTOMATICALLY above ~1024 tokens — no client opt-in, so
         unlike Anthropic (see anthropic_mixin's cache_control block) there was
-        never a discount to switch on, only one to report.
-
-        The subtraction is the load-bearing part: OpenAI reports the hit under
-        input_tokens_details.cached_tokens as a SUBSET of input_tokens, whereas
-        Anthropic's buckets are disjoint. stream_worker prices input at the full
-        rate AND cache_read at the cached rate, so handing it the raw
-        overlapping totals would double-charge every cached token. Verified live
-        2026-07-31: input_tokens=2714 with cached_tokens=2711 inside it.
-
-        `cache_write_tokens` is a subset of input_tokens too (verified live on
-        gpt-6-astra 2026-09-06: 2420 of 2423 written on a first call, read back
-        on the repeat). Whether it leaves the input bucket depends on the model:
-        the families before GPT-5.6 do not bill writes (no write price on the
-        pricing page — a written token is ordinary full-rate input), so it
-        stays put and no cache_creation key is emitted. GPT-5.6 and later bill
-        writes at 1.25x (terra $2.50/M, gpt-6-astra $12.50/M — pricing page
-        re-read 2026-09-06), so with ``cache_write_billed`` (the caller decides
-        from the pricing row — _openai_bills_cache_writes) the written tokens
-        move to a disjoint ``cache_creation_input_tokens`` bucket for
-        stream_worker's cache_write rate, exactly like Anthropic's.
-
-        Returns None when there is no usage to report. Dict fallbacks cover
-        older/looser SDK shapes.
+        never a discount to switch on, only one to report. The disjoint-bucket
+        subtraction lives in helpers.responses_usage_dict (shared with xAI,
+        which speaks the same Responses shape); ``cache_write_billed`` is
+        decided from the pricing row by _openai_bills_cache_writes so the
+        normalizer and the accumulator can never disagree.
         """
-        if not usage:
-            return None
-        total_in = getattr(usage, "input_tokens", 0) or 0
-        details = getattr(usage, "input_tokens_details", None)
-
-        def _detail(name):
-            if details is None:
-                return 0
-            return (getattr(details, name, None)
-                    or (details.get(name) if isinstance(details, dict) else None)
-                    or 0)
-
-        cached = min(_detail("cached_tokens"), total_in)  # never let a bad report go negative
-        out = {
-            "input_tokens": total_in - cached,
-            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
-            "cache_read_input_tokens": cached,
-        }
-        if cache_write_billed:
-            written = min(_detail("cache_write_tokens"), total_in - cached)
-            out["input_tokens"] -= written
-            out["cache_creation_input_tokens"] = written
-        return out
+        return responses_usage_dict(usage, cache_write_billed=cache_write_billed)
 
     def _openai_bills_cache_writes(self, model_id=None):
         """True when the model's OPENAI_PRICING row carries a cache-write rate

@@ -95,17 +95,27 @@ if (Test-Path -LiteralPath $repoLog) {
 
 # Token counts compacted to <=7 chars so four new columns cost ~36 characters
 # of width, not ~48: 1234 -> "1234", 45678 -> "45.7k", 2300000 -> "2.30M". An
-# absent field (a pre-2026-09-14 line, or SelfBot before the same change)
-# renders '-' rather than 0 -- "not recorded" must not read as "none billed".
-function Format-Tok([string]$v) {
-    if ([string]::IsNullOrWhiteSpace($v)) { return '-' }
-    $n = 0.0
-    if (-not [double]::TryParse($v, [ref]$n)) { return '-' }
+# absent group (a pre-2026-09-14 line, or SelfBot before the same change) is
+# parsed to $null at ingest and renders '-' rather than 0 -- "not recorded"
+# must not read as "none billed".
+function Format-Tok($n) {
+    if ($null -eq $n) { return '-' }
     if ($n -ge 1000000) { return ('{0:N2}M' -f ($n / 1000000)) }
     if ($n -ge 10000)   { return ('{0:N1}k' -f ($n / 1000)) }
     # No thousands separator below 10k, so this matches the macOS twin's
     # awk "%d" exactly -- the two viewers must render a log line identically.
     return ([string][long]$n)
+}
+
+# The four token fields (9th-12th) are written all-or-nothing by both apps
+# (a partially-filled group would read as "zero tokens billed" rather than
+# "not recorded" -- pinned in tests/test_costlog_params.py), so the reader
+# keeps that invariant: one guard, and the group is $null or four numbers.
+function Parse-TokGroup([string[]]$f) {
+    if ($f.Count -ge 12 -and $f[8] -ne '') {
+        return @([double]$f[8], [double]$f[9], [double]$f[10], [double]$f[11])
+    }
+    return @($null, $null, $null, $null)
 }
 
 # Per-model token totals + the EFFECTIVE blended rate (total cost / total
@@ -115,7 +125,7 @@ function Format-Tok([string]$v) {
 # cheap cache reads. Lifetime only (the month-scoped rollups stay cost-only):
 # a blended rate over a handful of runs is noise.
 function Get-TokenRollup([object[]]$set) {
-    $withTok = @($set | Where-Object { $_.TokIn -ne '' })
+    $withTok = @($set | Where-Object { $null -ne $_.TokIn })
     if ($withTok.Count -eq 0) { return @() }
     # A positive alignment in a .NET format string already right-aligns
     # ("{2,8}"); there is no '>' flag, and one would throw at render time.
@@ -125,18 +135,10 @@ function Get-TokenRollup([object[]]$set) {
     $lines += @($withTok | Group-Object Model |
         Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
         ForEach-Object {
-            # PS 5.1's Measure-Object -Property takes a NAME, not a
-            # scriptblock (that arrived in PS 6), so the token fields are
-            # summed by hand -- and cast defensively, since a 9-field line
-            # would leave the later buckets empty.
-            $ti = 0.0; $to = 0.0; $tw = 0.0; $tr = 0.0
-            foreach ($g in $_.Group) {
-                $p = 0.0
-                if ([double]::TryParse($g.TokIn,  [ref]$p)) { $ti += $p }
-                if ([double]::TryParse($g.TokOut, [ref]$p)) { $to += $p }
-                if ([double]::TryParse($g.TokCW,  [ref]$p)) { $tw += $p }
-                if ([double]::TryParse($g.TokCR,  [ref]$p)) { $tr += $p }
-            }
+            $ti = ($_.Group | Measure-Object TokIn -Sum).Sum
+            $to = ($_.Group | Measure-Object TokOut -Sum).Sum
+            $tw = ($_.Group | Measure-Object TokCW -Sum).Sum
+            $tr = ($_.Group | Measure-Object TokCR -Sum).Sum
             $c = ($_.Group | Measure-Object Cost -Sum).Sum
             $all = $ti + $to + $tw + $tr
             $rate = if ($all -gt 0) { '{0:N4}' -f ($c / $all * 1000000) } else { '-' }
@@ -148,8 +150,8 @@ function Get-TokenRollup([object[]]$set) {
             # and compares across providers. '-' when no input was recorded.
             $inp = $ti + $tw + $tr
             $share = if ($inp -gt 0) { '{0:N1}%' -f ($tr / $inp * 100) } else { '-' }
-            $thdr -f $_.Name, $_.Count, (Format-Tok "$ti"), (Format-Tok "$to"),
-                (Format-Tok "$tw"), (Format-Tok "$tr"), ('{0:N4}' -f $c), $rate, $share
+            $thdr -f $_.Name, $_.Count, (Format-Tok $ti), (Format-Tok $to),
+                (Format-Tok $tw), (Format-Tok $tr), ('{0:N4}' -f $c), $rate, $share
         })
     return $lines
 }
@@ -212,6 +214,7 @@ try {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             $f = $line.Split(';')
             if ($f.Count -lt 4) { continue }   # also skips the rotation marker line
+            $tok = Parse-TokGroup $f
             [pscustomobject]@{
                 Time = $f[0]; Provider = $f[1]; Model = $f[2]
                 Cost = [double]::Parse($f[3], $inv); Machine = $logf.Machine
@@ -219,10 +222,7 @@ try {
                 Secs = if ($f.Count -ge 6) { $f[5] } else { '' }
                 Instr = if ($f.Count -ge 7) { $f[6] } else { '' }
                 Calls = if ($f.Count -ge 8) { $f[7] } else { '' }
-                TokIn = if ($f.Count -ge 9) { $f[8] } else { '' }
-                TokOut = if ($f.Count -ge 10) { $f[9] } else { '' }
-                TokCW = if ($f.Count -ge 11) { $f[10] } else { '' }
-                TokCR = if ($f.Count -ge 12) { $f[11] } else { '' }
+                TokIn = $tok[0]; TokOut = $tok[1]; TokCW = $tok[2]; TokCR = $tok[3]
             }
         }
     }
@@ -288,8 +288,12 @@ try {
         # so the invariant above holds unchanged: cost never moves, and a
         # narrow console wraps the instruction name.
         $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,8} {7,8} {8,8} {9,8} {10,-$modW} {11,-$parW} {12}"
-        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS', 'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION')
-        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 6), ('-' * 7), ('-' * 7), ('-' * 7), ('-' * 5), ('-' * 10), ('-' * 11))
+        # The dash rule under each heading is exactly the heading's width, so
+        # it is derived from the one heading list rather than kept by hand.
+        $hdr = @('DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS',
+                 'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION')
+        $out += ($fmt -f $hdr)
+        $out += ($fmt -f @($hdr | ForEach-Object { '-' * $_.Length }))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
             $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls,

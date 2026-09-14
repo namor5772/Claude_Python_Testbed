@@ -1111,18 +1111,12 @@ class StreamingMixin:
         # cost log's CALLS / INSTRUCTION fields; both hoisted for the same
         # reason (the exception path logs whatever the run got through), and
         # the name is snapshotted at run start so an instruction applied
-        # mid-run can't relabel the entry. The four token accumulators feed
-        # the 2026-09-14 TOKENS fields and are hoisted for that same reason —
-        # the except path reads them. They used to sit just inside the try,
-        # beside the loop, where nothing outside it read them; leaving them
-        # there once the log call needs them makes an EARLY failure (anything
-        # raising before the loop, e.g. a collaborator called during setup)
-        # blow up the handler with UnboundLocalError. The error message itself
-        # still reaches the queue — it is queued first — but everything after
-        # the log call is skipped: no `_write_result_file("error", ...)`, so a
-        # waited parent sits out its whole timeout instead of getting the
-        # report, and no headless auto-close, so an unattended run is left a
-        # zombie. Verified both ways with an early-raising stub.
+        # mid-run can't relabel the entry. The four token accumulators (the
+        # 2026-09-14 TOKENS fields) are hoisted for the same reason: the
+        # except path reads them, so an EARLY failure — anything raising
+        # before the loop — would otherwise abort the handler with
+        # UnboundLocalError and skip _write_result_file / the headless close
+        # (pinned by test_early_failure_completes_the_exception_handler).
         total_cost = 0.0
         had_usage = False
         call_num = 0
@@ -1133,6 +1127,18 @@ class StreamingMixin:
         instr_name = getattr(self, "agent_instruction_name", "")
         run_started = time.monotonic()
         self._input_wait_secs = 0.0
+
+        def _log_run():
+            # The one cost-log call for both loop-end paths, so the fields
+            # can't drift between the success and exception tails.
+            self._log_api_cost(total_cost, had_usage,
+                               max(0.0, time.monotonic() - run_started
+                                   - self._input_wait_secs),
+                               instruction=instr_name, calls=call_num,
+                               tokens=(total_input_tokens, total_output_tokens,
+                                       total_cache_write_tokens,
+                                       total_cache_read_tokens))
+
         try:
             # Sync temperature from spinbox
             try:
@@ -1165,9 +1171,6 @@ class StreamingMixin:
 
             user_prompt_count = 0
             user_prompt_nudges = 0
-            # Cost tracking: total_cost AND the four token accumulators are
-            # hoisted above the try (the cost log's TOKENS fields are written
-            # on the exception path too) — nothing to initialise here.
             while True:
                 # Check stop request between API calls
                 if self.stop_requested:
@@ -1206,14 +1209,10 @@ class StreamingMixin:
                 # Accumulate tokens, then cost
                 if usage:
                     had_usage = True
-                    # The four buckets are summed for EVERY call that reported
-                    # usage, priced or not: they feed the cost log's TOKENS
-                    # fields (2026-09-14), and an Ollama run — free, so its
-                    # pricing table is deliberately empty — still logs a 0.0000
-                    # line, which until 2026-09-15 read 0;0;0;0 because these
-                    # sums sat inside the pricing gate below and the reported
-                    # counts were dropped. An unpriced PAID model still logs
-                    # nothing: the zero-cost gate in _log_api_cost is unchanged.
+                    # Summed for EVERY call that reported usage, priced or not,
+                    # so a free Ollama run's 0.0000 line still carries its
+                    # token counts (the zero-cost gate in _log_api_cost still
+                    # drops an unpriced PAID model's line).
                     call_input = usage.get("input_tokens", 0)
                     call_output = usage.get("output_tokens", 0)
                     call_cache_write = usage.get("cache_creation_input_tokens", 0)
@@ -1389,13 +1388,7 @@ class StreamingMixin:
 
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
-            self._log_api_cost(total_cost, had_usage,
-                               max(0.0, time.monotonic() - run_started
-                                   - self._input_wait_secs),
-                               instruction=instr_name, calls=call_num,
-                               tokens=(total_input_tokens, total_output_tokens,
-                                       total_cache_write_tokens,
-                                       total_cache_read_tokens))
+            _log_run()
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
@@ -1411,13 +1404,7 @@ class StreamingMixin:
             # Mirror the success path: persist whatever cost accrued before the
             # failure, and never leave a headless run as a zombie process — an
             # unattended error should exit (the auto-saved transcript records it).
-            self._log_api_cost(total_cost, had_usage,
-                               max(0.0, time.monotonic() - run_started
-                                   - self._input_wait_secs),
-                               instruction=instr_name, calls=call_num,
-                               tokens=(total_input_tokens, total_output_tokens,
-                                       total_cache_write_tokens,
-                                       total_cache_read_tokens))
+            _log_run()
             self._write_result_file("error", messages, error=str(e))
             if self._headless or self._result_file:
                 self.root.after(500, self._on_close)

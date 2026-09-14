@@ -6414,10 +6414,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             calls = getattr(self, "_session_calls", 0)
             line = (f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params};;"
                     f"{prompt};{calls};"
-                    f"{int(getattr(self, '_session_tokens_in', 0))};"
-                    f"{int(getattr(self, '_session_tokens_out', 0))};"
-                    f"{int(getattr(self, '_session_tokens_cache_write', 0))};"
-                    f"{int(getattr(self, '_session_tokens_cache_read', 0))}\n")
+                    f"{self._session_tokens_in};{self._session_tokens_out};"
+                    f"{self._session_tokens_cache_write};"
+                    f"{self._session_tokens_cache_read}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.

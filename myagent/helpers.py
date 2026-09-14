@@ -182,6 +182,59 @@ def trim_history_for_context(messages, reported_tokens=None, reported_max=None):
     return cut_at
 
 
+def responses_usage_dict(usage, cache_write_billed=False):
+    """Normalize a Responses-API usage object (OpenAI's shape, which xAI
+    shares) into stream_worker's DISJOINT buckets.
+
+    The subtraction is the load-bearing part: the provider reports the cache
+    hit under input_tokens_details.cached_tokens as a SUBSET of input_tokens,
+    whereas Anthropic's buckets are disjoint. stream_worker prices input at the
+    full rate AND cache_read at the cached rate — and since 2026-09-14 writes
+    the buckets to the cost log — so handing it the raw overlapping totals
+    would double-charge (and double-count) every cached token. Verified live
+    2026-07-31 on OpenAI (input_tokens=2714 with cached_tokens=2711 inside it)
+    and 2026-09-15 on xAI (the grok-4.6 row whose authoritative cost the table
+    rates reproduce ONLY under the subset reading). Clamped so a bad report
+    can't go negative.
+
+    `cache_write_tokens` is a subset of input_tokens too (verified live on
+    gpt-6-astra 2026-09-06: 2420 of 2423 written on a first call, read back on
+    the repeat). Whether it leaves the input bucket depends on the model: the
+    OpenAI families before GPT-5.6 do not bill writes (a written token is
+    ordinary full-rate input), so it stays put and no cache_creation key is
+    emitted; GPT-5.6 and later bill writes at 1.25x, so with
+    ``cache_write_billed`` (the caller decides from the pricing row) the
+    written tokens move to a disjoint ``cache_creation_input_tokens`` bucket,
+    exactly like Anthropic's.
+
+    Returns None when there is no usage to report. Dict fallbacks cover
+    older/looser SDK shapes.
+    """
+    if not usage:
+        return None
+    total_in = getattr(usage, "input_tokens", 0) or 0
+    details = getattr(usage, "input_tokens_details", None)
+
+    def _detail(name):
+        if details is None:
+            return 0
+        return (getattr(details, name, None)
+                or (details.get(name) if isinstance(details, dict) else None)
+                or 0)
+
+    cached = min(_detail("cached_tokens"), total_in)  # never let a bad report go negative
+    out = {
+        "input_tokens": total_in - cached,
+        "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+        "cache_read_input_tokens": cached,
+    }
+    if cache_write_billed:
+        written = min(_detail("cache_write_tokens"), total_in - cached)
+        out["input_tokens"] -= written
+        out["cache_creation_input_tokens"] = written
+    return out
+
+
 def rotate_log_if_needed(log_path, max_bytes):
     """One-slot size-cap rotation for the append-only runtime logs
     (heartbeat.log, APICostLog.txt): past max_bytes the log is atomically
