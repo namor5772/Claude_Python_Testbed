@@ -17,6 +17,13 @@ unattended run is left a zombie. That is what
 test_early_failure_completes_the_exception_handler pins; it fails if the
 initialisers move back inside the try.
 
+Since 2026-09-15 the accumulators run for EVERY call that reported usage,
+not only priced ones: OLLAMA_PRICING is deliberately empty, so an Ollama run
+is unpriced yet still logs a 0.0000 line (the 2026-08-12 exception) — and
+that line read 0;0;0;0 while the model had reported real counts, because the
+sums sat inside the pricing gate. _OllamaHost pins the fix; the paired
+unpriced-paid-model test pins that the zero-cost gate itself is unchanged.
+
 The provider call is stubbed at the dispatch seam (_stream_anthropic_call):
 call 1 returns a tool_use block (so the loop goes round again), call 2 ends
 the turn (or raises, for the exception-path case). Everything else the loop
@@ -104,6 +111,20 @@ class _CacheHost(_Host):
         usage["cache_creation_input_tokens"] = 40
         usage["cache_read_input_tokens"] = 7
         return stop, blocks, text, thinking, label, usage
+
+
+class _OllamaHost(_Host):
+    """_Host on the Ollama provider: usage is reported (prompt_eval_count /
+    eval_count) but OLLAMA_PRICING is empty, so _get_pricing returns None and
+    the run is unpriced — the one provider that logs at zero cost."""
+
+    def __init__(self, second_call="end", instruction="Local run"):
+        super().__init__(second_call, instruction)
+        self.provider = "Ollama"
+        self.model = "qwen3:32b"
+
+    def _stream_ollama_call(self, messages, max_retries, label_emitted):
+        return self._stream_anthropic_call(messages, max_retries, label_emitted)
 
 
 class CostLogRunFieldsTests(unittest.TestCase):
@@ -230,6 +251,30 @@ class CostLogRunFieldsTests(unittest.TestCase):
         self.assertEqual(closes, [500], "auto-close never scheduled")
         # Nothing was logged: no call completed, so the zero-cost gate holds.
         self.assertFalse(self.log.exists())
+
+    def test_ollama_run_logs_its_token_counts_at_zero_cost(self):
+        # Unpriced (empty table) but logged (Ollama exception) — and since
+        # 2026-09-15 with the REAL counts: two calls x (1000 in, 100 out).
+        # Before the hoist the line said 0;0;0;0, which the viewers render
+        # as "no tokens billed" — false; 2,200 had been reported.
+        host = _OllamaHost(second_call="end")
+        host.stream_worker([{"role": "user", "content": "go"}])
+        f = self._fields()
+        self.assertEqual(len(f), 12)
+        self.assertEqual((f[1], f[2], f[3]), ("Ollama", "qwen3:32b", "0.0000"))
+        self.assertEqual(f[7], "2")
+        self.assertEqual(f[8:], ["2000", "200", "0", "0"])
+
+    def test_unpriced_paid_model_still_logs_nothing(self):
+        # The zero-cost gate is untouched by the hoist: a PAID provider whose
+        # model has no pricing row now accumulates tokens too, but still
+        # writes no line — a $0.0000 row would claim the run was free when
+        # the truth is the price is unknown.
+        host = _Host(second_call="end")
+        host.model = "claude-unknown-99"
+        host.stream_worker([{"role": "user", "content": "go"}])
+        self.assertFalse(self.log.exists())
+        self.assertEqual(host.tool_calls, ["read_file"])  # the run itself ran
 
     def test_cache_buckets_accumulate_into_their_own_fields(self):
         # Two round-trips x (40 written, 7 read) -> 80 / 14, kept in the two

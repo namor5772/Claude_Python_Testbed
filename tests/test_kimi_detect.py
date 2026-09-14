@@ -287,9 +287,14 @@ class TestKimiUsageDict(unittest.TestCase):
             prompt_tokens=1000, completion_tokens=100,
             prompt_tokens_details=SimpleNamespace(cached_tokens=600))
         d = obj._kimi_usage_dict(usage)
-        self.assertEqual(d["input_tokens"], 1000)
+        # prompt_tokens is the GROSS prompt with the 600 cache hits INSIDE
+        # it; the emitted buckets are disjoint (miss 400 + hit 600 = 1000)
+        # since 2026-09-15 — the gross pass-through had counted every cached
+        # token twice in the cost log's TOK-IN field.
+        self.assertEqual(d["input_tokens"], 400)
         self.assertEqual(d["output_tokens"], 100)
         self.assertEqual(d["cache_read_input_tokens"], 600)
+        self.assertEqual(d["input_tokens"] + d["cache_read_input_tokens"], 1000)
         # (1000-600)*0.95 + 600*0.16 + 100*4.00 per MTok = $0.000876
         self.assertAlmostEqual(d["cost_usd"], 0.000876, delta=1e-12)
 
@@ -302,6 +307,7 @@ class TestKimiUsageDict(unittest.TestCase):
                                 cached_tokens=200)
         d = obj._kimi_usage_dict(usage)
         self.assertEqual(d["cache_read_input_tokens"], 200)
+        self.assertEqual(d["input_tokens"], 300)   # disjoint: 500 gross - 200 hit
         # (500-200)*0.95 + 200*0.16 + 10*4.00 per MTok
         self.assertAlmostEqual(d["cost_usd"], (300 * 0.95 + 200 * 0.16 + 10 * 4.00) / 1e6,
                                delta=1e-12)

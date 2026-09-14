@@ -979,7 +979,11 @@ class StreamingMixin:
         separate a 5x rate from a 40x cache-read discount). Written as plain
         integers, blank when tokens is None (SelfBot's caller, and any run
         whose provider returned no usage). input_tokens is the NON-cached
-        count and the cache buckets are disjoint, so in+cache_write+cache_read
+        count and the cache buckets are disjoint for EVERY provider — each
+        normalizer subtracts a subset-style cache hit before emitting
+        (OpenAI/Gemini since 2026-07-31, xAI/Kimi since 2026-09-15, when the
+        gross pass-through was caught double-counting here), and Ollama's
+        counts are summed although it is unpriced — so in+cache_write+cache_read
         is the run's true billed input volume — do not add input to a cache
         total expecting a subtotal. Older 4-/5-/6-/8-field lines stay valid
         and render blank PARAMETERS / TIME(sec) / INSTRUCTION / CALLS /
@@ -1199,9 +1203,25 @@ class StreamingMixin:
                     stop_reason, content_blocks, full_text, _had_thinking, label_emitted, usage = \
                         self._stream_anthropic_call(messages, max_retries, label_emitted)
 
-                # Accumulate cost
+                # Accumulate tokens, then cost
                 if usage:
                     had_usage = True
+                    # The four buckets are summed for EVERY call that reported
+                    # usage, priced or not: they feed the cost log's TOKENS
+                    # fields (2026-09-14), and an Ollama run — free, so its
+                    # pricing table is deliberately empty — still logs a 0.0000
+                    # line, which until 2026-09-15 read 0;0;0;0 because these
+                    # sums sat inside the pricing gate below and the reported
+                    # counts were dropped. An unpriced PAID model still logs
+                    # nothing: the zero-cost gate in _log_api_cost is unchanged.
+                    call_input = usage.get("input_tokens", 0)
+                    call_output = usage.get("output_tokens", 0)
+                    call_cache_write = usage.get("cache_creation_input_tokens", 0)
+                    call_cache_read = usage.get("cache_read_input_tokens", 0)
+                    total_input_tokens += call_input
+                    total_output_tokens += call_output
+                    total_cache_write_tokens += call_cache_write
+                    total_cache_read_tokens += call_cache_read
                     # Price by the model that actually produced the message when
                     # the provider reports one (Anthropic: a server-side refusal
                     # fallback serves the call on an Opus-tier model at ITS
@@ -1209,21 +1229,13 @@ class StreamingMixin:
                     pricing = (self._get_pricing(self.provider, usage.get("model") or self.model)
                                or self._get_pricing(self.provider, self.model))
                     # xAI reports the authoritative billed cost per call
-                    # (cost_in_usd_ticks → cost_usd, set in _stream_xai_events).
+                    # (cost_in_usd_ticks → cost_usd, set in _xai_usage_dict).
                     # Prefer it over the table estimate: it already includes
                     # the cached-input discount ($0.20/M vs full input rate)
                     # and the flat $0.005 per server-side tool invocation,
                     # neither of which the 2-tuple estimate can see.
                     authoritative_cost = usage.get("cost_usd")
                     if pricing or authoritative_cost is not None:
-                        call_input = usage.get("input_tokens", 0)
-                        call_output = usage.get("output_tokens", 0)
-                        call_cache_write = usage.get("cache_creation_input_tokens", 0)
-                        call_cache_read = usage.get("cache_read_input_tokens", 0)
-                        total_input_tokens += call_input
-                        total_output_tokens += call_output
-                        total_cache_write_tokens += call_cache_write
-                        total_cache_read_tokens += call_cache_read
                         if authoritative_cost is not None:
                             call_cost = authoritative_cost
                         else:

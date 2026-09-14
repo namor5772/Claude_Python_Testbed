@@ -103,6 +103,45 @@ class XAIMixin:
             self._xai_model_display_names = {}
             return list(XAI_FALLBACK_MODELS)
 
+    @staticmethod
+    def _xai_usage_dict(usage):
+        """Normalize a Responses-API usage object into stream_worker's buckets.
+
+        xAI reports the cache hit under input_tokens_details.cached_tokens as
+        a SUBSET of input_tokens (the OpenAI shape, not Anthropic's disjoint
+        one) — the cost log itself proves it: the 2026-09-15 grok-4.6 row
+        (input 246,964 with cached 183,424 inside, output 2,226) reproduces
+        its authoritative $0.2321 from the table rates ONLY under the subset
+        reading. Until 2026-09-15 the gross count was passed through —
+        harmless while cost_usd was the only thing consumed, but the cost
+        log's TOK-IN field (2026-09-14) then counted every cached token twice
+        and the viewers' blended $/MTok came out low by the cache share
+        ($0.54 shown vs $0.93 real on that row). Subtracted here, clamped so
+        a bad report can't go negative, exactly like _openai_usage_dict.
+
+        xAI extras (the SDK's pydantic models keep unknown fields, so plain
+        getattr works): cost_in_usd_ticks is the AUTHORITATIVE billed cost
+        (1 tick = $1e-10) including the cache discount and the flat $0.005
+        per server-tool invocation — stream_worker prefers it over the table
+        estimate; num_server_side_tools_used feeds the activity notice."""
+        total_in = getattr(usage, "input_tokens", 0) or 0
+        details = getattr(usage, "input_tokens_details", None)
+        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+        cached = min(cached, total_in)  # never let a bad report go negative
+        usage_dict = {
+            "input_tokens": total_in - cached,
+            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
+        }
+        if cached:
+            usage_dict["cache_read_input_tokens"] = cached
+        ticks = getattr(usage, "cost_in_usd_ticks", None)
+        if isinstance(ticks, (int, float)) and ticks >= 0:
+            usage_dict["cost_usd"] = ticks / 1e10
+        server_calls = getattr(usage, "num_server_side_tools_used", 0) or 0
+        if server_calls:
+            usage_dict["server_tool_calls"] = server_calls
+        return usage_dict
+
     def _stream_xai_events(self, api_kwargs, label_emitted):
         """One streaming pass over the xAI Responses endpoint.
         Returns (full_text, stop_reason, content_blocks, had_thinking,
@@ -198,27 +237,9 @@ class XAIMixin:
                 elif etype == "response.completed":
                     usage = getattr(getattr(event, "response", None), "usage", None)
                     if usage:
-                        usage_dict = {
-                            "input_tokens": getattr(usage, "input_tokens", 0) or 0,
-                            "output_tokens": getattr(usage, "output_tokens", 0) or 0,
-                        }
-                        # xAI extras (the SDK's pydantic models keep unknown
-                        # fields, so plain getattr works). cached_tokens are a
-                        # subset of input_tokens, billed at the $0.20/M cache
-                        # rate; cost_in_usd_ticks is the AUTHORITATIVE billed
-                        # cost (1 tick = $1e-10) including cache discounts and
-                        # the flat $0.005 per server-tool invocation —
-                        # stream_worker prefers it over the table estimate.
-                        details = getattr(usage, "input_tokens_details", None)
-                        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
-                        if cached:
-                            usage_dict["cache_read_input_tokens"] = cached
-                        ticks = getattr(usage, "cost_in_usd_ticks", None)
-                        if isinstance(ticks, (int, float)) and ticks >= 0:
-                            usage_dict["cost_usd"] = ticks / 1e10
-                        server_calls = getattr(usage, "num_server_side_tools_used", 0) or 0
-                        if server_calls:
-                            usage_dict["server_tool_calls"] = server_calls
+                        # Disjoint buckets + the xAI extras (cost_usd,
+                        # server_tool_calls) — see _xai_usage_dict.
+                        usage_dict = self._xai_usage_dict(usage)
 
                 elif etype == "response.failed":
                     resp = getattr(event, "response", None)

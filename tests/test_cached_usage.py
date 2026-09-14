@@ -1,23 +1,43 @@
-"""Characterization tests for the OpenAI / Gemini usage normalizers.
+"""Characterization tests for the OpenAI / Gemini / xAI / Kimi usage
+normalizers.
 
-Both providers cache AUTOMATICALLY (no client opt-in, unlike Anthropic), so the
-discount was always on the bill — it just wasn't reported, which overstated
-every OpenAI/Google line in APICostLog.txt until 2026-07-31.
+All four providers cache AUTOMATICALLY (no client opt-in, unlike Anthropic),
+so the discount was always on the bill — it just wasn't reported, which
+overstated every OpenAI/Google line in APICostLog.txt until 2026-07-31.
 
-The load-bearing property is that the emitted buckets are DISJOINT. Both
-providers report cached tokens as a SUBSET of their input total, while
-stream_worker prices input at the full rate AND cache_read at the cached rate —
-so failing to subtract would double-charge every cached token.
+The load-bearing property is that the emitted buckets are DISJOINT. All four
+report cached tokens as a SUBSET of their input total, while stream_worker
+prices input at the full rate AND cache_read at the cached rate — so failing
+to subtract would double-charge every cached token. xAI and Kimi dodged that
+because both supply an authoritative per-call cost, so their gross
+pass-through went unnoticed until the cost log started writing the buckets
+themselves (2026-09-14): TOK-IN then counted every cached token twice and the
+viewers' blended $/MTok came out low by the cache share (fixed 2026-09-15 —
+the DisjointContractCase at the bottom pins all four).
 
-Fixture values are the real ones observed live on 2026-07-31.
+Fixture values are the real ones observed live on 2026-07-31 (OpenAI, Gemini)
+and the 2026-09-15 grok-4.6 cost-log row (xAI).
 """
 
 import unittest
 from types import SimpleNamespace
 
 from myagent.gemini_mixin import GeminiMixin
+from myagent.kimi_mixin import KimiMixin
 from myagent.openai_mixin import OpenAIMixin
 from myagent.streaming_mixin import StreamingMixin
+from myagent.xai_mixin import XAIMixin
+
+
+class _KimiHost(KimiMixin, StreamingMixin):
+    """_kimi_usage_dict reaches for self.model and the static _get_pricing."""
+
+
+def _kimi(model="kimi-k3"):
+    host = _KimiHost.__new__(_KimiHost)
+    host.provider = "Moonshot"
+    host.model = model
+    return host
 
 
 class OpenAIUsageCase(unittest.TestCase):
@@ -137,6 +157,86 @@ class GeminiUsageCase(unittest.TestCase):
         self.assertIsNone(GeminiMixin._gemini_usage_dict(None))
         self.assertIsNone(GeminiMixin._gemini_usage_dict(
             SimpleNamespace(prompt_token_count=0, candidates_token_count=0)))
+
+
+class XAIUsageCase(unittest.TestCase):
+    # The real 2026-09-15 grok-4.6 cost-log row: input_tokens 246,964 with
+    # cached_tokens 183,424 INSIDE it, output 2,226, authoritative cost
+    # $0.232148 — which the table rates ($2 / $6, cached $0.50) reproduce
+    # ONLY under the subset reading. The logged line had TOK-IN 246,964, so
+    # the viewers' blended rate came out $0.54/MTok against a real $0.93.
+    LIVE = SimpleNamespace(
+        input_tokens=246964, output_tokens=2226,
+        input_tokens_details=SimpleNamespace(cached_tokens=183424),
+        cost_in_usd_ticks=2321480000, num_server_side_tools_used=0)
+
+    def test_cached_tokens_are_subtracted_from_input(self):
+        out = XAIMixin._xai_usage_dict(self.LIVE)
+        self.assertEqual(out["input_tokens"], 246964 - 183424)
+        self.assertEqual(out["cache_read_input_tokens"], 183424)
+        self.assertEqual(out["output_tokens"], 2226)
+        # Buckets must sum back to the provider's reported total
+        self.assertEqual(out["input_tokens"] + out["cache_read_input_tokens"], 246964)
+
+    def test_disjoint_buckets_reproduce_the_authoritative_cost(self):
+        # The proof that cached_tokens is a subset: priced disjointly, the
+        # buckets land on cost_in_usd_ticks to the cent; priced gross they
+        # would say $0.599.
+        out = XAIMixin._xai_usage_dict(self.LIVE)
+        table = (out["input_tokens"] * 2.00 + out["cache_read_input_tokens"] * 0.50
+                 + out["output_tokens"] * 6.00) / 1e6
+        self.assertAlmostEqual(out["cost_usd"], 0.232148, places=9)
+        self.assertAlmostEqual(table, out["cost_usd"], places=6)
+
+    def test_no_cache_hit_omits_the_key(self):
+        usage = SimpleNamespace(input_tokens=100, output_tokens=7)
+        self.assertEqual(XAIMixin._xai_usage_dict(usage),
+                         {"input_tokens": 100, "output_tokens": 7})
+
+    def test_overreported_cache_never_goes_negative(self):
+        usage = SimpleNamespace(input_tokens=10, output_tokens=1,
+                                input_tokens_details=SimpleNamespace(cached_tokens=999))
+        out = XAIMixin._xai_usage_dict(usage)
+        self.assertEqual((out["input_tokens"], out["cache_read_input_tokens"]), (0, 10))
+
+    def test_extras_pass_through(self):
+        usage = SimpleNamespace(input_tokens=100, output_tokens=7,
+                                cost_in_usd_ticks=50_000_000,
+                                num_server_side_tools_used=2)
+        out = XAIMixin._xai_usage_dict(usage)
+        self.assertAlmostEqual(out["cost_usd"], 0.005)
+        self.assertEqual(out["server_tool_calls"], 2)
+
+
+class DisjointContractCase(unittest.TestCase):
+    """The one property the cost log's TOKENS fields rest on, pinned for every
+    subset-style provider at once: input + cache_read (+ cache_creation) must
+    equal the provider's GROSS input, so in+cache_write+cache_read is the
+    billed input volume and TOK-IN never counts a cached token twice."""
+
+    def test_every_normalizer_is_disjoint(self):
+        gross, hit = 10_000, 8_000
+        cases = {
+            "OpenAI": OpenAIMixin._openai_usage_dict(SimpleNamespace(
+                input_tokens=gross, output_tokens=1,
+                input_tokens_details=SimpleNamespace(cached_tokens=hit))),
+            "Google": GeminiMixin._gemini_usage_dict(SimpleNamespace(
+                prompt_token_count=gross, candidates_token_count=1,
+                thoughts_token_count=0, cached_content_token_count=hit)),
+            "xAI": XAIMixin._xai_usage_dict(SimpleNamespace(
+                input_tokens=gross, output_tokens=1,
+                input_tokens_details=SimpleNamespace(cached_tokens=hit))),
+            "Moonshot": _kimi()._kimi_usage_dict(SimpleNamespace(
+                prompt_tokens=gross, completion_tokens=1,
+                prompt_tokens_details=SimpleNamespace(cached_tokens=hit))),
+        }
+        for provider, out in cases.items():
+            with self.subTest(provider=provider):
+                self.assertEqual(out["input_tokens"], gross - hit)
+                self.assertEqual(out["cache_read_input_tokens"], hit)
+                self.assertEqual(out["input_tokens"]
+                                 + out.get("cache_creation_input_tokens", 0)
+                                 + out["cache_read_input_tokens"], gross)
 
 
 class CostArithmeticCase(unittest.TestCase):

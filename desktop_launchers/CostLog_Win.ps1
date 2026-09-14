@@ -31,7 +31,9 @@
 # compacted to k/M) are absent on older lines and render '-'; they also feed
 # the SUMMARY's "By model (tokens and effective blended rate)" block, which
 # divides real cost by real tokens -- the only way to see what a model
-# ACTUALLY costs per MTok once cache reads are in the mix.
+# ACTUALLY costs per MTok once cache reads are in the mix -- and, since
+# 2026-09-15, a CACHE% column: cache reads as a share of the input side, the
+# cache effect on its own (the blended rate also carries output tokens).
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -117,9 +119,9 @@ function Get-TokenRollup([object[]]$set) {
     if ($withTok.Count -eq 0) { return @() }
     # A positive alignment in a .NET format string already right-aligns
     # ("{2,8}"); there is no '>' flag, and one would throw at render time.
-    $thdr = '    {0,-32} {1,5} {2,8} {3,8} {4,8} {5,8} {6,10} {7,9}'
+    $thdr = '    {0,-32} {1,5} {2,8} {3,8} {4,8} {5,8} {6,10} {7,9} {8,7}'
     $lines = @('', '  By model (tokens and effective blended rate; runs logged with token counts):')
-    $lines += ($thdr -f 'MODEL', 'RUNS', 'IN', 'OUT', 'CACHE-W', 'CACHE-R', 'COST(USD)', '$/MTok')
+    $lines += ($thdr -f 'MODEL', 'RUNS', 'IN', 'OUT', 'CACHE-W', 'CACHE-R', 'COST(USD)', '$/MTok', 'CACHE%')
     $lines += @($withTok | Group-Object Model |
         Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
         ForEach-Object {
@@ -138,8 +140,16 @@ function Get-TokenRollup([object[]]$set) {
             $c = ($_.Group | Measure-Object Cost -Sum).Sum
             $all = $ti + $to + $tw + $tr
             $rate = if ($all -gt 0) { '{0:N4}' -f ($c / $all * 1000000) } else { '-' }
+            # CACHE% (2026-09-15): cache reads as a share of the INPUT side
+            # (in + cache-w + cache-r). The blended rate's denominator also
+            # holds output tokens, which bill 5-6x input, so a blended figure
+            # under the input sticker can mean cheap cache reads OR little
+            # output -- this is the cache effect on its own, needs no pricing,
+            # and compares across providers. '-' when no input was recorded.
+            $inp = $ti + $tw + $tr
+            $share = if ($inp -gt 0) { '{0:N1}%' -f ($tr / $inp * 100) } else { '-' }
             $thdr -f $_.Name, $_.Count, (Format-Tok "$ti"), (Format-Tok "$to"),
-                (Format-Tok "$tw"), (Format-Tok "$tr"), ('{0:N4}' -f $c), $rate
+                (Format-Tok "$tw"), (Format-Tok "$tr"), ('{0:N4}' -f $c), $rate, $share
         })
     return $lines
 }

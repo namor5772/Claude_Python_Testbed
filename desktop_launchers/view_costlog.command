@@ -36,7 +36,9 @@
 # compacted to k/M) are absent on older lines and render '-'; they also feed
 # the SUMMARY's "By model (tokens and effective blended rate)" block, which
 # divides real cost by real tokens — the only way to see what a model ACTUALLY
-# costs per MTok once cache reads are in the mix.
+# costs per MTok once cache reads are in the mix — and, since 2026-09-15, a
+# CACHE% column: cache reads as a share of the input side, the cache effect on
+# its own (the blended rate also carries output tokens).
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -134,8 +136,8 @@ token_rollup() {
   awk -F';' 'NF>=13 && $9!="" { found=1 } END { exit !found }' "$MERGED" || return 0
   echo
   echo "  By model (tokens and effective blended rate; runs logged with token counts):"
-  printf '    %-32s %5s %8s %8s %8s %8s %10s %9s\n' \
-    "MODEL" "RUNS" "IN" "OUT" "CACHE-W" "CACHE-R" "COST(USD)" '$/MTok'
+  printf '    %-32s %5s %8s %8s %8s %8s %10s %9s %7s\n' \
+    "MODEL" "RUNS" "IN" "OUT" "CACHE-W" "CACHE-R" "COST(USD)" '$/MTok' 'CACHE%'
   # Rank the models by spend, then re-scan per model for its token totals.
   awk -F';' 'NF>=13 && $9!="" { c[$3]+=$4 }
     END { for (k in c) printf "%.6f\t%s\n", c[k], k }' "$MERGED" \
@@ -153,8 +155,15 @@ token_rollup() {
         if (!n) exit 0
         all = ti + to + tw + tr
         rate = (all > 0) ? sprintf("%.4f", c / all * 1000000) : "-"
-        printf "    %-32s %5d %8s %8s %8s %8s %10.4f %9s\n", \
-          M, n, tok(ti), tok(to), tok(tw), tok(tr), c, rate
+        # CACHE% (2026-09-15): cache reads as a share of the INPUT side
+        # (in + cache-w + cache-r), the cache effect on its own. The blended
+        # rate above also carries output tokens (5-6x input), so a blended
+        # figure under the input sticker can mean cheap reads OR little
+        # output; this needs no pricing and compares across providers.
+        inp = ti + tw + tr
+        share = (inp > 0) ? sprintf("%.1f%%", tr / inp * 100) : "-"
+        printf "    %-32s %5d %8s %8s %8s %8s %10.4f %9s %7s\n", \
+          M, n, tok(ti), tok(to), tok(tw), tok(tr), c, rate, share
       }' "$MERGED"
   done
 }

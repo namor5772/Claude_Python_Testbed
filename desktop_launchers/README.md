@@ -127,9 +127,9 @@ repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
 machine, by provider, by model (highest spend first) and, for rows that carry
 one, by instruction, then (since 2026-09-02) the same four rollups again over
 the current month only under a `THIS MONTH (yyyy-MM)` heading, each block
-built by one shared `rollups` shell function — before listing every run most-recent-first **with its
+built by one shared `rollups` shell function, plus (since 2026-09-14) a **By model (tokens and effective blended rate)** block (`token_rollup`: per-model IN / OUT / CACHE-W / CACHE-R totals, cost ÷ tokens as $/MTok and, since 2026-09-15, CACHE%, cache reads as a share of the input side) — before listing every run most-recent-first **with its
 individual cost** via `column -t -s';'` (columns: DATE/TIME, MACHINE, PROVIDER,
-COST(USD), TIME(sec), CALLS, MODEL, PARAMETERS, INSTRUCTION; empty mid-row
+COST(USD), TIME(sec), CALLS, TOK-IN, TOK-OUT, CACHE-W, CACHE-R, MODEL, PARAMETERS, INSTRUCTION; empty mid-row
 fields print as `-` because BSD `column -t` collapses consecutive delimiters).
 The cost/time/calls columns sit before the model/params columns and the
 open-ended INSTRUCTION is last, so a narrow terminal wraps at worst the tail and never hides a run's cost — the same layout
@@ -426,9 +426,12 @@ events first via `-notmatch 'nothing found'`, then the full log);
 repo-root `APICostLog.txt`) into a spend summary (grand total, today, this
 month, by machine, by provider, by model, by instruction — and, since
 2026-09-02, those four rollups again over the current month only under a
-`THIS MONTH` heading, both blocks from one `Get-Rollups` function) then lists every run
-most-recent-first with its cost, TIME(sec), CALLS, MODEL, PARAMETERS and
-INSTRUCTION columns (fixed-width format strings, console widened to 190 best-effort). Both resolve the repo from the script's own location, page
+`THIS MONTH` heading, both blocks from one `Get-Rollups` function, plus the **By model (tokens
+and effective blended rate)** block from `Get-TokenRollup` — 2026-09-14; its CACHE% column, cache
+reads as a share of the input side, 2026-09-15) then lists every run
+most-recent-first with its cost, TIME(sec), CALLS, TOK-IN / TOK-OUT / CACHE-W / CACHE-R
+(2026-09-14, compacted to k/M, `-` when absent), MODEL, PARAMETERS and
+INSTRUCTION columns (fixed-width format strings, console widened to 226 best-effort). Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On
 Windows `heartbeat.log` lives at the repo root (`BASE_DIR / "heartbeat.log"`,
 not under a `Logs` folder); the cost log lives in the OneDrive share on both
