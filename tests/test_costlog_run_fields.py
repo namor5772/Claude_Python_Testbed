@@ -4,6 +4,19 @@ run start and the final "Call #N" counter — on BOTH loop-end paths (normal
 completion and the exception path), because call_num is hoisted above the
 try exactly so a failed run still records how far it got.
 
+Since 2026-09-14 the same applies to the four token accumulators (fields
+9-12: input / output / cache-write / cache-read). They were already summed
+for the output window's running totals but discarded at log time; they are
+now hoisted beside total_cost for the same reason. Reading them in the
+`except` while they were still declared inside the `try` makes an EARLY
+failure (anything raising before the loop) abort the handler with
+UnboundLocalError: the error message itself still reaches the queue, because
+it is queued first, but _write_result_file and the headless auto-close after
+it never run — so a waited parent sits out its whole timeout and an
+unattended run is left a zombie. That is what
+test_early_failure_completes_the_exception_handler pins; it fails if the
+initialisers move back inside the try.
+
 The provider call is stubbed at the dispatch seam (_stream_anthropic_call):
 call 1 returns a tool_use block (so the loop goes round again), call 2 ends
 the turn (or raises, for the exception-path case). Everything else the loop
@@ -64,6 +77,10 @@ class _Host(sm.StreamingMixin):
 
     def _stream_anthropic_call(self, messages, max_retries, label_emitted):
         self._calls_made += 1
+        # Deliberately input/output only: tests/test_fable51_harness.py
+        # subclasses this host and asserts exact per-call costs, so adding
+        # cache buckets here would silently change ITS arithmetic. The cache
+        # accumulators are exercised by _CacheHost below instead.
         usage = {"input_tokens": 1000, "output_tokens": 100}
         if self._calls_made == 1:
             block = _ToolBlock("read_file", "toolu_1", {"path": "x"})
@@ -71,6 +88,22 @@ class _Host(sm.StreamingMixin):
         if self._second_call == "raise":
             raise RuntimeError("boom on call 2")
         return "end_turn", [], "done", False, True, usage
+
+
+class _CacheHost(_Host):
+    """_Host, but its usage also carries the two cache buckets — so all four
+    accumulators are exercised. Separate from _Host because
+    tests/test_fable51_harness.py subclasses that one and asserts exact
+    per-call costs, which cache tokens would change."""
+
+    def _stream_anthropic_call(self, messages, max_retries, label_emitted):
+        stop, blocks, text, thinking, label, usage = super()._stream_anthropic_call(
+            messages, max_retries, label_emitted)
+        # input_tokens stays the NON-cached count: the buckets are disjoint,
+        # which is what makes in+write+read the run's billed input volume.
+        usage["cache_creation_input_tokens"] = 40
+        usage["cache_read_input_tokens"] = 7
+        return stop, blocks, text, thinking, label, usage
 
 
 class CostLogRunFieldsTests(unittest.TestCase):
@@ -91,7 +124,7 @@ class CostLogRunFieldsTests(unittest.TestCase):
         host = _Host(second_call="end")
         host.stream_worker([{"role": "user", "content": "go"}])
         f = self._fields()
-        self.assertEqual(len(f), 8)
+        self.assertEqual(len(f), 12)
         self.assertEqual(f[6], "Balance Westpac")
         # Two API round-trips: the tool_use turn plus the final answer.
         self.assertEqual(f[7], "2")
@@ -126,6 +159,86 @@ class CostLogRunFieldsTests(unittest.TestCase):
         f = self._fields()
         self.assertEqual(f[6], "")
         self.assertEqual(f[7], "2")
+
+    def test_completed_run_logs_summed_token_buckets(self):
+        # Two API round-trips, each reporting the same usage -> doubled sums.
+        host = _Host(second_call="end")
+        host.stream_worker([{"role": "user", "content": "go"}])
+        f = self._fields()
+        self.assertEqual(len(f), 12)
+        self.assertEqual(f[8:], ["2000", "200", "0", "0"])
+
+    def test_failed_run_still_logs_tokens_accumulated_so_far(self):
+        # The accumulators are hoisted above the try precisely for this: the
+        # run died on call 2, so only call 1's usage was ever counted, and
+        # the except path must still be able to READ them.
+        host = _Host(second_call="raise")
+        host.stream_worker([{"role": "user", "content": "go"}])
+        f = self._fields()
+        self.assertEqual(len(f), 12)
+        self.assertEqual(f[8:], ["1000", "100", "0", "0"])
+        # The real error surfaced rather than a NameError from the handler.
+        errs = [m for m in self._drain_queue(host) if m.get("type") == "error"]
+        self.assertTrue(any("boom on call 2" in str(m.get("content"))
+                            for m in errs), errs)
+
+    @staticmethod
+    def _drain_queue(host):
+        out = []
+        while not host.queue.empty():
+            out.append(host.queue.get_nowait())
+        return out
+
+    def test_early_failure_completes_the_exception_handler(self):
+        # Regression pin for the hoisting of the four token accumulators.
+        # A collaborator that raises BEFORE the agentic loop used to leave
+        # them unbound; the except path reads them to build the TOKENS
+        # fields, so it died with UnboundLocalError *inside the handler*.
+        # The error message still reached the queue (it is queued first), but
+        # _write_result_file never ran -- so a waited parent sat out its full
+        # timeout and a headless run was left a zombie. What this asserts is
+        # therefore the handler COMPLETING, not just the message appearing.
+        host = _Host(second_call="end")
+        host._result_file = "sentinel"
+        written = []
+        host._write_result_file = lambda *a, **k: written.append(a)
+        # A result file means this run is a waited subagent, so the handler's
+        # tail schedules the auto-close — record it instead of needing Tk.
+        closes = []
+        host.root = type("_Root", (), {
+            "after": lambda _self, ms, fn: closes.append(ms)})()
+        host._on_close = lambda: None
+
+        def boom():
+            raise RuntimeError("EARLY BOOM")
+
+        host._weak_desktop_combo_warning = boom
+        # Must not propagate: stream_worker owns its exception path.
+        host.stream_worker([{"role": "user", "content": "go"}])
+
+        msgs = []
+        while not host.queue.empty():
+            msgs.append(host.queue.get_nowait())
+        errs = [str(m.get("content")) for m in msgs
+                if m.get("type") == "error"]
+        self.assertTrue(any("EARLY BOOM" in e for e in errs), errs)
+        self.assertFalse(any("not associated" in e or "not defined" in e
+                             for e in errs), errs)
+        # The handler ran to completion.
+        self.assertTrue(written, "exception path never wrote a result file")
+        self.assertEqual(written[0][0], "error")
+        self.assertEqual(closes, [500], "auto-close never scheduled")
+        # Nothing was logged: no call completed, so the zero-cost gate holds.
+        self.assertFalse(self.log.exists())
+
+    def test_cache_buckets_accumulate_into_their_own_fields(self):
+        # Two round-trips x (40 written, 7 read) -> 80 / 14, kept in the two
+        # trailing fields rather than folded into TOK-IN.
+        host = _CacheHost(second_call="end")
+        host.stream_worker([{"role": "user", "content": "go"}])
+        f = self._fields()
+        self.assertEqual(len(f), 12)
+        self.assertEqual(f[8:], ["2000", "200", "80", "14"])
 
 
 if __name__ == "__main__":

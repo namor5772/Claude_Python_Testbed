@@ -10,9 +10,16 @@ whitespace-collapsed, ';' -> ',' — blank for an ad-hoc run) and an 8th
 None) complete the line. The viewers (CostLog_Win.ps1 / view_costlog.command)
 render params as a trailing PARAMETERS column, secs as TIME(sec) right of
 COST(USD), calls as CALLS right of that and instruction as the rightmost
-INSTRUCTION column (after PARAMETERS), and must keep accepting 4-, 5- and 6-field lines, so the writer
-contract here is: exactly eight ;-separated fields, calls last (possibly
-empty), instruction before it, secs (possibly empty) 6th, params 5th.
+INSTRUCTION column (after PARAMETERS), and must keep accepting 4-, 5-, 6- and
+8-field lines.
+
+Since 2026-09-14 four token fields close the line (9th-12th: the run's
+cumulative input / output / cache-write / cache-read counts, the same buckets
+_get_pricing rates), so the writer contract here is: exactly TWELVE
+;-separated fields -- the four token counts last, ALL FOUR blank together when
+the caller passes none (a partially-filled group would read as "zero tokens
+billed" rather than "not recorded"), calls 8th (possibly empty), instruction
+7th, secs (possibly empty) 6th, params 5th.
 
 Since 2026-08-12 the zero-cost gate has one exception: Ollama runs that made
 at least one completed call (had_usage) log a 0.0000 line — local activity is
@@ -57,7 +64,7 @@ class CostLogParamsTests(unittest.TestCase):
         host._log_api_cost(0.3742)
         line = self.log.read_text(encoding="utf-8").strip("\n")
         fields = line.split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[1], "xAI")
         self.assertEqual(fields[2], "grok-4.5")
         self.assertEqual(fields[3], "0.3742")
@@ -74,14 +81,14 @@ class CostLogParamsTests(unittest.TestCase):
         host._log_api_cost(0.01)
         line = self.log.read_text(encoding="utf-8").strip("\n")
         fields = line.split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[4], "")
 
     def test_duration_written_as_whole_seconds_sixth_field(self):
         host = _Host("mode=Adaptive")
         host._log_api_cost(0.3742, had_usage=True, duration_secs=137.4)
         fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[5], "137")
 
     def test_instruction_seventh_and_calls_eighth_fields(self):
@@ -91,7 +98,7 @@ class CostLogParamsTests(unittest.TestCase):
                            instruction="Balance Westpac Mastercard account",
                            calls=7)
         fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[5], "42")
         # Spaces inside a name are fine — only ';' is the delimiter
         self.assertEqual(fields[6], "Balance Westpac Mastercard account")
@@ -106,7 +113,7 @@ class CostLogParamsTests(unittest.TestCase):
         host._log_api_cost(0.5, instruction="  odd; name\nwith   breaks ",
                            calls=3)
         fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[6], "odd, name with breaks")
         self.assertEqual(fields[7], "3")
 
@@ -116,7 +123,7 @@ class CostLogParamsTests(unittest.TestCase):
         host = _Host("mode=Adaptive")
         host._log_api_cost(0.5, instruction=None, calls=None)
         fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[6], "")
         self.assertEqual(fields[7], "")
 
@@ -132,7 +139,7 @@ class CostLogParamsTests(unittest.TestCase):
                            instruction="GeneralChatAgent_MacOS_Ollama_gemma",
                            calls=12)
         fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
-        self.assertEqual(len(fields), 8)
+        self.assertEqual(len(fields), 12)
         self.assertEqual(fields[1], "Ollama")
         self.assertEqual(fields[2], "muse-glimmer:30b-mlx")
         self.assertEqual(fields[3], "0.0000")
@@ -154,6 +161,43 @@ class CostLogParamsTests(unittest.TestCase):
                      model="claude-future-99")
         host._log_api_cost(0.0, had_usage=True)
         self.assertFalse(self.log.exists())
+
+
+    def test_tokens_written_as_last_four_fields(self):
+        host = _Host("mode=Adaptive", provider="Anthropic",
+                     model="claude-fable-5-1")
+        host._log_api_cost(0.8250, tokens=(10000, 5000, 20000, 900000))
+        fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
+        self.assertEqual(len(fields), 12)
+        self.assertEqual(fields[8:], ["10000", "5000", "20000", "900000"])
+
+    def test_absent_tokens_render_four_blanks_not_zeros(self):
+        # "Not recorded" must never render as "zero tokens billed": the
+        # viewers show '-' for an empty field but 0 for a real zero, and the
+        # blended-rate rollup skips a row whose token group is blank.
+        host = _Host("mode=Adaptive", provider="Anthropic",
+                     model="claude-opus-5")
+        host._log_api_cost(0.1000)
+        fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
+        self.assertEqual(len(fields), 12)
+        self.assertEqual(fields[8:], ["", "", "", ""])
+
+    def test_zero_tokens_render_as_zeros(self):
+        # A genuine all-zero group stays distinguishable from an absent one.
+        host = _Host("mode=Off", provider="Anthropic", model="claude-opus-5")
+        host._log_api_cost(0.1000, tokens=(0, 0, 0, 0))
+        fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
+        self.assertEqual(len(fields), 12)
+        self.assertEqual(fields[8:], ["0", "0", "0", "0"])
+
+    def test_tokens_coerced_to_int(self):
+        # A provider that reports floats must not widen the fields with a
+        # trailing ".0" the viewers would fail to parse as a number.
+        host = _Host("mode=Adaptive", provider="Anthropic",
+                     model="claude-opus-5")
+        host._log_api_cost(0.1000, tokens=(1000.0, 100.0, 0, 0))
+        fields = self.log.read_text(encoding="utf-8").strip("\n").split(";")
+        self.assertEqual(fields[8:], ["1000", "100", "0", "0"])
 
 
 if __name__ == "__main__":

@@ -1248,6 +1248,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.streaming = False
         self._session_cost = 0.0  # cumulative Anthropic API cost for this process (logged on close)
         self._session_calls = 0   # API calls made by this process (the "Call #N" counter, summed across every message) — logged beside the cost
+        # Cumulative token buckets for this process, logged as the cost line's
+        # 9th–12th fields (2026-09-14) in the same positions MyAgent writes
+        # them. input is the NON-cached count and the two cache buckets are
+        # disjoint, so in+write+read is the true billed input volume.
+        self._session_tokens_in = 0
+        self._session_tokens_out = 0
+        self._session_tokens_cache_write = 0
+        self._session_tokens_cache_read = 0
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
@@ -6232,6 +6240,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         call_cost = (ci * pricing["input"] + co * pricing["output"]
                                      + cw * pricing["cache_write"] + cr * pricing["cache_read"])
                         self._session_cost += call_cost
+                        self._session_tokens_in += ci
+                        self._session_tokens_out += co
+                        self._session_tokens_cache_write += cw
+                        self._session_tokens_cache_read += cr
                         self.queue.put({
                             "type": "cost_update",
                             "call_cost": call_cost,
@@ -6384,8 +6396,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         active saved system prompt's name — SelfBot's analogue of an Agent
         Instruction, blank when none is loaded — whitespace-collapsed with any ';'
         turned into ','; calls (8th → CALLS) is _session_calls, the process's total
-        API round-trips. Skipped when the cost is zero (no priced usage — e.g. an
-        unmatched model prefix). Best-effort; never raises."""
+        API round-trips; the 9th-12th fields (2026-09-14 → the viewers' TOKENS
+        columns) are the session's cumulative input / output / cache-write /
+        cache-read token counts, accumulated alongside _session_cost from the
+        same usage object so the log can answer "what is my blended $/MTok?" —
+        input is the NON-cached count and the cache buckets are disjoint, so
+        in+write+read is the true billed input volume. Skipped when the cost is
+        zero (no priced usage — e.g. an unmatched model prefix). Best-effort;
+        never raises."""
         if not total_cost or total_cost <= 0:
             return
         try:
@@ -6395,7 +6413,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                               .split()).replace(";", ",")
             calls = getattr(self, "_session_calls", 0)
             line = (f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params};;"
-                    f"{prompt};{calls}\n")
+                    f"{prompt};{calls};"
+                    f"{int(getattr(self, '_session_tokens_in', 0))};"
+                    f"{int(getattr(self, '_session_tokens_out', 0))};"
+                    f"{int(getattr(self, '_session_tokens_cache_write', 0))};"
+                    f"{int(getattr(self, '_session_tokens_cache_read', 0))}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.

@@ -30,7 +30,13 @@
 # PARAMETERS) and the calls field (added 2026-08-16: the run's API-call
 # count, the "Call #N" counter — one per round-trip of the agentic loop, so
 # beyond the first they are tool-use round-trips → the CALLS column, right of
-# TIME(sec)) are absent on older lines.
+# TIME(sec)) are absent on older lines. The four token fields (9th–12th, added
+# 2026-09-14: input / output / cache-write / cache-read, the buckets the
+# pricing tables rate → the TOK-IN / TOK-OUT / CACHE-W / CACHE-R columns,
+# compacted to k/M) are absent on older lines and render '-'; they also feed
+# the SUMMARY's "By model (tokens and effective blended rate)" block, which
+# divides real cost by real tokens — the only way to see what a model ACTUALLY
+# costs per MTok once cache reads are in the mix.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -75,13 +81,20 @@ if [ ${#LOGS[@]} -eq 0 ]; then
 fi
 
 # Merge every file into machine-tagged rows
-# "timestamp;provider;model;cost;params;secs;instruction;calls;machine",
-# sorted by timestamp — cross-machine order comes from the field, not file
-# order. Shorter historic shapes (4-field pre-params, 5-field pre-secs,
-# 6-field pre-instruction/calls) get empty fields appended so every merged
-# row is uniformly 9 fields (machine is ALWAYS $9, calls $8, instruction $7,
-# secs $6, params $5 — the middle four possibly empty). Since 2026-08-16
-# SelfBot writes 8 fields with an EMPTY secs, so it lands in the same shape.
+# "timestamp;provider;model;cost;params;secs;instruction;calls;in;out;cache_w;
+#  cache_r;machine", sorted by timestamp — cross-machine order comes from the
+# field, not file order. Shorter historic shapes (4-field pre-params, 5-field
+# pre-secs, 6-field pre-instruction/calls, 8-field pre-tokens) are padded with
+# empty fields so every merged row is uniformly 13 fields: machine is ALWAYS
+# $13, then cache_r $12, cache_w $11, out $10, in $9 (the 2026-09-14 token
+# group), calls $8, instruction $7, secs $6, params $5 — any of the middle
+# eight possibly empty. Since 2026-08-16 SelfBot writes an EMPTY secs, so it
+# lands in the same shape.
+# The pad is a loop rather than one rule per historic width (there are nine
+# now) so a future field costs only the 12 below; NF>=4 keeps the guard the
+# per-width rules gave for free — it drops blank lines and the rotation
+# marker, which a bare pad would otherwise turn into a 13-field $0.0000 row
+# and count as a run.
 # The sub() strips the CR that Windows-written lines carry (CRLF via Python
 # text mode until 2026-08-03, and any not-yet-updated writer): without it the
 # last field ends in \r and the viewer shows ^M after every Windows row.
@@ -89,25 +102,61 @@ MERGED="$(mktemp)"
 trap 'rm -f "$MERGED"' EXIT
 for i in "${!LOGS[@]}"; do
   awk -F';' -v M="${LABELS[$i]}" '{ sub(/\r$/, "") }
-    NF==4 { print $0 ";;;;;" M }
-    NF==5 { print $0 ";;;;" M }
-    NF==6 { print $0 ";;;" M }
-    NF==7 { print $0 ";;" M }
-    NF>=8 { print $0 ";" M }' "${LOGS[$i]}"
+    NF>=4 { line=$0; for (i=NF; i<12; i++) line=line ";"; print line ";" M }' "${LOGS[$i]}"
 done | sort -t';' -k1,1 > "$MERGED"
 
 # One rollup bucket — "    <key> $<sum>  (<count><suffix>)" lines, highest
 # spend first — over the merged rows whose timestamp starts with $2 ("" =
 # every row), keyed on merged field $1 (2 provider, 3 model, 7 instruction,
-# 9 machine); $3 pads the key column, $4 is the count suffix (" runs" / "").
+# 13 machine); $3 pads the key column, $4 is the count suffix (" runs" / "").
 # Rows with an empty key are skipped (only ever the instruction field). The
 # format string is built in the shell (awk -v turns its \n into a newline)
 # rather than with printf's "*" width, which not every awk supports.
 bucket() {
   local fmt="    %-$3s \$%10.4f  (%d$4)\n"
-  awk -F';' -v K="$1" -v P="$2" 'NF>=9 && substr($1,1,length(P))==P && $K!="" { m[$K]+=$4; c[$K]++ }
+  awk -F';' -v K="$1" -v P="$2" 'NF>=13 && substr($1,1,length(P))==P && $K!="" { m[$K]+=$4; c[$K]++ }
     END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
     | sort -rn | awk -F'\t' -v FMT="$fmt" '{ printf FMT, $2, $1+0, $3 }'
+}
+
+# Per-model token totals + the EFFECTIVE blended rate (total cost / total
+# tokens) over rows that actually carry the 2026-09-14 token fields. This is
+# what the per-token pricing tables cannot tell you: the table rate says
+# nothing about how much of the volume arrived as cheap cache reads, so the
+# blended rate is the only honest answer to "what does model X cost me per
+# MTok". Lifetime only (the month-scoped rollups stay cost-only) — a blended
+# rate over a handful of runs is noise. tok() compacts counts to <=7 chars so
+# the columns stay narrow; an empty field prints '-' ("not recorded"), never 0.
+token_rollup() {
+  # The heading is printed by the SHELL, not inside the ranking awk: that
+  # awk's output is piped through `sort -rn | cut -f2-`, which would sort the
+  # header in as data and cut it to pieces.
+  awk -F';' 'NF>=13 && $9!="" { found=1 } END { exit !found }' "$MERGED" || return 0
+  echo
+  echo "  By model (tokens and effective blended rate; runs logged with token counts):"
+  printf '    %-32s %5s %8s %8s %8s %8s %10s %9s\n' \
+    "MODEL" "RUNS" "IN" "OUT" "CACHE-W" "CACHE-R" "COST(USD)" '$/MTok'
+  # Rank the models by spend, then re-scan per model for its token totals.
+  awk -F';' 'NF>=13 && $9!="" { c[$3]+=$4 }
+    END { for (k in c) printf "%.6f\t%s\n", c[k], k }' "$MERGED" \
+    | sort -rn | cut -f2- | while IFS= read -r model; do
+    [ -n "$model" ] || continue
+    awk -F';' -v M="$model" '
+      function tok(v) {
+        if (v == "") return "-"
+        if (v >= 1000000) return sprintf("%.2fM", v / 1000000)
+        if (v >= 10000)   return sprintf("%.1fk", v / 1000)
+        return sprintf("%d", v)
+      }
+      NF>=13 && $9!="" && $3==M { ti+=$9; to+=$10; tw+=$11; tr+=$12; c+=$4; n++ }
+      END {
+        if (!n) exit 0
+        all = ti + to + tw + tr
+        rate = (all > 0) ? sprintf("%.4f", c / all * 1000000) : "-"
+        printf "    %-32s %5d %8s %8s %8s %8s %10.4f %9s\n", \
+          M, n, tok(ti), tok(to), tok(tw), tok(tr), c, rate
+      }' "$MERGED"
+  done
 }
 
 # One rollup block — by machine, by provider, by model and (only when a row
@@ -120,7 +169,7 @@ rollups() {
   if [ -n "$2" ]; then sfx=" ($2)"; lead="$2; "; fi
   echo
   echo "  By machine${sfx}:"
-  bucket 9 "$1" 24 " runs"
+  bucket 13 "$1" 24 " runs"
   echo
   echo "  By provider${sfx}:"
   bucket 2 "$1" 12 " runs"
@@ -130,7 +179,7 @@ rollups() {
   # Only rows that carry an instruction name (2026-08-16 lines onward; ad-hoc
   # runs and older history have none) — a "(none)" bucket would just restate
   # the block's total for as long as the old lines dominate.
-  if awk -F';' -v P="$1" 'NF>=9 && substr($1,1,length(P))==P && $7!="" { found=1 } END { exit !found }' "$MERGED"; then
+  if awk -F';' -v P="$1" 'NF>=13 && substr($1,1,length(P))==P && $7!="" { found=1 } END { exit !found }' "$MERGED"; then
     echo
     echo "  By instruction (${lead}highest spend first; runs logged with a name):"
     bucket 7 "$1" 40 ""
@@ -146,9 +195,9 @@ rollups() {
   echo
   echo "SUMMARY"
   TODAY="$(date +%Y-%m-%d)"; MONTH="$(date +%Y-%m)"
-  if awk -F';' 'NF>=9 { found=1 } END { exit !found }' "$MERGED"; then
+  if awk -F';' 'NF>=13 { found=1 } END { exit !found }' "$MERGED"; then
     awk -F';' -v TODAY="$TODAY" -v MONTH="$MONTH" '
-      NF>=9 {
+      NF>=13 {
         c=$4+0; total+=c; n++;
         d=substr($1,1,10); mo=substr($1,1,7);
         if (d==TODAY) today+=c;
@@ -163,13 +212,14 @@ rollups() {
         printf "  this month (%s): $%.4f\n", MONTH, month+0;
       }' "$MERGED"
     rollups "" ""
+    token_rollup
     # The same four rollups over the current month only (2026-09-02): the
     # lifetime block is dominated by history, so it can't show where THIS
     # month's spend is going.
     echo
     echo "THIS MONTH ($MONTH)"
-    if awk -F';' -v MONTH="$MONTH" 'NF>=9 && substr($1,1,7)==MONTH { found=1 } END { exit !found }' "$MERGED"; then
-      awk -F';' -v MONTH="$MONTH" 'NF>=9 && substr($1,1,7)==MONTH { s+=$4; n++ }
+    if awk -F';' -v MONTH="$MONTH" 'NF>=13 && substr($1,1,7)==MONTH { found=1 } END { exit !found }' "$MERGED"; then
+      awk -F';' -v MONTH="$MONTH" 'NF>=13 && substr($1,1,7)==MONTH { s+=$4; n++ }
         END { printf "  %d runs · $%.4f\n", n, s }' "$MERGED"
       rollups "$MONTH" "this month"
     else
@@ -187,15 +237,26 @@ rollups() {
   # Format-Table used to silently drop the trailing cost column instead).
   # INSTRUCTION is last (2026-08-16, the user wants it after PARAMETERS):
   # the open-ended column takes the wrap, and an empty instruction (older
-  # line, ad-hoc run) just leaves the tail blank. CALLS (2026-08-16) joins
-  # the numeric cluster right of TIME(sec). An empty secs (SelfBot / older
-  # line), calls (older line) or params (pre-2026-08-10 line) renders as
-  # "-" — they sit mid-row and BSD column -t COLLAPSES consecutive
+  # line, ad-hoc run) just leaves the tail blank. CALLS (2026-08-16) and the
+  # four TOKENS columns (2026-09-14) join the numeric cluster right of
+  # TIME(sec), still left of the open-ended MODEL/PARAMETERS/INSTRUCTION, so
+  # cost never moves. An empty secs (SelfBot / older line), calls (older
+  # line), params (pre-2026-08-10 line) or token field (pre-2026-09-14 line)
+  # renders as "-" — they sit mid-row and BSD column -t COLLAPSES consecutive
   # delimiters, so a genuinely empty field would shift every later column
-  # left.
-  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;MODEL;PARAMETERS;INSTRUCTION"
-    tail -r "$MERGED" | awk -F';' 'NF>=9 {
+  # left. That is why tok() returns "-" and not "" for an absent count.
+  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;TOK-IN;TOK-OUT;CACHE-W;CACHE-R;MODEL;PARAMETERS;INSTRUCTION"
+    tail -r "$MERGED" | awk -F';' '
+      function tok(v) {
+        if (v == "") return "-"
+        if (v >= 1000000) return sprintf("%.2fM", v / 1000000)
+        if (v >= 10000)   return sprintf("%.1fk", v / 1000)
+        return sprintf("%d", v)
+      }
+      NF>=13 {
       t=($6=="" ? "-" : $6); k=($8=="" ? "-" : $8); p=($5=="" ? "-" : $5);
-      print $1 ";" $9 ";" $2 ";" $4 ";" t ";" k ";" $3 ";" p ";" $7 }'; } \
+      print $1 ";" $13 ";" $2 ";" $4 ";" t ";" k ";" \
+            tok($9) ";" tok($10) ";" tok($11) ";" tok($12) ";" \
+            $3 ";" p ";" $7 }'; } \
     | column -t -s';'
 } | less -R

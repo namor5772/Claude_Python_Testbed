@@ -25,7 +25,13 @@
 # field (added 2026-08-16: the run's API-call count, the "Call #N" counter --
 # one per round-trip of the agentic loop, so beyond the first they are
 # tool-use round-trips -> the CALLS column, right of TIME(sec)) are absent on
-# older lines and shown blank.
+# older lines and shown blank. The four token fields (9th-12th, added
+# 2026-09-14: input / output / cache-write / cache-read, the buckets the
+# pricing tables rate -> the TOK-IN / TOK-OUT / CACHE-W / CACHE-R columns,
+# compacted to k/M) are absent on older lines and render '-'; they also feed
+# the SUMMARY's "By model (tokens and effective blended rate)" block, which
+# divides real cost by real tokens -- the only way to see what a model
+# ACTUALLY costs per MTok once cache reads are in the mix.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -36,15 +42,16 @@ $Host.UI.RawUI.WindowTitle = 'API Cost Log'
 $inv = [Globalization.CultureInfo]::InvariantCulture
 # Widen a narrow console (a fresh shortcut's conhost defaults to 80 columns)
 # so the full-log lines don't wrap (190: the 2026-08-16 CALLS + INSTRUCTION
-# columns pushed the widest rows past the previous 142). Best-effort: the
+# columns pushed the widest rows past the previous 142; 226 since the
+# 2026-09-14 TOKENS group added four 8-wide columns). Best-effort: the
 # cost column stays visible even when this fails, because it is placed
 # before the model name.
 try {
     $rawUI = $Host.UI.RawUI
-    if ($rawUI.BufferSize.Width -lt 190) {
-        $bs = $rawUI.BufferSize; $bs.Width = 190; $rawUI.BufferSize = $bs
+    if ($rawUI.BufferSize.Width -lt 226) {
+        $bs = $rawUI.BufferSize; $bs.Width = 226; $rawUI.BufferSize = $bs
         $ws = $rawUI.WindowSize
-        $ws.Width = [Math]::Min(190, $rawUI.MaxPhysicalWindowSize.Width)
+        $ws.Width = [Math]::Min(226, $rawUI.MaxPhysicalWindowSize.Width)
         $rawUI.WindowSize = $ws
     }
 } catch {}
@@ -82,6 +89,59 @@ if ($share -and (Test-Path -LiteralPath $share -PathType Container)) {
 $repoLog = Join-Path $repoDir 'APICostLog.txt'
 if (Test-Path -LiteralPath $repoLog) {
     $logs += [pscustomobject]@{ Path = $repoLog; Machine = "$env:COMPUTERNAME (unmigrated)" }
+}
+
+# Token counts compacted to <=7 chars so four new columns cost ~36 characters
+# of width, not ~48: 1234 -> "1234", 45678 -> "45.7k", 2300000 -> "2.30M". An
+# absent field (a pre-2026-09-14 line, or SelfBot before the same change)
+# renders '-' rather than 0 -- "not recorded" must not read as "none billed".
+function Format-Tok([string]$v) {
+    if ([string]::IsNullOrWhiteSpace($v)) { return '-' }
+    $n = 0.0
+    if (-not [double]::TryParse($v, [ref]$n)) { return '-' }
+    if ($n -ge 1000000) { return ('{0:N2}M' -f ($n / 1000000)) }
+    if ($n -ge 10000)   { return ('{0:N1}k' -f ($n / 1000)) }
+    # No thousands separator below 10k, so this matches the macOS twin's
+    # awk "%d" exactly -- the two viewers must render a log line identically.
+    return ([string][long]$n)
+}
+
+# Per-model token totals + the EFFECTIVE blended rate (total cost / total
+# tokens), over rows that actually carry token fields. This is the block that
+# answers "what does model X really cost me per MTok" -- the per-token table
+# rate can't, because it says nothing about how much of the volume arrived as
+# cheap cache reads. Lifetime only (the month-scoped rollups stay cost-only):
+# a blended rate over a handful of runs is noise.
+function Get-TokenRollup([object[]]$set) {
+    $withTok = @($set | Where-Object { $_.TokIn -ne '' })
+    if ($withTok.Count -eq 0) { return @() }
+    # A positive alignment in a .NET format string already right-aligns
+    # ("{2,8}"); there is no '>' flag, and one would throw at render time.
+    $thdr = '    {0,-32} {1,5} {2,8} {3,8} {4,8} {5,8} {6,10} {7,9}'
+    $lines = @('', '  By model (tokens and effective blended rate; runs logged with token counts):')
+    $lines += ($thdr -f 'MODEL', 'RUNS', 'IN', 'OUT', 'CACHE-W', 'CACHE-R', 'COST(USD)', '$/MTok')
+    $lines += @($withTok | Group-Object Model |
+        Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
+        ForEach-Object {
+            # PS 5.1's Measure-Object -Property takes a NAME, not a
+            # scriptblock (that arrived in PS 6), so the token fields are
+            # summed by hand -- and cast defensively, since a 9-field line
+            # would leave the later buckets empty.
+            $ti = 0.0; $to = 0.0; $tw = 0.0; $tr = 0.0
+            foreach ($g in $_.Group) {
+                $p = 0.0
+                if ([double]::TryParse($g.TokIn,  [ref]$p)) { $ti += $p }
+                if ([double]::TryParse($g.TokOut, [ref]$p)) { $to += $p }
+                if ([double]::TryParse($g.TokCW,  [ref]$p)) { $tw += $p }
+                if ([double]::TryParse($g.TokCR,  [ref]$p)) { $tr += $p }
+            }
+            $c = ($_.Group | Measure-Object Cost -Sum).Sum
+            $all = $ti + $to + $tw + $tr
+            $rate = if ($all -gt 0) { '{0:N4}' -f ($c / $all * 1000000) } else { '-' }
+            $thdr -f $_.Name, $_.Count, (Format-Tok "$ti"), (Format-Tok "$to"),
+                (Format-Tok "$tw"), (Format-Tok "$tr"), ('{0:N4}' -f $c), $rate
+        })
+    return $lines
 }
 
 # One rollup block -- by machine, by provider, by model and (only for rows
@@ -134,7 +194,9 @@ try {
     # from every machine's file, then sort by timestamp -- cross-machine order
     # comes from the field, not file order. Params (5th field, added
     # 2026-08-10), secs (6th, added 2026-08-12), instruction (7th) and calls
-    # (8th, both added 2026-08-16) are blank on older lines.
+    # (8th, both added 2026-08-16) are blank on older lines, as are the four
+    # token fields (9th-12th, added 2026-09-14: input / output / cache-write /
+    # cache-read, the buckets _get_pricing rates).
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -147,6 +209,10 @@ try {
                 Secs = if ($f.Count -ge 6) { $f[5] } else { '' }
                 Instr = if ($f.Count -ge 7) { $f[6] } else { '' }
                 Calls = if ($f.Count -ge 8) { $f[7] } else { '' }
+                TokIn = if ($f.Count -ge 9) { $f[8] } else { '' }
+                TokOut = if ($f.Count -ge 10) { $f[9] } else { '' }
+                TokCW = if ($f.Count -ge 11) { $f[10] } else { '' }
+                TokCR = if ($f.Count -ge 12) { $f[11] } else { '' }
             }
         }
     }
@@ -168,6 +234,7 @@ try {
         $out += ('  today ({0}):      ${1:N4}' -f $today, $todaySum)
         $out += ('  this month ({0}): ${1:N4}' -f $month, $monthSum)
         $out += Get-Rollups $rows ''
+        $out += Get-TokenRollup $rows
         # The same four rollups over the current month only (2026-09-02): the
         # lifetime block is dominated by history, so it can't show where THIS
         # month's spend is going.
@@ -206,12 +273,18 @@ try {
             if ($r.Model.Length -gt $modW) { $modW = $r.Model.Length }
             if ($r.Params.Length -gt $parW) { $parW = $r.Params.Length }
         }
-        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,-$modW} {7,-$parW} {8}"
-        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS', 'MODEL', 'PARAMETERS', 'INSTRUCTION')
-        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 5), ('-' * 10), ('-' * 11))
+        # TOKENS (2026-09-14) joins the fixed-width numeric cluster right of
+        # CALLS and still LEFT of the open-ended MODEL/PARAMETERS/INSTRUCTION,
+        # so the invariant above holds unchanged: cost never moves, and a
+        # narrow console wraps the instruction name.
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,8} {7,8} {8,8} {9,8} {10,-$modW} {11,-$parW} {12}"
+        $out += ($fmt -f 'DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS', 'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION')
+        $out += ($fmt -f ('-' * 9), ('-' * 7), ('-' * 8), ('-' * 9), ('-' * 9), ('-' * 5), ('-' * 6), ('-' * 7), ('-' * 7), ('-' * 7), ('-' * 5), ('-' * 10), ('-' * 11))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
-            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls, $r.Model, $r.Params, $r.Instr
+            $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls,
+                (Format-Tok $r.TokIn), (Format-Tok $r.TokOut), (Format-Tok $r.TokCW), (Format-Tok $r.TokCR),
+                $r.Model, $r.Params, $r.Instr
         })
     }
 

@@ -113,9 +113,10 @@ glowing green ECG trace and a googly-eyed red heart. Its Windows twin is
 folder) — see the Windows section.
 
 The **API Cost Log** launcher is the same viewer pattern for the API cost log
-(`{timestamp};{provider};{model};{cost}[;{params}[;{secs}[;{instruction}[;{calls}]]]]`,
+(`{timestamp};{provider};{model};{cost}[;{params}[;{secs}[;{instruction}[;{calls}
+[;{in};{out};{cache_write};{cache_read}]]]]]`,
 semicolon-delimited, gitignored — the trailing fields arrived 2026-08-10 /
-2026-08-12 / 2026-08-16 and are absent on older lines, which both viewers
+2026-08-12 / 2026-08-16 / 2026-09-14 and are absent on older lines, which both viewers
 still accept).
 Since 2026-08-03 each machine writes its own `APICostLog_<machine>.txt` into
 `<OneDrive>/MyAppShare` (per-machine files never conflict-fork, yet OneDrive

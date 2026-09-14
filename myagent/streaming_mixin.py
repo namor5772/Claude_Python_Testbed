@@ -949,12 +949,13 @@ class StreamingMixin:
         return priced
 
     def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,
-                      instruction="", calls=None):
+                      instruction="", calls=None, tokens=None):
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
         Line format:
         {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
+        ;{in};{out};{cache_write};{cache_read}
         — params is the compact _get_model_param_summary() string
         (comma-joined), so the log records the thinking/temperature settings
         the run used alongside its cost; secs (6th field, 2026-08-12) is the
@@ -969,8 +970,20 @@ class StreamingMixin:
         (8th field, 2026-08-16) is the run's API-call count — the "Call #N"
         counter in the output window, one per round-trip of the agentic loop,
         so every call after the first is a tool-use round-trip — blank when
-        None. Older 4-/5-/6-field lines stay valid and render blank
-        PARAMETERS / TIME(sec) / INSTRUCTION / CALLS columns in the viewers.
+        None. tokens (9th-12th fields, 2026-09-14) is the run's cumulative
+        (input, output, cache_write, cache_read) token counts — the same four
+        buckets _get_pricing rates, summed over every call of the agentic
+        loop; they were already accumulated for the output window's running
+        totals and merely discarded at log time, which left the log unable to
+        answer "what is my blended $/MTok for this model?" (cost alone can't
+        separate a 5x rate from a 40x cache-read discount). Written as plain
+        integers, blank when tokens is None (SelfBot's caller, and any run
+        whose provider returned no usage). input_tokens is the NON-cached
+        count and the cache buckets are disjoint, so in+cache_write+cache_read
+        is the run's true billed input volume — do not add input to a cache
+        total expecting a subtotal. Older 4-/5-/6-/8-field lines stay valid
+        and render blank PARAMETERS / TIME(sec) / INSTRUCTION / CALLS /
+        TOKENS columns in the viewers.
         total_cost is the last cost displayed in the output window.
         Ollama runs are deliberately free but still logged (cost 0.0000) when
         at least one call returned usage (had_usage) — local activity shows in
@@ -1001,11 +1014,18 @@ class StreamingMixin:
             # early) and neutralise the one character that could split it.
             instr = " ".join(str(instruction or "").split()).replace(";", ",")
             calls_s = "" if calls is None else f"{int(calls)}"
+            # 9th-12th fields: the run's cumulative token buckets. All four
+            # are blank together when tokens is None — a partially-filled
+            # TOKENS group would read as "zero tokens billed" in the viewers
+            # rather than "not recorded".
+            tok_s = (";;;" if not tokens
+                     else ";".join(f"{int(t)}" for t in tokens))
             # ';' delimiter (not ',') so a comma inside a model name, the
             # params field or an instruction name can't be misread as a
             # field separator.
             line = (f"{timestamp};{self.provider};{self.model};"
-                    f"{total_cost:.4f};{params};{secs};{instr};{calls_s}\n")
+                    f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
+                    f"{tok_s}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
@@ -1087,10 +1107,25 @@ class StreamingMixin:
         # cost log's CALLS / INSTRUCTION fields; both hoisted for the same
         # reason (the exception path logs whatever the run got through), and
         # the name is snapshotted at run start so an instruction applied
-        # mid-run can't relabel the entry.
+        # mid-run can't relabel the entry. The four token accumulators feed
+        # the 2026-09-14 TOKENS fields and are hoisted for that same reason —
+        # the except path reads them. They used to sit just inside the try,
+        # beside the loop, where nothing outside it read them; leaving them
+        # there once the log call needs them makes an EARLY failure (anything
+        # raising before the loop, e.g. a collaborator called during setup)
+        # blow up the handler with UnboundLocalError. The error message itself
+        # still reaches the queue — it is queued first — but everything after
+        # the log call is skipped: no `_write_result_file("error", ...)`, so a
+        # waited parent sits out its whole timeout instead of getting the
+        # report, and no headless auto-close, so an unattended run is left a
+        # zombie. Verified both ways with an early-raising stub.
         total_cost = 0.0
         had_usage = False
         call_num = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_cache_write_tokens = 0
+        total_cache_read_tokens = 0
         instr_name = getattr(self, "agent_instruction_name", "")
         run_started = time.monotonic()
         self._input_wait_secs = 0.0
@@ -1126,11 +1161,9 @@ class StreamingMixin:
 
             user_prompt_count = 0
             user_prompt_nudges = 0
-            # Cost tracking (total_cost itself is hoisted above the try)
-            total_input_tokens = 0
-            total_output_tokens = 0
-            total_cache_write_tokens = 0
-            total_cache_read_tokens = 0
+            # Cost tracking: total_cost AND the four token accumulators are
+            # hoisted above the try (the cost log's TOKENS fields are written
+            # on the exception path too) — nothing to initialise here.
             while True:
                 # Check stop request between API calls
                 if self.stop_requested:
@@ -1347,7 +1380,10 @@ class StreamingMixin:
             self._log_api_cost(total_cost, had_usage,
                                max(0.0, time.monotonic() - run_started
                                    - self._input_wait_secs),
-                               instruction=instr_name, calls=call_num)
+                               instruction=instr_name, calls=call_num,
+                               tokens=(total_input_tokens, total_output_tokens,
+                                       total_cache_write_tokens,
+                                       total_cache_read_tokens))
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
@@ -1366,7 +1402,10 @@ class StreamingMixin:
             self._log_api_cost(total_cost, had_usage,
                                max(0.0, time.monotonic() - run_started
                                    - self._input_wait_secs),
-                               instruction=instr_name, calls=call_num)
+                               instruction=instr_name, calls=call_num,
+                               tokens=(total_input_tokens, total_output_tokens,
+                                       total_cache_write_tokens,
+                                       total_cache_read_tokens))
             self._write_result_file("error", messages, error=str(e))
             if self._headless or self._result_file:
                 self.root.after(500, self._on_close)
