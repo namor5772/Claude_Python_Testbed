@@ -9,8 +9,8 @@ from datetime import date
 
 from myagent.streaming_mixin import StreamingMixin
 
-# Google's 3.6/3.7 Flash launch promo ("through December 31, 2026") and the
-# sticker it reverts to ("starting January 1, 2027") — the DatedPrice pair.
+# Google's 3.6/3.7/3.8 Flash launch promo ("through December 31, 2026") and
+# the sticker it reverts to ("starting January 1, 2027") — the DatedPrice pair.
 GEMINI_FLASH_PROMO = {"input": 0.75 / 1_000_000, "output": 3.75 / 1_000_000,
                       "cache_read": 0.075 / 1_000_000}
 GEMINI_FLASH_STICKER = {"input": 1.50 / 1_000_000, "output": 7.50 / 1_000_000,
@@ -134,8 +134,8 @@ class TestGetPricing(unittest.TestCase):
                                               "cache_read": 3e-08},
         ("Google", "gemini-flash-lite-latest"): {"input": 3e-07, "output": 2.5e-06,
                                                  "cache_read": 3e-08},
-        # gemini-3.6-flash / 3.7-flash / gemini-flash-latest are DatedPrice
-        # entries — see DATED_CASES below.
+        # gemini-3.6-flash / 3.7-flash / 3.8-flash / gemini-flash-latest are
+        # DatedPrice entries — see DATED_CASES below.
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.6"): {"input": 2e-06, "output": 6e-06},
@@ -180,13 +180,20 @@ class TestGetPricing(unittest.TestCase):
     # its LAST day (inclusive "through December 31") and the sticker from the
     # next day; the boundary is resolved per lookup, never at import.
     DATED_CASES = {
+        # gemini-3.8-flash (GA 2026-09-02) bills the same pair; until its row
+        # was added on 2026-09-16 it fell through to the bare "gemini-3" entry
+        # at $0.50/$3.00 — the third Flash tier in a row to do so.
+        ("Google", "gemini-3.8-flash", date(2026, 9, 16)): GEMINI_FLASH_PROMO,
+        ("Google", "gemini-3.8-flash", date(2026, 12, 31)): GEMINI_FLASH_PROMO,
+        ("Google", "gemini-3.8-flash", date(2027, 1, 1)): GEMINI_FLASH_STICKER,
         ("Google", "gemini-3.7-flash", date(2026, 8, 25)): GEMINI_FLASH_PROMO,
         ("Google", "gemini-3.7-flash", date(2026, 12, 31)): GEMINI_FLASH_PROMO,
         ("Google", "gemini-3.7-flash", date(2027, 1, 1)): GEMINI_FLASH_STICKER,
         ("Google", "gemini-3.6-flash", date(2026, 12, 31)): GEMINI_FLASH_PROMO,
         ("Google", "gemini-3.6-flash", date(2027, 1, 1)): GEMINI_FLASH_STICKER,
-        # The floating alias resolves to 3.7-flash (verified live 2026-08-25)
-        # and must NOT prefix-match the cheaper bare "gemini-3" entry.
+        # The floating alias resolves to 3.8-flash (verified live 2026-09-16;
+        # it was 3.7-flash on 2026-08-25) and must NOT prefix-match the
+        # cheaper bare "gemini-3" entry.
         ("Google", "gemini-flash-latest", date(2026, 12, 31)): GEMINI_FLASH_PROMO,
         ("Google", "gemini-flash-latest", date(2027, 1, 1)): GEMINI_FLASH_STICKER,
         # A plain-tuple entry ignores `today` entirely.
@@ -215,6 +222,52 @@ class TestGetPricing(unittest.TestCase):
         # boundary the real clock is on, the result is a concrete rate dict.
         got = StreamingMixin._get_pricing("Google", "gemini-3.7-flash")
         self.assertIn(got, (GEMINI_FLASH_PROMO, GEMINI_FLASH_STICKER))
+
+
+class TestGenericPricingWarning(unittest.TestCase):
+    """The catch-all-row guard (2026-09-16): gemini-3.8-flash ran for two
+    weeks on the bare "gemini-3" row ($0.50/$3.00) before its own row was
+    added — the third Flash tier in a row — so a model priced by a
+    GENERIC_PRICING_PREFIXES row now gets a run-start ⚠ instead of a silent
+    1.5x under-report. _pricing_match is the longest-prefix step split out of
+    _get_pricing so the warning can see WHICH row priced the model."""
+
+    def test_pricing_match_returns_the_longest_prefix(self):
+        self.assertEqual(
+            StreamingMixin._pricing_match("Google", "gemini-3.8-flash")[0],
+            "gemini-3.8-flash")
+        self.assertEqual(
+            StreamingMixin._pricing_match("Google", "gemini-3.9-flash")[0],
+            "gemini-3")
+        self.assertEqual(
+            StreamingMixin._pricing_match("Google", "gemini-2.5-pro"), (None, None))
+        self.assertEqual(StreamingMixin._pricing_match("Bogus", "x"), (None, None))
+
+    def test_warns_only_for_a_catch_all_row(self):
+        note = StreamingMixin._generic_pricing_warning("Google", "gemini-3.9-flash")
+        self.assertIn("gemini-3.9-flash", note)
+        self.assertIn("'gemini-3'", note)
+        for provider, model in [
+            ("Google", "gemini-3.8-flash"),      # its own row since 2026-09-16
+            ("Google", "gemini-3.7-flash"),
+            ("Google", "gemini-flash-latest"),
+            ("Google", "gemini-3-flash"),        # the original 3 Flash: a real row
+            ("Google", "gemini-2.5-pro"),        # unpriced, not mispriced
+            ("Anthropic", "claude-fable-5-1"),
+            ("OpenAI", "gpt-6-unknown-tier"),    # unpriced by policy, no catch-all
+            ("Bogus", "x"),
+        ]:
+            with self.subTest(provider=provider, model=model):
+                self.assertIsNone(
+                    StreamingMixin._generic_pricing_warning(provider, model))
+
+    def test_get_pricing_unchanged_by_the_refactor(self):
+        # _get_pricing goes through _pricing_match now; the catch-all row still
+        # PRICES an unknown 3.x id — the warning is additive, not a refusal.
+        self.assertEqual(
+            StreamingMixin._get_pricing("Google", "gemini-3.9-flash"),
+            {"input": 0.50 / 1_000_000, "output": 3.00 / 1_000_000,
+             "cache_read": 0.05 / 1_000_000})
 
 
 if __name__ == "__main__":

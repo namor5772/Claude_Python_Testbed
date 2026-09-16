@@ -2,8 +2,8 @@
   MyAgent.py — API Model Pricing Reference
   All prices in USD per million tokens
   Verified: April 12, 2026 — rate audits 2026-07-31 and 2026-08-25, Claude
-  Fable 5.1 row added 2026-09-02 (see the dated notes in each section;
-  constants.py is the source of truth)
+  Fable 5.1 row added 2026-09-02, Gemini 3.8 Flash row 2026-09-16 (see the
+  dated notes in each section; constants.py is the source of truth)
 ================================================================================
 
 
@@ -284,16 +284,33 @@
   Model Prefix               Input    Output   Cached   Resolves to
   ──────────────────────────────────────────────────────────────────────────
   gemini-pro-latest          $2.00    $12.00   $0.20    gemini-3.1-pro-preview
-  gemini-flash-latest        $0.75*   $3.75*   $0.075*  gemini-3.7-flash
+  gemini-flash-latest        $0.75*   $3.75*   $0.075*  gemini-3.8-flash
   gemini-flash-lite-latest   $0.30    $2.50    $0.03    gemini-3.5-flash-lite
 
   (These aliases float to whatever Google currently serves; the version sits
    after the tier word, so the version-pinned prefixes below don't match them.
-   Resolution re-verified live via response.model_version on 2026-08-25:
-   gemini-flash-latest moved from 3.5-flash to 3.7-flash and
-   gemini-flash-lite-latest from 3.1-flash-lite to 3.5-flash-lite — revisit
-   whenever a new Gemini tier ships. * = the 3.6/3.7 Flash launch PROMO
-   through 2026-12-31; sticker $1.50/$7.50/$0.15 from 2027-01-01, see below.)
+   Resolution re-verified live via response.model_version: on 2026-08-25
+   gemini-flash-latest had moved from 3.5-flash to 3.7-flash and
+   gemini-flash-lite-latest from 3.1-flash-lite to 3.5-flash-lite; on
+   2026-09-16 gemini-flash-latest served 3.8-flash — revisit whenever a new
+   Gemini tier ships. * = the 3.6/3.7/3.8 Flash launch PROMO through
+   2026-12-31; sticker $1.50/$7.50/$0.15 from 2027-01-01, see below.)
+
+  Gemini 3.8 Family                        (added 2026-09-16)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cached
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-3.8-flash       $0.75*   $3.75*   $0.075*
+  (Stable 2026-09-02 — Google's Flash tier "for long-horizon software
+   engineering, autonomous agents" — now the Google default and the
+   gemini-flash-latest target. For its first fourteen days it fell through
+   to the bare "gemini-3" entry at $0.50/$3.00, so every 3.8 line logged
+   before 2026-09-16 is 1.5x UNDER its real promo cost — the third Flash
+   tier in a row to land unpriced (3.6: ten days, 3.7: twelve). Since this
+   date a run whose model prices by such a catch-all row posts a ⚠ at start
+   (GENERIC_PRICING_PREFIXES in constants.py). * the same DatedPrice as
+   3.6 / 3.7: promo through 2026-12-31, sticker $1.50/$7.50/$0.15 from
+   2027-01-01.)
 
   Gemini 3.7 Family                        (added 2026-08-25)
   ──────────────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
+    GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
     APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
 )
@@ -892,6 +893,46 @@ class StreamingMixin:
         return None
 
     @staticmethod
+    def _pricing_match(provider, model_name):
+        """The (prefix, table entry) a model prices by — the LONGEST table
+        prefix the id starts with — or (None, None) when the provider has no
+        table or nothing matches. The entry is raw (possibly a DatedPrice):
+        _get_pricing resolves and converts it; _generic_pricing_warning only
+        needs the prefix, to tell a model's own row from a family catch-all."""
+        table = {"Anthropic": ANTHROPIC_PRICING,
+                 "OpenAI": OPENAI_PRICING,
+                 "Google": GEMINI_PRICING,
+                 "xAI": XAI_PRICING,
+                 "Moonshot": KIMI_PRICING,
+                 "Ollama": OLLAMA_PRICING}.get(provider)
+        if not table:
+            return None, None
+        # Match longest prefix first for specificity
+        best_prefix, best_match, best_len = None, None, 0
+        for prefix, prices in table.items():
+            if model_name.startswith(prefix) and len(prefix) > best_len:
+                best_prefix, best_match, best_len = prefix, prices, len(prefix)
+        return best_prefix, best_match
+
+    @staticmethod
+    def _generic_pricing_warning(provider, model_name):
+        """A ⚠ line for stream_worker when the active model is priced by a
+        family catch-all row (GENERIC_PRICING_PREFIXES) instead of one of its
+        own — how every new Gemini Flash tier since 3.6 was silently
+        under-priced for weeks until someone added its row (2026-09-16). None
+        when the model has its own row, is unpriced, or the provider keeps no
+        catch-all rows."""
+        prefix, _entry = StreamingMixin._pricing_match(provider, model_name)
+        if prefix is None or prefix not in GENERIC_PRICING_PREFIXES.get(provider, ()):
+            return None
+        return (f"{model_name} has no pricing entry of its own — it is priced by the "
+                f"generic '{prefix}' fallback row, so its cost lines and cost-log "
+                f"rows may be wrong (every new Gemini Flash tier since 3.6 was "
+                f"under-priced this way until its row was added). Add a "
+                f"{model_name} entry to the {provider} pricing table in "
+                f"myagent/constants.py.")
+
+    @staticmethod
     def _get_pricing(provider, model_name, today=None):
         """Look up per-token pricing for a model.
         Returns a dict with per-token prices, or None if no match.
@@ -904,24 +945,12 @@ class StreamingMixin:
         per-call cost that already nets out their cached-input discount, so a
         table rate would never be consulted.
         A table entry may be a DatedPrice (a launch promo that reverts to the
-        sticker rate on a known date — Gemini 3.6/3.7 Flash through
+        sticker rate on a known date — Gemini 3.6/3.7/3.8 Flash through
         2026-12-31); it is resolved against ``today`` (default: the real date,
-        so a long-running agent flips at the boundary; tests pin it)."""
-        table = {"Anthropic": ANTHROPIC_PRICING,
-                 "OpenAI": OPENAI_PRICING,
-                 "Google": GEMINI_PRICING,
-                 "xAI": XAI_PRICING,
-                 "Moonshot": KIMI_PRICING,
-                 "Ollama": OLLAMA_PRICING}.get(provider)
-        if not table:
-            return None
-        # Match longest prefix first for specificity
-        best_match = None
-        best_len = 0
-        for prefix, prices in table.items():
-            if model_name.startswith(prefix) and len(prefix) > best_len:
-                best_match = prices
-                best_len = len(prefix)
+        so a long-running agent flips at the boundary; tests pin it).
+        The longest-prefix step lives in _pricing_match, shared with
+        _generic_pricing_warning."""
+        _prefix, best_match = StreamingMixin._pricing_match(provider, model_name)
         if best_match is None:
             return None
         best_match = resolve_price(best_match, today)
@@ -1155,6 +1184,16 @@ class StreamingMixin:
                     "type": "tool_info",
                     "content": f"⚠ {weak_warning}\n",
                 })
+
+            # ...and when the model is priced by a family catch-all row rather
+            # than one of its own (a new Gemini Flash tier before its row is
+            # added — 3.6, 3.7 and 3.8 each ran that way for weeks): every
+            # cost line of the run may be wrong, so this is a "warning"
+            # (always shown, Activity or not), not Activity-gated tool_info.
+            generic_pricing = self._generic_pricing_warning(self.provider, self.model)
+            if generic_pricing:
+                self.queue.put({"type": "warning",
+                                "content": f"⚠ {generic_pricing}\n"})
 
             # Re-post provider/model drift warnings from the last instruction
             # restore: _start_agent wipes the output window, so anything queued

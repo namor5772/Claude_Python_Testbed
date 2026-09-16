@@ -94,10 +94,10 @@ METHODS = {
     },
     "GeminiMixin": {"_stream_gemini_call"},
     "StreamingMixin": {
-        "_execute_tool", "_get_pricing", "_get_tools", "_log_api_cost",
-        "_make_serializable", "_messages_to_responses", "_payload_for_display",
-        "_tool_info", "_tools_to_responses", "_weak_desktop_combo_warning",
-        "stream_worker",
+        "_execute_tool", "_generic_pricing_warning", "_get_pricing", "_get_tools",
+        "_log_api_cost", "_make_serializable", "_messages_to_responses",
+        "_payload_for_display", "_pricing_match", "_tool_info",
+        "_tools_to_responses", "_weak_desktop_combo_warning", "stream_worker",
     },
 }
 

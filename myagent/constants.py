@@ -1426,14 +1426,19 @@ OPENAI_DEPRECATED_MODEL_IDS = {"gpt-5", "gpt-5.1-codex"}
 # only current 3.x models. The 2.5 thinking_budget PARAM wiring stays
 # (GEMINI_THINKING_PREFIXES + _gemini_uses_thinking_level) so a pinned
 # instruction that still names a 2.5 id keeps working until Google pulls it.
-# gemini-3.7-flash (stable, 2026-08) leads: the current Flash tier — what the
-# floating gemini-flash-latest alias resolves to (verified live 2026-08-25) —
-# and cheaper than 3.5-flash at either its promo or sticker rate; it accepts
-# thinking_level low/medium/high like the rest of 3.x (probed live the same
-# day). 3.5-flash stays listed because instructions were pinned to it while
-# it was the default; gemini-flash-lite-latest now resolves to 3.5-flash-lite.
-GEMINI_FALLBACK_MODELS = ["gemini-3.7-flash", "gemini-3.1-pro-preview",
-                          "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+# gemini-3.8-flash (stable 2026-09-02) leads: the current Flash tier — what the
+# floating gemini-flash-latest alias resolves to (verified live 2026-09-16 via
+# response.model_version; it was 3.7-flash on 2026-08-25) — at the same
+# promo/sticker rate as 3.6 / 3.7 and Google's own pick for "long-horizon
+# software engineering, autonomous agents"; it accepts thinking_level
+# low/medium/high like the rest of 3.x (probed live 2026-09-16) and still
+# tolerates the temperature MyAgent sends, although its release notes say to
+# strip temperature / top_p / top_k. 3.7-flash and 3.5-flash stay listed
+# because instructions were pinned to each while it was the default;
+# gemini-flash-lite-latest resolves to 3.5-flash-lite.
+GEMINI_FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
+                          "gemini-3.1-pro-preview", "gemini-3.5-flash",
+                          "gemini-3.5-flash-lite"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 # Models that support thinking via ThinkingConfig. EVERY current Gemini text
 # tier is thinking-capable, including Flash-Lite (2.5-flash-lite ships thinking
@@ -3220,9 +3225,11 @@ OPENAI_PRICING = {
 # "through December 31, 2026", $1.50/$7.50 ($0.15) "starting January 1,
 # 2027" — modelled as a DatedPrice so the tracker flips itself on New Year's
 # Day instead of overstating every Flash line by 2x until someone edits this.
+# Re-verified 2026-09-16: gemini-3.8-flash (stable 2026-09-02) bills the
+# identical promo/sticker pair, so the three Flash tiers share ONE object.
 # (Context-cache STORAGE, $1.00/M tokens/hour, is not modelled — it applies to
 # EXPLICIT CachedContent objects, which MyAgent never creates.)
-_GEMINI_FLASH_37_PROMO = DatedPrice(
+_GEMINI_FLASH_PROMO = DatedPrice(
     until=datetime.date(2026, 12, 31),
     promo=(0.75, 3.75, 0.075),
     then=(1.50, 7.50, 0.15),
@@ -3232,20 +3239,27 @@ GEMINI_PRICING = {
     # AFTER the tier word (gemini-pro-latest, not gemini-3.1-pro), so none of the
     # version-pinned prefixes below match them — without explicit entries they
     # get no cost line. Priced at the model each alias resolves to, verified
-    # live via response.model_version on 2026-08-25: gemini-flash-latest moved
-    # from 3.5-flash to 3.7-flash and gemini-flash-lite-latest from
-    # 3.1-flash-lite to 3.5-flash-lite (pro-latest is still 3.1-pro-preview).
-    # Re-verify the targets whenever a new Gemini tier ships.
+    # live via response.model_version: on 2026-08-25 gemini-flash-latest had
+    # moved from 3.5-flash to 3.7-flash and gemini-flash-lite-latest from
+    # 3.1-flash-lite to 3.5-flash-lite (pro-latest was still 3.1-pro-preview);
+    # on 2026-09-16 gemini-flash-latest served gemini-3.8-flash. Re-verify
+    # the targets whenever a new Gemini tier ships.
     "gemini-pro-latest":        (2.00, 12.00, 0.20),    # -> gemini-3.1-pro-preview
-    "gemini-flash-latest":      _GEMINI_FLASH_37_PROMO,  # -> gemini-3.7-flash
+    "gemini-flash-latest":      _GEMINI_FLASH_PROMO,     # -> gemini-3.8-flash
     "gemini-flash-lite-latest": (0.30, 2.50, 0.03),     # -> gemini-3.5-flash-lite
+    # Gemini 3.8 family (added 2026-09-16 — GA 2026-09-02, and for those two
+    # weeks it fell through to the bare "gemini-3" entry at $0.50/$3.00, a
+    # 1.5x under-report of every 3.8 line in the cost logs; the third Flash
+    # tier in a row to land unpriced, which is what GENERIC_PRICING_PREFIXES
+    # below now warns about). Same promo/sticker as 3.6 / 3.7.
+    "gemini-3.8-flash":    _GEMINI_FLASH_PROMO,
     # Gemini 3.7 family (added 2026-08-25 — until then it fell through to the
     # bare "gemini-3" entry at $0.50/$3.00). Same promo/sticker as 3.6.
-    "gemini-3.7-flash":    _GEMINI_FLASH_37_PROMO,
+    "gemini-3.7-flash":    _GEMINI_FLASH_PROMO,
     # Gemini 3.6 family (added 2026-07-31 at the $1.50/$7.50 sticker — the
     # bare "gemini-3" fallback had been pricing it at $0.50/$3.00; the
     # 2026-08-25 re-check found the sticker itself suspended by the promo)
-    "gemini-3.6-flash":    _GEMINI_FLASH_37_PROMO,
+    "gemini-3.6-flash":    _GEMINI_FLASH_PROMO,
     # Gemini 3.5 family (-lite is a LONGER prefix, so it must be listed for
     # gemini-3.5-flash-lite not to match the pricier gemini-3.5-flash entry).
     # The pricing page lists no context-caching rate for 3.5 Flash-Lite; the
@@ -3265,6 +3279,18 @@ GEMINI_PRICING = {
     # Gemini 2.5 (sunset ≥ 2026-10-16) was unpriced in the 2026-07 audit —
     # retiring models are removed ahead of their shutdown date.
 }
+# Pricing rows that are family CATCH-ALLS rather than a model's own rate, per
+# provider. A new model id that longest-prefix-matches one of these is priced
+# at whatever the row happens to hold, silently: every Gemini Flash tier since
+# 3.6 landed on the bare "gemini-3" row at $0.50/$3.00 until its own row was
+# added (3.6 for ten days, 3.7 for twelve, 3.8 for fourteen — Google now
+# ships a Flash tier every three to six weeks), and their cost lines and log
+# rows were 1.5x under during the promo (3x at the sticker). stream_worker
+# therefore posts an always-shown ⚠ at run start when the active model is
+# priced by one of these (_generic_pricing_warning). Anthropic and OpenAI
+# keep NO catch-all rows by policy (an unknown id is unpriced — no cost line —
+# rather than mispriced), so only Google is listed.
+GENERIC_PRICING_PREFIXES = {"Google": ("gemini-3",)}
 # xAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output.
 # Verified LIVE 2026-07-17 (re-verified 2026-08-18 and 2026-08-25) against /v1/models' own
