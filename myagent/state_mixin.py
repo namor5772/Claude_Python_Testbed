@@ -474,14 +474,20 @@ class StateMixin:
 
     def _place_window(self, win, kind, default_size, parent=None, min_size=(200, 150)):
         """Position a dialog before it is shown: the saved geometry for `kind`
-        when still visible on this layout, else `default_size` (shrunk to fit
-        the monitor) centred on `parent` — the main window by default — and
-        clamped onto that monitor. A withdrawn parent (--headless) centres the
-        dialog on the primary monitor instead. Returns the geometry applied
-        (the PS Safety dialog re-applies it after mapping)."""
+        when still visible on this layout; else the saved SIZE — the user's
+        resize survives a monitor change, only the position is lost — or, with
+        nothing saved (or a too-small saved size), `default_size`; either one
+        shrunk to fit the monitor, centred on `parent` — the main window by
+        default — and clamped onto that monitor. A withdrawn parent
+        (--headless) centres the dialog on the primary monitor instead.
+        Returns the geometry applied (the PS Safety dialog re-applies it after
+        mapping). SelfBot's `_place_dialog` mirrors these three branches."""
         geo = self._saved_geometry(kind, *min_size)
         if geo is None:
             w, h = default_size
+            saved = self._parse_geometry(self._geo_cache().get(kind))
+            if saved and saved[0] >= min_size[0] and saved[1] >= min_size[1]:
+                w, h = saved[0], saved[1]
             parent = parent if parent is not None else self.root
             try:
                 mapped = bool(parent.winfo_ismapped())

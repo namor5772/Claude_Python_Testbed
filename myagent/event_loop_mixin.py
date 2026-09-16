@@ -69,7 +69,6 @@ class EventLoopMixin:
                     self._chat_insert(
                         ("--- TOOL CALL ---\n", "tool_debug_label"),
                         (msg["content"] + "\n", "tool_debug"),
-                        ("--- END TOOL CALL ---\n", "tool_debug_label"),
                     )
                 elif msg["type"] == "thinking_start":
                     self._current_thinking_text = ""

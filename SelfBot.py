@@ -1194,6 +1194,22 @@ APICOST_LOG_FILE = _resolve_costlog()
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
+# The three persisted dialogs: kind → the App attribute holding its open Toplevel (or
+# None). Each kind also has a `_last_<kind>_geometry` attribute, its last-known
+# geometry on the CURRENT monitor layout, and a legacy flat state key from before
+# the per-layout `dialog_geometries` dict (2026-09-16), adopted once on load.
+DIALOG_WINDOWS = {
+    "prompt_editor": "prompt_editor_window",
+    "skills_dialog": "skills_editor_window",
+    "ps_safety": "_ps_safety_dialog",
+}
+DIALOG_LEGACY_KEYS = {
+    "prompt_editor": "prompt_editor_geometry",
+    "skills_dialog": "skills_dialog_geometry",
+    "ps_safety": "ps_safety_dialog_geometry",
+}
+GEOMETRY_RE = r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)"   # Tk's "WxH+X+Y" (X / Y may be negative)
+MAIN_MIN_W, MAIN_MIN_H = 400, 300                # below this a saved main geometry is junk (an unmapped root reports 1x1)
 SKILLS_DIR = _resolve_skills_dir()  # per-skill SKILL.md tree; a legacy skills.json migrates in on first load
 STORES_SYNCED = os.path.dirname(PROMPTS_FILE) != os.path.dirname(os.path.abspath(__file__))
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lock")
@@ -1348,6 +1364,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # process by the stream_worker 400 rungs; _fable_features stops sending.
         self._anthropic_unsupported = set()
         self.prompt_editor_window = None
+        self._last_prompt_editor_geometry = None    # persisted System Prompt Editor geometry
         self.skills_editor_window = None
         self._skills_refresh_list = None            # set while the Skills Manager is open
         self._last_skills_dialog_geometry = None    # persisted Skills Manager geometry
@@ -2166,13 +2183,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.outlook_enabled.set(True)
         if state.get("pause_enabled"):
             self.pause_enabled.set(True)
-        # Restore the Skills Manager dialog geometry (applied when it next opens).
-        if state.get("skills_dialog_geometry"):
-            self._last_skills_dialog_geometry = state["skills_dialog_geometry"]
-        # Restore the Safety dialog's confirm-bypass set + geometry.
+        # Restore the dialog geometries saved for the CURRENT monitor layout (applied
+        # when each dialog next opens). They come from THIS instance's state file, so
+        # instance 2 keeps its own placements; a layout with no entry leaves the
+        # `_last_*` attributes None and each dialog opens at its default over the main
+        # window — the safe fallback when monitors were added, removed or re-scaled.
+        for kind, geo in self._dialog_geometries_from_state(state, self._monitor_layout_key()).items():
+            setattr(self, f"_last_{kind}_geometry", geo)
+        # Restore the Safety dialog's confirm-bypass set.
         self._disabled_confirm_patterns = set(state.get("disabled_confirm_patterns", []))
-        if state.get("ps_safety_dialog_geometry"):
-            self._last_ps_safety_geometry = state["ps_safety_dialog_geometry"]
         self._update_ps_safety_button()
         # Restore delay setting
         saved_delay = state.get("delay_seconds")
@@ -2214,19 +2233,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # a legacy text-only prompt has no bundled keys, so this is a safe no-op there.
         if prompt_name and prompt_name in prompts:
             self._apply_prompt_settings(prompts[prompt_name])
-        # Restore window geometry — duo and solo modes are independent
+        # Restore window geometry — duo and solo modes are independent, and both are
+        # filed PER MONITOR LAYOUT (main_geometries[layout][mode], like the dialogs); a
+        # saved position is used only when SOME monitor still shows its title bar, so a
+        # main window left on a secondary monitor — negative x when it sits LEFT of the
+        # primary — comes back there. The primary-only test used before 2026-09-16
+        # (x + w > 0 …) rejected exactly that, which read as "the monitor isn't saved".
+        layout_key = self._monitor_layout_key()
         if self._duo_mode:
             # Launched from LaunchSelfBot.bat — restore saved duo geometry or default side-by-side
-            duo_geo = state.get("duo_geometry", "")
-            if duo_geo:
-                m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", duo_geo)
-                if m:
-                    w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-                    cur_sw = self.root.winfo_screenwidth()
-                    cur_sh = self.root.winfo_screenheight()
-                    if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0 and w >= 400 and h >= 300:
-                        self.root.geometry(duo_geo)
-                        return
+            duo_geo = self._main_geometry_from_state(state, layout_key, "duo")
+            if self._usable_main_geometry(duo_geo):
+                self.root.geometry(duo_geo)
+                return
             # No saved duo geometry — calculate side-by-side from work area
             if IS_WINDOWS:
                 rect = ctypes.wintypes.RECT()
@@ -2243,45 +2262,38 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             else:
                 self.root.geometry(f"{half_w}x{wa_h}+{wa_x}+{wa_y}")
         else:
-            # Manual launch — restore saved solo geometry if display setup hasn't changed
-            geometry = state.get("geometry", "")
-            saved_sw = state.get("screen_width", 0)
-            saved_sh = state.get("screen_height", 0)
-            geo_re = r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)"
-            if geometry and saved_sw and saved_sh:
-                cur_sw = self.root.winfo_screenwidth()
-                cur_sh = self.root.winfo_screenheight()
-                if saved_sw == cur_sw and saved_sh == cur_sh:
-                    m = re.match(geo_re, geometry)
-                    if m:
-                        w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
-                        if x < cur_sw and y < cur_sh and x + w > 0 and y + h > 0 and w >= 400 and h >= 300:
-                            # A manually-opened 2nd instance restores the SAME solo geometry
-                            # as instance 1 and lands exactly on top of it — which looks like
-                            # nothing opened (or a crash). If its saved position (nearly)
-                            # coincides with instance 1's, cascade it down-right so it's a
-                            # visibly separate window. Cascade only on collision, so manual
-                            # placement is preserved and the offset can't drift across launches.
-                            if self._is_second_instance:
-                                i1x = i1y = None
-                                try:
-                                    with open(APP_STATE_FILE, encoding="utf-8") as f:
-                                        im = re.match(geo_re, json.load(f).get("geometry", ""))
-                                    if im:
-                                        i1x, i1y = int(im.group(3)), int(im.group(4))
-                                except (OSError, json.JSONDecodeError):
-                                    pass
-                                if i1x is not None and abs(x - i1x) < 30 and abs(y - i1y) < 30:
-                                    # Fixed cascade off instance 1 — no clamp against
-                                    # winfo_screenwidth/height, which report only the PRIMARY
-                                    # monitor and would yank instance 2 onto it when the pair
-                                    # lives on a secondary display. A 60 px shift keeps a
-                                    # window that already passed the on-screen validity check
-                                    # on the same monitor and still reachable.
-                                    x, y = x + CASCADE_OFFSET, y + CASCADE_OFFSET
-                                    geometry = f"{w}x{h}+{x}+{y}"
-                            self.root.update_idletasks()
-                            self.root.geometry(geometry)
+            # Manual launch — restore the solo geometry saved for THIS monitor layout
+            # (another layout's entry is never used; with none, the WM places the
+            # default-size window — the safe fallback after monitors change).
+            geometry = self._main_geometry_from_state(state, layout_key, "solo")
+            parsed = self._usable_main_geometry(geometry)
+            if parsed:
+                w, h, x, y = parsed
+                # A manually-opened 2nd instance restores the SAME solo geometry
+                # as instance 1 and lands exactly on top of it — which looks like
+                # nothing opened (or a crash). If its saved position (nearly)
+                # coincides with instance 1's, cascade it down-right so it's a
+                # visibly separate window. Cascade only on collision, so manual
+                # placement is preserved and the offset can't drift across launches.
+                if self._is_second_instance:
+                    i1 = None
+                    try:
+                        with open(APP_STATE_FILE, encoding="utf-8") as f:
+                            i1 = self._parse_geometry(
+                                self._main_geometry_from_state(json.load(f), layout_key, "solo"))
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                    if i1 is not None and abs(x - i1[2]) < 30 and abs(y - i1[3]) < 30:
+                        # Fixed cascade off instance 1 — no clamp against
+                        # winfo_screenwidth/height, which report only the PRIMARY
+                        # monitor and would yank instance 2 onto it when the pair
+                        # lives on a secondary display. A 60 px shift keeps a
+                        # window that already passed the on-screen validity check
+                        # on the same monitor and still reachable.
+                        x, y = x + CASCADE_OFFSET, y + CASCADE_OFFSET
+                        geometry = f"{w}x{h}+{x}+{y}"
+                self.root.update_idletasks()
+                self.root.geometry(geometry)
             elif self._is_second_instance:
                 # No usable saved solo geometry — still offset instance 2 off the default
                 # top-left position so it doesn't stack on instance 1.
@@ -2340,23 +2352,41 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "outlook_enabled": self.outlook_enabled.get(),
             "pause_enabled": self.pause_enabled.get(),
         }
-        # Skills Manager dialog geometry — live value if open, else the last-known one.
-        if self.skills_editor_window and self.skills_editor_window.winfo_exists():
-            state["skills_dialog_geometry"] = self.skills_editor_window.geometry()
-        elif getattr(self, "_last_skills_dialog_geometry", None):
-            state["skills_dialog_geometry"] = self._last_skills_dialog_geometry
-        # Safety dialog: the confirm-bypass set + its geometry (live if open).
         state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
-        if self._ps_safety_dialog and self._ps_safety_dialog.winfo_exists():
-            state["ps_safety_dialog_geometry"] = self._ps_safety_dialog.geometry()
-        elif getattr(self, "_last_ps_safety_geometry", None):
-            state["ps_safety_dialog_geometry"] = self._last_ps_safety_geometry
         # Load existing state to preserve the other mode's geometry
         try:
             with open(self._state_file, encoding="utf-8") as f:
                 existing = json.load(f)
         except (OSError, json.JSONDecodeError):
             existing = {}
+        # Dialog geometries — live value if open, else the last-known one — filed under
+        # the CURRENT monitor layout's key; other layouts' entries in the existing file
+        # are kept, so a laptop docked and undocked remembers both arrangements. Written
+        # to self._state_file (app_state.json / app_state_2.json), so each instance
+        # remembers its own dialog placements.
+        layout_key = self._monitor_layout_key()
+        layouts = existing.get("dialog_geometries")
+        layouts = dict(layouts) if isinstance(layouts, dict) else {}
+        current = self._current_dialog_geometries()
+        if current:
+            layouts[layout_key] = current
+        if layouts:
+            state["dialog_geometries"] = layouts
+        # Main window — filed per monitor layout too: main_geometries[layout][mode],
+        # mode "solo" / "duo", which is what _load_last_state restores from. Captured
+        # only once the root is mapped and at a real size (an unmapped root reports
+        # 1x1), so the save in __init__ can't overwrite a good entry with junk. The
+        # flat `geometry` / `duo_geometry` keys below stay as last-seen values.
+        mains = existing.get("main_geometries")
+        mains = ({k: dict(v) for k, v in mains.items() if isinstance(v, dict)}
+                 if isinstance(mains, dict) else {})
+        main_geo = self.root.geometry()
+        parsed = self._parse_geometry(main_geo)
+        if (self.root.winfo_ismapped() and parsed
+                and parsed[0] >= MAIN_MIN_W and parsed[1] >= MAIN_MIN_H):
+            mains.setdefault(layout_key, {})["duo" if self._duo_mode else "solo"] = main_geo
+        if mains:
+            state["main_geometries"] = mains
         # Preserve whichever geometry key belongs to the other mode
         if self._duo_mode:
             state["duo_geometry"] = self.root.geometry()
@@ -2546,10 +2576,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return
 
         win = tk.Toplevel(self.root)
+        win.withdraw()  # Hide until geometry is set (avoids a flash at the wrong spot)
         win.title("System Prompt Editor")
-        win.geometry("650x500")
-        win.transient(self.root)
+        if IS_WINDOWS:
+            win.transient(self.root)
         self.prompt_editor_window = win
+
+        def _on_prompt_editor_close():
+            self._last_prompt_editor_geometry = win.geometry()
+            self._save_last_state()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", _on_prompt_editor_close)
 
         # Row 0: Save row
         tk.Label(win, text="Save System Prompt", font=("Arial", 10)).grid(
@@ -2607,6 +2645,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if self.system_prompt_name:
             self._prompt_name_entry.insert(0, self.system_prompt_name)
             self._prompt_combo_var.set(self.system_prompt_name)
+
+        # Restore geometry AFTER content is laid out, then show (withdraw/deiconify) —
+        # the same pattern as the Skills Manager and Safety dialogs.
+        win.update_idletasks()
+        self._place_dialog(win, "prompt_editor", (650, 500))
+        win.deiconify()
 
     def _refresh_prompt_list(self):
         prompts = self._load_saved_prompts()
@@ -2683,6 +2727,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.system_prompt = text
         self.system_prompt_name = self._prompt_name_entry.get().strip()
         self._update_title()
+        # Apply closes the editor too, so capture its geometry before the destroy —
+        # otherwise only an [X] close would remember where it was.
+        self._last_prompt_editor_geometry = self.prompt_editor_window.geometry()
         self._save_last_state()
         self.prompt_editor_window.destroy()
 
@@ -2710,17 +2757,139 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 self._skills_refresh_list()
         self.root.after(0, _refresh)
 
+    # ── Dialog geometry persistence, per monitor layout ─────────────────────
+
+    def _monitor_rects(self):
+        """Every monitor's (left, top, right, bottom), the primary screen alone when
+        the enumeration fails — the one source for every check below."""
+        return self._get_display_rects() or [
+            (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())]
+
+    def _monitor_layout_key(self):
+        """A string naming the current monitor arrangement — every monitor's rect,
+        sorted — under which the dialog geometries are filed. A monitor added,
+        removed, moved or re-scaled changes the key, so the geometries saved on
+        one arrangement are never applied to another (MyAgent's rule)."""
+        return "|".join(",".join(str(v) for v in rect) for rect in sorted(self._monitor_rects()))
+
+    @staticmethod
+    def _parse_geometry(geo):
+        """(w, h, x, y) from a Tk 'WxH+X+Y' string, else None."""
+        m = re.match(GEOMETRY_RE, geo or "")
+        return tuple(int(g) for g in m.groups()) if m else None
+
+    @staticmethod
+    def _main_geometry_from_state(state, layout_key, mode):
+        """The main-window geometry to restore for `mode` ("solo" / "duo"): the
+        entry saved under `layout_key` in `main_geometries`, else — for a
+        pre-2026-09-16 file with no per-layout data — the legacy flat
+        `geometry` / `duo_geometry` key (validated against the monitors by the
+        caller). Another layout's entry is never used."""
+        layouts = state.get("main_geometries")
+        if isinstance(layouts, dict):
+            entry = layouts.get(layout_key)
+            return (entry.get(mode) or None) if isinstance(entry, dict) else None
+        return state.get("duo_geometry" if mode == "duo" else "geometry") or None
+
+    def _usable_main_geometry(self, geo):
+        """(w, h, x, y) when `geo` is a real-size main-window geometry whose title
+        bar SOME monitor shows, else None — the any-monitor test that replaced the
+        primary-only one."""
+        parsed = self._parse_geometry(geo)
+        if not parsed:
+            return None
+        w, h, x, y = parsed
+        if w < MAIN_MIN_W or h < MAIN_MIN_H or not self._dialog_geometry_visible(x, y, w, h):
+            return None
+        return parsed
+
+    @staticmethod
+    def _dialog_geometries_from_state(state, layout_key):
+        """The dialog geometries to restore from a loaded state dict: the entry
+        saved under `layout_key`, else — for a pre-2026-09-16 file — the legacy
+        flat keys, adopted once (they are validated against the monitors at open).
+        Another layout's entry is never used."""
+        layouts = state.get("dialog_geometries")
+        entry = layouts.get(layout_key) if isinstance(layouts, dict) else None
+        if isinstance(entry, dict):
+            return {k: v for k, v in entry.items() if k in DIALOG_WINDOWS and v}
+        if layouts:      # per-layout data exists, just not for this arrangement
+            return {}
+        return {kind: state[key] for kind, key in DIALOG_LEGACY_KEYS.items() if state.get(key)}
+
+    def _current_dialog_geometries(self):
+        """kind → geometry for every persisted dialog: live while open, else the
+        last-known value; dialogs never opened are absent."""
+        geos = {}
+        for kind, win_attr in DIALOG_WINDOWS.items():
+            win = getattr(self, win_attr, None)
+            if win is not None and win.winfo_exists():
+                geos[kind] = win.geometry()
+            elif getattr(self, f"_last_{kind}_geometry", None):
+                geos[kind] = getattr(self, f"_last_{kind}_geometry")
+        return geos
+
+    def _monitor_rect_containing(self, x, y):
+        """The monitor whose rect holds the point, else the first (primary)."""
+        rects = self._monitor_rects()
+        for left, top, right, bottom in rects:
+            if left <= x < right and top <= y < bottom:
+                return (left, top, right, bottom)
+        return rects[0]
+
+    def _default_dialog_geometry(self, w, h):
+        """A `w`x`h` dialog centred on the main window, shrunk to fit and clamped
+        onto the monitor holding the main window's centre — so a dialog opened
+        with no usable saved position lands where the user is looking, whatever
+        the monitor count or resolution."""
+        rx, ry = self.root.winfo_x(), self.root.winfo_y()
+        rw, rh = self.root.winfo_width(), self.root.winfo_height()
+        left, top, right, bottom = self._monitor_rect_containing(rx + rw // 2, ry + rh // 2)
+        w, h = min(w, right - left), min(h, bottom - top)
+        x = max(left, min(rx + (rw - w) // 2, right - w))
+        y = max(top, min(ry + (rh - h) // 2, bottom - h))
+        return f"{w}x{h}+{x}+{y}"
+
+    def _place_dialog(self, win, kind, default_size, min_size=(400, 300)):
+        """Apply a dialog's geometry before it is shown and return it: the position
+        saved for this monitor layout when some monitor still shows it, else that
+        saved SIZE at the default position; with nothing saved, the default size —
+        both defaults centred on the main window (`_default_dialog_geometry`)."""
+        saved = getattr(self, f"_last_{kind}_geometry", None)
+        geo = self._sanitize_geometry(saved, *min_size) if saved else None
+        if not geo or "+" not in geo:
+            m = re.match(r"(\d+)x(\d+)", geo or "")
+            w, h = (int(m.group(1)), int(m.group(2))) if m else default_size
+            geo = self._default_dialog_geometry(w, h)
+        win.geometry(geo)
+        return geo
+
+    def _dialog_geometry_visible(self, x, y, w, h):
+        """True when enough of the window's title bar lies on SOME monitor to grab
+        it: at least 50 px of the 30-px title strip, 10 px tall (MyAgent's rule).
+        Checked per monitor via _get_display_rects(), falling back to the primary
+        screen when the enumeration fails. The earlier primary-only test
+        (x < screen_width and x + w > 0) rejected every position on a monitor
+        LEFT of the primary, where x is negative — so a dialog parked there came
+        back wherever the WM chose, which is what made the Skills Manager and
+        Safety dialogs look non-persistent (2026-09-16)."""
+        for left, top, right, bottom in self._monitor_rects():
+            overlap_w = min(x + w, right) - max(x, left)
+            overlap_h = min(y + 30, bottom) - max(y, top)
+            if overlap_w >= 50 and overlap_h >= 10:
+                return True
+        return False
+
     def _sanitize_geometry(self, geo, min_w=400, min_h=300):
-        """Validate a saved 'WxH+X+Y' geometry: enforce a minimum size and drop an
-        off-screen position (letting the WM place it) — matching SelfBot's main-window
-        geometry-restore checks."""
+        """Validate a saved 'WxH+X+Y' geometry: enforce a minimum size and drop a
+        position no monitor shows (letting the WM place it). The position test is
+        per monitor — see _dialog_geometry_visible."""
         m = re.match(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geo or "")
         if not m:
             return f"{max(min_w, 900)}x{max(min_h, 500)}"
         w, h, x, y = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
         w, h = max(w, min_w), max(h, min_h)
-        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        if x < sw and y < sh and x + w > 0 and y + h > 0:
+        if self._dialog_geometry_visible(x, y, w, h):
             return f"{w}x{h}+{x}+{y}"
         return f"{w}x{h}"
 
@@ -3045,11 +3214,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         # Restore geometry AFTER content is laid out, then show (withdraw/deiconify).
         win.update_idletasks()
-        saved_geo = getattr(self, '_last_skills_dialog_geometry', None)
-        if saved_geo:
-            win.geometry(self._sanitize_geometry(saved_geo, min_w=400, min_h=300))
-        else:
-            win.geometry("900x500")
+        self._place_dialog(win, "skills_dialog", (900, 500))
         win.deiconify()
 
     # --- Chat Save / Load ---
@@ -3576,15 +3741,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # Set geometry AFTER layout but BEFORE showing; re-apply after deiconify because
         # the embedded checkbuttons request a large natural size that overrides it on map.
         dlg.update_idletasks()
-        saved_geo = getattr(self, "_last_ps_safety_geometry", None)
-        if saved_geo:
-            geo = self._sanitize_geometry(saved_geo)
-        else:
-            w, h = 560, 760
-            x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-            y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-            geo = f"{w}x{h}+{x}+{y}"
-        dlg.geometry(geo)
+        geo = self._place_dialog(dlg, "ps_safety", (560, 760))
         dlg.deiconify()
         dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
 
@@ -6511,7 +6668,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     self._chat_insert(
                         ("--- TOOL CALL ---\n", "tool_debug_label"),
                         (msg["content"] + "\n", "tool_debug"),
-                        ("--- END TOOL CALL ---\n", "tool_debug_label"),
                     )
                 elif msg["type"] == "thinking_start":
                     self._current_thinking_text = ""

@@ -159,14 +159,23 @@ class ClampAndPlace(unittest.TestCase):
             self.assertEqual(h._place_window(dlg, "confirm", (500, 400)), "611x304+-1500+467")
         self.assertEqual(dlg.calls, [("geometry", "611x304+-1500+467")])
 
-    def test_place_centres_the_default_on_the_parent_when_saved_is_off_screen(self):
+    def test_place_keeps_the_saved_size_centred_on_the_parent_when_saved_is_off_screen(self):
+        # The saved POSITION is on a monitor that is gone; the saved SIZE (the
+        # user's resize) is kept and centred on the parent (SelfBot's rule too).
         h = host(root=FakeWin("800x600+-1400+200"),
                  _geometry_cache={"confirm": "611x304+1916+467"})
         dlg = FakeWin()
         with rects([(-2560, 0, 0, 1440)]):   # only the left monitor remains
             geo = h._place_window(dlg, "confirm", (500, 400))
-        # parent centre (-1000, 500) → top-left (-1250, 300)
-        self.assertEqual(geo, "500x400+-1250+300")
+        # parent centre (-1000, 500) → top-left (-1305, 348)
+        self.assertEqual(geo, "611x304+-1305+348")
+
+    def test_place_uses_the_default_size_when_the_saved_size_is_too_small(self):
+        h = host(root=FakeWin("800x600+-1400+200"),
+                 _geometry_cache={"confirm": "90x60+1916+467"})
+        dlg = FakeWin()
+        with rects([(-2560, 0, 0, 1440)]):
+            self.assertEqual(h._place_window(dlg, "confirm", (500, 400)), "500x400+-1250+300")
 
     def test_place_clamps_the_default_onto_the_parents_monitor(self):
         h = host(root=FakeWin("800x600+2300+1200"))
