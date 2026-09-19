@@ -15,3 +15,4 @@ Pillow
 pypdf
 python-docx
 xlwings
+sounddevice

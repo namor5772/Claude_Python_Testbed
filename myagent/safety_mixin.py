@@ -435,6 +435,14 @@ class SafetyMixin:
             resp_sb.grid(row=0, column=1, sticky="ns")
             resp_text.config(yscrollcommand=resp_sb.set)
 
+            # Voice row (voice_mixin): Mike toggles a recording whose
+            # transcript lands in the reply box, Voice Setup picks the model
+            # and microphone. Built before the image row so Tab order follows
+            # the visual order.
+            voice_row, mike_btn, voice_setup_btn, dictation = self._voice_build_row(
+                dlg, resp_text)
+            voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
+
             # Image attachment row — mirrors the instruction editor's
             # Attach/Remove pattern so a reply can carry images back to the
             # model (they ride the tool_result / user message as standard
@@ -442,7 +450,7 @@ class SafetyMixin:
             attached_images = []  # (b64_data, media_type, filename)
 
             img_frame = tk.Frame(dlg)
-            img_frame.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 10))
+            img_frame.grid(row=5, column=0, sticky="ew", padx=15, pady=(5, 10))
             img_frame.grid_columnconfigure(2, weight=1)
 
             def _refresh_prompt_images():
@@ -471,7 +479,8 @@ class SafetyMixin:
             # (buttons, then the list), as in the instruction editor.
             img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
-            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn})
+            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn,
+                                 "m": mike_btn, "v": voice_setup_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with
@@ -490,10 +499,19 @@ class SafetyMixin:
 
             def _capture_and_close():
                 """Cache the dialog geometry before destroying."""
+                dictation.shutdown()   # release the microphone, drop a pending transcript
                 self._remember_geometry("prompt", dlg)
                 self._prompt_dialog = None
 
             def on_inject(ev=None):
+                # Mid-dictation, Enter must not send: the speech would be
+                # lost. While recording it ends the recording (like a second
+                # Mike press); while the transcript is on its way it waits.
+                if dictation.state == "recording":
+                    dictation.toggle()
+                    return "break"
+                if dictation.state == "transcribing":
+                    return "break"
                 text = resp_text.get("1.0", tk.END).strip()
                 # An image-only reply is still a reply — don't let the
                 # empty-text path stop the agent.

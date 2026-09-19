@@ -484,6 +484,53 @@
     https://platform.kimi.ai/docs/pricing/chat  (per-model subpages)
 
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  VOICE INPUT (SPEECH-TO-TEXT)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  The Agent Request dialog's Mike button (myagent/voice_mixin.py) sends each
+  recording to a speech-to-text model. Unlike every table above this one is
+  priced PER MINUTE OF AUDIO, not per token: VOICE_PRICING_PER_MIN in
+  myagent/constants.py, multiplied by the recording's locally known length.
+
+  OpenAI transcription models — developers.openai.com/api/docs/pricing,
+  read 2026-09-19
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix              Est. per minute   Billed by
+  ──────────────────────────────────────────────────────────────────────────
+  gpt-transcribe            $0.0045           duration   (the default; OpenAI's
+                                              "recommended for general
+                                              transcription")
+  gpt-4o-transcribe         $0.006            tokens     ($2.50 in / $10.00 out
+                                              per MTok; the page's own
+                                              per-minute estimate is used)
+  gpt-4o-mini-transcribe    $0.003            tokens     ($1.25 in / $5.00 out)
+  whisper-1                 $0.006            duration
+
+  Notes:
+  - The figure in the dialog's status line ("≈ $0.0004") is an ESTIMATE. The
+    two duration-billed models round each request up to a whole second
+    (usage.seconds was 6.0 for a 5.6 s clip), so a very short dictation costs
+    fractionally more than shown.
+  - A transcription is deliberately NOT written to APICostLog: every line of
+    that log belongs to one chat provider / model, and the viewers total it
+    per model. Speech-to-text spend appears on the OpenAI (or Google) bill
+    only.
+  - Google (gemini-3.5-transcribe and the chat tiers used as transcribers) is
+    UNPRICED here: Gemini bills audio input at its own rate, a separate
+    column that GEMINI_PRICING does not carry, so the dialog shows no cost
+    for it rather than a wrong one. A 5.6 s clip was 140 audio input tokens
+    (~25 tokens per second of audio).
+  - Not listed because they cannot serve a file upload: gpt-live-transcribe
+    and gpt-realtime-whisper ($0.017 / min, realtime sessions only),
+    gpt-realtime-translate ($0.034 / min), and gpt-4o-transcribe-diarize
+    ($0.006 / min; speaker labels, needs chunking_strategy).
+
+  Sources:
+    https://developers.openai.com/api/docs/pricing
+    https://developers.openai.com/api/docs/guides/speech-to-text
+
+
 ================================================================================
   NOTES
 ================================================================================
@@ -501,11 +548,11 @@
     in token-based cost display).
 
   - This file is auto-generated from the ANTHROPIC_PRICING, OPENAI_PRICING,
-    GEMINI_PRICING, XAI_PRICING, and KIMI_PRICING (+ KIMI_CACHE_HIT_PRICING)
-    tables in myagent/constants.py.
+    GEMINI_PRICING, XAI_PRICING, KIMI_PRICING (+ KIMI_CACHE_HIT_PRICING) and
+    VOICE_PRICING_PER_MIN tables in myagent/constants.py.
 
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: July 25, 2026 (added the Kimi / Moonshot AI provider)
+  Last updated: September 19, 2026 (added the voice-input per-minute table)
 ================================================================================

@@ -62,6 +62,7 @@ from myagent.desktop_mixin import DesktopMixin
 from myagent.browser_mixin import BrowserMixin
 from myagent.excel_mixin import ExcelMixin
 from myagent.safety_mixin import SafetyMixin
+from myagent.voice_mixin import VoiceMixin
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
 
@@ -75,8 +76,8 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
           XAIMixin, KimiMixin, OllamaMixin, MCPMixin, GmailMixin,
           ProtonMailMixin, OutlookMixin, DocumentMixin, FileMixin,
-          DesktopMixin, BrowserMixin, ExcelMixin, SafetyMixin, ChatMixin,
-          EventLoopMixin):
+          DesktopMixin, BrowserMixin, ExcelMixin, SafetyMixin, VoiceMixin,
+          ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
                  extra_file=None):

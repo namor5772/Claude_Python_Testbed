@@ -1460,11 +1460,15 @@ GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3", "gemini-pro-latest",
 # bidi-only live/audio); different API surface (deep-research and antigravity
 # are managed agents on the Interactions API; computer-use needs its own
 # predefined tool protocol); no function calling (gemma open models); and
-# niche/legacy (robotics-er spatial models, embedding, imagen, aqa).
+# niche/legacy (robotics-er spatial models, embedding, imagen, aqa). Speech-to-
+# text (gemini-3.5-transcribe, found in the list 2026-09-19: it answers on
+# generateContent, so the action test passes it, but only with an
+# audioTranscription part) belongs to the Agent Request dialog's Voice Setup
+# picker, not this one.
 GEMINI_NON_AGENTIC_SUBSTRINGS = (
     "embedding", "imagen", "aqa", "bisheng", "text-", "-tts", "-image",
     "nano-banana", "lyria", "veo", "-live", "-audio", "omni", "gemma",
-    "robotics", "computer-use", "deep-research", "antigravity",
+    "robotics", "computer-use", "deep-research", "antigravity", "transcribe",
 )
 # Ollama (local inference) — no API key needed; availability probed at startup.
 # Order is the curated preference: [0] is OLLAMA_DEFAULT_MODEL (initial model,
@@ -3347,6 +3351,58 @@ KIMI_CACHE_HIT_PRICING = {
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.
 OLLAMA_PRICING = {}
+
+# ── Voice input (speech-to-text behind the Agent Request dialog's Mike button,
+# myagent/voice_mixin.py) ──────────────────────────────────────────────────
+# Two providers, both riding on an SDK + key MyAgent already has. OpenAI's
+# dedicated /v1/audio/transcriptions endpoint is the default: gpt-transcribe is
+# the docs' "recommended for general transcription" model and the cheapest of
+# its accuracy class. Google transcribes through generateContent with an audio
+# part: gemini-3.5-transcribe is its dedicated model (no system instruction,
+# no thinking knob — both HTTP 400 — and the transcript comes back in a part
+# field, audioTranscription.text, that google-genai 1.67.0 cannot parse, so
+# voice_mixin reads the raw body), and any chat tier does it under a
+# transcribe-only system instruction; two cheap, fast ones are listed as
+# alternatives. All verified live 2026-09-19 with a synthesized sample: every
+# id below returned the sentence verbatim (OpenAI 0.5-2.3 s, Google 2-6 s).
+VOICE_PROVIDERS = ("OpenAI", "Google")
+VOICE_OPENAI_FALLBACK_MODELS = ["gpt-transcribe", "gpt-4o-transcribe",
+                                "gpt-4o-mini-transcribe", "whisper-1"]
+VOICE_GEMINI_FALLBACK_MODELS = ["gemini-3.5-transcribe", "gemini-3.5-flash-lite",
+                                "gemini-3.8-flash"]
+VOICE_FALLBACK_MODELS = {"OpenAI": VOICE_OPENAI_FALLBACK_MODELS,
+                         "Google": VOICE_GEMINI_FALLBACK_MODELS}
+VOICE_DEFAULT_MODELS = {provider: models[0]
+                        for provider, models in VOICE_FALLBACK_MODELS.items()}
+# A Gemini id carrying this is a dedicated speech-to-text model: the request is
+# the audio alone (plus the hints, when configured), never a system instruction.
+VOICE_GEMINI_DEDICATED_SUBSTRING = "transcribe"
+# models.list() ids that are speech-to-text but NOT usable for dictation on the
+# file endpoint: the realtime-session models (gpt-live-transcribe,
+# gpt-realtime-whisper / -translate) and the speaker-labelling -diarize
+# variant, which needs chunking_strategy and answers in diarized_json.
+VOICE_OPENAI_SKIP_SUBSTRINGS = ("realtime", "-live-", "diarize")
+# gpt-transcribe alone takes `languages` (several ISO codes) and `keywords`
+# (a term list) through extra_body; every other model 400s on them — whisper-1
+# with a bare "Invalid request." naming no parameter, which is why the request
+# builder decides per family up front instead of parsing the error. `language`
+# (one code) and `prompt` are accepted by all four (probed live 2026-09-19).
+VOICE_OPENAI_KEYWORD_PREFIXES = ("gpt-transcribe",)
+# Estimated USD per minute of audio, from developers.openai.com/api/docs/pricing
+# (2026-09-19). The 4o models bill by token, the other two by duration, but the
+# page quotes a per-minute figure for all four and the recording's length is
+# known locally, so one table serves. Longest prefix wins (dated snapshots price
+# as their family); an id matching nothing — and every Gemini model, whose audio
+# input rate is a separate column this table does not carry — shows no cost
+# rather than a wrong one. Shown in the dialog only: a transcription is never
+# written to the API cost log, whose lines each belong to one chat model.
+VOICE_PRICING_PER_MIN = {
+    "gpt-transcribe":         0.0045,
+    "gpt-4o-transcribe":      0.006,
+    "gpt-4o-mini-transcribe": 0.003,
+    "whisper-1":              0.006,
+}
+
 PROVIDERS = ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
@@ -3359,6 +3415,9 @@ TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
 # header-item fill, sampled 2026-09-12 (hover is #d9ebf9) — the blue a clicked
 # ttk heading showed, held permanently on every OS.
 LIST_TITLE_BG = "#bcdcf4"
+# The Agent Request dialog's Mike button while the microphone is live (white
+# text on it) — the one state in MyAgent a user must never miss.
+VOICE_RECORDING_BG = "#c62828"
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
 
 # _BASE_DIR points to the project root (parent of the myagent/ package)

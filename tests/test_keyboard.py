@@ -296,7 +296,7 @@ class WiringTests(unittest.TestCase):
         src = {
             name: (REPO / "myagent" / name).read_text(encoding="utf-8")
             for name in ("ui_mixin.py", "instructions_mixin.py",
-                         "skills_mixin.py", "safety_mixin.py")
+                         "skills_mixin.py", "safety_mixin.py", "voice_mixin.py")
         }
         self.assertIn("install_class_bindings(self.root)", src["ui_mixin.py"])
         # The macOS focus-ring default is installed before the first button
@@ -309,6 +309,7 @@ class WiringTests(unittest.TestCase):
         # The read-only panes stay Tab stops (a disabled widget is skipped otherwise).
         self.assertEqual(src["ui_mixin.py"].count("takefocus=1,"), 1)
         self.assertEqual(src["safety_mixin.py"].count("takefocus=1,"), 2)
+        self.assertEqual(src["voice_mixin.py"].count("takefocus=1,"), 1)   # Voice Setup's test transcript
 
 
 if __name__ == "__main__":
