@@ -436,11 +436,10 @@ class SafetyMixin:
             resp_text.config(yscrollcommand=resp_sb.set)
 
             # Voice row (voice_mixin): Mike toggles a recording whose
-            # transcript lands in the reply box, Voice Setup picks the model
-            # and microphone. Built before the image row so Tab order follows
-            # the visual order.
-            voice_row, mike_btn, voice_setup_btn, dictation = self._voice_build_row(
-                dlg, resp_text)
+            # transcript lands in the reply box. (Its settings are the main
+            # window's Voice Setup button.) Built before the image row so Tab
+            # order follows the visual order.
+            voice_row, mike_btn, dictation = self._voice_build_row(dlg, resp_text)
             voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
 
             # Image attachment row — mirrors the instruction editor's
@@ -479,8 +478,7 @@ class SafetyMixin:
             # (buttons, then the list), as in the instruction editor.
             img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
-            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn,
-                                 "m": mike_btn, "v": voice_setup_btn})
+            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with

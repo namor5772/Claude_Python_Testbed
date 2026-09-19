@@ -49,6 +49,7 @@ from myagent.constants import (
     VOICE_DEFAULT_MODELS, VOICE_FALLBACK_MODELS, VOICE_PRICING_PER_MIN,
     VOICE_PROVIDERS, VOICE_RECORDING_BG,
 )
+from myagent.ui_mixin import UIMixin
 from myagent.voice_mixin import VoiceMixin, _VoiceDictation, _VoiceRecorder
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -761,15 +762,124 @@ class DictationTests(unittest.TestCase):
         self.assertEqual(empty.get("1.0", "end-1c"), "Hello there.")
 
 
+class MainWindowButtonTests(unittest.TestCase):
+    """Voice Setup sits at the main window's bottom left, left of the Debug
+    checkbox (2026-09-20). Built by the REAL setup_ui on a stub, on a mapped
+    but fully transparent root (a withdrawn one is never laid out). Every
+    assertion is relative to the widgets' own requested sizes, so it holds at
+    any DPI and on either OS."""
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.attributes("-alpha", 0.0)
+        self.opened = []
+        app = stub(UIMixin, root=self.root, provider="OpenAI", model="m",
+                   available_models=["m"], temperature=1.0)
+        for name in ("debug_enabled", "tool_calls_enabled", "show_activity",
+                     "show_thinking", "save_thinking", "diag_enabled"):
+            setattr(app, name, tk.BooleanVar(master=self.root, value=False))
+        app._update_title = lambda: None
+        app._get_display_name = lambda model_id: model_id
+        app.open_instruction_editor = app._start_agent = app._stop_agent = lambda: None
+        app._voice_setup_from_main = lambda: self.opened.append("setup")
+        app.setup_ui()
+        self.app = app
+        self.button, self.debug, self.diag = (app.voice_setup_button, app.debug_toggle,
+                                              app.diag_toggle)
+        self.root.update()      # a Frame only knows its requested width after an idle pass
+        self.need = self.button.winfo_reqwidth() + 10 + self.debug.master.winfo_reqwidth()
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def lay_out(self, width):
+        self.root.geometry(f"{width}x400+0+0")
+        end = time.monotonic() + 3.0    # the window manager applies a resize in its own time
+        while self.root.winfo_width() != width and time.monotonic() < end:
+            self.root.update()
+            time.sleep(0.01)
+        for _ in range(3):              # then the re-grid on <Configure> needs a pass of its own
+            self.root.update()
+        if self.root.winfo_width() != width:
+            self.skipTest(f"the display would not size the window to {width} px")
+        left = self.root.winfo_rootx()
+        return {"button": self.button.winfo_rootx() - left,
+                "debug": self.debug.winfo_rootx() - left,
+                "diag_end": self.diag.winfo_rootx() - left + self.diag.winfo_width(),
+                "below": self.debug.winfo_rooty() >= self.button.winfo_rooty()
+                + self.button.winfo_height()}
+
+    def test_with_room_it_sits_left_of_debug_and_the_checkboxes_stay_centred(self):
+        width = self.need + 400
+        at = self.lay_out(width)
+        self.assertFalse(at["below"])
+        self.assertEqual(at["button"], 10)                          # the bottom-left corner
+        self.assertLess(at["button"] + self.button.winfo_width(), at["debug"])
+        # Centred on the WINDOW, as before the button existed (the mirror column).
+        self.assertAlmostEqual((at["debug"] + at["diag_end"]) / 2, width / 2, delta=6)
+
+    def test_a_narrow_window_puts_the_checkboxes_on_the_line_below(self):
+        at = self.lay_out(self.need - 40)
+        self.assertTrue(at["below"])
+        self.assertEqual(at["button"], 10)
+        self.assertGreaterEqual(at["debug"], 0)
+        # ... and widening it again brings them back beside the button.
+        self.assertFalse(self.lay_out(self.need + 400)["below"])
+
+    def test_the_threshold_is_the_pair_side_by_side(self):
+        stacked = UIMixin._bottom_row_stacked
+        self.assertFalse(stacked(798, 121, 677))
+        self.assertTrue(stacked(797, 121, 677))
+        self.assertFalse(stacked(1, 121, 677))      # not laid out yet, not narrow
+
+    def test_tab_reaches_it_before_the_checkboxes_and_pressing_it_opens_setup(self):
+        self.lay_out(self.need + 400)
+        after_pane = self.app.chat_display.tk_focusNext()
+        self.assertIs(after_pane, self.button)
+        self.assertIs(after_pane.tk_focusNext(), self.debug)
+        self.button.invoke()
+        self.assertEqual(self.opened, ["setup"])
+
+
+class IndependenceTests(unittest.TestCase):
+    """The settings belong to the user and the machine: one file, read at every
+    Mike press, and nothing in an instruction or an instance's state file."""
+
+    def test_no_instruction_or_state_code_mentions_voice(self):
+        for name in ("instructions_mixin.py", "instruction_layout.py", "state_mixin.py",
+                     "skills_mixin.py", "streaming_mixin.py", "datapaths.py"):
+            src = (REPO / "myagent" / name).read_text(encoding="utf-8").lower()
+            self.assertNotIn("voice", src, name)
+        self.assertNotIn("voice", (REPO / "Heartbeat.py").read_text(encoding="utf-8").lower())
+
+    def test_every_press_reads_the_one_per_user_file(self):
+        self.assertEqual(os.path.normpath(voice_mixin.VOICE_CONFIG_FILE),
+                         os.path.normpath(os.path.expanduser("~/.config/myagent-voice/config.json")))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "config.json")
+            with mock.patch.object(voice_mixin, "VOICE_CONFIG_FILE", path):
+                # Two "instances" (or one, before and after applying another
+                # instruction): what one saves, the other's next press loads.
+                first, second = stub(VoiceMixin), stub(VoiceMixin)
+                first._voice_save_config({"provider": "Google", "device": "USB Headset"})
+                loaded = second._voice_load_config()
+        self.assertEqual((loaded["provider"], loaded["device"]), ("Google", "USB Headset"))
+
+
 class WiringTests(unittest.TestCase):
     """The dialog and the app are wired to the mixin (a static scan, no Tk)."""
 
     def test_the_agent_request_dialog_embeds_the_voice_row(self):
         src = (REPO / "myagent" / "safety_mixin.py").read_text(encoding="utf-8")
         self.assertIn("self._voice_build_row(", src)
-        # One bind_mnemonics call per window: the dialog owns the voice letters.
-        self.assertRegex(src, r'bind_mnemonics\(dlg, \{"i": attach_btn, "r": remove_btn,\s+'
-                              r'"m": mike_btn, "v": voice_setup_btn\}\)')
+        # One bind_mnemonics call per window: the dialog owns Mike's letter.
+        # Voice Setup is NOT in this dialog (it moved to the main window
+        # 2026-09-20, where it can be reached before a run asks anything).
+        self.assertIn('bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn})', src)
+        self.assertNotIn("voice_setup_btn", src)
         # Enter never sends mid-dictation, and every close path frees the microphone.
         inject = src[src.index("def on_inject("):src.index("def on_close(")]
         self.assertLess(inject.index('dictation.state == "recording"'),
@@ -779,6 +889,14 @@ class WiringTests(unittest.TestCase):
         self.assertIn("dictation.shutdown()", close)
         # The voice row is built before the image row: Tab order is creation order.
         self.assertLess(src.index("self._voice_build_row("), src.index("attach_btn = tk.Button("))
+
+    def test_the_main_window_carries_the_voice_setup_button(self):
+        src = (REPO / "myagent" / "ui_mixin.py").read_text(encoding="utf-8")
+        self.assertIn("command=self._voice_setup_from_main", src)
+        self.assertIn('"v": self.voice_setup_button,', src)
+        # Left of the checkboxes and created before them: Tab order is creation order.
+        self.assertLess(src.index("self.voice_setup_button = tk.Button("),
+                        src.index("self.debug_toggle = tk.Checkbutton("))
 
     def test_the_app_inherits_the_mixin(self):
         src = (REPO / "MyAgent.py").read_text(encoding="utf-8")

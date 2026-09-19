@@ -3,14 +3,17 @@
 The dialog's **Mike** button is a toggle: the first press starts recording the
 microphone, the second stops it, the recording goes to a speech-to-text model,
 and the transcript is inserted into the reply box at the cursor — to be edited
-like typed text before Enter sends it. **Voice Setup**, beside it, picks the
-provider / model / language / vocabulary hint / microphone and tests the whole
-chain (microphone → API key → model) without leaving the dialog.
+like typed text before Enter sends it. **Voice Setup** — a button at the bottom
+left of the MAIN window since 2026-09-20 (it began beside Mike, reachable only
+while a run was asking something) — picks the provider / model / language /
+vocabulary hint / microphone and tests the whole chain (microphone → API key →
+model) with a Test button of its own.
 
 Pieces, outermost first:
 
-* `VoiceMixin._voice_build_row` — the two buttons and the status line the
-  Agent Request dialog embeds; `_open_voice_setup` — the setup dialog.
+* `VoiceMixin._voice_build_row` — the Mike button and the status line the
+  Agent Request dialog embeds; `_voice_setup_from_main` / `_open_voice_setup`
+  — the main window's button and the setup dialog it opens.
 * `_VoiceDictation` — the toggle's state machine (idle → recording →
   transcribing → idle), shared by the Mike button and the setup dialog's Test
   button. The API call runs on a worker thread and hands its result back
@@ -601,7 +604,8 @@ class VoiceMixin:
         where = ("Settings → Privacy & security → Microphone" if IS_WINDOWS
                  else "System Settings → Privacy & Security → Microphone")
         return ("Only silence was recorded, so nothing was sent. If you did speak, check "
-                f"that the microphone is not muted, the choice in Voice Setup, and {where}.")
+                "that the microphone is not muted, the one chosen in Voice Setup (main "
+                f"window), and {where}.")
 
     @staticmethod
     def _voice_error_text(exc):
@@ -656,8 +660,8 @@ class VoiceMixin:
     def _voice_transcribe_openai(self, model, cfg, wav_bytes):
         client = getattr(self, "openai_client", None)
         if client is None:
-            raise RuntimeError("OPENAI_API_KEY is not set, so OpenAI cannot transcribe. "
-                               "Set it and restart MyAgent, or pick Google in Voice Setup.")
+            raise RuntimeError("OPENAI_API_KEY is not set, so OpenAI cannot transcribe. Set it and "
+                               "restart MyAgent, or pick Google in Voice Setup (main window).")
         params = self._voice_openai_params(model, cfg["language"], cfg["hint"])
 
         def call(optional):
@@ -681,8 +685,8 @@ class VoiceMixin:
     def _voice_transcribe_gemini(self, model, cfg, wav_bytes):
         client = getattr(self, "gemini_client", None)
         if client is None:
-            raise RuntimeError("GEMINI_API_KEY is not set, so Google cannot transcribe. "
-                               "Set it and restart MyAgent, or pick OpenAI in Voice Setup.")
+            raise RuntimeError("GEMINI_API_KEY is not set, so Google cannot transcribe. Set it and "
+                               "restart MyAgent, or pick OpenAI in Voice Setup (main window).")
         audio = genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav")
         ask = self._voice_gemini_request(cfg["language"], cfg["hint"])
         dedicated = VOICE_GEMINI_DEDICATED_SUBSTRING in model
@@ -784,46 +788,33 @@ class VoiceMixin:
         return status
 
     def _voice_build_row(self, dlg, target_text):
-        """Mike + Voice Setup + the status line, for the caller to grid under
-        its reply box. Returns (frame, mike_button, setup_button, dictation);
-        the caller owns the mnemonics (one bind_mnemonics call per window) and
-        calls dictation.shutdown() on its close paths."""
+        """Mike + the status line, for the caller to grid under its reply box.
+        Returns (frame, mike_button, dictation); the caller owns the mnemonics
+        (one bind_mnemonics call per window) and calls dictation.shutdown() on
+        its close paths. The settings are NOT here: Voice Setup is a button on
+        the main window (2026-09-20), so it can be reached before any run asks
+        anything — this dialog only exists while one does."""
         row = tk.Frame(dlg)
-        row.grid_columnconfigure(2, weight=1)
+        row.grid_columnconfigure(1, weight=1)
         mike_btn = tk.Button(row, text="Mike", width=15)
-        mike_btn.grid(row=0, column=0, padx=(0, 5), sticky="nw")
-        setup_btn = tk.Button(row, text="Voice Setup", width=15)
-        setup_btn.grid(row=0, column=1, sticky="nw")
-        # Under the buttons, across the whole width — not beside them: the
-        # dialog's size is the user's (567 px wide on one saved layout), and
-        # beside two buttons the longest message wrapped into eight lines.
+        mike_btn.grid(row=0, column=0, padx=(0, 8), sticky="nw")
+        # Beside the one button. (While Voice Setup sat here too the status
+        # went UNDER the pair: the dialog's size is the user's — 567 px wide on
+        # one saved layout — and beside two buttons the longest message wrapped
+        # into eight lines. Beside one it is four, in less height than a row
+        # of its own would cost at idle.)
         status = self._voice_status_label(row)
-        status.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(3, 0))
+        status.grid(row=0, column=1, sticky="ew")
 
         dictation = _VoiceDictation(
             self, dlg, mike_btn, status, self._voice_load_config,
             lambda transcript: self._voice_insert_into(target_text, transcript),
             idle_hint=VOICE_IDLE_HINT)
         mike_btn.config(command=dictation.toggle)
-
-        def on_setup():
-            if dictation.state != "idle":
-                return   # the microphone is busy (and setup rescans PortAudio)
-            try:
-                held_grab = str(dlg.grab_current() or "") == str(dlg)
-                self._open_voice_setup(dlg)
-                if dlg.winfo_exists():
-                    if held_grab:
-                        dlg.grab_set()   # the child's grab died with it; ours must come back
-                    target_text.focus_set()
-            except tk.TclError:
-                pass   # the dialog (or the app) went away underneath the setup window
-
-        setup_btn.config(command=on_setup)
         dlg.bind("<Destroy>",
                  lambda e: dictation.shutdown() if str(e.widget) == str(dlg) else None,
                  add="+")
-        return row, mike_btn, setup_btn, dictation
+        return row, mike_btn, dictation
 
     # ── UI: Voice Setup ────────────────────────────────────────────────
 
@@ -838,11 +829,29 @@ class VoiceMixin:
         return (f"{name} is NOT set: {provider} cannot transcribe until it is "
                 "(set the environment variable, then restart MyAgent)."), True
 
+    def _voice_setup_from_main(self):
+        """The main window's Voice Setup button (bottom left, Alt+V)."""
+        self._open_voice_setup(self.root)
+
     def _open_voice_setup(self, parent):
-        """The modal settings dialog over `parent`; returns when it closes.
-        Save writes ~/.config/myagent-voice/config.json, which the next Mike
-        press reads; Test runs the same dictation on the UNSAVED fields, so a
-        provider / model / microphone can be tried before it is kept."""
+        """The modal settings dialog over `parent` (the main window); returns
+        when it closes. Save writes ~/.config/myagent-voice/config.json, which
+        the next Mike press reads — in this instance and every other, whatever
+        instruction is applied: the settings belong to the user and the
+        machine, never to an instruction. Test runs the same dictation on the
+        UNSAVED fields, so a provider / model / microphone can be tried before
+        it is kept."""
+        # One at a time. The grab normally guarantees it, but an Agent Request
+        # arriving mid-setup takes the grab for itself, and once it closes the
+        # main window's button is pressable again with this dialog still up.
+        existing = getattr(self, "_voice_setup_dialog", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                return
+        except tk.TclError:
+            pass
         cfg = self._voice_load_config()
         models = dict(cfg["models"])          # the per-provider draft
         cache = self._voice_model_cache()
@@ -855,6 +864,7 @@ class VoiceMixin:
             device_names, device_error = [], self._voice_error_text(exc)
 
         dlg = tk.Toplevel(parent)
+        self._voice_setup_dialog = dlg
         dlg.withdraw()
         dlg.title("Voice Setup")
         dlg.transient(parent)
@@ -968,6 +978,7 @@ class VoiceMixin:
 
         def close(event=None):
             dictation.shutdown()
+            self._voice_setup_dialog = None
             dlg.destroy()
             return "break"
 

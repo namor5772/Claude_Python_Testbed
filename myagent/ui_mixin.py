@@ -185,9 +185,52 @@ class UIMixin:
             "cost_info", foreground="#0277bd", font=(MONO_FONT, 9)
         )
 
-        # Row 2: Checkbox row
-        checkbox_frame = tk.Frame(self.root)
-        checkbox_frame.grid(row=2, column=0, columnspan=2, pady=(0, 5))
+        # Row 2: Voice Setup (bottom left) + the checkbox row.
+        # The checkboxes stay centred on the WINDOW, exactly where they were
+        # before the button arrived (2026-09-20): columns 0 and 4 form one
+        # uniform group, so the empty right-hand column always matches the
+        # button's, and the two weighted gaps split the slack evenly. (Short
+        # of room for that mirror column the checkboxes slide left against
+        # the button; it holds nothing, so what falls off the edge is air.)
+        bottom_row = tk.Frame(self.root)
+        bottom_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 5))
+        for column in (0, 4):
+            bottom_row.grid_columnconfigure(column, uniform="edge")
+        for column in (1, 3):
+            bottom_row.grid_columnconfigure(column, weight=1)
+
+        # The speech-to-text settings behind the Agent Request dialog's Mike
+        # button (voice_mixin). Here, not in that dialog, so they can be set
+        # up before a run ever asks anything. Created before the checkboxes:
+        # Tab order is creation order, and it sits to their left.
+        self.voice_setup_button = tk.Button(
+            bottom_row, text="Voice Setup", font=("Arial", 9),
+            command=self._voice_setup_from_main,
+        )
+        self.voice_setup_button.grid(row=0, column=0, sticky="w", padx=(10, 0))
+
+        checkbox_frame = tk.Frame(bottom_row)
+        checkbox_frame.grid(row=0, column=2)
+
+        # A window too narrow for button + checkboxes side by side (three of
+        # the user's saved monitor layouts are: 638-791 px, against the 798
+        # the pair needs at 150 % DPI) would push Diag off the right edge. There
+        # the checkboxes take the line BELOW the button instead — the full
+        # width, as before the button existed. Below, not above: Tab order is
+        # creation order, and the button was created first.
+        def arrange_bottom_row(event=None):
+            stacked = self._bottom_row_stacked(
+                bottom_row.winfo_width(), self.voice_setup_button.winfo_reqwidth() + 10,
+                checkbox_frame.winfo_reqwidth())
+            if stacked != arrange_bottom_row.stacked:
+                arrange_bottom_row.stacked = stacked
+                if stacked:
+                    checkbox_frame.grid(row=1, column=0, columnspan=5)
+                else:
+                    checkbox_frame.grid(row=0, column=2, columnspan=1)
+
+        arrange_bottom_row.stacked = False
+        bottom_row.bind("<Configure>", arrange_bottom_row)
 
         self.debug_toggle = tk.Checkbutton(
             checkbox_frame, text="Debug", variable=self.debug_enabled,
@@ -236,8 +279,16 @@ class UIMixin:
             "s": self._start_button,
             "t": self._stop_button,
             "c": self.chat_name_entry,
+            "v": self.voice_setup_button,
         })
         self.instruction_button.focus_set()
+
+    @staticmethod
+    def _bottom_row_stacked(available, button_width, checkbox_width):
+        """Must the checkbox row go under the Voice Setup button? Yes when the
+        two do not fit side by side in `available` pixels. A width of 1 is a
+        window that has not been laid out yet, not a narrow one."""
+        return 1 < available < button_width + checkbox_width
 
     # ── Toolbar "last pressed" highlight ────────────────────────────────
 
