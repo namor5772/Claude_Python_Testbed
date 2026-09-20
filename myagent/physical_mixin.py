@@ -25,6 +25,15 @@ Architecture notes:
   timeout instead of hanging the agent (a blocking C call cannot be
   interrupted by STOP), and a fresh thread carries no COM apartment for Media
   Foundation to collide with (the Excel tools initialise COM on the worker).
+- delay_seconds is a self-timer, and the way a monitoring loop should pace
+  itself: ONE tool call is then "wait, then photo", so a quiet cycle costs one
+  API call and every result the model reads is a fresh photo. Pacing with
+  run_command's Start-Sleep costs a second call per cycle and leaves the model
+  a turn with nothing new in front of it — where claude-haiku-4-5 dropped out
+  of the loop ("Monitoring continues. Waiting for STOP.") in the user's first
+  run and again in a 20-photo control run (2026-09-21). The wait comes BEFORE
+  the camera opens (the light is on for the photo, not the wait) and STOP ends
+  it within 0.1 s, which nothing can do to a Start-Sleep.
 - cv2 is imported at the first capture, not at startup (_HAS_CAMERA in
   constants is a find_spec probe), and all helpers are prefixed _camera_
   against flat-namespace MRO shadowing.
@@ -59,6 +68,9 @@ class PhysicalMixin:
     CAMERA_FIRST_FRAME_TIMEOUT = 5.0
     #: The whole grab (every backend tried) — beyond it the driver is wedged.
     CAMERA_TIMEOUT = 25.0
+    #: The self-timer's ceiling (delay_seconds) — run_command's own maximum, so
+    #: one tool call can never park the agent for longer than a command could.
+    CAMERA_MAX_DELAY = 600.0
     #: Mean brightness under which the photo is reported as black.
     CAMERA_DARK_MEAN = 6.0
     CAMERA_JPEG_QUALITY = 85        # the copy the model sees
@@ -258,6 +270,37 @@ class PhysicalMixin:
             raise RuntimeError(str(box["error"]))
         return box["result"]
 
+    def _camera_delay(self, value):
+        """A delay_seconds argument -> (seconds, note, error). Absent / None / 0
+        is no delay; more than CAMERA_MAX_DELAY is clamped, and `note` says so
+        (a monitor that asked for an hour should learn it got ten minutes)."""
+        if value is None or value == "":
+            return 0.0, "", None
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            return 0.0, "", f"'delay_seconds' must be a number of seconds, got {value!r}."
+        if seconds != seconds or seconds < 0:          # NaN or negative
+            return 0.0, "", "'delay_seconds' must be 0 or greater."
+        if seconds > self.CAMERA_MAX_DELAY:
+            return self.CAMERA_MAX_DELAY, (f"delay_seconds was capped at "
+                                           f"{self.CAMERA_MAX_DELAY:g}"), None
+        return seconds, "", None
+
+    def _camera_wait(self, seconds):
+        """The self-timer: wait BEFORE the camera is opened, so its light is on
+        for the photo and not for the wait, in 0.1 s steps so STOP ends it at
+        once — the reason a monitoring loop should pace itself with this rather
+        than run_command's Start-Sleep, which nothing can interrupt."""
+        deadline = time.monotonic() + seconds
+        while True:
+            if getattr(self, "stop_requested", False):
+                raise _CameraStopped()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(0.1, remaining))
+
     def _camera_save(self, cv2, frame, path):
         """Write the full-resolution frame to `path` -> the sentence reporting
         it. A failed save is a note, not an error: the photo was still taken,
@@ -290,13 +333,18 @@ class PhysicalMixin:
             return f"camera_capture error: 'camera' must be a whole number, got {inp.get('camera')!r}."
         if index < 0:
             return "camera_capture error: 'camera' must be 0 or greater."
+        delay, delay_note, problem = self._camera_delay(inp.get("delay_seconds"))
+        if problem:
+            return f"camera_capture error: {problem}"
         save_path, save_note = None, ""
         if str(inp.get("save_path") or "").strip():
             save_path, save_note, problem = self._camera_save_target(inp["save_path"])
             if problem:
                 return f"camera_capture refused: {problem}"
         try:
-            cv2 = self._camera_cv2()
+            cv2 = self._camera_cv2()      # before the wait: a missing OpenCV fails at once
+            if delay:
+                self._camera_wait(delay)
             frame, info = self._camera_grab_guarded(cv2, index)
         except _CameraStopped:
             return "camera_capture stopped: STOP was pressed before the photo was taken."
@@ -307,7 +355,7 @@ class PhysicalMixin:
         try:
             full_h, full_w = frame.shape[:2]
             brightness = float(frame[::8, ::8].mean())
-            notes = []
+            notes = [f"({delay_note} seconds.)"] if delay_note else []
             if save_path:
                 notes.append(self._camera_save(cv2, frame, save_path))
                 if save_note:

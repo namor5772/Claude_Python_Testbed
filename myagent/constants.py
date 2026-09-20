@@ -1974,7 +1974,9 @@ PHYSICAL_TOOLS = [
             "read from a photo to mouse_click. The camera is opened for this one photo "
             "and released again; its indicator light is on for the few seconds the "
             "exposure takes to settle. Pass save_path to also keep the photo as a file, "
-            "e.g. to attach it to an email."
+            "e.g. to attach it to an email. To watch something over time, pace the loop "
+            "with delay_seconds (wait, then photo, in one call) rather than a separate "
+            "sleep command."
         ),
         "input_schema": {
             "type": "object",
@@ -1982,6 +1984,10 @@ PHYSICAL_TOOLS = [
                 "camera": {
                     "type": "integer",
                     "description": "Which camera, by index: 0 = the first / built-in one (the default), 1 = the next, and so on. Only needed on a computer with more than one camera.",
+                },
+                "delay_seconds": {
+                    "type": "number",
+                    "description": "Optional self-timer: wait this many seconds (0-600), THEN take the photo. The way to pace a monitoring loop — each call is one wait plus one photo, and STOP interrupts the wait.",
                 },
                 "save_path": {
                     "type": "string",

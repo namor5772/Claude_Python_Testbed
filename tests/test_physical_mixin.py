@@ -21,6 +21,8 @@ import os
 import queue
 import re
 import tempfile
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -449,6 +451,88 @@ class CaptureTests(unittest.TestCase):
         self.assertIn("pip install opencv-python", result)
 
 
+class SelfTimerTests(unittest.TestCase):
+    """delay_seconds: one tool call = wait + photo, which is how a monitoring
+    loop paces itself without a separate sleep command (and the empty turn
+    after it, where claude-haiku-4-5 dropped out of the loop)."""
+
+    def test_delay_argument_parsing(self):
+        ok = stub(PhysicalMixin)._camera_delay
+        self.assertEqual(ok(None), (0.0, "", None))
+        self.assertEqual(ok(""), (0.0, "", None))
+        self.assertEqual(ok(0), (0.0, "", None))
+        self.assertEqual(ok(5), (5.0, "", None))
+        self.assertEqual(ok("2.5"), (2.5, "", None))
+        for bad in ("soon", [5], -1, float("nan")):
+            with self.subTest(value=bad):
+                self.assertIsNotNone(ok(bad)[2])
+
+    def test_a_delay_beyond_the_ceiling_is_capped_and_says_so(self):
+        seconds, note, error = stub(PhysicalMixin)._camera_delay(3600)
+        self.assertEqual(seconds, PhysicalMixin.CAMERA_MAX_DELAY)
+        self.assertIn("capped at 600", note)
+        self.assertIsNone(error)
+        # the ceiling is run_command's own maximum timeout
+        self.assertEqual(PhysicalMixin.CAMERA_MAX_DELAY, 600.0)
+
+    def test_the_cap_is_reported_in_the_result(self):
+        host = camera_host(CAMERA_MAX_DELAY=0.05)
+        text = host.do_camera_capture({"delay_seconds": 99})[0]["text"]
+        self.assertIn("capped at", text)
+
+    def test_the_wait_happens_before_the_camera_is_opened(self):
+        # the indicator light is on for the photo, not for the wait
+        stamps = {}
+
+        class _Stamping(_FakeCv2):
+            def VideoCapture(self, index, backend):
+                stamps.setdefault("opened", time.monotonic())
+                return super().VideoCapture(index, backend)
+
+        host = camera_host(_Stamping())
+        started = time.monotonic()
+        result = host.do_camera_capture({"delay_seconds": 0.3})
+        self.assertIsInstance(result, list)
+        self.assertGreaterEqual(stamps["opened"] - started, 0.28)
+
+    def test_no_delay_means_no_wait(self):
+        host = camera_host()
+        host._camera_wait = lambda seconds: self.fail("must not wait")
+        for inp in ({}, {"delay_seconds": 0}, {"delay_seconds": None}):
+            with self.subTest(inp=inp):
+                self.assertIsInstance(host.do_camera_capture(inp), list)
+
+    def test_stop_cuts_the_wait_short_and_the_camera_is_never_opened(self):
+        host = camera_host()
+        threading.Timer(0.15, lambda: setattr(host, "stop_requested", True)).start()
+        started = time.monotonic()
+        result = host.do_camera_capture({"delay_seconds": 30})
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertIn("STOP", result)
+        self.assertEqual(host.cv2.opened_with, [])
+
+    def test_a_bad_delay_is_refused_before_anything_happens(self):
+        host = camera_host()
+        result = host.do_camera_capture({"delay_seconds": "soon"})
+        self.assertIn("delay_seconds", result)
+        self.assertEqual(host.cv2.opened_with, [])
+
+    def test_missing_opencv_fails_before_the_wait_not_after_it(self):
+        host = stub(PhysicalMixin, provider="Anthropic", stop_requested=False)
+        host._camera_wait = lambda seconds: self.fail("waited for a camera that cannot work")
+        with mock.patch.dict("sys.modules", {"cv2": None}):
+            self.assertIn("pip install opencv-python",
+                          host.do_camera_capture({"delay_seconds": 30}))
+
+    def test_the_activity_line_announces_the_wait(self):
+        host = _ToolHost()
+        host.do_camera_capture = lambda inp: "ok"
+        with mock.patch("myagent.streaming_mixin._HAS_CAMERA", True):
+            host._execute_tool(SimpleNamespace(name="camera_capture",
+                                               input={"delay_seconds": 10}))
+        self.assertIn("waiting 10 s, then taking a photo", host.queue.get_nowait()["content"])
+
+
 class SaveTests(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()
@@ -641,7 +725,8 @@ class SurfaceTests(unittest.TestCase):
     def test_no_argument_is_required(self):
         schema = C.PHYSICAL_TOOLS[0]["input_schema"]
         self.assertEqual(schema["required"], [])
-        self.assertEqual(sorted(schema["properties"]), ["camera", "save_path"])
+        self.assertEqual(sorted(schema["properties"]),
+                         ["camera", "delay_seconds", "save_path"])
 
     def test_manage_instructions_can_set_the_toggle(self):
         manage = next(t for t in C.META_TOOLS if t["name"] == "manage_instructions")

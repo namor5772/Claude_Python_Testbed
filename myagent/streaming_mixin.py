@@ -602,8 +602,10 @@ class StreamingMixin:
             method = getattr(self, f"do_{block.name}", None)
             if method is None:
                 return f"Unknown Physical tool: {block.name}"
-            self._tool_info(f"Camera: taking a photo (camera {(block.input or {}).get('camera') or 0})...\n")
-            return method(block.input or {})
+            cam_inp = block.input or {}
+            cam_wait = f"waiting {cam_inp['delay_seconds']} s, then " if cam_inp.get("delay_seconds") else ""
+            self._tool_info(f"Camera: {cam_wait}taking a photo (camera {cam_inp.get('camera') or 0})...\n")
+            return method(cam_inp)
         if block.name == "web_search":
             query = block.input.get("query", "")
             self._tool_info(f"Searching: {query}\n")
