@@ -61,6 +61,7 @@ from myagent.file_mixin import FileMixin
 from myagent.desktop_mixin import DesktopMixin
 from myagent.browser_mixin import BrowserMixin
 from myagent.excel_mixin import ExcelMixin
+from myagent.physical_mixin import PhysicalMixin
 from myagent.safety_mixin import SafetyMixin
 from myagent.voice_mixin import VoiceMixin
 from myagent.chat_mixin import ChatMixin
@@ -76,8 +77,8 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           StreamingMixin, AnthropicMixin, OpenAIMixin, GeminiMixin,
           XAIMixin, KimiMixin, OllamaMixin, MCPMixin, GmailMixin,
           ProtonMailMixin, OutlookMixin, DocumentMixin, FileMixin,
-          DesktopMixin, BrowserMixin, ExcelMixin, SafetyMixin, VoiceMixin,
-          ChatMixin, EventLoopMixin):
+          DesktopMixin, BrowserMixin, ExcelMixin, PhysicalMixin, SafetyMixin,
+          VoiceMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
                  extra_file=None):
@@ -243,6 +244,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self.excel_enabled = tk.BooleanVar(value=False)
+        self.physical_enabled = tk.BooleanVar(value=False)
         self.meta_enabled = tk.BooleanVar(value=False)
         self.mcp_enabled = tk.BooleanVar(value=False)
         self._init_mcp_state()

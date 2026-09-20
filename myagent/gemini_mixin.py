@@ -7,6 +7,7 @@ import time
 from google.genai import types as genai_types
 
 from myagent.constants import GEMINI_FALLBACK_MODELS, GEMINI_NON_AGENTIC_SUBSTRINGS
+from myagent.helpers import camera_aware_hint, is_camera_result
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -228,6 +229,7 @@ class GeminiMixin:
                     if has_tool_result:
                         parts = []
                         image_parts = []  # Collect images separately
+                        image_from_camera = []  # one bool per collected image
                         all_text_parts = []  # Accumulate for dimension extraction
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -237,6 +239,7 @@ class GeminiMixin:
                                 # Extract text from content (may be string or list)
                                 if isinstance(tc_content, list):
                                     text_parts = []
+                                    from_camera = is_camera_result(tc_content)
                                     for part in tc_content:
                                         if isinstance(part, dict) and part.get("type") == "text":
                                             text_parts.append(part.get("text", ""))
@@ -251,6 +254,7 @@ class GeminiMixin:
                                             image_parts.append(genai_types.Part.from_bytes(
                                                 data=img_data, mime_type=media_type,
                                             ))
+                                            image_from_camera.append(from_camera)
                                         else:
                                             text_parts.append(str(part))
                                     response_text = "\n".join(text_parts) if text_parts else ""
@@ -281,13 +285,15 @@ class GeminiMixin:
                                     dims_hint = f" ({dims_w}x{dims_h} pixels)"
                                     break
                             hint = genai_types.Part.from_text(
-                                text=(
+                                # A camera photo is no click surface (helpers.py)
+                                text=camera_aware_hint(
                                     f"Below is the screenshot image{dims_hint} returned by "
                                     "the screenshot tool above. Use pixel (x, y) coordinates "
                                     "directly from this image when calling mouse_click — "
                                     "top-left is (0, 0), X increases rightward, Y increases "
                                     "downward. Coordinates are automatically mapped to the "
-                                    "actual screen."
+                                    "actual screen.",
+                                    image_from_camera,
                                 )
                             )
                             contents.append(genai_types.Content(

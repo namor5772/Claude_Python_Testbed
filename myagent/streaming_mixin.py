@@ -9,16 +9,18 @@ from datetime import datetime
 
 from myagent.constants import (
     TOOLS, FILE_TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
-    GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, EXCEL_TOOLS, PARALLEL_SAFE_TOOLS,
+    GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, EXCEL_TOOLS, PHYSICAL_TOOLS,
+    PARALLEL_SAFE_TOOLS,
     _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
-    _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL,
+    _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
     APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
 )
-from myagent.helpers import _ToolBlock, rotate_log_if_needed
+from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
+                             rotate_log_if_needed)
 
 if _HAS_DESKTOP:
     import pyautogui
@@ -72,6 +74,7 @@ class StreamingMixin:
                         # items.  GPT models process images more reliably from
                         # user messages than from function_call_output content.
                         deferred_images = []
+                        deferred_from_camera = []  # one bool per deferred image
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
                                 tc_content = block.get("content", "")
@@ -79,6 +82,7 @@ class StreamingMixin:
                                 # Handle content that is a list (e.g. with image blocks)
                                 if isinstance(tc_content, list):
                                     text_parts = []
+                                    from_camera = is_camera_result(tc_content)
                                     for part in tc_content:
                                         if isinstance(part, dict) and part.get("type") == "image":
                                             src = part.get("source", {})
@@ -87,6 +91,7 @@ class StreamingMixin:
                                                 "type": "input_image",
                                                 "image_url": data_url,
                                             })
+                                            deferred_from_camera.append(from_camera)
                                         elif isinstance(part, dict) and part.get("type") == "text":
                                             text_parts.append(part.get("text", ""))
                                         else:
@@ -123,6 +128,8 @@ class StreamingMixin:
                                 "as they appear in THIS image — they are automatically "
                                 "scaled to actual screen coordinates."
                             )
+                            # A camera photo is no click surface (helpers.py)
+                            hint_text = camera_aware_hint(hint_text, deferred_from_camera)
                             result.append({
                                 "role": "user",
                                 "content": [
@@ -433,6 +440,11 @@ class StreamingMixin:
         if (_HAS_EXCEL and getattr(self, "excel_enabled", None)
                 and self.excel_enabled.get()):
             tools.extend(copy.deepcopy(EXCEL_TOOLS))
+        # Physical tools (camera_capture, OpenCV) — their own checkbox, never
+        # part of Desktop: see the PHYSICAL_TOOLS comment in constants.py.
+        if (_HAS_CAMERA and getattr(self, "physical_enabled", None)
+                and self.physical_enabled.get()):
+            tools.extend(copy.deepcopy(PHYSICAL_TOOLS))
         if self.meta_enabled.get():
             tools.extend(copy.deepcopy(META_TOOLS))
         # MCP tools are populated by MCPMixin._refresh_mcp_tools at connect-time.
@@ -578,6 +590,19 @@ class StreamingMixin:
             if method is None:
                 return f"Unknown Excel tool: {block.name}"
             self._tool_info(f"Excel: {block.name}\n")
+            return method(block.input or {})
+        # Physical tools (camera_capture) — same namespaced dispatch pattern,
+        # the missing-OpenCV hint inside for the same reason as Excel's.
+        if block.name.startswith("camera_"):
+            if not _HAS_CAMERA:
+                return ("Camera tools unavailable: OpenCV is not installed. "
+                        "Install with: pip install opencv-python")
+            if not getattr(self, "physical_enabled", None) or not self.physical_enabled.get():
+                return f"Physical tools are disabled. Enable the Physical checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Physical tool: {block.name}"
+            self._tool_info(f"Camera: taking a photo (camera {(block.input or {}).get('camera') or 0})...\n")
             return method(block.input or {})
         if block.name == "web_search":
             query = block.input.get("query", "")
@@ -892,6 +917,25 @@ class StreamingMixin:
                 )
         return None
 
+    def _blind_camera_warning(self):
+        """A warning string when the Physical tools are on but the active
+        model takes no image input — camera_capture would hand it photos it
+        cannot see — else None. The twin of the text-only branches above for a
+        run with Physical on and Desktop off; with Desktop on, that warning has
+        already said the model is blind."""
+        if not (_HAS_CAMERA and getattr(self, "physical_enabled", None)
+                and self.physical_enabled.get()):
+            return None
+        if self.desktop_enabled.get() and _HAS_DESKTOP:
+            return None
+        blind = ((self.provider == "xAI" and not self._is_xai_vision_model())
+                 or (self.provider == "Moonshot" and not self._is_kimi_vision_model())
+                 or (self.provider == "Ollama" and not self._is_ollama_vision_model()))
+        if not blind:
+            return None
+        return (f"{self.model} is a text-only model — it cannot see photos. "
+                "camera_capture will not work with this model.")
+
     @staticmethod
     def _pricing_match(provider, model_name):
         """The (prefix, table entry) a model prices by — the LONGEST table
@@ -1178,7 +1222,8 @@ class StreamingMixin:
             # Surface a warning at agent start when the active provider/model is
             # known to be weak at small-target click work. The user can switch
             # models without restarting if they want better accuracy.
-            weak_warning = self._weak_desktop_combo_warning()
+            weak_warning = (self._weak_desktop_combo_warning()
+                            or self._blind_camera_warning())
             if weak_warning:
                 self.queue.put({
                     "type": "tool_info",

@@ -1,6 +1,7 @@
 import sys
 import os
 import datetime
+import importlib.util
 import subprocess
 
 IS_WINDOWS = sys.platform == "win32"
@@ -86,6 +87,22 @@ try:
     import xlwings  # noqa: F401
 except Exception:
     _HAS_EXCEL = False
+
+# Camera capture via OpenCV — the Physical tool set (camera_capture).
+# Optional — absence disables the Physical checkbox and the camera tool.
+# PROBED, not imported: cv2 is a large native library that nothing needs until
+# the first photo (physical_mixin imports it there), the way voice_mixin
+# treats sounddevice.
+# Install via:  pip install opencv-python
+# (the same optional extra that gives find_image_on_screen its matching). A
+# camera must also be attached and permitted; like Proton Bridge, that's
+# detected at first-call time as a clear error, not a startup check.
+_HAS_CAMERA = True
+try:
+    if importlib.util.find_spec("cv2") is None:
+        _HAS_CAMERA = False
+except Exception:
+    _HAS_CAMERA = False
 
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
@@ -467,6 +484,10 @@ META_TOOLS = [
                 "excel": {
                     "type": "boolean",
                     "description": "Enable Excel live-workbook tools — excel_open, excel_read, excel_write, etc. (via xlwings; drives the real Excel app). Default false on create.",
+                },
+                "physical": {
+                    "type": "boolean",
+                    "description": "Enable Physical tools — camera_capture, a still photo from the computer's webcam (via OpenCV). The camera sees the room and whoever is in it, so enable it only for an instruction that needs it. Default false on create.",
                 },
                 "meta": {
                     "type": "boolean",
@@ -1923,6 +1944,48 @@ EXCEL_TOOLS = [
                 "quit_app": {
                     "type": "boolean",
                     "description": "Also quit Excel afterwards — only honored when no other workbooks remain open.",
+                },
+            },
+            "required": [],
+        },
+    },
+]
+
+# ── Physical tools ───────────────────────────────────────────────────────────
+# Tools that sense the room the computer sits in rather than the computer
+# itself — today one, camera_capture: a still photo from a webcam, returned to
+# the model the way a screenshot is. Its own checkbox (Physical) and NOT part
+# of DESKTOP_TOOLS, for three reasons: consent (a camera sees the room and
+# whoever is in it, so an instruction that only drives the mouse must not gain
+# it), coordinates (a photo is not a click surface — it never touches the
+# screenshot pipeline's scale / offset state), and dependency (OpenCV, not
+# pyautogui).
+# Conditionally included in _get_tools() only when self.physical_enabled.get()
+# is True AND _HAS_CAMERA is True. Dispatch is the namespaced camera_* pattern
+# (myagent/physical_mixin.py).
+PHYSICAL_TOOLS = [
+    {
+        "name": "camera_capture",
+        "description": (
+            "Take a still photo with a camera attached to this computer (the built-in "
+            "webcam by default) and look at it. The photo shows the PHYSICAL scene in "
+            "front of the camera — the room, a person, an object held up to the lens — "
+            "NOT the screen: use screenshot for the screen, and never pass coordinates "
+            "read from a photo to mouse_click. The camera is opened for this one photo "
+            "and released again; its indicator light is on for the few seconds the "
+            "exposure takes to settle. Pass save_path to also keep the photo as a file, "
+            "e.g. to attach it to an email."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "camera": {
+                    "type": "integer",
+                    "description": "Which camera, by index: 0 = the first / built-in one (the default), 1 = the next, and so on. Only needed on a computer with more than one camera.",
+                },
+                "save_path": {
+                    "type": "string",
+                    "description": "Optional. Also save the photo, at the camera's full resolution, to this file path (.jpg or .png; .jpg is added when the path has no extension). Refused when the file already exists — pick a new name.",
                 },
             },
             "required": [],

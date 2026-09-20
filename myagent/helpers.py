@@ -320,6 +320,47 @@ class _ToolBlock:
         self.type = "tool_use"
 
 
+# How a camera_capture result's text begins. physical_mixin writes it and
+# is_camera_result reads it back, so the two ends share this one constant.
+CAMERA_RESULT_MARKER = "Camera photo"
+
+
+def is_camera_result(tc_content):
+    """True when a tool_result's content is camera_capture's: a block list
+    whose first text block opens with CAMERA_RESULT_MARKER."""
+    if not isinstance(tc_content, list):
+        return False
+    for part in tc_content:
+        if isinstance(part, dict) and part.get("type") == "text":
+            return str(part.get("text", "")).startswith(CAMERA_RESULT_MARKER)
+    return False
+
+
+def camera_aware_hint(screen_hint, from_camera):
+    """The text introducing tool-result images that a translator hoists into
+    a follow-up user message (every provider but Anthropic, which takes images
+    inside the tool_result). `screen_hint` is the translator's own screenshot
+    wording — "use these pixel coordinates for mouse_click" — and comes back
+    UNTOUCHED unless camera photos are among the images: over a photo that
+    sentence would send the model clicking at the furniture. `from_camera`
+    holds one bool per hoisted image, in order."""
+    if not any(from_camera):
+        return screen_hint
+    count = len(from_camera)
+    if all(from_camera):
+        what = "the camera photo" if count == 1 else f"the {count} camera photos"
+        return (f"Below is {what} returned by the camera_capture tool above: the "
+                "physical scene in front of the camera, NOT the screen. Describe or "
+                "reason about what it shows; never use coordinates read from a "
+                "camera photo for mouse_click.")
+    photos = [str(i + 1) for i, cam in enumerate(from_camera) if cam]
+    which = (f"image {photos[0]} is a camera photo" if len(photos) == 1
+             else f"images {', '.join(photos)} are camera photos")
+    return (f"{screen_hint} EXCEPTION: of the {count} images below, {which} "
+            "(camera_capture) — the physical scene in front of the camera, not the "
+            "screen. Never use coordinates read from a camera photo for mouse_click.")
+
+
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 

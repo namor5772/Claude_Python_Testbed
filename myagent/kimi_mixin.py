@@ -78,6 +78,7 @@ from myagent.constants import (
     MAX_TOKENS,
     MAX_TOKENS_THINKING,
 )
+from myagent.helpers import camera_aware_hint, is_camera_result
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 # Stale saved efforts from other providers' UIs coerced onto kimi-k3's SPARSE
@@ -263,6 +264,7 @@ class KimiMixin:
                     )
                     if has_tool_result:
                         deferred_images = []
+                        deferred_from_camera = []  # one bool per deferred image
                         for block in content:
                             if not (isinstance(block, dict)
                                     and block.get("type") == "tool_result"):
@@ -271,6 +273,7 @@ class KimiMixin:
                             call_id = block.get("tool_use_id", "")
                             if isinstance(tc_content, list):
                                 text_parts = []
+                                from_camera = is_camera_result(tc_content)
                                 for part in tc_content:
                                     if isinstance(part, dict) and part.get("type") == "image":
                                         src = part.get("source", {})
@@ -280,6 +283,7 @@ class KimiMixin:
                                             "type": "image_url",
                                             "image_url": {"url": data_url},
                                         })
+                                        deferred_from_camera.append(from_camera)
                                     elif isinstance(part, dict) and part.get("type") == "text":
                                         text_parts.append(part.get("text", ""))
                                     else:
@@ -315,6 +319,8 @@ class KimiMixin:
                                 "as they appear in THIS image — they are automatically "
                                 "scaled to actual screen coordinates."
                             )
+                            # A camera photo is no click surface (helpers.py)
+                            hint_text = camera_aware_hint(hint_text, deferred_from_camera)
                             result.append({
                                 "role": "user",
                                 "content": [

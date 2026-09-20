@@ -4,7 +4,7 @@ from tkinter import font as tkfont, messagebox, ttk
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
     ADAPTIVE_MODE_VALUES, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
-    _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL,
+    _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA,
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
@@ -66,12 +66,13 @@ class InstructionsMixin:
                 desktop = "desktop" if entry.get("desktop") else ""
                 browser = "browser" if entry.get("browser") else ""
                 excel = "excel" if entry.get("excel") else ""
+                physical = "physical" if entry.get("physical") else ""
                 meta = "meta" if entry.get("meta") else ""
                 mcp = "mcp" if entry.get("mcp") else ""
                 google = "google" if entry.get("google") else ""
                 outlook = "outlook" if entry.get("outlook") else ""
                 convo = "convo" if entry.get("conversational") else ""
-                flags = " ".join(f for f in [desktop, browser, excel, meta, mcp, google, outlook, convo] if f)
+                flags = " ".join(f for f in [desktop, browser, excel, physical, meta, mcp, google, outlook, convo] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
                 lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
             return "\n".join(lines)
@@ -89,6 +90,7 @@ class InstructionsMixin:
                 "desktop": entry.get("desktop", False),
                 "browser": entry.get("browser", False),
                 "excel": entry.get("excel", False),
+                "physical": entry.get("physical", False),
                 "meta": entry.get("meta", False),
                 "mcp": entry.get("mcp", False),
                 "google": entry.get("google", False),
@@ -120,6 +122,7 @@ class InstructionsMixin:
                 "desktop": params.get("desktop", False),
                 "browser": params.get("browser", False),
                 "excel": params.get("excel", False),
+                "physical": params.get("physical", False),
                 "meta": params.get("meta", False),
                 "mcp": params.get("mcp", False),
                 "google": params.get("google", False),
@@ -147,7 +150,7 @@ class InstructionsMixin:
         if action == "update":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
-            updatable = ("text", "desktop", "browser", "excel", "meta", "mcp", "google",
+            updatable = ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
                          "outlook", "conversational", "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
@@ -160,7 +163,7 @@ class InstructionsMixin:
                     "'thinking_mode', or 'text_verbosity' must be provided for update."
                 )
             entry = instructions[name]
-            for key in ("text", "desktop", "browser", "excel", "meta", "mcp", "google",
+            for key in ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
                         "outlook", "conversational", "provider", "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity",
@@ -314,6 +317,7 @@ class InstructionsMixin:
         self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get() if _HAS_DESKTOP else False)
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
         self._editor_excel = tk.BooleanVar(value=self.excel_enabled.get() if _HAS_EXCEL else False)
+        self._editor_physical = tk.BooleanVar(value=self.physical_enabled.get() if _HAS_CAMERA else False)
         self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
         self._editor_mcp = tk.BooleanVar(value=self.mcp_enabled.get() if _HAS_MCP else False)
         self._editor_google = tk.BooleanVar(value=self.google_enabled.get() if _HAS_GOOGLE else False)
@@ -338,6 +342,13 @@ class InstructionsMixin:
         _excel_cb.pack(side=tk.LEFT, padx=(5, 0))
         if not _HAS_EXCEL:
             _excel_cb.config(state=tk.DISABLED)
+        _physical_cb = tk.Checkbutton(
+            checks_frame, text="Physical", variable=self._editor_physical,
+            font=("Arial", 9),
+        )
+        _physical_cb.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_CAMERA:
+            _physical_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
             checks_frame, text="Meta", variable=self._editor_meta,
             font=("Arial", 9),
@@ -499,7 +510,9 @@ class InstructionsMixin:
 
         # Restore geometry AFTER all content is laid out, then show
         win.update_idletasks()
-        self._place_window(win, "editor", (900, 640), min_size=(400, 300))
+        # 960 wide: the ten tool toggles need 904 px at 150 % display scaling
+        # (measured 2026-09-21, when Physical became the tenth)
+        self._place_window(win, "editor", (960, 640), min_size=(400, 300))
         win.deiconify()
         # The list could not scroll to its selection before it had a size
         win.update_idletasks()
@@ -896,6 +909,7 @@ class InstructionsMixin:
         self.desktop_enabled.set(self._editor_desktop.get())
         self.browser_enabled.set(self._editor_browser.get())
         self.excel_enabled.set(self._editor_excel.get())
+        self.physical_enabled.set(self._editor_physical.get())
         self.meta_enabled.set(self._editor_meta.get())
         self.mcp_enabled.set(self._editor_mcp.get())
         self.google_enabled.set(self._editor_google.get())
@@ -919,6 +933,7 @@ class InstructionsMixin:
             "desktop": self.desktop_enabled.get(),
             "browser": self.browser_enabled.get(),
             "excel": self.excel_enabled.get(),
+            "physical": self.physical_enabled.get(),
             "meta": self.meta_enabled.get(),
             "mcp": self.mcp_enabled.get(),
             "google": self.google_enabled.get(),
@@ -1001,6 +1016,7 @@ class InstructionsMixin:
         self._editor_desktop.set(False)
         self._editor_browser.set(False)
         self._editor_excel.set(False)
+        self._editor_physical.set(False)
         self._editor_meta.set(False)
         self._editor_mcp.set(False)
         self._editor_google.set(False)
@@ -1073,6 +1089,7 @@ class InstructionsMixin:
             self._editor_desktop.set(entry.get("desktop", False))
             self._editor_browser.set(entry.get("browser", False))
             self._editor_excel.set(entry.get("excel", False))
+            self._editor_physical.set(entry.get("physical", False))
             self._editor_meta.set(entry.get("meta", False))
             self._editor_mcp.set(entry.get("mcp", False))
             self._editor_google.set(entry.get("google", False))
@@ -1096,6 +1113,7 @@ class InstructionsMixin:
         self.desktop_enabled.set(self._editor_desktop.get())
         self.browser_enabled.set(self._editor_browser.get())
         self.excel_enabled.set(self._editor_excel.get())
+        self.physical_enabled.set(self._editor_physical.get())
         self.meta_enabled.set(self._editor_meta.get())
         self.mcp_enabled.set(self._editor_mcp.get())
         self.google_enabled.set(self._editor_google.get())

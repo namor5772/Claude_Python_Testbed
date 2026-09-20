@@ -8,6 +8,7 @@ from myagent.constants import (
     OLLAMA_NUM_CTX_CAP,
     OLLAMA_KEEP_ALIVE,
 )
+from myagent.helpers import camera_aware_hint, is_camera_result
 
 
 def _attr(obj, key, default=None):
@@ -79,6 +80,7 @@ class OllamaMixin:
                     )
                     if has_tool_result:
                         deferred_images = []
+                        deferred_from_camera = []  # one bool per deferred image
                         deferred_text_hints = []
                         for block in content:
                             if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -86,10 +88,12 @@ class OllamaMixin:
                                 call_id = block.get("tool_use_id", "")
                                 if isinstance(tc_content, list):
                                     text_parts = []
+                                    from_camera = is_camera_result(tc_content)
                                     for part in tc_content:
                                         if isinstance(part, dict) and part.get("type") == "image":
                                             src = part.get("source", {})
                                             deferred_images.append(src.get("data", ""))
+                                            deferred_from_camera.append(from_camera)
                                         elif isinstance(part, dict) and part.get("type") == "text":
                                             text_parts.append(part.get("text", ""))
                                         else:
@@ -127,6 +131,8 @@ class OllamaMixin:
                                 "as they appear in THIS image — they are automatically scaled "
                                 "to actual screen coordinates."
                             )
+                            # A camera photo is no click surface (helpers.py)
+                            hint_text = camera_aware_hint(hint_text, deferred_from_camera)
                             out.append({
                                 "role": "user",
                                 "content": hint_text,

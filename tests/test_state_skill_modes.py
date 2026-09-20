@@ -22,9 +22,9 @@ import unittest
 from myagent.skills_mixin import SkillsMixin
 from myagent.state_mixin import StateMixin
 
-TOGGLES = ("desktop_enabled", "browser_enabled", "excel_enabled", "meta_enabled",
-           "mcp_enabled", "google_enabled", "proton_enabled", "outlook_enabled",
-           "conversational_enabled")
+TOGGLES = ("desktop_enabled", "browser_enabled", "excel_enabled", "physical_enabled",
+           "meta_enabled", "mcp_enabled", "google_enabled", "proton_enabled",
+           "outlook_enabled", "conversational_enabled")
 DISPLAY = ("show_activity", "show_thinking", "save_thinking", "debug_enabled",
            "tool_calls_enabled", "diag_enabled")
 
