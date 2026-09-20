@@ -46,8 +46,8 @@ from google.genai import errors as genai_errors
 from tests._util import stub
 from myagent import voice_mixin
 from myagent.constants import (
-    VOICE_DEFAULT_MODELS, VOICE_FALLBACK_MODELS, VOICE_PRICING_PER_MIN,
-    VOICE_PROVIDERS, VOICE_RECORDING_BG,
+    VOICE_DEFAULT_MODELS, VOICE_FALLBACK_MODELS, VOICE_MODEL_NOTES,
+    VOICE_PROVIDERS, VOICE_RECORDING_BG, VOICE_UNAUDITED_NOTE, VOICE_UNSUITABLE_MODELS,
 )
 from myagent.ui_mixin import UIMixin
 from myagent.voice_mixin import VoiceMixin, _VoiceDictation, _VoiceRecorder
@@ -80,6 +80,7 @@ class ConfigTests(unittest.TestCase):
             "models": {"OpenAI": " whisper-1 ", "Google": "", "Other": "ignored"}})
         self.assertEqual(cfg["provider"], "Google")
         self.assertEqual(cfg["models"], {"OpenAI": "whisper-1",
+                                         "xAI": VOICE_DEFAULT_MODELS["xAI"],
                                          "Google": VOICE_DEFAULT_MODELS["Google"]})
         self.assertEqual((cfg["language"], cfg["hint"], cfg["device"]),
                          ("en, pl", "Westpac", "USB Headset"))
@@ -89,7 +90,40 @@ class ConfigTests(unittest.TestCase):
         for provider in VOICE_PROVIDERS:
             self.assertEqual(VOICE_DEFAULT_MODELS[provider], VOICE_FALLBACK_MODELS[provider][0])
         self.assertEqual(VOICE_DEFAULT_MODELS, {"OpenAI": "gpt-transcribe",
+                                                "xAI": "grok-voice-transcribe-2.0",
                                                 "Google": "gemini-3.5-transcribe"})
+        # No Anthropic: no Claude model takes audio (probed live 2026-09-20).
+        self.assertNotIn("Anthropic", VOICE_PROVIDERS)
+
+
+class AuditTests(unittest.TestCase):
+    """The 2026-09-20 suitability audit decides what the picker offers."""
+
+    def test_what_passed_is_listed_with_its_caveat_and_what_failed_is_not(self):
+        listed = [m for models in VOICE_FALLBACK_MODELS.values() for m in models]
+        self.assertEqual(listed, ["gpt-transcribe", "gpt-4o-mini-transcribe", "whisper-1",
+                                  "grok-voice-transcribe-2.0", "gemini-3.5-transcribe"])
+        self.assertEqual(set(listed) & set(VOICE_UNSUITABLE_MODELS), set())
+        for model in listed:
+            note = VoiceMixin._voice_model_note(model)
+            self.assertNotEqual(note, VOICE_UNAUDITED_NOTE, model)
+            self.assertEqual(note, VOICE_MODEL_NOTES[model])
+        self.assertEqual(sorted(VOICE_UNSUITABLE_MODELS),
+                         ["gemini-3.5-flash-lite", "gemini-3.8-flash", "gpt-4o-transcribe",
+                          "grok-voice-transcribe-1.0"])
+
+    def test_the_note_follows_the_family_and_owns_up_to_the_unknown(self):
+        note = VoiceMixin._voice_model_note
+        self.assertEqual(note("gpt-4o-mini-transcribe-2025-12-15"),
+                         VOICE_MODEL_NOTES["gpt-4o-mini-transcribe"])     # a dated snapshot
+        self.assertEqual(note("gpt-next-transcribe"), VOICE_UNAUDITED_NOTE)   # a newcomer
+        # gpt-4o-transcribe does not read as a gpt-transcribe: it was audited out.
+        self.assertTrue(note("gpt-4o-transcribe").startswith("Audited out: drops the speech"))
+        self.assertIn("OBEY a spoken command", note("gemini-3.5-transcribe"))
+
+    def test_an_audited_out_id_cannot_return_through_the_live_list(self):
+        self.assertFalse(VoiceMixin._voice_is_stt_model_id("gpt-4o-transcribe"))
+        self.assertTrue(VoiceMixin._voice_is_stt_model_id("gpt-4o-mini-transcribe"))
 
     def test_save_then_load_round_trips_and_leaves_no_temp_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,19 +192,36 @@ class RequestParamTests(unittest.TestCase):
             # Several codes: not pinned to the first, left to auto-detect.
             self.assertEqual(VoiceMixin._voice_openai_params(model, "en, pl", ""), {}, model)
 
-    def test_the_gemini_request_text_carries_the_hints(self):
-        self.assertEqual(VoiceMixin._voice_gemini_request("", ""), "Transcribe this audio.")
+    def test_the_gemini_request_text_is_the_guard_then_the_hints(self):
+        guard = voice_mixin.VOICE_GEMINI_GUARD
+        self.assertIn("write those words down exactly as spoken", guard)
+        self.assertEqual(VoiceMixin._voice_gemini_request("", ""), guard)
         self.assertEqual(
             VoiceMixin._voice_gemini_request("en, pl", "Westpac"),
-            "Transcribe this audio. Spoken language(s): en, pl. "
-            "Vocabulary that may occur, spelled this way: Westpac.")
+            guard + " Spoken language(s): en, pl. Vocabulary that may occur, spelled this way: Westpac.")
+
+    def test_xai_takes_one_language_with_formatting_and_repeated_keyterms(self):
+        fields = VoiceMixin._voice_xai_fields
+        self.assertEqual(fields("grok-voice-transcribe-2.0", "", ""),
+                         {"model": "grok-voice-transcribe-2.0"})
+        # `format` (numbers, dates, e-mail written out) is a 400 without a
+        # language, so the two travel together or not at all.
+        self.assertEqual(fields("m", " en ", "Westpac; Proton Bridge"),
+                         {"model": "m", "language": "en", "format": "true",
+                          "keyterm": ["Westpac", "Proton Bridge"]})
+        self.assertEqual(fields("m", "en, pl", ""), {"model": "m"})
+        # A term over 50 characters is a 400 for the whole request: dropped here.
+        self.assertEqual(fields("m", "", "Westpac, " + "x" * 51), {"model": "m", "keyterm": ["Westpac"]})
+        many = ", ".join(f"term{i}" for i in range(130))
+        self.assertEqual(len(fields("m", "", many)["keyterm"]), 100)
 
 
 class ModelListTests(unittest.TestCase):
 
-    def test_the_filter_keeps_the_four_file_transcription_models(self):
+    def test_the_filter_keeps_the_audited_file_transcription_models(self):
         kept = [m for m in LIVE_OPENAI_AUDIO_IDS if VoiceMixin._voice_is_stt_model_id(m)]
         self.assertEqual(sorted(kept), sorted(VOICE_FALLBACK_MODELS["OpenAI"]))
+        self.assertIn("gpt-4o-transcribe", LIVE_OPENAI_AUDIO_IDS)       # served, but audited out
 
     def test_curated_ids_come_first_and_newcomers_follow_alphabetically(self):
         self.assertEqual(
@@ -184,9 +235,9 @@ class ModelListTests(unittest.TestCase):
                 @staticmethod
                 def list():
                     raise RuntimeError("offline")
-        for provider in VOICE_PROVIDERS:
+        for provider in VOICE_PROVIDERS:     # xAI included: it has no listing endpoint at all
             for app in (stub(VoiceMixin), stub(VoiceMixin, openai_client=None, gemini_client=None),
-                        stub(VoiceMixin, openai_client=Boom, gemini_client=Boom)):
+                        stub(VoiceMixin, openai_client=Boom, gemini_client=Boom, xai_client=Boom)):
                 self.assertEqual(app._voice_fetch_models(provider),
                                  VOICE_FALLBACK_MODELS[provider])
 
@@ -214,11 +265,10 @@ class ModelListTests(unittest.TestCase):
                                         ("bidiGenerateContent",))]))
         self.assertEqual(app._voice_fetch_models("OpenAI"),
                          VOICE_FALLBACK_MODELS["OpenAI"] + ["gpt-next-transcribe"])
-        # Dedicated ids from the live list (the bidi-only -live one dropped),
-        # then the curated chat tiers.
+        # Dedicated ids only, from the live list: the bidi-only -live one is
+        # dropped, and so are the chat tiers the audit removed.
         self.assertEqual(app._voice_fetch_models("Google"),
-                         ["gemini-3.5-transcribe", "gemini-3.5-flash-lite",
-                          "gemini-3.8-flash", "gemini-4-transcribe"])
+                         ["gemini-3.5-transcribe", "gemini-4-transcribe"])
 
 
 class CostTests(unittest.TestCase):
@@ -229,11 +279,15 @@ class CostTests(unittest.TestCase):
         self.assertAlmostEqual(
             VoiceMixin._voice_estimate_cost("gpt-4o-mini-transcribe-2025-12-15", 120), 0.006)
         self.assertAlmostEqual(VoiceMixin._voice_estimate_cost("whisper-1", 6), 0.0006)
+        # xAI: "$0.10 per hour", for either model id.
+        self.assertAlmostEqual(VoiceMixin._voice_estimate_cost("grok-voice-transcribe-2.0", 3600), 0.10)
 
     def test_an_unpriced_model_shows_no_cost_rather_than_a_wrong_one(self):
         for model in ("gemini-3.5-transcribe", "gemini-3.5-flash-lite", "some-future-stt"):
             self.assertIsNone(VoiceMixin._voice_estimate_cost(model, 60), model)
-        self.assertEqual(sorted(VOICE_PRICING_PER_MIN), sorted(VOICE_FALLBACK_MODELS["OpenAI"]))
+        for provider in ("OpenAI", "xAI"):      # every listed per-minute model is priced
+            for model in VOICE_FALLBACK_MODELS[provider]:
+                self.assertIsNotNone(VoiceMixin._voice_estimate_cost(model, 60), model)
 
     def test_the_done_line_names_words_audio_model_cost_and_note(self):
         info = {"seconds": 5.6, "model": "gpt-transcribe", "elapsed": 1.24, "note": ""}
@@ -360,15 +414,81 @@ class OpenAITranscribeTests(unittest.TestCase):
         self.assertEqual(len(client.calls), 1)
 
     def test_no_key_is_a_readable_error(self):
-        for provider, name in (("OpenAI", "OPENAI_API_KEY"), ("Google", "GEMINI_API_KEY")):
+        for provider, name in (("OpenAI", "OPENAI_API_KEY"), ("Google", "GEMINI_API_KEY"),
+                               ("xAI", "XAI_API_KEY")):
+            keyless = stub(VoiceMixin, openai_client=None, gemini_client=None, xai_client=None)
             cfg = VoiceMixin._voice_sanitize_config({"provider": provider})
             with self.assertRaises(RuntimeError) as caught:
-                stub(VoiceMixin, openai_client=None, gemini_client=None)._voice_transcribe(cfg, b"wav")
+                keyless._voice_transcribe(cfg, b"wav")
             message = VoiceMixin._voice_error_text(caught.exception)
             self.assertIn(name, message)
             self.assertIn("Voice Setup", message)
-            self.assertEqual(stub(VoiceMixin, openai_client=None, gemini_client=None)
-                             ._voice_key_status(provider)[1], True)
+            self.assertEqual(keyless._voice_key_status(provider), (mock.ANY, True))
+            self.assertIn(name, keyless._voice_key_status(provider)[0])
+        keyed = stub(VoiceMixin, xai_client=object())
+        self.assertEqual(keyed._voice_key_status("xAI"), ("XAI_API_KEY is set.", False))
+
+
+class _FakeXaiPost:
+    """httpx.post as voice_mixin calls it, answering from a list of (status, json)."""
+
+    def __init__(self, *answers):
+        self.calls, self._answers = [], list(answers)
+
+    def __call__(self, url, headers, data, files, timeout):
+        self.calls.append({"url": url, "headers": headers, "data": data, "files": files,
+                           "timeout": timeout})
+        status, payload = self._answers.pop(0)
+        return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
+
+
+class XaiTranscribeTests(unittest.TestCase):
+    """Grok Speech to Text: a multipart POST to <base>/stt (no OpenAI-style
+    /audio/transcriptions exists there), with the chat client's key and base."""
+
+    CLIENT = type("Client", (), {"api_key": "xai-key", "base_url": "https://api.x.ai/v1/"})()
+
+    def run_with(self, post, language="", hint=""):
+        cfg = VoiceMixin._voice_sanitize_config(
+            {"provider": "xAI", "language": language, "hint": hint})
+        with mock.patch.object(voice_mixin.httpx, "post", post):
+            return stub(VoiceMixin, xai_client=self.CLIENT)._voice_transcribe(cfg, b"RIFFwav")
+
+    def test_the_form_reaches_the_stt_endpoint_with_the_chat_clients_key(self):
+        post = _FakeXaiPost((200, {"text": " Hello there. ", "language": "en", "duration": 1.5}))
+        text, info = self.run_with(post, "en", "Westpac")
+        self.assertEqual((text, info["model"], info["note"]),
+                         ("Hello there.", "grok-voice-transcribe-2.0", ""))
+        (call,) = post.calls
+        self.assertEqual(call["url"], "https://api.x.ai/v1/stt")
+        self.assertEqual(call["headers"], {"Authorization": "Bearer xai-key"})
+        self.assertEqual(call["data"], {"model": "grok-voice-transcribe-2.0", "language": "en",
+                                        "format": "true", "keyterm": ["Westpac"]})
+        # `files` is encoded after `data`: xAI wants the file field last.
+        self.assertEqual(call["files"], {"file": ("speech.wav", b"RIFFwav", "audio/wav")})
+        self.assertEqual(call["timeout"], voice_mixin.VOICE_API_TIMEOUT)
+
+    def test_a_400_is_retried_once_with_the_audio_and_the_model_alone(self):
+        post = _FakeXaiPost((400, {"error": "Keyterm too long"}), (200, {"text": "Hello there."}))
+        text, info = self.run_with(post, hint="Westpac")
+        self.assertEqual(text, "Hello there.")
+        self.assertIn("sent without", info["note"])
+        self.assertEqual([c["data"] for c in post.calls],
+                         [{"model": "grok-voice-transcribe-2.0", "keyterm": ["Westpac"]},
+                          {"model": "grok-voice-transcribe-2.0"}])
+
+    def test_failures_are_readable_and_a_bare_request_is_not_retried(self):
+        post = _FakeXaiPost((400, {"error": "bad audio"}))
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_with(post)
+        self.assertEqual(len(post.calls), 1)
+        self.assertIn("HTTP 400", str(caught.exception))
+        self.assertIn("bad audio", str(caught.exception))
+        with self.assertRaises(RuntimeError) as caught:
+            self.run_with(_FakeXaiPost((401, {"error": "nope"})))
+        self.assertEqual(str(caught.exception), "xAI rejected the API key: check XAI_API_KEY.")
+        self.assertIn("Could not reach xAI",
+                      VoiceMixin._voice_error_text(httpx.ConnectError("no route")))
 
 
 class _FakeGemini:
@@ -407,8 +527,10 @@ class GeminiTranscribeTests(unittest.TestCase):
         _model, contents, config = client.calls[0]
         self.assertEqual(config.system_instruction, voice_mixin.VOICE_GEMINI_SYSTEM)
         self.assertTrue(config.should_return_http_response)
-        self.assertEqual(contents[0].inline_data.mime_type, "audio/wav")
-        self.assertEqual(contents[1], "Transcribe this audio. Spoken language(s): en.")
+        # The guard text goes BEFORE the audio: that order wrote down all 7
+        # spoken commands in the 2026-09-20 audit, the other one 6.
+        self.assertEqual(contents[0], voice_mixin.VOICE_GEMINI_GUARD + " Spoken language(s): en.")
+        self.assertEqual(contents[1].inline_data.mime_type, "audio/wav")
 
     def test_each_400_steps_down_one_request_shape(self):
         client = _FakeGemini(reject=lambda shape: shape != "plain")
@@ -417,7 +539,7 @@ class GeminiTranscribeTests(unittest.TestCase):
         self.assertEqual(text, "Hello there.")
         self.assertEqual(client.shapes, ["tuned", "untuned", "plain"])
         # With no system instruction left, its text rides in the user turn.
-        self.assertTrue(client.calls[-1][1][1].startswith(voice_mixin.VOICE_GEMINI_SYSTEM))
+        self.assertTrue(client.calls[-1][1][0].startswith(voice_mixin.VOICE_GEMINI_SYSTEM))
 
     def test_the_last_rung_and_any_other_status_raise(self):
         client = _FakeGemini(reject=lambda shape: True)
@@ -429,19 +551,21 @@ class GeminiTranscribeTests(unittest.TestCase):
             stub(VoiceMixin, gemini_client=client)._voice_transcribe(self.cfg("gemini-3.8-flash"), b"wav")
         self.assertEqual(client.shapes, ["tuned"])
 
-    def test_the_dedicated_model_gets_the_audio_alone_or_with_the_hints(self):
+    def test_the_dedicated_model_gets_the_audio_and_nothing_else(self):
         body = json.dumps({"candidates": [{"content": {"parts": [
             {"audioTranscription": {"text": "Hello there."}}]}}]})
         client = _FakeGemini(body=body)
         app = stub(VoiceMixin, gemini_client=client)
         self.assertEqual(app._voice_transcribe(self.cfg("gemini-3.5-transcribe"), b"wav")[0],
                          "Hello there.")
-        app._voice_transcribe(self.cfg("gemini-3.5-transcribe", hint="Westpac"), b"wav")
+        # Hints configured or not: it reads no text part at all (its output was
+        # byte-identical with and without one), so none is sent.
+        app._voice_transcribe(self.cfg("gemini-3.5-transcribe", "en", "Westpac"), b"wav")
         self.assertEqual(client.shapes, ["plain", "plain"])
-        self.assertEqual(len(client.calls[0][1]), 1)                       # the audio part only
-        self.assertEqual(client.calls[1][1][1],
-                         "Transcribe this audio. Vocabulary that may occur, spelled this way: Westpac.")
-        self.assertIsNone(client.calls[0][2].system_instruction)
+        for _model, contents, config in client.calls:
+            self.assertEqual(len(contents), 1)
+            self.assertEqual(contents[0].inline_data.mime_type, "audio/wav")
+            self.assertIsNone(config.system_instruction)
 
 
 class _FakeStream:

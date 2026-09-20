@@ -507,6 +507,19 @@
   gpt-4o-mini-transcribe    $0.003            tokens     ($1.25 in / $5.00 out)
   whisper-1                 $0.006            duration
 
+  xAI Grok Speech to Text — x.ai/news/grok-stt-and-tts-apis, read 2026-09-20
+  ──────────────────────────────────────────────────────────────────────────
+  grok-voice-transcribe     $0.00167          duration   ("$0.10 per hour" for
+                                              the batch /v1/stt endpoint the
+                                              Mike button uses; streaming is
+                                              $0.20 per hour. One prefix row
+                                              prices both -2.0 and -1.0.)
+
+  Which of these Voice Setup actually LISTS is decided by the 2026-09-20
+  suitability audit (docs/voice-stt-audit.md), not by price: gpt-4o-transcribe
+  and grok-voice-transcribe-1.0 were audited out but stay priced, because
+  their request wiring stays for a hand-edited settings file.
+
   Notes:
   - The figure in the dialog's status line ("≈ $0.0004") is an ESTIMATE. The
     two duration-billed models round each request up to a whole second
@@ -554,5 +567,5 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: September 19, 2026 (added the voice-input per-minute table)
+  Last updated: September 20, 2026 (voice input: xAI speech-to-text row)
 ================================================================================
