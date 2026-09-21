@@ -2,7 +2,8 @@
 # view_costlog.command — opened by the "API Cost Log" desktop launcher.
 #
 # Shows the MyAgent/SelfBot API cost log for examination: a spend summary first
-# (grand total, today, this month, then by machine, by provider, by model and
+# (grand total, today — and under it, since 2026-09-22, each of the last seven
+# days — this month, then by machine, by provider, by model and
 # by instruction — each rollup twice since 2026-09-02: once over all history,
 # once over the current month only, under a THIS MONTH heading), then
 # every logged run (most recent first) WITH its individual cost, in a
@@ -204,22 +205,46 @@ rollups() {
   echo "════════════════════════════════════════════════════════════════════════════"
   echo
   echo "SUMMARY"
-  TODAY="$(date +%Y-%m-%d)"; MONTH="$(date +%Y-%m)"
+  # One clock reading for every date below: the month and the seven days under
+  # "today" are all derived from the TODAY string — read separately, a viewer
+  # opened across midnight could show a day twice.
+  TODAY="$(date +%Y-%m-%d)"; MONTH="${TODAY%-*}"
+  # The last seven days (2026-09-22, the user's request) as "YYYY-MM-DD Dow;"
+  # entries, yesterday first — every calendar day, so a day without a run
+  # shows as $0.0000. BSD date: -j = do not set the clock, -f parses TODAY
+  # (the time of day stays "now"), -v12H moves to noon so a DST shift cannot
+  # carry the result across midnight, -v-Nd steps back N calendar days.
+  # LC_ALL=C: English weekday names, the same ones the Windows twin prints.
+  DAYS=""
+  for back in 1 2 3 4 5 6 7; do
+    DAYS="$DAYS$(LC_ALL=C date -j -v12H -v-"$back"d -f %Y-%m-%d "$TODAY" '+%Y-%m-%d %a' 2>/dev/null);"
+  done
   if awk -F';' -v W="$W" 'NF>=W { found=1 } END { exit !found }' "$MERGED"; then
-    awk -F';' -v TODAY="$TODAY" -v MONTH="$MONTH" -v W="$W" '
+    # The weekday takes the slot "today" has, padded to its width, so the
+    # eight dates stack in one column. ONE money column for those rows and
+    # "this month": the amount, "$" included, is right-aligned to end where a
+    # single-digit "today" always ended (column 34) — decimal points line up
+    # when a day runs past $10, and a < $10 today row is byte-identical to
+    # what it was. Fixed widths, not printf "*" (see bucket()).
+    awk -F';' -v TODAY="$TODAY" -v MONTH="$MONTH" -v DAYS="$DAYS" -v W="$W" '
       NF>=W {
         c=$4+0; total+=c; n++;
-        d=substr($1,1,10); mo=substr($1,1,7);
-        if (d==TODAY) today+=c;
-        if (mo==MONTH) month+=c;
+        day[substr($1,1,10)]+=c;
+        if (substr($1,1,7)==MONTH) month+=c;
         if (n==1) first=$1;
         last=$1;
       }
       END {
         printf "  %d runs · $%.4f total\n", n, total;
         printf "  span: %s  →  %s\n", first, last;
-        printf "  today (%s):      $%.4f\n", TODAY, today+0;
-        printf "  this month (%s): $%.4f\n", MONTH, month+0;
+        printf "  %-5s (%s):%13s\n", "today", TODAY, sprintf("$%.4f", day[TODAY]+0);
+        nd = split(DAYS, dd, ";");
+        for (i=1; i<=nd; i++) {
+          if (dd[i]=="") continue;
+          split(dd[i], p, " ");
+          printf "  %-5s (%s):%13s\n", p[2], p[1], sprintf("$%.4f", day[p[1]]+0);
+        }
+        printf "  this month (%s):%11s\n", MONTH, sprintf("$%.4f", month+0);
       }' "$MERGED"
     rollups "" ""
     token_rollup

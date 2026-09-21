@@ -1,6 +1,7 @@
 # CostLog_Win.ps1 -- Desktop-shortcut viewer for the MyAgent/SelfBot API cost
 # log (Windows twin of CostLog.applescript / view_costlog.command). Shows a
-# spend summary first (grand total, today, this month, then by machine, by
+# spend summary first (grand total, today -- and under it, since 2026-09-22,
+# each of the last seven days -- this month, then by machine, by
 # provider, by model and by instruction -- each rollup twice since 2026-09-02:
 # once over all history, once over the current month only, under a THIS MONTH
 # heading), then every run most-recent-first WITH its individual cost -- the
@@ -234,15 +235,41 @@ try {
         $out += '  (no priced runs logged yet)'
     } else {
         $total    = ($rows | Measure-Object Cost -Sum).Sum
-        $today    = (Get-Date).ToString('yyyy-MM-dd')
-        $month    = (Get-Date).ToString('yyyy-MM')
+        # One clock reading for every date below: read separately, a viewer
+        # opened across midnight could take "today" from one day and the seven
+        # days under it from the next, and show a day twice.
+        $now      = Get-Date
+        $today    = $now.ToString('yyyy-MM-dd', $inv)
+        $month    = $now.ToString('yyyy-MM', $inv)
         $monthRows = @($rows | Where-Object { $_.Time.StartsWith($month) })
-        $todaySum = [double]($rows | Where-Object { $_.Time.StartsWith($today) } | Measure-Object Cost -Sum).Sum
         $monthSum = [double]($monthRows | Measure-Object Cost -Sum).Sum
+        # Spend per calendar day in ONE pass (2026-09-22): today's row and the
+        # seven days under it all read from it -- a Where-Object pipeline per
+        # day would walk the merged logs eight times.
+        $byDay = @{}
+        foreach ($r in $rows) {
+            if ($r.Time.Length -ge 10) { $byDay[$r.Time.Substring(0, 10)] += $r.Cost }
+        }
         $out += ('  {0} runs - ${1:N4} total' -f $rows.Count, $total)
         $out += ('  span: {0}  ->  {1}' -f $rows[0].Time, $rows[-1].Time)
-        $out += ('  today ({0}):      ${1:N4}' -f $today, $todaySum)
-        $out += ('  this month ({0}): ${1:N4}' -f $month, $monthSum)
+        # today, then the last seven days (2026-09-22, the user's request) --
+        # every calendar day, a day without a run as $0.0000, so the rows are
+        # always the same seven dates counting back from yesterday. The weekday
+        # takes the slot "today" has, padded to its width, so the eight dates
+        # stack in one column. ONE money column for these rows and "this month":
+        # the amount, "$" included, is right-aligned to end where a single-digit
+        # "today" always ended (column 34) -- decimal points line up when a day
+        # runs past $10 (most weeks), and a < $10 today row is byte-identical
+        # to what it was. (The two old format strings only LOOKED aligned: {0}
+        # is 10 characters for a date, 7 for a month.)
+        $dayFmt = '  {0,-5} ({1}):{2,13}'
+        $out += ($dayFmt -f 'today', $today, ('${0:N4}' -f [double]$byDay[$today]))
+        foreach ($back in 1..7) {
+            $day = $now.Date.AddDays(-$back)
+            $key = $day.ToString('yyyy-MM-dd', $inv)
+            $out += ($dayFmt -f $day.ToString('ddd', $inv), $key, ('${0:N4}' -f [double]$byDay[$key]))
+        }
+        $out += ('  this month ({0}):{1,11}' -f $month, ('${0:N4}' -f $monthSum))
         $out += Get-Rollups $rows ''
         $out += Get-TokenRollup $rows
         # The same four rollups over the current month only (2026-09-02): the
