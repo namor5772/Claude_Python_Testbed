@@ -460,6 +460,19 @@ class ChatMixin:
             if last_char != "\n":
                 self.chat_display.insert(tk.END, "\n")
 
+    def _ensure_blank_line(self):
+        """Ensure the chat display ends with an empty line (or is empty), so a
+        heading starts its own paragraph — exactly one blank line above it,
+        whatever the previous insert ended with."""
+        if self.chat_display.index("end-1c") == "1.0":
+            return
+        # The last two characters (one, when the display holds only one —
+        # a lone "\n" is already an empty line).
+        tail = self.chat_display.get("end-3c", "end-1c")
+        if tail in ("\n", "\n\n"):
+            return
+        self.chat_display.insert(tk.END, "\n" if tail.endswith("\n") else "\n\n")
+
     @staticmethod
     def _latex_to_unicode(text):
         """Convert LaTeX math notation to Unicode equivalents and strip delimiters."""

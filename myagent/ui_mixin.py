@@ -146,6 +146,10 @@ class UIMixin:
             "assistant_label", foreground="#2e7d32", font=("Arial", 11, "bold")
         )
         self.chat_display.tag_config("assistant", foreground="#2e7d32")
+        # The Agent Request dialog's message, shown under "Agent Request:".
+        # Same look as "assistant" but its own tag, so _post_process_latex
+        # (which rewrites assistant ranges) leaves it as the dialog showed it.
+        self.chat_display.tag_config("agent_request", foreground="#2e7d32")
         self.chat_display.tag_config("error", foreground="#c62828")
         self.chat_display.tag_config(
             "tool_info", foreground="#757575", font=("Arial", 10, "italic")

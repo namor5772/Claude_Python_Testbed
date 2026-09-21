@@ -9,11 +9,15 @@ except ImportError:
 
 class EventLoopMixin:
 
-    def _chat_insert(self, *segments, newline_first=True, see=True):
+    def _chat_insert(self, *segments, newline_first=True, see=True,
+                     blank_line_first=False):
         """Insert (text, tag) segments into the chat display in one
-        enable→insert→disable cycle, starting on a fresh line by default."""
+        enable→insert→disable cycle, starting on a fresh line by default —
+        or, with blank_line_first, as a new paragraph (one empty line above)."""
         self.chat_display.config(state="normal")
-        if newline_first:
+        if blank_line_first:
+            self._ensure_blank_line()
+        elif newline_first:
             self._ensure_newline()
         for text, tag in segments:
             self.chat_display.insert(tk.END, text, tag)
@@ -87,9 +91,22 @@ class EventLoopMixin:
                 elif msg["type"] == "text_delta":
                     self._current_response_text += msg["content"]
                     self._chat_insert((msg["content"], "assistant"), newline_first=False)
+                elif msg["type"] == "user_prompt_request":
+                    # What the Agent Request dialog is asking, under its own
+                    # heading. It LOOKS like the Agent: text but is tagged
+                    # "agent_request", not "assistant": _post_process_latex
+                    # rewrites every assistant range (lone $, backslashes and
+                    # braces go), and this must stay what the dialog showed —
+                    # "Pay $250.00 to …?", a Windows path. str(): the text is
+                    # the model's tool input, and a sloppy model can send null.
+                    request = str(msg["content"]).rstrip()
+                    self._chat_insert(("Agent Request:\n", "assistant_label"),
+                                      (request + "\n\n" if request else "\n", "agent_request"),
+                                      blank_line_first=True)
                 elif msg["type"] == "user_prompt_echo":
-                    self._chat_insert(("\nYou:\n", "user_label"),
-                                      (msg["content"] + "\n\n", "user"))
+                    self._chat_insert(("You:\n", "user_label"),
+                                      (msg["content"] + "\n\n", "user"),
+                                      blank_line_first=True)
                 elif msg["type"] == "ci_code" and not self.show_activity.get():
                     pass
                 elif msg["type"] == "ci_code":

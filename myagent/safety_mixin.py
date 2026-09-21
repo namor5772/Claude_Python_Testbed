@@ -377,6 +377,13 @@ class SafetyMixin:
         event = threading.Event()
         result_holder = ["", []]  # [reply_text, [(b64, media_type, filename)]]
 
+        # Show the request in the chat display too (the echo's twin, below):
+        # the dialog is gone once answered, and the output pane — which is
+        # also the saved .txt transcript — otherwise records the reply but
+        # never the question. Emitted here so both callers are covered: the
+        # user_prompt tool (the model's text) and Convo mode (the stock text).
+        self.queue.put({"type": "user_prompt_request", "content": message})
+
         def ask():
             dlg = tk.Toplevel(self.root)
             self._prompt_dialog = dlg
