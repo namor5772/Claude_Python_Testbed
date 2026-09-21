@@ -77,20 +77,18 @@ class UIMixin:
         self._verbosity_label = None
         self._verbosity_combo = None
 
-        # Row 0: Chat toolbar — Instruction + START/STOP + model info + Save
+        # Row 0: Chat toolbar — START/STOP + Instruction + Save
         chat_toolbar = tk.Frame(self.root)
         chat_toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 0))
 
-        # Instruction / START / STOP are a "last pressed" group: their commands
+        # START / STOP / Instruction are a "last pressed" group: their commands
         # are wired by _track_toolbar_presses below, through the highlighter.
         # One shared font, so all three look identical at startup — only the
         # pressed one ever goes bold (its bold twin is derived from this).
+        # CREATED in their left-to-right order (START, STOP, Instruction — the
+        # user's order since 2026-09-21; Instruction used to come first):
+        # creation order is Tab order, so packing alone would not move it.
         toolbar_font = ("Arial", 10)
-        self.instruction_button = tk.Button(
-            chat_toolbar, text="Instruction", font=toolbar_font,
-        )
-        self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
-
         self._start_button = tk.Button(
             chat_toolbar, text="START", width=8, font=toolbar_font,
         )
@@ -107,10 +105,15 @@ class UIMixin:
         self._stop_button.config(disabledforeground=self._stop_button.cget("fg"))
         self._stop_button.pack(side=tk.LEFT, padx=(0, 8))
 
+        self.instruction_button = tk.Button(
+            chat_toolbar, text="Instruction", font=toolbar_font,
+        )
+        self.instruction_button.pack(side=tk.LEFT, padx=(0, 8))
+
         self._track_toolbar_presses(
-            (self.instruction_button, self.open_instruction_editor),
             (self._start_button, self._start_agent),
             (self._stop_button, self._stop_agent),
+            (self.instruction_button, self.open_instruction_editor),
         )
 
         self._update_title()
@@ -272,7 +275,9 @@ class UIMixin:
         # root class bindings (Escape leaves any field, Return presses any
         # button), this window's Alt+letter mnemonics (not underlined — the
         # letters are in the README), and the initial focus — on Instruction,
-        # where Tab would land first anyway.
+        # NOT on the first button: that is START since 2026-09-21, and Return
+        # presses the focused button, so a stray Enter on a freshly opened
+        # window would start a run; on Instruction it only opens the editor.
         install_class_bindings(self.root)
         bind_mnemonics(self.root, {
             "i": self.instruction_button,
