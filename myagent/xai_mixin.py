@@ -27,30 +27,45 @@ Deliberate differences from the OpenAI mixin:
    pre-scales coordinates, colliding with our scaling). A 400 naming a
    server tool strips it and retries, so models that reject a built-in
    degrade gracefully.
-3. **Reasoning knob per family** — ``XAI_REASONING_EFFORT`` maps model
-   families to their accepted ``reasoning.effort`` values (grok-4.3:
-   none/low/medium/high; grok-4.5 and grok-4.6: low..xhigh, always-reasoning
-   — "none" is HTTP 400, verified live 2026-07-17 for 4.5 and 2026-08-18
-   for 4.6; grok-4.20-multi-agent: low..xhigh, where the knob is agent
-   collaboration count). Families not in the table get no reasoning param at
-   all — the pinned ``-reasoning`` / ``-non-reasoning`` variants bake the
-   behaviour into the model id, and the floating ``grok-latest`` alias
-   (grok-4.6 since 2026-08) runs at its target's server default.
-   Reasoning deltas stream back as ``response.reasoning_text.delta`` or
-   ``response.reasoning_summary_text.delta`` depending on model; both feed the
-   Show Thinking pane.
+3. **Reasoning knob per model, read from the listing** — ``/v1/language-models``
+   (the listing ``_fetch_xai_models`` reads since 2026-09-23; its ``/v1/models``
+   twin carries ids alone) publishes each model's ``capabilities.reasoning_effort``
+   and ``input_modalities``, plus its aliases. The parsed records (``_xai_caps``:
+   model id AND every alias → ladder + vision flag) answer
+   ``_xai_reasoning_values`` / ``_is_xai_vision_model`` first; the static
+   ``XAI_REASONING_EFFORT`` / ``XAI_NON_VISION_PREFIXES`` tables (longest
+   prefix wins) answer only for a model the listing did not describe — a
+   failed fetch, or a model listed without a capabilities block (the
+   grok-4.20 variants). Live 2026-09-23: grok-4.3 none..xhigh, grok-4.5 /
+   4.6 / 4.7 low..xhigh (always-reasoning — "none" is HTTP 400),
+   grok-4.20-multi-agent low..xhigh from the table (the knob is agent
+   collaboration count). ``_xai_effective_effort`` is the ONE coercion of a
+   stale saved effort onto the model's ladder (nearest rung, OpenAI's rule),
+   shared by the request builder, the Debug dump, the Reasoning combobox and
+   the title. Every request carries ``reasoning.summary: "auto"`` — with an
+   ``effort`` only for a knob model — because the knobless pinned
+   ``-reasoning`` variant and grok-build-0.1 DO reason and stream their
+   summaries when asked (probed 2026-09-23), while the ``-non-reasoning``
+   variant simply streams none. Reasoning deltas arrive as
+   ``response.reasoning_text.delta`` or ``response.reasoning_summary_text.delta``
+   depending on model; both feed the Show Thinking pane.
 4. **Temperature alongside reasoning** — xAI accepts both (Gemini-style).
-   A BadRequest mentioning temperature or reasoning downgrades the request
-   (drop temperature → drop reasoning summary → drop reasoning) and retries,
-   so a future API tightening degrades gracefully instead of hard-failing.
+   ``_xai_model_params`` is the ONE builder of the temperature + reasoning
+   params behind both the live request and the Debug payload, so the dump
+   cannot drift from the wire. A BadRequest mentioning temperature or
+   reasoning downgrades the request (drop temperature → drop reasoning
+   summary → drop reasoning) and retries, so a future API tightening
+   degrades gracefully instead of hard-failing.
 """
 import json
 import time
 import threading
 
+import httpx
 import openai
 
 from myagent.constants import (
+    XAI_EFFORT_LADDER,
     XAI_FALLBACK_MODELS,
     XAI_NON_AGENTIC_SUBSTRINGS,
     XAI_NON_VISION_PREFIXES,
@@ -58,16 +73,62 @@ from myagent.constants import (
     _HAS_DESKTOP,
 )
 from myagent.helpers import responses_usage_dict
+from myagent.openai_mixin import OpenAIMixin
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
 class XAIMixin:
 
+    def _xai_model_caps(self):
+        """The per-model records the last successful /v1/language-models
+        fetch parsed (_fetch_xai_models): the model id AND each of its
+        aliases → {"reasoning_effort": ladder | None, "vision": bool}. Empty
+        until a fetch succeeds, and after one fails — the static tables
+        answer then."""
+        return getattr(self, "_xai_caps", None) or {}
+
+    @staticmethod
+    def _parse_xai_language_models(payload):
+        """(model_ids, caps) from a /v1/language-models body. Keeps the grok*
+        ids that can serve the agentic loop (XAI_NON_AGENTIC_SUBSTRINGS
+        dropped), sorted; caps maps each kept id and every alias it lists to
+        its record — a ladder ordered by XAI_EFFORT_LADDER when the entry
+        carries capabilities.reasoning_effort, else None (unadvertised: the
+        static table decides, see _xai_reasoning_values), and whether
+        input_modalities includes image."""
+        model_ids, caps = [], {}
+        for entry in (payload or {}).get("models") or []:
+            mid = entry.get("id") or ""
+            if not mid.startswith("grok"):
+                continue
+            if any(skip in mid for skip in XAI_NON_AGENTIC_SUBSTRINGS):
+                continue
+            ladder = (entry.get("capabilities") or {}).get("reasoning_effort") or None
+            if ladder:
+                ladder = sorted((str(v).lower() for v in ladder),
+                                key=lambda v: (XAI_EFFORT_LADDER.index(v)
+                                               if v in XAI_EFFORT_LADDER
+                                               else len(XAI_EFFORT_LADDER)))
+            record = {"reasoning_effort": ladder,
+                      "vision": "image" in (entry.get("input_modalities") or [])}
+            model_ids.append(mid)
+            caps[mid] = record
+            for alias in entry.get("aliases") or []:
+                caps.setdefault(alias, record)
+        model_ids.sort()
+        return model_ids, caps
+
     def _xai_reasoning_values(self, model_id=None):
         """Accepted reasoning.effort values for a Grok model, or None when the
-        family has no client-side knob. Longest prefix wins so
-        grok-4.20-multi-agent-0309 matches its own entry, not a shorter one."""
+        model has no client-side knob. The live listing's ladder when it
+        published one for this id (or for the model this id is an alias
+        of); else XAI_REASONING_EFFORT by longest prefix — so
+        grok-4.20-multi-agent-0309 (listed without capabilities) keeps its
+        table entry and does not fall through to a shorter one."""
         mid = model_id or self.model or ""
+        live = self._xai_model_caps().get(mid)
+        if live and live.get("reasoning_effort"):
+            return list(live["reasoning_effort"])
         best = None
         best_len = 0
         for prefix, values in XAI_REASONING_EFFORT.items():
@@ -76,33 +137,78 @@ class XAIMixin:
                 best_len = len(prefix)
         return best
 
+    def _xai_nearest_effort(self, requested, model_id=None):
+        """`requested` mapped onto the rungs the model accepts — OpenAI's
+        nearest-rung rule (_openai_nearest_effort): a supported value passes
+        through, a Claude Off / Adaptive becomes None where it exists
+        (grok-4.3) else the floor, a Max steps down to Xhigh, a None on an
+        always-reasoning tier steps up to Low, anything unknown takes the
+        floor. None when the model has no knob."""
+        values = self._xai_reasoning_values(model_id)
+        if not values:
+            return None
+        return OpenAIMixin._openai_nearest_effort(requested, values)
+
+    def _xai_effective_effort(self, model_id=None):
+        """The reasoning.effort that goes on the wire for the current model —
+        the saved effort when the model accepts it, else the nearest rung it
+        does — or None for a knobless model (no effort is sent). The ONE
+        coercion behind the request builder (_xai_model_params), the Debug
+        dump, the Reasoning combobox and the title."""
+        return self._xai_nearest_effort(getattr(self, "thinking_effort", ""), model_id)
+
+    def _xai_model_params(self):
+        """The temperature + reasoning params for the current Grok model —
+        the ONE builder behind both the live request (_stream_xai_call) and
+        the Debug payload (stream_worker's dump), so the dump cannot drift
+        from the wire. Temperature always (xAI takes it alongside reasoning);
+        reasoning.summary "auto" always — the knobless pinned -reasoning
+        variant and grok-build reason too, and stream their summaries only
+        when asked — with an effort for a knob model. The 400 ladder in
+        _stream_xai_call drops each in turn if a model refuses."""
+        reasoning = {}
+        effort = self._xai_effective_effort()
+        if effort:
+            reasoning["effort"] = effort
+        reasoning["summary"] = "auto"
+        return {"temperature": self.temperature, "reasoning": reasoning}
+
     def _is_xai_vision_model(self, model_id=None):
-        """False for text-only Grok families (grok-build, legacy grok-3 /
-        grok-code); every current chat tier (grok-4.x) takes image input."""
+        """Whether the model takes image input: the live listing's
+        input_modalities when it described this id (or its alias target),
+        else not a XAI_NON_VISION_PREFIXES family — a tuple empty since
+        2026-09-23, every served Grok language model being vision-capable."""
         mid = model_id or self.model or ""
+        live = self._xai_model_caps().get(mid)
+        if live is not None:
+            return bool(live.get("vision"))
         return not mid.startswith(XAI_NON_VISION_PREFIXES)
 
     def _fetch_xai_models(self):
-        """List Grok chat models from api.x.ai, dropping non-agentic entries
-        (image/video generation, embeddings) by substring."""
+        """List Grok language models from api.x.ai's /v1/language-models —
+        the listing that publishes each model's reasoning knob, input
+        modalities and aliases (its /v1/models twin carries ids alone) —
+        dropping non-agentic entries by substring, and keep the parsed
+        records on the instance (_xai_caps) for _xai_reasoning_values /
+        _is_xai_vision_model. A failed or empty fetch clears them, so the
+        static tables answer, and serves XAI_FALLBACK_MODELS."""
+        self._xai_caps = {}
+        self._xai_model_display_names = {}
         if not getattr(self, "xai_client", None):
             return list(XAI_FALLBACK_MODELS)
         try:
-            response = self.xai_client.models.list()
-            model_ids = []
-            for m in response.data:
-                mid = m.id
-                if not mid.startswith("grok"):
-                    continue
-                if any(skip in mid for skip in XAI_NON_AGENTIC_SUBSTRINGS):
-                    continue
-                model_ids.append(mid)
-            model_ids.sort()
-            self._xai_model_display_names = {mid: mid for mid in model_ids}
-            return model_ids if model_ids else list(XAI_FALLBACK_MODELS)
+            # The SDK's own transport (key, base URL, timeouts, retries) on
+            # an endpoint it has no method for: cast_to=httpx.Response hands
+            # back the raw response, and a 4xx / 5xx raises as usual.
+            response = self.xai_client.get("/language-models", cast_to=httpx.Response)
+            model_ids, caps = self._parse_xai_language_models(response.json())
         except Exception:
-            self._xai_model_display_names = {}
             return list(XAI_FALLBACK_MODELS)
+        if not model_ids:
+            return list(XAI_FALLBACK_MODELS)
+        self._xai_caps = caps
+        self._xai_model_display_names = {mid: mid for mid in model_ids}
+        return model_ids
 
     @staticmethod
     def _xai_usage_dict(usage):
@@ -290,19 +396,14 @@ class XAIMixin:
             "input": self._messages_to_responses(messages),
             "instructions": system_prompt,
             "store": False,
-            # xAI accepts temperature alongside reasoning (Gemini-style);
-            # the BadRequest ladder below drops it if a model refuses.
-            "temperature": self.temperature,
         }
+        # temperature + reasoning from the ONE builder the Debug dump also
+        # uses (a stale saved effort → the nearest rung the model accepts;
+        # the summary asked of every model); the BadRequest ladder below
+        # drops each in turn if a model refuses.
+        api_kwargs.update(self._xai_model_params())
         if responses_tools:
             api_kwargs["tools"] = responses_tools
-        values = self._xai_reasoning_values()
-        if values:
-            # A stale saved effort (e.g. "max" from an Anthropic instruction)
-            # coerces to the family default rather than erroring.
-            effort = (self.thinking_effort if self.thinking_effort in values
-                      else ("low" if "low" in values else values[0]))
-            api_kwargs["reasoning"] = {"effort": effort, "summary": "auto"}
 
         FIRST_CONTENT_TIMEOUT = 180
         WAITING_MSG_INTERVAL = 15
@@ -370,12 +471,17 @@ class XAIMixin:
                     r = api_kwargs["reasoning"]
                     if isinstance(r, dict) and "summary" in r:
                         # First downgrade: some models may reject the summary
-                        # request while accepting the effort itself.
-                        api_kwargs["reasoning"] = {k: v for k, v in r.items() if k != "summary"}
-                        self.queue.put({
-                            "type": "tool_info",
-                            "content": "Model rejected reasoning summary — retrying with effort only...\n",
-                        })
+                        # request while accepting the effort itself. On a
+                        # knobless model the summary is all there was, so
+                        # the whole parameter goes rather than an empty {}.
+                        stripped = {k: v for k, v in r.items() if k != "summary"}
+                        if stripped:
+                            api_kwargs["reasoning"] = stripped
+                            notice = "Model rejected reasoning summary — retrying with effort only...\n"
+                        else:
+                            del api_kwargs["reasoning"]
+                            notice = "Model rejected the reasoning summary — retrying without it...\n"
+                        self.queue.put({"type": "tool_info", "content": notice})
                         continue
                     del api_kwargs["reasoning"]
                     self.queue.put({

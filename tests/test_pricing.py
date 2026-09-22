@@ -139,11 +139,16 @@ class TestGetPricing(unittest.TestCase):
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.6"): {"input": 2e-06, "output": 6e-06},
+        # grok-4.7 (2026-09): the same $2/$6 tier — cost_in_usd_ticks matched
+        # the table to the digit on 2026-09-23 (103 uncached + 1152 cached
+        # at $0.50/M + 81 out = $0.001268)
+        ("xAI", "grok-4.7"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.20-multi-agent-0309"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-build-0.1"): {"input": 1e-06, "output": 2e-06},
-        # Aliases (live catalog 2026-07-17, re-checked 2026-08-18):
-        # grok-code-fast-1 folds into grok-build-0.1's price; grok-latest
-        # floats — it served grok-4.3 until 2026-08 and grok-4.6 since, so
+        # Aliases (live catalog 2026-07-17, re-checked 2026-08-18 and
+        # 2026-09-23): grok-code-fast-1 folds into grok-build-0.1's price;
+        # grok-latest floats — grok-4.3 until 2026-08, grok-4.6 then,
+        # grok-4.7 since 2026-09 (the response's model field says so) — so
         # its row tracks the current target; the longer grok-build-latest
         # entry (re-aliased to grok-4.5) must win over the cheaper
         # grok-build prefix.

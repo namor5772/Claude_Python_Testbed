@@ -1554,45 +1554,78 @@ OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
 # input/tool shapes as OpenAI's — so xAI reuses _messages_to_responses /
 # _tools_to_responses). Requires XAI_API_KEY. Catalog, capabilities and
 # reasoning matrix verified against docs.x.ai 2026-07; grok-4.6 (released
-# 2026-08-12) added after a live /v1/models + reasoning probe on 2026-08-18.
+# 2026-08-12) added after a live /v1/models + reasoning probe on 2026-08-18;
+# grok-4.7 (created 2026-09-01) found by the 2026-09-23 audit, which also
+# moved model discovery from /v1/models to /v1/language-models — the listing
+# that PUBLISHES each model's reasoning knob (capabilities.reasoning_effort
+# + default_reasoning_effort), its input modalities and its aliases — so a
+# new tier gets its Reasoning combobox the day it appears instead of waiting
+# for the tables below, which are now the OFFLINE fallback (a failed fetch,
+# or an id the listing does not carry).
 XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1"
-XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.5", "grok-4.6",
+XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7",
                        "grok-4.20-0309-reasoning",
                        "grok-4.20-0309-non-reasoning",
                        "grok-4.20-multi-agent-0309", "grok-build-0.1"]
 XAI_DEFAULT_MODEL = XAI_FALLBACK_MODELS[0]
-# models.list() entries that can't serve the agentic loop (image/video
+# Listing entries that can't serve the agentic loop (image/video
 # generation, embeddings, TTS) — dropped by substring in _fetch_xai_models.
 XAI_NON_AGENTIC_SUBSTRINGS = ("-image", "imagine", "embed", "-video", "-tts")
 # reasoning_effort support by model family (longest prefix wins; families
-# absent here have no client-side knob and are sent no reasoning param).
-# grok-4.3: none/low/medium/high — low is the API default, "none" disables
-# reasoning. grok-4.5: low/medium/high/xhigh — always-reasoning, "none" is
-# HTTP 400 (verified live 2026-07-17; aliases grok-4.5-latest +
+# absent here have no client-side knob and are sent no effort) — the OFFLINE
+# fallback behind _xai_reasoning_values, consulted only for a model the live
+# listing did not describe: a fetch that failed, or a model the listing
+# carries WITHOUT a capabilities block (grok-4.20-multi-agent — probed
+# 2026-09-23: the knob is unvalidated there, even "banana" is accepted, but
+# it is honoured — xhigh billed 6x low's tokens — so the table keeps it).
+# grok-4.3: none/low/medium/high/xhigh — low is the API default, "none"
+# disables reasoning, xhigh appeared in the listing by 2026-09-23 and is
+# accepted live. grok-4.5: low/medium/high/xhigh — always-reasoning, "none"
+# is HTTP 400 (verified live 2026-07-17; aliases grok-4.5-latest +
 # grok-build-latest). grok-4.6 (the 2026-08 flagship, 500K context, vision,
 # no aliases of its own): the same low..xhigh always-reasoning matrix —
 # "none" is HTTP 400 "This model does not support `reasoning_effort` value
-# `none`", every other value accepted, verified live 2026-08-18.
+# `none`", every other value accepted, verified live 2026-08-18. grok-4.7
+# (2026-09, the same $2/$6 tier): the same matrix, the same 400 on "none",
+# verified live 2026-09-23 — with temperature alongside, image input, and
+# reasoning summaries streaming as response.reasoning_summary_text.delta.
+# The API default is low on grok-4.3 and HIGH on 4.5 / 4.6 / 4.7, but the
+# default is never relied on: an effort is always sent for a knob family
+# (a stale saved value → the nearest rung, _xai_effective_effort).
 # grok-4.20-multi-agent: the knob sets agent collaboration count rather than
-# depth — no "none". The pinned grok-4.20-*-reasoning / -non-reasoning
-# variants have no knob at all, and neither do the aliases (bare grok-4.20 →
-# the pinned reasoning variant; grok-latest → whatever xAI currently calls
-# latest, grok-4.6 since 2026-08, running its server-side default effort —
-# a floating alias never gets a knob, so a re-point can't strand a saved
-# effort value).
+# depth — no "none" (it is accepted but does not stop the reasoning). The
+# pinned grok-4.20-*-reasoning / -non-reasoning variants have no knob at
+# all (HTTP 400 "does not support parameter reasoningEffort"), nor does
+# grok-build-0.1 (same 400) — both the pinned reasoning variant and
+# grok-build DO reason, and stream their summaries when asked, so every
+# xAI request carries reasoning.summary "auto" whether or not it carries an
+# effort. Neither do the aliases (bare grok-4.20 → the pinned reasoning
+# variant; grok-latest → whatever xAI currently calls latest — grok-4.7
+# since 2026-09, grok-4.6 in 2026-08, grok-4.3 before — running its
+# server-side default effort — a floating alias never gets a knob, so a
+# re-point can't strand a saved effort value; the listing names it under
+# no model, so the live path never gives it one either).
 XAI_REASONING_EFFORT = {
     "grok-4.20-multi-agent": ["low", "medium", "high", "xhigh"],
-    "grok-4.3": ["none", "low", "medium", "high"],
+    "grok-4.3": ["none", "low", "medium", "high", "xhigh"],
     "grok-4.5": ["low", "medium", "high", "xhigh"],
     "grok-4.6": ["low", "medium", "high", "xhigh"],
+    "grok-4.7": ["low", "medium", "high", "xhigh"],
 }
+# The ladder every knob is ordered by (the listing's order is not
+# promised): quietest first, so nearest-rung coercion can step to a floor
+# or a ceiling. Shared with OpenAI's _openai_nearest_effort.
+XAI_EFFORT_LADDER = ("none", "low", "medium", "high", "xhigh")
 # Text-only Grok families (no image input) — the weak-desktop-combo warning
-# fires for these. Every current chat tier (grok-4.3 / grok-4.5 / grok-4.6 /
-# grok-4.20) is vision-capable; grok-build-0.x (docs list it text-only) and its
-# grok-code-fast alias are not. The prefix is "grok-build-0", NOT
-# "grok-build": grok-build-latest re-aliased to grok-4.5 (vision) in the
-# 2026-07 catalog, so the shorter prefix would false-flag it.
-XAI_NON_VISION_PREFIXES = ("grok-build-0", "grok-code")
+# fires for these — the OFFLINE fallback behind _is_xai_vision_model (the
+# live listing's input_modalities decides for any model it describes).
+# EMPTY since the 2026-09-23 audit: every Grok language model the API
+# serves lists text + image input, INCLUDING grok-build-0.1 and its
+# grok-code-fast aliases (the docs once called it text-only; live it read a
+# red test square as "Red" — and the 2026-07 grok-build-latest re-alias to
+# grok-4.5 made the shorter "grok-build" prefix wrong even then). The tuple
+# stays so a future text-only tier is one entry away.
+XAI_NON_VISION_PREFIXES = ()
 # ── Moonshot AI (Kimi models) ─────────────────────────────────────────────────
 # Provider label in the UI/state: "Moonshot" (the company, matching the
 # Anthropic/OpenAI/xAI convention) — the constants and mixin keep the KIMI_*/
@@ -3406,28 +3439,31 @@ GEMINI_PRICING = {
 GENERIC_PRICING_PREFIXES = {"Google": ("gemini-3",)}
 # xAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output.
-# Verified LIVE 2026-07-17 (re-verified 2026-08-18 and 2026-08-25) against /v1/models' own
-# price fields (unit = $1/10000 per MTok: grok-4.3 reports 12500/25000 =
-# $1.25/$2.50, grok-4.5 and grok-4.6 both report 20000/60000 = $2/$6). The
-# legacy families (grok-4 / -fast, grok-3, grok-2) are fully retired — the
-# API no longer serves them, and unknown ids are rejected, so they can never
-# bill. grok-code-fast survives only as an ALIAS of grok-build-0.1 at
-# grok-build's price. Cached input bills at $0.20/M ($0.30/M for grok-4.5,
-# $0.50/M for grok-4.6) — not tracked, the 2-tuple treats all input at full
-# rate, a slight overestimate; input above 200K tokens bills double (table
-# keeps the ≤200K tier, same convention as gemini-3.1-pro). The floating
-# grok-latest alias moved from grok-4.3 to grok-4.6 with the 2026-08
-# catalog — its row tracks the current target (the table is only the
-# fallback: xAI's per-call cost_in_usd_ticks is authoritative regardless).
+# Verified LIVE 2026-07-17 (re-verified 2026-08-18, 2026-08-25 and 2026-09-23)
+# against the listing's own price fields (unit = $1/10000 per MTok: grok-4.3
+# reports 12500/25000 = $1.25/$2.50, grok-4.5, grok-4.6 and grok-4.7 all
+# report 20000/60000 = $2/$6). The legacy families (grok-4 / -fast, grok-3,
+# grok-2) are fully retired — the API no longer serves them, and unknown ids
+# are rejected, so they can never bill. grok-code-fast survives only as an
+# ALIAS of grok-build-0.1 at grok-build's price. Cached input bills at
+# $0.20/M ($0.30/M for grok-4.5, $0.50/M for grok-4.6 and grok-4.7) — not
+# tracked, the 2-tuple treats all input at full rate, a slight overestimate;
+# input above 200K tokens bills double (table keeps the ≤200K tier, same
+# convention as gemini-3.1-pro). The floating grok-latest alias moved from
+# grok-4.3 to grok-4.6 with the 2026-08 catalog and to grok-4.7 by
+# 2026-09-23 (the response's own model field says so) — its row tracks the
+# current target (the table is only the fallback: xAI's per-call
+# cost_in_usd_ticks is authoritative regardless).
 XAI_PRICING = {
     "grok-4.3":          (1.25, 2.50),
     "grok-4.5":          (2.00, 6.00),
     "grok-4.6":          (2.00, 6.00),   # 2026-08 flagship; cached $0.50/M, x2 above 200K
+    "grok-4.7":          (2.00, 6.00),   # 2026-09 flagship; the same rates as 4.6 (cost_in_usd_ticks matched to the digit 2026-09-23)
     "grok-4.20":         (1.25, 2.50),   # covers all three 4.20 variants + bare alias
     "grok-build-latest": (2.00, 6.00),   # re-aliased to grok-4.5 in the 2026-07 catalog
     "grok-build":        (1.00, 2.00),
     "grok-code-fast":    (1.00, 2.00),   # alias of grok-build-0.1
-    "grok-latest":       (2.00, 6.00),   # alias of grok-4.6 since 2026-08 (was grok-4.3)
+    "grok-latest":       (2.00, 6.00),   # alias of grok-4.7 since 2026-09 (grok-4.6 in 2026-08, grok-4.3 before)
 }
 # Moonshot AI (Kimi) pricing (USD per million tokens)
 # Each entry: (input_price, output_price) — reasoning tokens bill as output,

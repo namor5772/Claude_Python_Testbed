@@ -189,6 +189,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._openai_model_display_names = {}
         self._gemini_model_display_names = {}
         self._xai_model_display_names = {}
+        self._xai_caps = {}  # per-model knob + vision records from /v1/language-models (xai_mixin)
         self._kimi_model_display_names = {}
         self._ollama_model_display_names = {}
         self._model_display_names = {}

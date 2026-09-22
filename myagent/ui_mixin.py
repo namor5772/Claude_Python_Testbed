@@ -466,11 +466,13 @@ class UIMixin:
                 self._verbosity_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
             elif support == "extended" and self.provider == "xAI":
-                # Grok models with a reasoning_effort knob (grok-4.3:
-                # None/Low/Medium/High; grok-4.5 and grok-4.20-multi-agent:
-                # Low..Xhigh — 4.5 is always-reasoning, and the multi-agent
-                # knob is agent collaboration count). Unlike OpenAI,
-                # xAI accepts temperature alongside reasoning, so
+                # Grok models with a reasoning_effort knob — the ladder the
+                # live /v1/language-models listing publishes for the model
+                # (grok-4.3: None..Xhigh; grok-4.5 / 4.6 / 4.7: Low..Xhigh,
+                # always-reasoning), else XAI_REASONING_EFFORT's
+                # (grok-4.20-multi-agent: Low..Xhigh, the knob being agent
+                # collaboration count). Unlike OpenAI, xAI accepts
+                # temperature alongside reasoning, so
                 # _on_thinking_mode_changed packs the temp widgets after the combo.
                 self._thinking_mode_label.config(text="Reasoning")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
@@ -479,9 +481,12 @@ class UIMixin:
                 self._thinking_mode_combo["values"] = values
                 current = self._thinking_mode_var.get()
                 if current not in values:
-                    # Default to Low — xAI's documented default effort for
-                    # grok-4.3, and the floor where "None" doesn't exist.
-                    self._thinking_mode_var.set("Low" if "Low" in values else values[0])
+                    # The same nearest-rung rule the request builder applies
+                    # (_xai_effective_effort): a Claude Off / Adaptive → None
+                    # where it exists (grok-4.3) else Low, a Max → Xhigh, a
+                    # None carried onto an always-reasoning tier → Low.
+                    self._thinking_mode_var.set(
+                        self._xai_nearest_effort(current).capitalize())
                 self._on_thinking_mode_changed()
             elif support == "extended" and self.provider == "Moonshot":
                 # kimi-k3: always-reasoning, sparse Low/High/Max ladder (no
@@ -576,10 +581,12 @@ class UIMixin:
         if self.provider == "Google":
             return "adaptive" if self._is_gemini_thinking_model(mid) else None
         if self.provider == "xAI":
-            # Grok families with a reasoning_effort knob get the OpenAI-style
-            # "extended" mode combobox; the rest (pinned -reasoning /
-            # -non-reasoning variants, legacy grok-4 / grok-2) have no
-            # client-side knob — reasoning behaviour is baked into the id.
+            # Grok models with a reasoning_effort knob — per the live listing
+            # first, the static table behind it — get the OpenAI-style
+            # "extended" mode combobox; the rest (the pinned -reasoning /
+            # -non-reasoning variants, grok-build, the floating grok-latest)
+            # have no client-side knob — reasoning behaviour is baked into
+            # the id (the reasoning ones still stream their summaries).
             return "extended" if self._xai_reasoning_values(mid) else None
         if self.provider == "Moonshot":
             # kimi-k3 has the reasoning_effort knob (low/high/max) → the
@@ -1000,8 +1007,9 @@ class UIMixin:
             if shown == "none" and self._gpt5_supports_temp_at_none():
                 parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "xAI":
-            # Mirror _stream_xai_call: reasoning knob + temperature always sent.
-            parts.append(f"reasoning={mode.capitalize() or 'Low'}")
+            # Mirror _xai_model_params: the effort that goes on the wire (a
+            # stale saved value → the nearest rung) + temperature always sent.
+            parts.append(f"reasoning={self._xai_effective_effort().capitalize()}")
             parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "Moonshot":
             # kimi-k3: reasoning_effort only — Kimi never takes temperature.

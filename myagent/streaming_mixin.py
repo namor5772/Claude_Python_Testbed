@@ -303,14 +303,11 @@ class StreamingMixin:
                 params, _notice = self._openai_model_params()
                 payload.update(params)
             else:
-                # xAI — mirror _stream_xai_call: temperature always, reasoning
-                # only for families with an effort knob.
-                payload["temperature"] = self.temperature
-                values = self._xai_reasoning_values()
-                if values:
-                    effort = (self.thinking_effort if self.thinking_effort in values
-                              else ("low" if "low" in values else values[0]))
-                    payload["reasoning"] = {"effort": effort, "summary": "auto"}
+                # xAI — the same builder _stream_xai_call uses (temperature
+                # always; reasoning.summary always, with an effort only for
+                # a knob model), read-only here — the dump shows exactly
+                # what the wire will carry.
+                payload.update(self._xai_model_params())
         elif self.provider == "Moonshot":
             # Chat Completions format (Kimi has no Responses endpoint) — mirror
             # _stream_kimi_call: system message first, tool results as role:
@@ -930,8 +927,10 @@ class StreamingMixin:
                     "(or any gemini-3.x) for desktop work."
                 )
         elif self.provider == "xAI":
-            # grok-build and the legacy grok-3 / grok-code families are
-            # text-only — they cannot see screenshots at all.
+            # No Grok language model the API serves is text-only any more
+            # (the live listing's input_modalities decides — grok-build-0.1
+            # included since the 2026-09-23 audit); the branch stays for the
+            # next one that is.
             if not self._is_xai_vision_model():
                 return (
                     f"{self.model} is a text-only model — it cannot see screenshots. "
