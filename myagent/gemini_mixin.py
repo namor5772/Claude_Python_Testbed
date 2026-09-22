@@ -175,18 +175,45 @@ class GeminiMixin:
                 self._clean_schema_for_gemini(item)
 
     @staticmethod
-    def _normalize_gemini_args(args_dict):
-        """Normalize Gemini protobuf args to plain Python types.
+    def _normalize_gemini_args(args_dict, properties=None):
+        """Normalize Gemini protobuf args to plain Python types, guided by
+        the tool's declared parameter types.
 
         Protobuf Struct returns all numbers as float64.  Edge cases
         (especially when schema enum types are mismatched) can produce
         string-encoded numbers like "500.0" that break downstream
         int(x) calls in shared tool methods.  Convert string numbers
-        back to int/float; leave real strings (e.g. "left") untouched.
+        back to int/float — but ONLY for parameters the schema declares
+        numeric.  The first cut converted every numeric-looking string,
+        so type_text(text="12345") — a docket number, exactly what a
+        form-filling instruction types — arrived as the int 12345 and
+        `len(text)` killed the run (live 2026-09-22, gemini-3.8-flash,
+        Process_Dockets, call #47).  A declared string is therefore never
+        parsed, and a NUMBER Gemini sends for a declared string (it does,
+        for numeric-looking values) is stringified — an integral float as
+        its integer form, so 12345.0 types "12345", not "12345.0".
+
+        `properties` is the tool's JSON-Schema ``properties`` map; a
+        parameter not in it (or no map at all — an MCP tool that slipped
+        the schema, an older caller) keeps the original numeric-string
+        heuristic.
         """
+        properties = properties or {}
         result = {}
         for k, v in args_dict.items():
-            if isinstance(v, str):
+            declared = (properties.get(k) or {}).get("type")
+            if isinstance(declared, list):  # JSON-Schema union, e.g. ["string", "null"]
+                declared = next((t for t in declared if t != "null"), None)
+            if declared == "string":
+                if isinstance(v, bool):
+                    result[k] = v
+                elif isinstance(v, float) and v == int(v):
+                    result[k] = str(int(v))
+                elif isinstance(v, (int, float)):
+                    result[k] = str(v)
+                else:
+                    result[k] = v
+            elif declared in ("integer", "number", None) and isinstance(v, str):
                 try:
                     fv = float(v)
                     result[k] = int(fv) if fv == int(fv) else fv
@@ -397,6 +424,13 @@ class GeminiMixin:
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
         gemini_tools = [genai_types.Tool(function_declarations=self._tools_to_gemini(tools))] if tools else None
+        # Declared parameter types per tool, for _normalize_gemini_args: a
+        # string that looks like a number must stay a string where the
+        # schema says string (type_text's docket numbers).
+        tool_properties = {
+            t["name"]: (t.get("input_schema") or {}).get("properties") or {}
+            for t in (tools or [])
+        }
         gemini_contents = self._messages_to_gemini(messages)
 
         # Build config
@@ -467,7 +501,9 @@ class GeminiMixin:
                             tc_entry = {
                                 "name": fc.name,
                                 "id": tool_id,
-                                "input": self._normalize_gemini_args(dict(fc.args)) if fc.args else {},
+                                "input": (self._normalize_gemini_args(
+                                    dict(fc.args), tool_properties.get(fc.name))
+                                    if fc.args else {}),
                             }
                             # Preserve thought_signature for thinking models (required by Gemini API)
                             ts = getattr(part, "thought_signature", None)

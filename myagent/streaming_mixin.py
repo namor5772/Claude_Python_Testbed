@@ -522,6 +522,26 @@ class StreamingMixin:
             })
         return tools
 
+    def _run_tool(self, block):
+        """_execute_tool with a crash INSIDE a tool turned into an error
+        result for the model, instead of the end of the run.
+
+        Every do_* method catches its own exceptions and returns an error
+        string, so what reaches here is a bug in the dispatch itself — an
+        argument of an unexpected type, typically (2026-09-22: Gemini's
+        type_text(text=12345) met `len(text)` in the label preview and 47
+        calls of a docket run died on "object of type 'int' has no len()").
+        The model sees a tool_result naming the exception and retries with
+        the corrected argument; a warning line records it in the pane.
+        """
+        try:
+            return self._execute_tool(block)
+        except Exception as e:
+            self.queue.put({"type": "warning", "content":
+                f"⚠ {block.name} raised {type(e).__name__}: {e}\n"})
+            return (f"Error executing {block.name}: {type(e).__name__}: {e}. "
+                    "Check the argument types against the tool's schema and retry.")
+
     def _execute_tool(self, block):
         """Execute a single tool_use block and return the result.
 
@@ -1408,7 +1428,7 @@ class StreamingMixin:
                         with concurrent.futures.ThreadPoolExecutor(max_workers=len(parallel_items)) as executor:
                             future_map = {}
                             for idx, block in parallel_items:
-                                future = executor.submit(self._execute_tool, block)
+                                future = executor.submit(self._run_tool, block)
                                 future_map[future] = (idx, block)
                             for future in concurrent.futures.as_completed(future_map):
                                 idx, block = future_map[future]
@@ -1422,7 +1442,7 @@ class StreamingMixin:
                     # Execute sequential tools one at a time, in order
                     had_user_prompt = False
                     for idx, block in sequential_items:
-                        result = self._execute_tool(block)
+                        result = self._run_tool(block)
                         tool_results_ordered[idx] = {
                             "type": "tool_result",
                             "tool_use_id": block.id,
