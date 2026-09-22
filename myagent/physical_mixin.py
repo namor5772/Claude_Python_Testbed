@@ -1,9 +1,10 @@
-"""Physical tools — sensing the room the computer sits in (OpenCV).
+"""Physical tools — sensing the room the computer sits in (OpenCV, PortAudio).
 
-One tool today: camera_capture, a still photo from a webcam, handed to the
-model the way a screenshot is (a text block + an image block in the
-tool_result). It is its own tool set behind its own checkbox (Physical), not a
-Desktop tool — see the PHYSICAL_TOOLS comment in constants.py.
+Two tools: camera_capture, a still photo from a webcam, handed to the model the
+way a screenshot is (a text block + an image block in the tool_result), and
+microphone_listen (2026-09-22), a few seconds of the room's sound returned as a
+transcript. They are their own tool set behind their own checkbox (Physical),
+not Desktop tools — see the PHYSICAL_TOOLS comment in constants.py.
 
 Architecture notes:
 - Stateless per call: the camera is opened, read and RELEASED inside one call,
@@ -37,9 +38,33 @@ Architecture notes:
 - cv2 is imported at the first capture, not at startup (_HAS_CAMERA in
   constants is a find_spec probe), and all helpers are prefixed _camera_
   against flat-namespace MRO shadowing.
+- macOS asks for the camera ONCE per launching app, and only when asked to:
+  OpenCV's AVFoundation backend checks the permission before it touches the
+  device and, while macOS has not been asked, sends the request and fails the
+  open — from ANY thread, the prompt being the system's, not this process's.
+  So on a Mac the first call asks (a throwaway open, no camera light), waits
+  for the answer (CAMERA_AUTH_WAIT, STOP-interruptible) and then takes the
+  photo, all in one call. OPENCV_AVFOUNDATION_SKIP_AUTH=1, set here until
+  2026-09-22, made OpenCV fail WITHOUT asking: the app never appeared under
+  System Settings > Camera (macOS lists an app there only after its first
+  request, so it cannot be granted by hand) and no Mac photo was possible.
+- microphone_listen reuses voice input's pieces (voice_mixin) end to end: the
+  same recorder, the same Voice Setup settings (provider / model / language /
+  vocabulary hint / microphone) and the same transcription path, so what the
+  Mike button hears the tool hears. Its PortAudio calls — import, rescan,
+  stream open and close — are marshalled onto the Tk thread (voice_mixin's
+  rule: PortAudio's Windows backends bind COM to the initialising thread, and
+  the Tk thread is the one that never goes away); the worker only waits, in
+  0.1 s steps, so STOP ends the listening at once. Silence (the Mike button's
+  VOICE_SILENCE_PEAK) is reported and sent nowhere — a listening loop mostly
+  hears nothing, and speech models invent words from silence. The
+  transcription's estimated cost is shown in the result, not added to the
+  run's token accounting (the Mike button does the same).
 """
 
 import base64
+import ctypes
+import ctypes.util
 import os
 import sys
 import threading
@@ -47,11 +72,20 @@ import time
 
 from myagent.constants import IS_WINDOWS
 from myagent.helpers import CAMERA_RESULT_MARKER, normalize_save_path
+from myagent.voice_mixin import VOICE_MIN_SECONDS, VOICE_SILENCE_PEAK, _VoiceDictation
 
 
 class _CameraStopped(Exception):
     """STOP was pressed while the camera was settling — not a camera fault,
     so it must not be answered with the troubleshooting hint."""
+
+
+class _MicStopped(Exception):
+    """STOP was pressed while listening — not a microphone fault."""
+
+
+#: (objc_msgSend, its arguments) once resolved — see _camera_mac_auth_status.
+_MAC_CAMERA_STATUS_CALL = None
 
 
 class PhysicalMixin:
@@ -71,6 +105,9 @@ class PhysicalMixin:
     #: The self-timer's ceiling (delay_seconds) — run_command's own maximum, so
     #: one tool call can never park the agent for longer than a command could.
     CAMERA_MAX_DELAY = 600.0
+    #: macOS: how long ONE call waits for the camera-permission prompt to be
+    #: answered (someone at the desk; an unattended run fails with a hint).
+    CAMERA_AUTH_WAIT = 60.0
     #: Mean brightness under which the photo is reported as black.
     CAMERA_DARK_MEAN = 6.0
     CAMERA_JPEG_QUALITY = 85        # the copy the model sees
@@ -81,6 +118,16 @@ class PhysicalMixin:
     #: and the extra bytes only slow the request down.
     CAMERA_IMAGE_CAPS = {"Google": (2048, 4_000_000), "OpenAI": (2048, 5_000_000)}
     CAMERA_IMAGE_CAP_DEFAULT = (1568, 1_150_000)
+
+    #: microphone_listen without a `seconds` argument.
+    MIC_DEFAULT_SECONDS = 5.0
+    #: ...and its ceiling — the camera timer's and run_command's, for the same
+    #: reason: one call never parks the agent for longer than a command could.
+    MIC_MAX_SECONDS = 600.0
+    #: How long the worker waits for the Tk thread to open or close the
+    #: stream (the first sounddevice import is ~0.5 s) before giving up.
+    MIC_TK_TIMEOUT = 15.0
+    MIC_RESULT_PREFIX = "Microphone transcript"
 
     # ── Pure helpers (unit-tested in tests/test_physical_mixin.py) ───────
 
@@ -149,14 +196,22 @@ class PhysicalMixin:
             return [("AVFoundation", cv2.CAP_AVFOUNDATION)]
         return [("default", cv2.CAP_ANY)]
 
-    @staticmethod
-    def _camera_failure_hint():
-        """What to check when no camera answers, for the platform at hand."""
+    def _camera_failure_hint(self):
+        """What to check when no camera answers, for the platform at hand — on
+        macOS, worded by the permission state the OS reports."""
         if IS_WINDOWS:
             return ("Check that a camera is attached, that no other app is using it, "
                     "and Settings > Privacy & security > Camera ('Let desktop apps "
                     "access your camera').")
         if sys.platform == "darwin":
+            status = self._camera_mac_auth_status()
+            if status == 2:
+                return ("macOS has DENIED the camera to the app that launched MyAgent: "
+                        "turn it on in System Settings > Privacy & Security > Camera, "
+                        "then try again.")
+            if status == 0:
+                return ("macOS is asking for camera permission for the app that "
+                        "launched MyAgent: answer the prompt, then try again.")
             return ("Check that a camera is attached, that no other app is using it, "
                     "and System Settings > Privacy & Security > Camera for the app "
                     "that launched MyAgent.")
@@ -169,11 +224,14 @@ class PhysicalMixin:
         """OpenCV, imported on first use. Raises RuntimeError with the install
         hint when it is missing — the single guard for the whole tool."""
         if sys.platform == "darwin":
-            # OpenCV's own permission request spins the MAIN thread's run loop
-            # and fails from any other thread; skipped, the system asks on its
-            # own at the first open. Read when a capture opens, so setting it
-            # here is early enough even with cv2 already imported.
-            os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
+            # OpenCV must ASK for the camera: its AVFoundation backend checks
+            # the permission before touching the device and, while macOS has
+            # not been asked, sends the request and fails the open — from any
+            # thread (the prompt is the system's; the main-thread run-loop spin
+            # OpenCV wants is for a script about to exit). "1" here made it
+            # fail without asking, so no Mac ever saw the prompt. Read at each
+            # open, so setting it here is early enough with cv2 already imported.
+            os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "0"
         try:
             import cv2
         except Exception as e:
@@ -187,6 +245,55 @@ class PhysicalMixin:
         except Exception:
             pass
         return cv2
+
+    # ── macOS camera permission ──────────────────────────────────────────
+
+    @staticmethod
+    def _camera_mac_auth_status():
+        """macOS: this process's camera permission, read through the ObjC
+        runtime (no PyObjC) — 0 not determined, 1 restricted, 2 denied,
+        3 authorized; None off macOS or when the lookup fails. "This process"
+        is the RESPONSIBLE app: the launcher .app, Terminal, or the python
+        binary itself for a launchd job."""
+        global _MAC_CAMERA_STATUS_CALL
+        if sys.platform != "darwin":
+            return None
+        try:
+            if _MAC_CAMERA_STATUS_CALL is None:
+                objc = ctypes.CDLL(ctypes.util.find_library("objc"))
+                av = ctypes.CDLL("/System/Library/Frameworks/AVFoundation.framework/AVFoundation")
+                objc.objc_getClass.restype = ctypes.c_void_p
+                objc.objc_getClass.argtypes = [ctypes.c_char_p]
+                objc.sel_registerName.restype = ctypes.c_void_p
+                objc.sel_registerName.argtypes = [ctypes.c_char_p]
+                send = objc.objc_msgSend
+                send.restype = ctypes.c_long
+                send.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+                args = (objc.objc_getClass(b"AVCaptureDevice"),
+                        objc.sel_registerName(b"authorizationStatusForMediaType:"),
+                        ctypes.c_void_p.in_dll(av, "AVMediaTypeVideo").value)
+                _MAC_CAMERA_STATUS_CALL = (send, args)
+            send, args = _MAC_CAMERA_STATUS_CALL
+            return int(send(*args))
+        except Exception:
+            return None
+
+    def _camera_mac_authorize(self, cv2, index):
+        """macOS only: when this process has never asked for the camera, ask
+        now and wait for the answer, so the FIRST photo is taken in the same
+        call. A throwaway open sends the request (OpenCV fails it at once,
+        before the device is touched — no camera light) and the permission is
+        polled until the prompt is answered, up to CAMERA_AUTH_WAIT; STOP ends
+        the wait. Authorized, denied, restricted or unreadable: nothing to wait
+        for — the grab that follows succeeds or fails with the worded hint."""
+        if self._camera_mac_auth_status() != 0:
+            return
+        cv2.VideoCapture(index, cv2.CAP_AVFOUNDATION).release()
+        deadline = time.monotonic() + self.CAMERA_AUTH_WAIT
+        while self._camera_mac_auth_status() == 0 and time.monotonic() < deadline:
+            if getattr(self, "stop_requested", False):
+                raise _CameraStopped()
+            time.sleep(0.25)
 
     def _camera_grab(self, cv2, index, cancel):
         """Open camera `index`, let the exposure settle, return the frame.
@@ -343,6 +450,8 @@ class PhysicalMixin:
                 return f"camera_capture refused: {problem}"
         try:
             cv2 = self._camera_cv2()      # before the wait: a missing OpenCV fails at once
+            if sys.platform == "darwin":  # ...and the permission prompt comes while someone is there
+                self._camera_mac_authorize(cv2, index)
             if delay:
                 self._camera_wait(delay)
             frame, info = self._camera_grab_guarded(cv2, index)
@@ -396,3 +505,137 @@ class PhysicalMixin:
             {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
                                          "data": b64_data}},
         ]
+
+    # ── Microphone ───────────────────────────────────────────────────────
+
+    def _mic_seconds(self, value):
+        """A seconds argument -> (seconds, note, error). Absent is the default;
+        more than MIC_MAX_SECONDS is clamped, and `note` says so."""
+        if value is None or value == "":
+            return self.MIC_DEFAULT_SECONDS, "", None
+        try:
+            seconds = float(value)
+        except (TypeError, ValueError):
+            return 0.0, "", f"'seconds' must be a number, got {value!r}."
+        if seconds != seconds or seconds <= 0:          # NaN or nothing to hear
+            return 0.0, "", "'seconds' must be greater than 0."
+        if seconds > self.MIC_MAX_SECONDS:
+            return self.MIC_MAX_SECONDS, f"seconds was capped at {self.MIC_MAX_SECONDS:g}", None
+        return seconds, "", None
+
+    def _mic_on_tk_thread(self, fn):
+        """Run `fn` on the Tk thread and return its result (or re-raise), so
+        every PortAudio call keeps to voice_mixin's rule. Without a root (a
+        bare mixin in a test) it simply runs here."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return fn()
+        done = threading.Event()
+        box = {}
+
+        def run():
+            try:
+                box["result"] = fn()
+            except BaseException as e:
+                box["error"] = e
+            finally:
+                done.set()
+
+        root.after(0, run)
+        if not done.wait(self.MIC_TK_TIMEOUT):
+            raise RuntimeError("the microphone could not be opened: the window is not responding")
+        if "error" in box:
+            raise box["error"]
+        return box["result"]
+
+    @staticmethod
+    def _mic_live(delta):
+        """Count the tool's stream where the Mike button counts its own, so a
+        press during a listen does not re-initialise PortAudio under it."""
+        _VoiceDictation.live = max(0, _VoiceDictation.live + delta)
+
+    def _mic_open(self, cfg):
+        """Tk thread: sounddevice (rescanned, so a microphone plugged in
+        mid-session is found), the Voice Setup microphone, an open stream
+        -> (recorder, the microphone's name, a note)."""
+        sd = self._voice_sd(rescan=True)
+        devices = list(sd.query_devices())
+        device = self._voice_resolve_device(cfg["device"], devices, sd.default.hostapi)
+        note = (f"microphone '{cfg['device']}' not found: used the system default"
+                if cfg["device"] and device is None else "")
+        try:
+            name = (sd.query_devices(device, "input") if device is not None
+                    else sd.query_devices(kind="input"))["name"]
+        except Exception:
+            name = "the system default microphone"
+        recorder = self._voice_new_recorder(sd)
+        recorder.start(device)
+        return recorder, name, note
+
+    def _mic_record(self, recorder, seconds):
+        """Worker thread: wait out `seconds` (or the upload budget) in 0.1 s
+        steps, so STOP ends the listening at once -> (pcm, samplerate)."""
+        deadline = time.monotonic() + seconds
+        while not recorder.full:
+            if getattr(self, "stop_requested", False):
+                self._mic_on_tk_thread(recorder.abort)
+                raise _MicStopped()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.1, remaining))
+        return self._mic_on_tk_thread(recorder.stop)
+
+    def do_microphone_listen(self, inp):
+        inp = inp or {}
+        seconds, cap_note, problem = self._mic_seconds(inp.get("seconds"))
+        if problem:
+            return f"microphone_listen error: {problem}"
+        try:
+            cfg = self._voice_load_config()
+            recorder, device_name, device_note = self._mic_on_tk_thread(
+                lambda: self._mic_open(cfg))
+        except Exception as e:
+            return f"microphone_listen error: {self._voice_error_text(e)}"
+        self._mic_live(+1)
+        try:
+            pcm, rate = self._mic_record(recorder, seconds)
+        except _MicStopped:
+            return "microphone_listen stopped: STOP was pressed while listening."
+        except Exception as e:
+            return f"microphone_listen error: {self._voice_error_text(e)}"
+        finally:
+            self._mic_live(-1)
+        heard = len(pcm) / (2.0 * rate)
+        peak = self._voice_peak(pcm)
+        notes = [n for n in (cap_note, device_note) if n]
+        if recorder.full:
+            notes.append("the recording stopped early at the upload limit")
+        tail = f" ({'; '.join(notes)}.)" if notes else ""
+        if heard < VOICE_MIN_SECONDS:
+            return (f"microphone_listen error: nothing was recorded ({heard:.2f} s "
+                    f"through {device_name}).{tail}")
+        if peak < VOICE_SILENCE_PEAK:
+            why = (" That is exact digital silence: the microphone may be muted, or not "
+                   "permitted — System Settings > Privacy & Security > Microphone for the "
+                   "app that launched MyAgent." if peak == 0 and not IS_WINDOWS else
+                   " That is exact digital silence: the microphone may be muted, or not "
+                   "permitted — Settings > Privacy & security > Microphone." if peak == 0
+                   else "")
+            return (f"{self.MIC_RESULT_PREFIX} — heard only silence for {heard:.1f} s "
+                    f"through {device_name} (peak level {peak} of 32767); nothing was "
+                    f"sent for transcription.{why}{tail}")
+        try:
+            wav = self._voice_wav_bytes(pcm, rate)
+            text, info = self._voice_transcribe(cfg, wav)
+        except Exception as e:
+            return f"microphone_listen error: {self._voice_error_text(e)}{tail}"
+        cost = self._voice_estimate_cost(info["model"], heard)
+        detail = (f"{heard:.1f} s through {device_name}, transcribed by {info['model']} "
+                  f"in {info['elapsed']:.1f} s" + (f", ≈ ${cost:.4f}" if cost is not None else ""))
+        if info.get("note"):
+            notes.append(info["note"])
+            tail = f" ({'; '.join(notes)}.)"
+        if not text:
+            return f"{self.MIC_RESULT_PREFIX} — no speech was recognised ({detail}).{tail}"
+        return f'{self.MIC_RESULT_PREFIX} — {detail}: "{text}"{tail}'

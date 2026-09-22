@@ -104,6 +104,20 @@ try:
 except Exception:
     _HAS_CAMERA = False
 
+# The Physical set's second sense (2026-09-22): microphone_listen records
+# through `sounddevice` (PortAudio) — the package voice input needs, probed
+# the same way — and transcribes with the Voice Setup model.
+# Install via:  pip install sounddevice
+_HAS_MICROPHONE = True
+try:
+    if importlib.util.find_spec("sounddevice") is None:
+        _HAS_MICROPHONE = False
+except Exception:
+    _HAS_MICROPHONE = False
+# The Physical checkbox is enabled when either sense is installed; each tool
+# is offered only when its own package is.
+_HAS_PHYSICAL = _HAS_CAMERA or _HAS_MICROPHONE
+
 
 # ── Tool definitions for the Anthropic API ──────────────────────────────────
 
@@ -487,7 +501,7 @@ META_TOOLS = [
                 },
                 "physical": {
                     "type": "boolean",
-                    "description": "Enable Physical tools — camera_capture, a still photo from the computer's webcam (via OpenCV). The camera sees the room and whoever is in it, so enable it only for an instruction that needs it. Default false on create.",
+                    "description": "Enable Physical tools — camera_capture, a still photo from the computer\'s webcam (via OpenCV), and microphone_listen, a few seconds through its microphone returned as a transcript (via sounddevice and the Voice Setup speech-to-text model). The camera sees the room and whoever is in it, so enable it only for an instruction that needs it. Default false on create.",
                 },
                 "meta": {
                     "type": "boolean",
@@ -1953,15 +1967,18 @@ EXCEL_TOOLS = [
 
 # ── Physical tools ───────────────────────────────────────────────────────────
 # Tools that sense the room the computer sits in rather than the computer
-# itself — today one, camera_capture: a still photo from a webcam, returned to
-# the model the way a screenshot is. Its own checkbox (Physical) and NOT part
+# itself — two: camera_capture, a still photo from a webcam, returned to the
+# model the way a screenshot is, and microphone_listen (2026-09-22), a few
+# seconds of the room's sound returned as a transcript through the Voice Setup
+# speech-to-text model. Their own checkbox (Physical) and NOT part
 # of DESKTOP_TOOLS, for three reasons: consent (a camera sees the room and
 # whoever is in it, so an instruction that only drives the mouse must not gain
 # it), coordinates (a photo is not a click surface — it never touches the
 # screenshot pipeline's scale / offset state), and dependency (OpenCV, not
 # pyautogui).
 # Conditionally included in _get_tools() only when self.physical_enabled.get()
-# is True AND _HAS_CAMERA is True. Dispatch is the namespaced camera_* pattern
+# is True, each tool only when its own package is installed (_HAS_CAMERA /
+# _HAS_MICROPHONE). Dispatch is the namespaced camera_* / microphone_* pattern
 # (myagent/physical_mixin.py).
 PHYSICAL_TOOLS = [
     {
@@ -1992,6 +2009,29 @@ PHYSICAL_TOOLS = [
                 "save_path": {
                     "type": "string",
                     "description": "Optional. Also save the photo, at the camera's full resolution, to this file path (.jpg or .png; .jpg is added when the path has no extension). Refused when the file already exists — pick a new name.",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "microphone_listen",
+        "description": (
+            "Listen through this computer's microphone for a number of seconds and return "
+            "what was said, as text (speech-to-text through the provider and model chosen "
+            "in Voice Setup). Use it to hear a person in the room: a spoken instruction, "
+            "the answer to something you said with a speech command, a name or number read "
+            "out. The microphone is opened for this one call and released again. Silence is "
+            "reported as such and costs nothing; speech costs one transcription call. "
+            "Listening IS the wait: to watch and listen in turns, alternate camera_capture "
+            "and microphone_listen rather than adding a sleep command. STOP interrupts it."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "seconds": {
+                    "type": "number",
+                    "description": "How long to listen, in seconds (default 5, maximum 600). Allow enough for a sentence; the call returns only when the time is up.",
                 },
             },
             "required": [],

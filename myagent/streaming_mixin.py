@@ -12,7 +12,8 @@ from myagent.constants import (
     GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, EXCEL_TOOLS, PHYSICAL_TOOLS,
     PARALLEL_SAFE_TOOLS,
     _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
-    _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA,
+    _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE,
+    _HAS_PHYSICAL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
     GENERIC_PRICING_PREFIXES,
@@ -440,11 +441,15 @@ class StreamingMixin:
         if (_HAS_EXCEL and getattr(self, "excel_enabled", None)
                 and self.excel_enabled.get()):
             tools.extend(copy.deepcopy(EXCEL_TOOLS))
-        # Physical tools (camera_capture, OpenCV) — their own checkbox, never
-        # part of Desktop: see the PHYSICAL_TOOLS comment in constants.py.
-        if (_HAS_CAMERA and getattr(self, "physical_enabled", None)
+        # Physical tools (camera_capture via OpenCV, microphone_listen via
+        # sounddevice) — their own checkbox, never part of Desktop: see the
+        # PHYSICAL_TOOLS comment in constants.py. Each is offered only when
+        # its own package is installed.
+        if (_HAS_PHYSICAL and getattr(self, "physical_enabled", None)
                 and self.physical_enabled.get()):
-            tools.extend(copy.deepcopy(PHYSICAL_TOOLS))
+            installed = {"camera_capture": _HAS_CAMERA, "microphone_listen": _HAS_MICROPHONE}
+            tools.extend(copy.deepcopy(t) for t in PHYSICAL_TOOLS
+                         if installed.get(t["name"], True))
         if self.meta_enabled.get():
             tools.extend(copy.deepcopy(META_TOOLS))
         # MCP tools are populated by MCPMixin._refresh_mcp_tools at connect-time.
@@ -606,6 +611,21 @@ class StreamingMixin:
             cam_wait = f"waiting {cam_inp['delay_seconds']} s, then " if cam_inp.get("delay_seconds") else ""
             self._tool_info(f"Camera: {cam_wait}taking a photo (camera {cam_inp.get('camera') or 0})...\n")
             return method(cam_inp)
+        if block.name.startswith("microphone_"):
+            if not _HAS_MICROPHONE:
+                return ("Microphone tools unavailable: the 'sounddevice' package is not "
+                        "installed. Install with: pip install sounddevice")
+            if not getattr(self, "physical_enabled", None) or not self.physical_enabled.get():
+                return f"Physical tools are disabled. Enable the Physical checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Physical tool: {block.name}"
+            mic_inp = block.input or {}
+            asked = mic_inp.get("seconds")
+            shown = asked if asked not in (None, "") else getattr(self, "MIC_DEFAULT_SECONDS", 5)
+            shown = f"{shown:g}" if isinstance(shown, (int, float)) else shown
+            self._tool_info(f"Microphone: listening for {shown} s...\n")
+            return method(mic_inp)
         if block.name == "web_search":
             query = block.input.get("query", "")
             self._tool_info(f"Searching: {query}\n")

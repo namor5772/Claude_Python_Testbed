@@ -14,12 +14,21 @@ anywhere. What is pinned:
   translators that hoist tool-result images never introduce a photo with the
   "use these coordinates for mouse_click" screenshot hint — while that hint
   itself stays byte-identical for screenshots;
+* the macOS permission dance — ask once (a throwaway open, before the
+  self-timer wait), wait for the answer, then photograph in the same call;
+  a denial and an unanswered prompt worded apart; STOP ends the wait;
+* microphone_listen — a timed recording through voice input's recorder and
+  Voice Setup settings, transcribed by its path (both faked): the default and
+  the ceiling, silence sent nowhere, STOP ending the listening at once, the
+  PortAudio calls marshalled onto the Tk thread, the stream counted where the
+  Mike button counts its own, readable errors;
 * the wiring — gate, dispatch, toggle persistence.
 """
 import base64
 import os
 import queue
 import re
+import sys
 import tempfile
 import threading
 import time
@@ -34,6 +43,7 @@ from myagent.kimi_mixin import KimiMixin
 from myagent.ollama_mixin import OllamaMixin
 from myagent.physical_mixin import PhysicalMixin
 from myagent.streaming_mixin import StreamingMixin
+from myagent.voice_mixin import VoiceMixin, _VoiceDictation
 from tests._util import stub
 from tests.test_state_skill_modes import _Host as _StateHost
 
@@ -155,6 +165,7 @@ def camera_host(cv2=None, provider="Anthropic", **attrs):
                 CAMERA_SETTLE_WINDOW=0.0, **attrs)
     host.cv2 = cv2 or _FakeCv2()
     host._camera_cv2 = lambda: host.cv2
+    host._camera_mac_auth_status = lambda: 3   # authorized: the macOS pre-step is a no-op
     return host
 
 
@@ -293,6 +304,103 @@ class BackendTests(unittest.TestCase):
         with mock.patch.object(physical_mixin, "IS_WINDOWS", False), \
                 mock.patch.object(physical_mixin.sys, "platform", "linux"):
             self.assertEqual(PhysicalMixin._camera_backends(_FakeCv2), [("default", 0)])
+
+
+# ── macOS camera permission ──────────────────────────────────────────────────
+
+def _status_sequence(*values):
+    """A _camera_mac_auth_status stand-in answering `values` in turn and the
+    last of them forever after."""
+    remaining = list(values)
+
+    def status():
+        if len(remaining) > 1:
+            return remaining.pop(0)
+        return remaining[0]
+    return status
+
+
+def _mac(status=3, **attrs):
+    """A camera host on a Mac (AVFoundation only) whose permission state is
+    `status` — a list is answered in turn."""
+    host = camera_host(**attrs)
+    host._camera_mac_auth_status = (_status_sequence(*status)
+                                    if isinstance(status, (list, tuple)) else (lambda: status))
+    return host
+
+
+class MacAuthorizationTests(unittest.TestCase):
+    """macOS asks for the camera once per launching app, and ONLY when asked
+    to: OpenCV's AVFoundation backend sends the request and fails the open
+    while the permission is undetermined, so the first call asks (a throwaway
+    open), waits for the answer and then takes the photo in the same call."""
+
+    def setUp(self):
+        for p in (mock.patch.object(physical_mixin, "IS_WINDOWS", False),
+                  mock.patch.object(physical_mixin.sys, "platform", "darwin"),
+                  mock.patch.object(physical_mixin.time, "sleep")):    # the 0.25 s polls
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_an_authorized_app_opens_nothing_extra(self):
+        host = _mac(status=3)
+        self.assertIsInstance(host.do_camera_capture({}), list)
+        self.assertEqual(host.cv2.opened_with, [(0, 1200)])
+
+    def test_a_first_use_asks_with_a_throwaway_open_then_waits_and_photographs(self):
+        host = _mac(status=[0, 0, 0, 3])          # undetermined for two polls, then Allow
+        self.assertIsInstance(host.do_camera_capture({}), list)   # the photo, same call
+        self.assertEqual(host.cv2.opened_with, [(0, 1200), (0, 1200)])
+        self.assertEqual([c.released for c in host.cv2.made], [1, 1])   # throwaway released at once
+
+    def test_the_request_goes_out_before_the_self_timer_wait(self):
+        # The prompt should come while someone is at the desk, not after a
+        # ten-minute timer — and the throwaway open lights no camera.
+        host = _mac(status=[0, 3])
+        events = []
+        real_open = host.cv2.VideoCapture
+        host.cv2.VideoCapture = lambda i, b: (events.append("open"), real_open(i, b))[1]
+        host._camera_wait = lambda seconds: events.append("wait")
+        host.do_camera_capture({"delay_seconds": 5})
+        self.assertEqual(events, ["open", "wait", "open"])
+
+    def test_an_unanswered_prompt_gives_up_after_the_wait_and_says_to_answer_it(self):
+        cv2 = _FakeCv2([_Capture(opened=False), _Capture(opened=False)])
+        host = _mac(cv2=cv2, status=0, CAMERA_AUTH_WAIT=0.0)
+        result = host.do_camera_capture({})
+        self.assertIn("camera 0 did not open", result)
+        self.assertIn("answer the prompt", result)
+        self.assertEqual([c.released for c in cv2.made], [1, 1])
+
+    def test_a_denied_app_is_told_so_and_pointed_at_system_settings(self):
+        cv2 = _FakeCv2([_Capture(opened=False)])
+        host = _mac(cv2=cv2, status=2)
+        result = host.do_camera_capture({})
+        self.assertIn("DENIED", result)
+        self.assertIn("System Settings", result)
+        self.assertEqual(cv2.opened_with, [(0, 1200)])      # nothing to ask for: no throwaway
+
+    def test_stop_during_the_permission_wait_is_not_a_camera_fault(self):
+        host = _mac(status=0, CAMERA_AUTH_WAIT=30.0)
+        host.stop_requested = True
+        result = host.do_camera_capture({})
+        self.assertIn("STOP", result)
+        self.assertNotIn("Privacy", result)
+        self.assertEqual([c.released for c in host.cv2.made], [1])
+
+    def test_opencv_is_told_to_ask(self):
+        with mock.patch.dict("sys.modules", {"cv2": _FakeCv2()}), \
+                mock.patch.dict(os.environ, {"OPENCV_AVFOUNDATION_SKIP_AUTH": "1"}):
+            PhysicalMixin._camera_cv2()
+            self.assertEqual(os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"], "0")
+
+    def test_the_permission_is_unreadable_off_macos(self):
+        with mock.patch.object(physical_mixin.sys, "platform", "win32"):
+            self.assertIsNone(PhysicalMixin._camera_mac_auth_status())
+
+    @unittest.skipUnless(sys.platform == "darwin", "reads the real permission via the ObjC runtime")
+    def test_the_real_permission_reads_as_one_of_the_four_states(self):
+        self.assertIn(PhysicalMixin._camera_mac_auth_status(), (0, 1, 2, 3))
 
 
 # ── do_camera_capture ────────────────────────────────────────────────────────
@@ -684,6 +792,205 @@ class TranslatorHintTests(unittest.TestCase):
         self.assertNotIn("screenshot tool", photo)
 
 
+# ── microphone_listen ────────────────────────────────────────────────────────
+
+class _FakeMicRecorder:
+    """What the tool needs of a _VoiceRecorder: `seconds` of audio at `peak`."""
+
+    def __init__(self, seconds=1.0, peak=4096, fail_start=None):
+        self.samplerate, self.peak, self.level, self.full = 16000, peak, peak, False
+        self._pcm = peak.to_bytes(2, "little", signed=True) * int(16000 * seconds)
+        self._fail_start = fail_start
+        self.log, self.started_with, self.live_at_stop = [], None, None
+
+    def start(self, device=None):
+        if self._fail_start:
+            raise self._fail_start
+        self.started_with = device
+        self.log.append("start")
+
+    def stop(self):
+        self.log.append("stop")
+        self.live_at_stop = _VoiceDictation.live
+        return self._pcm, self.samplerate
+
+    def abort(self):
+        self.log.append("abort")
+
+
+class _FakeMicSd:
+    """query_devices for the list / one device's name, and default.hostapi."""
+    DEVICES = [{"name": "L27h-4A", "hostapi": 0, "max_input_channels": 0},
+               {"name": "Brio 500", "hostapi": 0, "max_input_channels": 2},
+               {"name": "Mac mini Speakers", "hostapi": 0, "max_input_channels": 0}]
+
+    def __init__(self):
+        self.default = SimpleNamespace(hostapi=0)
+
+    def query_devices(self, device=None, kind=None):
+        if device is None and kind is None:
+            return list(self.DEVICES)
+        return self.DEVICES[1] if device is None else self.DEVICES[device]
+
+
+class _MicHost(PhysicalMixin, VoiceMixin):
+    """The two App mixins the tool spans; the impure voice edges are stubbed."""
+
+
+def mic_host(recorder=None, cfg=None, transcript="hello there", fail=None, **attrs):
+    host = stub(_MicHost, provider="Anthropic", stop_requested=False, **attrs)
+    host.recorder = recorder or _FakeMicRecorder()
+    host.sd = _FakeMicSd()
+    host.calls = []
+    host._voice_sd = lambda rescan=False: (host.calls.append(("sd", rescan)), host.sd)[1]
+    host._voice_new_recorder = lambda sd: host.recorder
+    host._voice_load_config = lambda: dict(cfg or {
+        "provider": "OpenAI", "models": {"OpenAI": "gpt-4o-transcribe"},
+        "language": "", "hint": "", "device": ""})
+
+    def transcribe(cfg, wav):
+        host.calls.append(("transcribe", cfg, wav))
+        if fail:
+            raise fail
+        return transcript, {"model": cfg["models"][cfg["provider"]], "note": "", "elapsed": 0.8}
+    host._voice_transcribe = transcribe
+    return host
+
+
+class ListenTests(unittest.TestCase):
+    def test_speech_is_recorded_for_the_asked_time_and_returned_as_a_transcript(self):
+        host = mic_host()
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertTrue(result.startswith(PhysicalMixin.MIC_RESULT_PREFIX))
+        self.assertIn('"hello there"', result)
+        self.assertIn("Brio 500", result)                  # the microphone it used
+        self.assertIn("gpt-4o-transcribe", result)
+        self.assertEqual(host.recorder.log, ["start", "stop"])
+        self.assertEqual([c[0] for c in host.calls], ["sd", "transcribe"])
+        self.assertTrue(host.calls[0][1])                  # rescanned: a new microphone is found
+        self.assertTrue(host.calls[1][2].startswith(b"RIFF"))   # a WAV, like the Mike button's
+
+    def test_silence_is_reported_and_sent_nowhere(self):
+        host = mic_host(recorder=_FakeMicRecorder(peak=5))     # a quiet room
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertIn("only silence", result)
+        self.assertIn("nothing was sent", result)
+        self.assertNotIn("Privacy", result)                # a quiet room is not a fault
+        self.assertEqual([c[0] for c in host.calls], ["sd"])
+        self.assertEqual(host.recorder.log, ["start", "stop"])
+
+    def test_exact_silence_points_at_mute_and_the_permission(self):
+        host = mic_host(recorder=_FakeMicRecorder(peak=0))
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertIn("only silence", result)
+        self.assertIn("Privacy", result)
+
+    def test_the_default_is_five_seconds_and_the_ceiling_is_the_commands(self):
+        secs = mic_host()._mic_seconds
+        self.assertEqual(secs(None), (5.0, "", None))
+        self.assertEqual(secs(""), (5.0, "", None))
+        self.assertEqual(secs("2.5"), (2.5, "", None))
+        self.assertEqual(secs(9999)[0], PhysicalMixin.MIC_MAX_SECONDS)
+        self.assertIn("capped", secs(9999)[1])
+        self.assertEqual(PhysicalMixin.MIC_MAX_SECONDS, PhysicalMixin.CAMERA_MAX_DELAY)
+        for bad in ("soon", 0, -1, float("nan")):
+            with self.subTest(value=bad):
+                self.assertIsNotNone(secs(bad)[2])
+
+    def test_a_bad_seconds_is_refused_before_the_microphone_is_touched(self):
+        host = mic_host()
+        self.assertIn("error", host.do_microphone_listen({"seconds": "soon"}))
+        self.assertEqual(host.recorder.log, [])
+        self.assertEqual(host.calls, [])
+
+    def test_the_cap_is_reported_in_the_result(self):
+        host = mic_host(MIC_MAX_SECONDS=0.05)
+        self.assertIn("capped at 0.05", host.do_microphone_listen({"seconds": 60}))
+
+    def test_stop_ends_the_listening_at_once_and_throws_the_audio_away(self):
+        host = mic_host()
+        host.stop_requested = True
+        started = time.monotonic()
+        result = host.do_microphone_listen({"seconds": 30})
+        self.assertLess(time.monotonic() - started, 2.0)
+        self.assertIn("STOP", result)
+        self.assertEqual(host.recorder.log, ["start", "abort"])
+        self.assertEqual([c[0] for c in host.calls], ["sd"])
+
+    def test_the_voice_setup_microphone_is_used_and_a_missing_one_falls_back_with_a_note(self):
+        cfg = {"provider": "OpenAI", "models": {"OpenAI": "m"}, "language": "", "hint": "",
+               "device": "Brio 500"}
+        host = mic_host(cfg=cfg)
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertEqual(host.recorder.started_with, 1)
+        self.assertNotIn("not found", result)
+        cfg["device"] = "USB Headset"
+        host = mic_host(cfg=cfg)
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertIsNone(host.recorder.started_with)          # the system default
+        self.assertIn("'USB Headset' not found", result)
+
+    def test_a_transcription_failure_is_a_readable_error_with_the_microphone_released(self):
+        host = mic_host(fail=RuntimeError("OPENAI_API_KEY is not set, so OpenAI cannot transcribe."))
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertTrue(result.startswith("microphone_listen error: OPENAI_API_KEY"))
+        self.assertEqual(host.recorder.log, ["start", "stop"])
+
+    def test_a_microphone_that_will_not_open_is_a_readable_error(self):
+        class PortAudioError(Exception):
+            pass
+        host = mic_host(recorder=_FakeMicRecorder(fail_start=PortAudioError("Error opening stream")))
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertIn("Could not open the microphone", result)
+        self.assertEqual([c[0] for c in host.calls], ["sd"])
+
+    def test_no_recognised_speech_says_so(self):
+        self.assertIn("no speech was recognised",
+                      mic_host(transcript="").do_microphone_listen({"seconds": 0.05}))
+
+    def test_the_transcriptions_estimated_cost_is_shown_when_the_model_is_priced(self):
+        host = mic_host()
+        host._voice_estimate_cost = lambda model, seconds: 0.0012
+        self.assertIn("≈ $0.0012", host.do_microphone_listen({"seconds": 0.05}))
+        host = mic_host()
+        host._voice_estimate_cost = lambda model, seconds: None
+        self.assertNotIn("$", host.do_microphone_listen({"seconds": 0.05}))
+
+    def test_portaudio_work_is_marshalled_onto_the_tk_thread(self):
+        class _Root:
+            def __init__(self):
+                self.ran = []
+
+            def after(self, ms, fn):
+                self.ran.append(fn)
+                fn()
+
+        host = mic_host(root=_Root())
+        self.assertIn('"hello there"', host.do_microphone_listen({"seconds": 0.05}))
+        self.assertEqual(len(host.root.ran), 2)                # open, then stop
+        host = mic_host(root=_Root())
+        host.stop_requested = True
+        host.do_microphone_listen({"seconds": 30})
+        self.assertEqual(len(host.root.ran), 2)                # open, then abort
+
+    def test_a_tk_thread_that_never_answers_is_a_timeout_not_a_hang(self):
+        class _DeadRoot:
+            def after(self, ms, fn):
+                pass
+
+        host = mic_host(root=_DeadRoot(), MIC_TK_TIMEOUT=0.05)
+        result = host.do_microphone_listen({"seconds": 0.05})
+        self.assertIn("not responding", result)
+        self.assertEqual(host.recorder.log, [])
+
+    def test_the_open_stream_is_counted_where_the_mike_button_counts_its_own(self):
+        host = mic_host()
+        self.assertEqual(_VoiceDictation.live, 0)
+        host.do_microphone_listen({"seconds": 0.05})
+        self.assertEqual(host.recorder.live_at_stop, 1)
+        self.assertEqual(_VoiceDictation.live, 0)
+
+
 # ── wiring ───────────────────────────────────────────────────────────────────
 
 class _Var:
@@ -707,6 +1014,7 @@ class _ToolHost(StreamingMixin, PhysicalMixin):
         self.browser_enabled = _Var(False)
         self.meta_enabled = _Var(False)
         self.physical_enabled = _Var(physical)
+        self._camera_mac_auth_status = lambda: 3   # authorized: no macOS pre-step
 
     def names(self):
         return [t["name"] for t in self._get_tools()]
@@ -714,52 +1022,81 @@ class _ToolHost(StreamingMixin, PhysicalMixin):
 
 class SurfaceTests(unittest.TestCase):
     def test_tool_list(self):
-        self.assertEqual([t["name"] for t in C.PHYSICAL_TOOLS], ["camera_capture"])
+        self.assertEqual([t["name"] for t in C.PHYSICAL_TOOLS],
+                         ["camera_capture", "microphone_listen"])
 
-    def test_the_camera_is_not_a_desktop_tool(self):
-        self.assertNotIn("camera_capture", [t["name"] for t in C.DESKTOP_TOOLS])
+    def test_neither_sense_is_a_desktop_tool(self):
+        desktop = [t["name"] for t in C.DESKTOP_TOOLS]
+        self.assertNotIn("camera_capture", desktop)
+        self.assertNotIn("microphone_listen", desktop)
 
-    def test_one_camera_is_never_driven_in_parallel(self):
+    def test_one_camera_or_microphone_is_never_driven_in_parallel(self):
         self.assertNotIn("camera_capture", C.PARALLEL_SAFE_TOOLS)
+        self.assertNotIn("microphone_listen", C.PARALLEL_SAFE_TOOLS)
 
     def test_no_argument_is_required(self):
-        schema = C.PHYSICAL_TOOLS[0]["input_schema"]
-        self.assertEqual(schema["required"], [])
-        self.assertEqual(sorted(schema["properties"]),
-                         ["camera", "delay_seconds", "save_path"])
+        camera, microphone = (t["input_schema"] for t in C.PHYSICAL_TOOLS)
+        self.assertEqual(camera["required"], [])
+        self.assertEqual(sorted(camera["properties"]), ["camera", "delay_seconds", "save_path"])
+        self.assertEqual(microphone["required"], [])
+        self.assertEqual(sorted(microphone["properties"]), ["seconds"])
 
     def test_manage_instructions_can_set_the_toggle(self):
         manage = next(t for t in C.META_TOOLS if t["name"] == "manage_instructions")
         self.assertEqual(manage["input_schema"]["properties"]["physical"]["type"], "boolean")
 
 
+def installed(camera=True, microphone=True):
+    """The package probes as the streaming mixin sees them."""
+    stack = mock.patch.multiple("myagent.streaming_mixin", _HAS_CAMERA=camera,
+                                _HAS_MICROPHONE=microphone,
+                                _HAS_PHYSICAL=camera or microphone)
+    return stack
+
+
 class GateTests(unittest.TestCase):
     def test_offered_only_while_the_checkbox_is_on(self):
-        with mock.patch("myagent.streaming_mixin._HAS_CAMERA", True):
-            self.assertIn("camera_capture", _ToolHost(physical=True).names())
-            self.assertNotIn("camera_capture", _ToolHost(physical=False).names())
+        with installed():
+            on, off = _ToolHost(physical=True).names(), _ToolHost(physical=False).names()
+        for name in ("camera_capture", "microphone_listen"):
+            self.assertIn(name, on)
+            self.assertNotIn(name, off)
 
-    def test_never_offered_without_opencv(self):
-        with mock.patch("myagent.streaming_mixin._HAS_CAMERA", False):
-            self.assertNotIn("camera_capture", _ToolHost(physical=True).names())
+    def test_each_sense_is_offered_only_with_its_own_package(self):
+        with installed(camera=False):
+            names = _ToolHost(physical=True).names()
+        self.assertNotIn("camera_capture", names)
+        self.assertIn("microphone_listen", names)
+        with installed(microphone=False):
+            names = _ToolHost(physical=True).names()
+        self.assertIn("camera_capture", names)
+        self.assertNotIn("microphone_listen", names)
+        with installed(camera=False, microphone=False):
+            names = _ToolHost(physical=True).names()
+        self.assertNotIn("camera_capture", names)
+        self.assertNotIn("microphone_listen", names)
 
-    def test_desktop_alone_does_not_bring_the_camera(self):
+    def test_desktop_alone_does_not_bring_the_senses(self):
         host = _ToolHost(physical=False)
         host.desktop_enabled = _Var(True)
-        with mock.patch("myagent.streaming_mixin._HAS_CAMERA", True), \
-                mock.patch("myagent.streaming_mixin._HAS_DESKTOP", False):
-            self.assertNotIn("camera_capture", host.names())
+        with installed(), mock.patch("myagent.streaming_mixin._HAS_DESKTOP", False):
+            names = host.names()
+        self.assertNotIn("camera_capture", names)
+        self.assertNotIn("microphone_listen", names)
 
-    def test_blocked_tools_covers_it_by_name(self):
-        with mock.patch("myagent.streaming_mixin._HAS_CAMERA", True):
-            self.assertNotIn("camera_capture",
-                             _ToolHost(blocked={"camera_capture"}).names())
+    def test_blocked_tools_covers_each_by_name(self):
+        with installed():
+            names = _ToolHost(blocked={"camera_capture", "microphone_listen"}).names()
+        self.assertNotIn("camera_capture", names)
+        self.assertNotIn("microphone_listen", names)
 
     def test_a_host_without_the_variable_offers_nothing(self):
         host = _ToolHost()
         del host.physical_enabled                  # SelfBot reuses StreamingMixin-era hosts
-        with mock.patch("myagent.streaming_mixin._HAS_CAMERA", True):
-            self.assertNotIn("camera_capture", host.names())
+        with installed():
+            names = host.names()
+        self.assertNotIn("camera_capture", names)
+        self.assertNotIn("microphone_listen", names)
 
 
 class DispatchTests(unittest.TestCase):
@@ -787,6 +1124,34 @@ class DispatchTests(unittest.TestCase):
     def test_blocked_is_refused_first(self):
         host = _ToolHost(blocked={"camera_capture"})
         self.assertIn("HARD-BLOCKED", host._execute_tool(self.BLOCK))
+
+    MIC = SimpleNamespace(name="microphone_listen", input={"seconds": 3})
+
+    def test_the_microphone_dispatches_the_same_way_and_says_how_long(self):
+        host = _ToolHost()
+        host.do_microphone_listen = lambda inp: ("heard", inp)
+        with mock.patch("myagent.streaming_mixin._HAS_MICROPHONE", True):
+            self.assertEqual(host._execute_tool(self.MIC), ("heard", {"seconds": 3}))
+        line = host.queue.get_nowait()
+        self.assertEqual(line["type"], "tool_info")
+        self.assertIn("listening for 3 s", line["content"])
+
+    def test_the_microphones_default_is_announced_when_no_seconds_are_given(self):
+        host = _ToolHost()
+        host.do_microphone_listen = lambda inp: "ok"
+        with mock.patch("myagent.streaming_mixin._HAS_MICROPHONE", True):
+            host._execute_tool(SimpleNamespace(name="microphone_listen", input={}))
+        self.assertIn("listening for 5 s", host.queue.get_nowait()["content"])
+
+    def test_missing_sounddevice_is_the_install_hint(self):
+        with mock.patch("myagent.streaming_mixin._HAS_MICROPHONE", False):
+            self.assertIn("pip install sounddevice", _ToolHost()._execute_tool(self.MIC))
+
+    def test_the_microphone_is_refused_with_the_checkbox_off(self):
+        host = _ToolHost(physical=False)
+        host.do_microphone_listen = lambda inp: self.fail("must not run")
+        with mock.patch("myagent.streaming_mixin._HAS_MICROPHONE", True):
+            self.assertIn("Enable the Physical checkbox", host._execute_tool(self.MIC))
 
 
 class BlindModelWarningTests(unittest.TestCase):

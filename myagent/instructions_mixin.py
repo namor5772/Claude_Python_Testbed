@@ -4,7 +4,7 @@ from tkinter import font as tkfont, messagebox, ttk
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
     ADAPTIVE_MODE_VALUES, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
-    _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA,
+    _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_PHYSICAL,
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
@@ -317,7 +317,7 @@ class InstructionsMixin:
         self._editor_desktop = tk.BooleanVar(value=self.desktop_enabled.get() if _HAS_DESKTOP else False)
         self._editor_browser = tk.BooleanVar(value=self.browser_enabled.get())
         self._editor_excel = tk.BooleanVar(value=self.excel_enabled.get() if _HAS_EXCEL else False)
-        self._editor_physical = tk.BooleanVar(value=self.physical_enabled.get() if _HAS_CAMERA else False)
+        self._editor_physical = tk.BooleanVar(value=self.physical_enabled.get() if _HAS_PHYSICAL else False)
         self._editor_meta = tk.BooleanVar(value=self.meta_enabled.get())
         self._editor_mcp = tk.BooleanVar(value=self.mcp_enabled.get() if _HAS_MCP else False)
         self._editor_google = tk.BooleanVar(value=self.google_enabled.get() if _HAS_GOOGLE else False)
@@ -347,7 +347,7 @@ class InstructionsMixin:
             font=("Arial", 9),
         )
         _physical_cb.pack(side=tk.LEFT, padx=(5, 0))
-        if not _HAS_CAMERA:
+        if not _HAS_PHYSICAL:
             _physical_cb.config(state=tk.DISABLED)
         tk.Checkbutton(
             checks_frame, text="Meta", variable=self._editor_meta,
