@@ -246,8 +246,11 @@ class Exposed(unittest.TestCase):
         h = _UIHost()
         self.assertEqual(h._openai_reasoning_values("gpt-6-astra"),
                          ["Low", "Medium", "High", "Xhigh", "Max"])
-        self.assertEqual(h._openai_reasoning_values("gpt-6.1-nova"),
-                         ["Low", "Medium", "High", "Xhigh", "Max"])
+        # Only astra is always-reasoning: sol / luna (probed 2026-09-23) and
+        # an unknown future tier get the None rung
+        for mid in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-nova"):
+            self.assertEqual(h._openai_reasoning_values(mid),
+                             ["None", "Low", "Medium", "High", "Xhigh", "Max"], mid)
         self.assertEqual(h._openai_reasoning_values("gpt-5.6-terra"),
                          ["None", "Low", "Medium", "High", "Xhigh", "Max"])
         self.assertEqual(h._openai_reasoning_values("gpt-5.5"),
@@ -301,6 +304,71 @@ class SavedEntry(unittest.TestCase):
         h._restore_model_params(entry)
         self.assertEqual((h.thinking_mode, h.thinking_effort), ("xhigh", "xhigh"))
         self.assertEqual(h.text_verbosity, "medium")   # default when absent
+
+
+class SolLunaTiers(unittest.TestCase):
+    """gpt-6-sol / gpt-6-luna (2026-09-14; probed live 2026-09-23): the GPT-5.6
+    contract inside the GPT-6 family — none..max, temperature ONLY at none
+    (the user's), verbosity, billed cache writes — and NOT astra's
+    always-reasoning one. For nine days the family rule hid their None rung
+    and their temperature; gpt-6-sol also had no pricing row, so a run on it
+    showed no cost and never reached the cost log (the user's report)."""
+
+    def test_none_sends_reasoning_none_and_the_users_temperature(self):
+        for mid in ("gpt-6-sol", "gpt-6-luna"):
+            with self.subTest(model=mid):
+                h = _ReqHost(model=mid, effort="none", enabled=False, verbosity="low")
+                h.call()
+                (kw,) = h.sent
+                self.assertEqual(kw["reasoning"], {"effort": "none", "summary": "auto"})
+                self.assertEqual(kw["temperature"], 0.7)      # the user's, not 1.0
+                self.assertEqual(kw["text"], {"verbosity": "low"})
+                self.assertEqual(h.infos(), [])               # nothing coerced
+                self.assertEqual((h.thinking_effort, h.thinking_enabled), ("none", False))
+
+    def test_every_other_rung_sends_no_temperature(self):
+        for rung in ("low", "medium", "high", "xhigh", "max"):
+            with self.subTest(rung=rung):
+                h = _ReqHost(model="gpt-6-sol", effort=rung)
+                h.call()
+                (kw,) = h.sent
+                self.assertEqual(kw["reasoning"], {"effort": rung, "summary": "auto"})
+                self.assertNotIn("temperature", kw)
+
+    def test_stale_values_take_the_nearest_rung(self):
+        # A Claude "off" → none (sol has the rung; astra would floor to low),
+        # a GPT-5.0 "minimal" → low — with the one-shot notice
+        for stale, expected in (("off", "none"), ("minimal", "low")):
+            with self.subTest(stale=stale):
+                h = _ReqHost(model="gpt-6-luna", effort=stale)
+                h.call()
+                self.assertEqual(h.sent[0]["reasoning"]["effort"], expected)
+                self.assertEqual(len(h.infos()), 1)
+                self.assertEqual(h.thinking_effort, expected)
+
+    def test_debug_payload_mirrors_the_request(self):
+        h = _ReqHost(model="gpt-6-sol", effort="none", enabled=False)
+        text = h._payload_for_display([{"role": "user", "content": "hi"}])
+        self.assertIn('"effort": "none"', text)
+        self.assertIn('"temperature": 0.7', text)
+
+    def test_exposed(self):
+        h = _UIHost(model="gpt-6-sol", mode="none")
+        self.assertEqual(h._model_supports_thinking(), "extended")
+        self.assertEqual(h._get_model_param_summary(), "reasoning=None verbosity=medium temp=0.7")
+        self.assertEqual(_UIHost(model="gpt-6-luna", mode="max")._get_model_param_summary(),
+                         "reasoning=Max verbosity=medium")
+
+    def test_saved_none_entry_restores_headless_as_none(self):
+        entry = {"provider": "OpenAI", "model": "gpt-6-sol", "temperature": 0.3,
+                 "thinking_enabled": False, "thinking_effort": "none", "thinking_budget": 8192,
+                 "thinking_mode": "none", "text_verbosity": "high"}
+        h = _UIHost(mode="low")
+        h.available_models.append("gpt-6-sol")
+        h._restore_model_params(entry)
+        self.assertEqual((h.model, h.thinking_mode, h.thinking_enabled), ("gpt-6-sol", "none", False))
+        self.assertEqual(h._openai_effective_effort(), "none")
+        self.assertEqual(h._get_model_param_summary(), "reasoning=None verbosity=high temp=0.3")
 
 
 if __name__ == "__main__":

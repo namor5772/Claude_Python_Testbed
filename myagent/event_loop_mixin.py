@@ -50,6 +50,34 @@ class EventLoopMixin:
                 name = "output.bin"
         return name
 
+    @staticmethod
+    def _cost_line(msg):
+        """The blue cost line for one cost_update message: this call's cost
+        and the running total (4 decimals under a cent, else 2) with the
+        call's token buckets — or, for a call no table could price
+        (call_cost None: a paid provider's model without a pricing row, see
+        _unpriced_model_warning), the tokens alone behind "unpriced", so API
+        usage is shown even when its price is unknown (a gpt-6-sol run
+        showed nothing at all, 2026-09-23). Pure — tests/test_costlog_run_fields.py."""
+        inp = msg["input_tokens"]
+        out = msg["output_tokens"]
+        cw = msg["cache_write_tokens"]
+        cr = msg["cache_read_tokens"]
+        parts = [f"in:{inp:,}  out:{out:,}"]
+        if cw:
+            parts.append(f"cache_write:{cw:,}")
+        if cr:
+            parts.append(f"cache_read:{cr:,}")
+        token_str = "  ".join(parts)
+        call_cost = msg["call_cost"]
+        total_cost = msg["total_cost"]
+        if call_cost is None:
+            return f"  unpriced this call  |  no pricing row  ({token_str})\n"
+        # Use appropriate precision based on cost magnitude
+        if total_cost < 0.01:
+            return f"  ${call_cost:.4f} this call  |  ${total_cost:.4f} total  ({token_str})\n"
+        return f"  ${call_cost:.4f} this call  |  ${total_cost:.2f} total  ({token_str})\n"
+
     def check_queue(self):
         try:
             while True:
@@ -190,25 +218,7 @@ class EventLoopMixin:
                 elif msg["type"] == "cost_update" and not self.show_activity.get():
                     pass
                 elif msg["type"] == "cost_update":
-                    call_cost = msg["call_cost"]
-                    total_cost = msg["total_cost"]
-                    inp = msg["input_tokens"]
-                    out = msg["output_tokens"]
-                    cw = msg["cache_write_tokens"]
-                    cr = msg["cache_read_tokens"]
-                    # Format: this call tokens + cost, then running total
-                    parts = [f"in:{inp:,}  out:{out:,}"]
-                    if cw:
-                        parts.append(f"cache_write:{cw:,}")
-                    if cr:
-                        parts.append(f"cache_read:{cr:,}")
-                    token_str = "  ".join(parts)
-                    # Use appropriate precision based on cost magnitude
-                    if total_cost < 0.01:
-                        cost_line = f"  ${call_cost:.4f} this call  |  ${total_cost:.4f} total  ({token_str})\n"
-                    else:
-                        cost_line = f"  ${call_cost:.4f} this call  |  ${total_cost:.2f} total  ({token_str})\n"
-                    self._chat_insert((cost_line, "cost_info"))
+                    self._chat_insert((self._cost_line(msg), "cost_info"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()

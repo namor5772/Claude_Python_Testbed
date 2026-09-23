@@ -1018,6 +1018,30 @@ class StreamingMixin:
                 f"myagent/constants.py.")
 
     @staticmethod
+    def _unpriced_model_warning(provider, model_name):
+        """A ⚠ line for stream_worker when a PAID provider's model has no row
+        in its pricing table at all — the 2026-09-23 report: a gpt-6-sol run
+        on the Mac showed no cost line and never reached the cost log,
+        because the tier (created 2026-09-14) had no OPENAI_PRICING row, and
+        those two symptoms are exactly what an unpriced paid model gets (no
+        per-call price, and the zero-cost gate in _log_api_cost — a $0.0000
+        line would claim the run was free). None when the model has a row —
+        its own or a family catch-all, which _generic_pricing_warning covers
+        — for Ollama (free by design, logged at $0.0000) and for xAI (its
+        API reports the billed cost per call, so a missing row costs
+        nothing)."""
+        if provider in ("Ollama", "xAI"):
+            return None
+        prefix, _entry = StreamingMixin._pricing_match(provider, model_name)
+        if prefix is not None:
+            return None
+        return (f"{model_name} has no row in the {provider} pricing table "
+                f"(myagent/constants.py), so its calls cannot be priced: no cost "
+                f"will be shown for this run and the run will NOT be written to "
+                f"the API cost log (a $0.0000 line would claim it was free). "
+                f"Token counts are still shown per call. Add the model's row.")
+
+    @staticmethod
     def _get_pricing(provider, model_name, today=None):
         """Look up per-token pricing for a model.
         Returns a dict with per-token prices, or None if no match.
@@ -1118,6 +1142,17 @@ class StreamingMixin:
         interrupts the run."""
         if not total_cost or total_cost <= 0:
             if not (self.provider == "Ollama" and had_usage):
+                q = getattr(self, "queue", None)
+                if had_usage and q is not None:
+                    # A paid provider's run that made calls but could price
+                    # none of them (no pricing row — the 2026-09-23 gpt-6-sol
+                    # report): say so where the user looks for the line,
+                    # rather than skipping in silence.
+                    q.put({"type": "warning", "content": (
+                        f"⚠ Run NOT written to the API cost log: {self.model} has no "
+                        f"row in the {self.provider} pricing table, so its cost is "
+                        f"unknown (a $0.0000 line would claim it was free). Add the "
+                        f"row in myagent/constants.py.\n")})
                 return
             total_cost = 0.0
         try:
@@ -1280,6 +1315,13 @@ class StreamingMixin:
             if generic_pricing:
                 self.queue.put({"type": "warning",
                                 "content": f"⚠ {generic_pricing}\n"})
+            # ...and when a paid provider's model has NO row at all (a new
+            # tier before its row is added — gpt-6-sol ran nine days that
+            # way): no cost line and no cost-log line would follow, in
+            # silence, so this too is an always-shown warning.
+            unpriced = self._unpriced_model_warning(self.provider, self.model)
+            if unpriced:
+                self.queue.put({"type": "warning", "content": f"⚠ {unpriced}\n"})
 
             # Re-post provider/model drift warnings from the last instruction
             # restore: _start_agent wipes the output window, so anything queued
@@ -1372,6 +1414,23 @@ class StreamingMixin:
                             "type": "cost_update",
                             "call_cost": call_cost,
                             "total_cost": total_cost,
+                            "input_tokens": call_input,
+                            "output_tokens": call_output,
+                            "cache_write_tokens": call_cache_write,
+                            "cache_read_tokens": call_cache_read,
+                            "total_input_tokens": total_input_tokens,
+                            "total_output_tokens": total_output_tokens,
+                        })
+                    else:
+                        # No table row and no authoritative cost: the call's
+                        # tokens still go to the window (call_cost None —
+                        # check_queue's _cost_line prints them behind
+                        # "unpriced"), so API usage is never silent; the
+                        # run-start ⚠ has said why there is no price.
+                        self.queue.put({
+                            "type": "cost_update",
+                            "call_cost": None,
+                            "total_cost": None,
                             "input_tokens": call_input,
                             "output_tokens": call_output,
                             "cache_write_tokens": call_cache_write,

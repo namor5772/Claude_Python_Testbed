@@ -558,8 +558,9 @@ META_TOOLS = [
                         "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 and Mythos 5 / 5.1 have "
                         "ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
                         "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh (max on 5.6+); "
-                        "gpt-6 is ALWAYS-reasoning — low/medium/high/xhigh/max, 'none' is "
-                        "invalid there. Lower-cased to match the stored value."
+                        "gpt-6-sol / gpt-6-luna: none..max like 5.6; gpt-6-astra is "
+                        "ALWAYS-reasoning — low/medium/high/xhigh/max, 'none' is invalid "
+                        "there. Lower-cased to match the stored value."
                     ),
                 },
                 "blocked_tools": {
@@ -1418,15 +1419,31 @@ BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768
 # the default. All three accept reasoning.effort none..xhigh AND "max" (probed
 # live 2026-08-25; gpt-5.5 / 5.4 reject "max") — see _has_reasoning_max.
 # GPT-6 Astra (gpt-6-astra, released 2026-09-03: $10/$50, 1.05M context,
-# 128K output) is the new flagship, listed second so the far cheaper terra
+# 128K output) is the flagship, listed second so the far cheaper terra
 # keeps the default slot. Probed live 2026-09-06: ALWAYS-reasoning — effort
 # low/medium/high/xhigh/max only ("none" and "minimal" are HTTP 400),
 # temperature rejected unconditionally, text.verbosity accepted, and the
 # web_search_preview / code_interpreter server tools accepted — see
 # OpenAIMixin._openai_always_reasoning. Its usage also reports BILLED cache
 # writes (cache_write_tokens at $12.50/M — the 4th OPENAI_PRICING element).
-OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-5.6-sol",
-                          "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
+# GPT-6 Sol and Luna (gpt-6-sol $2/$10 "built to power complex coding and
+# agentic workflows", gpt-6-luna $0.10/$0.50 "our most efficient model for
+# focused, high-volume tasks" — both created 2026-09-14, 1.05M context, 128K
+# output, vision) are NOT always-reasoning: probed live 2026-09-23, both take
+# effort none/low/medium/high/xhigh/max ("minimal" is HTTP 400 "not supported
+# with the 'gpt-6-sol' model"), temperature ONLY at effort=none (HTTP 400
+# "Unsupported parameter" at every other rung and when the reasoning param is
+# omitted) — the GPT-5.6 rule — text.verbosity, reasoning.summary and both
+# server tools, and bill cache writes at 1.25x input like astra (2421 of 2424
+# tokens written on a first call, read back on the repeat). So the
+# always-reasoning contract is a per-tier list, NOT the GPT-6 family: for the
+# nine days between their release and this audit the family rule hid their
+# None rung and their temperature. An unknown future gpt-6 tier is deliberately
+# NOT listed here — it gets the None rung, and if it turns out always-reasoning
+# the reactive "Supported values are" 400 rung steps it to low with a notice.
+OPENAI_ALWAYS_REASONING_PREFIXES = ("gpt-6-astra",)
+OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+                          "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
 # o-series prefixes stay HERE (params wiring) even though the picker no longer
 # lists them — a saved instruction pinning o3 etc. keeps correct reasoning
@@ -3311,6 +3328,14 @@ OPENAI_PRICING = {
     # "gpt-6" family row, for the same reason as 5.6 below: an unknown future
     # gpt-6 tier is unpriced, not mispriced.
     "gpt-6-astra":         (10.00, 50.00, 1.00, 12.50),
+    # GPT-6 Sol / Luna (created 2026-09-14; pricing page + model pages read
+    # 2026-09-23): the same 4-tuple shape — cache writes billed at 1.25x
+    # input. Until these rows existed a gpt-6-sol run showed NO cost line
+    # and was NOT written to the cost log (the unpriced-paid-model gate) —
+    # the 2026-09-23 report from the Mac; _unpriced_model_warning now says
+    # so at run start and run end, and the per-call token line still shows.
+    "gpt-6-sol":           (2.00, 10.00, 0.20, 2.50),
+    "gpt-6-luna":          (0.10, 0.50, 0.01, 0.125),
     # GPT-5.6 family — no bare "gpt-5.6" id exists (only the three tiers), so
     # there is deliberately no family fallback row: an unknown future 5.6 id
     # gets no cost line rather than a wrong one.

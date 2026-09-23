@@ -6,6 +6,7 @@ import threading
 import openai
 
 from myagent.constants import (
+    OPENAI_ALWAYS_REASONING_PREFIXES,
     OPENAI_DEPRECATED_MODEL_IDS,
     OPENAI_DEPRECATED_MODEL_PREFIXES,
     OPENAI_PRICING,
@@ -37,8 +38,8 @@ class OpenAIMixin:
 
     def _openai_bills_cache_writes(self, model_id=None):
         """True when the model's OPENAI_PRICING row carries a cache-write rate
-        (a 4th element — the GPT-5.6 tiers and GPT-6 Astra, which bill writes
-        at 1.25x input). Decided from the pricing table itself so
+        (a 4th element — the GPT-5.6 and GPT-6 tiers, which bill writes at
+        1.25x input). Decided from the pricing table itself so
         the usage normalizer and the cost accumulator can never disagree about
         whether written tokens leave the input bucket."""
         mid = model_id or self.model or ""
@@ -276,25 +277,40 @@ class OpenAIMixin:
         return mid.startswith("gpt-5") and "-chat" not in mid
 
     def _has_reasoning_none(self, model_id=None):
-        """Check if model supports reasoning.effort='none' (gpt-5.1+)."""
+        """Check if model supports reasoning.effort='none': gpt-5.1+, and the
+        GPT-6 tiers that are not always-reasoning (sol / luna, probed live
+        2026-09-23 — astra rejects it)."""
         mid = model_id or self.model
+        if self._is_gpt6_family(mid):
+            return not self._openai_always_reasoning(mid)
         return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 1
 
     def _is_gpt6_family(self, model_id=None):
-        """GPT-6 family — gpt-6-astra (2026-09-03) and any later gpt-6.x tier.
-        Anchored so a hypothetical "gpt-60" can't match, and a -chat Instant
-        variant is excluded like _is_gpt5_family."""
+        """GPT-6 family — gpt-6-astra (2026-09-03), gpt-6-sol / gpt-6-luna
+        (2026-09-14) and any later gpt-6.x tier: xhigh + max, verbosity,
+        billed cache writes, never a gpt-5 family member. Anchored so a
+        hypothetical "gpt-60" can't match, and a -chat Instant variant is
+        excluded like _is_gpt5_family. Whether a tier can stop reasoning is
+        _openai_always_reasoning's per-tier question, not the family's."""
         mid = model_id or self.model or ""
         return bool(re.match(r"gpt-6(?:[.-]|$)", mid)) and "-chat" not in mid
 
     def _openai_always_reasoning(self, model_id=None):
         """Models whose reasoning cannot be switched off: reasoning.effort is
         low/medium/high/xhigh/max ONLY ("none" and "minimal" are HTTP 400) and
-        temperature is rejected unconditionally — the GPT-6 family, probed live
-        on gpt-6-astra 2026-09-06. They get the Reasoning combobox without a
-        None rung, and _stream_responses_call always sends `reasoning` and
-        never `temperature`."""
-        return self._is_gpt6_family(model_id)
+        temperature is rejected unconditionally — gpt-6-astra, probed live
+        2026-09-06 and again 2026-09-23. A per-tier list
+        (OPENAI_ALWAYS_REASONING_PREFIXES), NOT the GPT-6 family: gpt-6-sol
+        and gpt-6-luna take "none" and temperature at none like the 5.6
+        tiers (probed 2026-09-23), and for nine days the family rule had
+        hidden their None rung and their temperature. These get the
+        Reasoning combobox without a None rung, and _stream_responses_call
+        always sends `reasoning` and never `temperature`. An unknown future
+        gpt-6 tier is not listed: it gets the None rung, and if it turns out
+        always-reasoning the reactive "Supported values are" 400 rung steps
+        it to low with a notice."""
+        mid = model_id or self.model or ""
+        return mid.startswith(OPENAI_ALWAYS_REASONING_PREFIXES) and "-chat" not in mid
 
     _OPENAI_EFFORT_LADDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
@@ -328,8 +344,9 @@ class OpenAIMixin:
         """The reasoning.effort to actually send for a model with the extended
         Reasoning combobox: the saved effort when the model accepts it, else
         the nearest rung it does (_openai_nearest_effort against
-        _openai_reasoning_values) — a "none" / "minimal" carried onto GPT-6 →
-        "low"; on GPT-5.1+ a stale "minimal" → "low", "off" → "none", a "max"
+        _openai_reasoning_values) — a "none" / "minimal" carried onto
+        gpt-6-astra → "low"; on GPT-5.1+ (and gpt-6-sol / luna) a stale
+        "minimal" → "low", "off" → "none", a "max"
         saved on a 5.6 and run on a 5.5 → "xhigh". Headless runs never pass
         through the combobox coercion in ui_mixin, so this is what keeps them
         from a 400 round trip; the reactive rung in _stream_responses_call
@@ -346,11 +363,12 @@ class OpenAIMixin:
         gpt-5.1+ none/temperature detail was approximated — caught by
         tests/test_gpt6_params.py, 2026-09-06).
 
-        Per family: the always-reasoning GPT-6 tiers send `reasoning` only,
-        never temperature, with a stale rung floor-coerced to "low"
-        (_openai_effective_effort); GPT-5.1+ always send `reasoning` (even
-        "none") and, at none, temperature (the user's on 5.4+, fixed 1.0
-        before); GPT-5.0 sends reasoning when enabled and temperature 1.0;
+        Per family: the always-reasoning tier (gpt-6-astra) sends
+        `reasoning` only, never temperature, with a stale rung floor-coerced
+        to "low" (_openai_effective_effort); GPT-5.1+ and gpt-6-sol / luna
+        always send `reasoning` (even "none") and, at none, temperature (the
+        user's on 5.4+ and the GPT-6 tiers, fixed 1.0 before); GPT-5.0 sends
+        reasoning when enabled and temperature 1.0;
         the o-series reasoning when enabled; non-reasoning ids temperature
         except the -chat Instant variants; every gpt-5 / gpt-6 id adds
         text.verbosity.
@@ -379,14 +397,16 @@ class OpenAIMixin:
             return effort
 
         if self._openai_always_reasoning():
-            # GPT-6: reasoning can't be disabled, temperature never accepted
+            # gpt-6-astra: reasoning can't be disabled, temperature never accepted
             params["reasoning"] = {"effort": coerced_effort(), "summary": "auto"}
         elif self._has_reasoning_none():
-            # GPT-5.1+: always send reasoning param, even with effort="none"
+            # GPT-5.1+ and gpt-6-sol / luna: always send the reasoning
+            # param, even with effort="none"
             effort = coerced_effort()
             params["reasoning"] = {"effort": effort, "summary": "auto"}
             if effort == "none":
-                # gpt-5.4+ supports user temperature at effort=none; older models fixed at 1.0
+                # gpt-5.4+ and the GPT-6 sol / luna tiers take the user's
+                # temperature at effort=none; older 5.x models fixed at 1.0
                 params["temperature"] = (self.temperature if self._gpt5_supports_temp_at_none()
                                          else 1.0)
         elif self._is_gpt5_family():
@@ -408,11 +428,12 @@ class OpenAIMixin:
     def _openai_reasoning_values(self, model_id=None):
         """Reasoning-combobox rungs (display labels) for a model that gets the
         extended combobox, mirroring what _stream_responses_call will accept:
-        the -pro tiers Medium/High only ('none' and 'low' are HTTP 400); the
-        GPT-6 family Low..Max with NO None (always-reasoning — 'none' and
-        'minimal' are HTTP 400, probed live 2026-09-06); GPT-5.1+ None/Low/
-        Medium/High, plus Xhigh (5.2+ and codex-max, not mini/nano) and Max
-        (5.6+). Pure, so the UI gate is unit-testable without Tk."""
+        the -pro tiers Medium/High only ('none' and 'low' are HTTP 400);
+        gpt-6-astra Low..Max with NO None (always-reasoning — 'none' and
+        'minimal' are HTTP 400, probed live 2026-09-06); gpt-6-sol / luna
+        None..Max (probed 2026-09-23); GPT-5.1+ None/Low/Medium/High, plus
+        Xhigh (5.2+ and codex-max, not mini/nano) and Max (5.6+). Pure, so
+        the UI gate is unit-testable without Tk."""
         mid = model_id or self.model
         if "-pro" in mid and self._is_gpt5_family(mid):
             values = ["Medium", "High"]
@@ -430,7 +451,7 @@ class OpenAIMixin:
         """Check if model supports reasoning.effort='xhigh'."""
         mid = model_id or self.model
         if self._is_gpt6_family(mid):
-            return True  # gpt-6-astra: low..xhigh..max, probed live 2026-09-06
+            return True  # every GPT-6 tier: astra 2026-09-06, sol / luna 2026-09-23
         if not self._is_gpt5_family(mid):
             return False
         if "codex-max" in mid:
@@ -453,8 +474,14 @@ class OpenAIMixin:
         return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 6
 
     def _gpt5_supports_temp_at_none(self, model_id=None):
-        """Check if model supports temperature when reasoning.effort='none' (gpt-5.4+)."""
+        """Check if model supports temperature when reasoning.effort='none':
+        gpt-5.4+, and the GPT-6 tiers that take none (sol / luna — probed
+        2026-09-23: accepted at none, HTTP 400 at every other rung and when
+        the reasoning param is omitted; astra never). The name predates
+        GPT-6 and is pinned by tests/test_surface.py."""
         mid = model_id or self.model
+        if self._is_gpt6_family(mid):
+            return not self._openai_always_reasoning(mid)
         return self._is_gpt5_family(mid) and self._parse_gpt5_minor(mid) >= 4
 
     def _is_gpt5_chat_model(self, model_id=None):

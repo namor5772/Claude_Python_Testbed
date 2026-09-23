@@ -273,6 +273,40 @@ class CostLogRunFieldsTests(unittest.TestCase):
         self.assertFalse(self.log.exists())
         self.assertEqual(host.tool_calls, ["read_file"])  # the run itself ran
 
+    def test_unpriced_paid_model_is_loud_and_shows_its_tokens(self):
+        # 2026-09-23: a gpt-6-sol run (no OPENAI_PRICING row yet) showed no
+        # cost line and reached no log, in silence. Now the run says so at
+        # start and end, and every call's tokens still reach the window as
+        # a cost_update with call_cost None.
+        host = _Host(second_call="end")
+        host.model = "claude-unknown-99"
+        host.stream_worker([{"role": "user", "content": "go"}])
+        msgs = []
+        while not host.queue.empty():
+            msgs.append(host.queue.get_nowait())
+        warnings = [m["content"] for m in msgs if m["type"] == "warning"]
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("claude-unknown-99 has no row in the Anthropic pricing table", warnings[0])
+        self.assertTrue(warnings[1].startswith("⚠ Run NOT written to the API cost log"))
+        costs = [m for m in msgs if m["type"] == "cost_update"]
+        self.assertEqual(len(costs), 2)                      # one per call
+        self.assertEqual([m["call_cost"] for m in costs], [None, None])
+        self.assertEqual(costs[1]["input_tokens"], 1000)
+        self.assertEqual(costs[1]["total_input_tokens"], 2000)
+        self.assertFalse(self.log.exists())
+
+    def test_priced_run_gets_no_such_warning(self):
+        host = _Host(second_call="end")
+        host.stream_worker([{"role": "user", "content": "go"}])
+        msgs = []
+        while not host.queue.empty():
+            msgs.append(host.queue.get_nowait())
+        self.assertEqual([m for m in msgs if m["type"] == "warning"], [])
+        costs = [m for m in msgs if m["type"] == "cost_update"]
+        self.assertEqual(len(costs), 2)
+        self.assertTrue(all(m["call_cost"] > 0 for m in costs))
+
+
     def test_cache_buckets_accumulate_into_their_own_fields(self):
         # Two round-trips x (40 written, 7 read) -> 80 / 14, kept in the two
         # trailing fields rather than folded into TOK-IN.
@@ -281,6 +315,27 @@ class CostLogRunFieldsTests(unittest.TestCase):
         f = self._fields()
         self.assertEqual(len(f), 12)
         self.assertEqual(f[8:], ["2000", "200", "80", "14"])
+
+
+class CostLineTests(unittest.TestCase):
+    """event_loop_mixin._cost_line: the blue per-call line, pure."""
+
+    @staticmethod
+    def _msg(call_cost, total_cost, cw=0, cr=0):
+        return {"call_cost": call_cost, "total_cost": total_cost, "input_tokens": 12345,
+                "output_tokens": 678, "cache_write_tokens": cw, "cache_read_tokens": cr}
+
+    def test_priced_lines(self):
+        from myagent.event_loop_mixin import EventLoopMixin
+        self.assertEqual(EventLoopMixin._cost_line(self._msg(0.0012, 0.0034)),
+                         "  $0.0012 this call  |  $0.0034 total  (in:12,345  out:678)\n")
+        self.assertEqual(EventLoopMixin._cost_line(self._msg(0.0012, 1.2345, cw=40, cr=7)),
+                         "  $0.0012 this call  |  $1.23 total  (in:12,345  out:678  cache_write:40  cache_read:7)\n")
+
+    def test_unpriced_line_shows_the_tokens(self):
+        from myagent.event_loop_mixin import EventLoopMixin
+        self.assertEqual(EventLoopMixin._cost_line(self._msg(None, None, cr=7)),
+                         "  unpriced this call  |  no pricing row  (in:12,345  out:678  cache_read:7)\n")
 
 
 if __name__ == "__main__":

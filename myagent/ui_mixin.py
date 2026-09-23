@@ -444,9 +444,10 @@ class UIMixin:
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
                 # Per-model rungs from the pure, unit-tested helper: the -pro
-                # tiers Medium/High ('none'/'low' are HTTP 400), the GPT-6
-                # family Low..Max with no None (always-reasoning — 'none' /
-                # 'minimal' are HTTP 400, probed live 2026-09-06), GPT-5.1+
+                # tiers Medium/High ('none'/'low' are HTTP 400), gpt-6-astra
+                # Low..Max with no None (always-reasoning — 'none' /
+                # 'minimal' are HTTP 400, probed live 2026-09-06), gpt-6-sol
+                # / luna None..Max (probed 2026-09-23), GPT-5.1+
                 # None..High plus Xhigh (5.2+/codex-max) and Max (5.6+,
                 # live-probed 2026-08-25: all three 5.6 tiers accept it).
                 values = self._openai_reasoning_values()
@@ -455,7 +456,7 @@ class UIMixin:
                 # the same nearest-rung rule the request builder applies: a
                 # Max/Xhigh above the ceiling (saved on a 5.6, now on a 5.5)
                 # steps down to the top rung, None on a -pro tier steps up to
-                # Medium, a Claude Off/Adaptive becomes None (or Low on GPT-6),
+                # Medium, a Claude Off/Adaptive becomes None (or Low on gpt-6-astra),
                 # a GPT-5.0 Minimal becomes Low.
                 current = self._thinking_mode_var.get()
                 if current not in values:
@@ -571,9 +572,9 @@ class UIMixin:
         mid = model_id or self.model
         if self.provider == "OpenAI":
             if self._is_openai_reasoning_model(mid):
-                # The Reasoning combobox: GPT-5.1+ (has a None rung) and the
-                # always-reasoning GPT-6 family (Low..Max, no None); the
-                # o-series / GPT-5.0 keep the checkbox + effort combo.
+                # The Reasoning combobox: GPT-5.1+ and gpt-6-sol / luna (a
+                # None rung) and the always-reasoning gpt-6-astra (Low..Max,
+                # no None); the o-series / GPT-5.0 keep the checkbox + effort combo.
                 if self._has_reasoning_none(mid) or self._openai_always_reasoning(mid):
                     return "extended"
                 return "adaptive"
@@ -960,10 +961,10 @@ class UIMixin:
                 if self.provider == "Anthropic" and self._anthropic_rejects_temperature():
                     show_temp = False  # Opus 4.7+ removed temperature (400 if sent)
                 elif self.provider != "OpenAI" or not (self._is_gpt5_family()
-                                                        or self._openai_always_reasoning()):
+                                                        or self._is_gpt6_family()):
                     show_temp = True  # non-gpt5/gpt-6 models
                 elif mode == "none" and self._gpt5_supports_temp_at_none():
-                    show_temp = True  # gpt-5.4+ with effort=none
+                    show_temp = True  # gpt-5.4+ and gpt-6-sol / luna with effort=none
             if show_temp:
                 self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
@@ -998,8 +999,9 @@ class UIMixin:
         elif support == "extended" and self.provider == "OpenAI":
             # Report the effort that actually goes on the wire: the request
             # builder maps a stale value onto the nearest rung this model
-            # accepts (None/minimal → Low on GPT-6, minimal → Low and off →
-            # None on 5.1+, a Max above the ceiling → the top rung).
+            # accepts (None/minimal → Low on gpt-6-astra, minimal → Low and
+            # off → None on 5.1+ and gpt-6-sol / luna, a Max above the
+            # ceiling → the top rung).
             shown = self._openai_effective_effort()
             parts.append(f"reasoning={shown.capitalize()}")
             if self._has_openai_verbosity():

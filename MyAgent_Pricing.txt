@@ -96,8 +96,9 @@
   APICostLog.txt. Cached input is 1/10 of input on the GPT-5 families and 1/4
   on GPT-4.1; the -pro tiers (gpt-5.5-pro / gpt-5.2-pro / gpt-5-pro) have NO
   cached tier. Cache WRITES are BILLED from GPT-5.6 on at 1.25x input
-  (terra $2.50 / sol $5.00 / luna $0.25 / gpt-6-astra $12.50 per M — pricing
-  page re-read 2026-09-06; the write premium arrived with GPT-5.6 GA on
+  (terra $2.50 / sol $5.00 / luna $0.25 / gpt-6-astra $12.50 / gpt-6-sol
+  $2.50 / gpt-6-luna $0.125 per M — pricing page re-read 2026-09-06 and
+  2026-09-23; the write premium arrived with GPT-5.6 GA on
   2026-07-09 together with a 1,024-token cache floor, 2,048 on older models),
   carried as the 4th element of those rows and moved out of the input bucket
   only for rows that carry the rate. The 5.5 / 5.4 / 5.2 / 5.1 / 4.1 rows
@@ -121,16 +122,32 @@
   OPENAI_PRICING (gpt-4o, gpt-4.5, the o-series, the gpt-5.0 base tiers) —
   constants.py is the source of truth for what actually prices.
 
-  GPT-6 Family (Flagship — gpt-6-astra, released 2026-09-03, wired 2026-09-06)
+  GPT-6 Family (gpt-6-astra released 2026-09-03, wired 2026-09-06; gpt-6-sol
+  and gpt-6-luna created 2026-09-14, wired 2026-09-23 after a gpt-6-sol run
+  on the Mac showed no cost and reached no log — the unpriced-paid-model
+  gate — nine days without a row; the pricing page and both model pages
+  were read that day)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output    Cached   Cache write
   ──────────────────────────────────────────────────────────────────────────
   gpt-6-astra            $10.00   $50.00    $1.00    $12.50
+  gpt-6-sol              $2.00    $10.00    $0.20    $2.50   ("built to power
+                                                              complex coding and
+                                                              agentic workflows")
+  gpt-6-luna             $0.10    $0.50     $0.01    $0.125  ("our most efficient
+                                                              model for focused,
+                                                              high-volume tasks")
   (Standard tier, ≤272K input. Above 272K: 2x input & cache, 1.5x output;
-   Fast mode 2x everything — neither modelled. 1.05M context, 128K output.
-   Always-reasoning: effort low/medium/high/xhigh/max — "none"/"minimal" are
-   HTTP 400 — and temperature is rejected. No bare "gpt-6" family row: an
-   unknown future gpt-6 tier is unpriced rather than mispriced, as with 5.6.
+   Fast mode 2x everything — neither modelled. All three 1.05M context, 128K
+   output, vision. Astra is always-reasoning: effort low/medium/high/xhigh/
+   max — "none"/"minimal" are HTTP 400 — and temperature is rejected. Sol and
+   luna are NOT: none/low/medium/high/xhigh/max ("minimal" HTTP 400) and
+   temperature ONLY at effort=none — the GPT-5.6 rule — probed live
+   2026-09-23; both bill cache writes (2421 of 2424 tokens written on a first
+   call, read back on the repeat). No bare "gpt-6" family row: an unknown
+   future gpt-6 tier is unpriced rather than mispriced, as with 5.6 — and
+   since 2026-09-23 MyAgent says so at run start and run end instead of
+   silently showing no cost and logging nothing.
    Declaring the web_search_preview + code_interpreter server tools adds
    ~5.6K tokens of tool definitions to every request — written to the cache
    at $12.50/M on the first call of a run, read back at $1/M thereafter.
@@ -585,5 +602,6 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7)
+  Last updated: September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
+                OpenAI audit: gpt-6-sol / gpt-6-luna rows)
 ================================================================================

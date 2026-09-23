@@ -136,6 +136,15 @@ class TestGetPricing(unittest.TestCase):
                                                  "cache_read": 3e-08},
         # gemini-3.6-flash / 3.7-flash / 3.8-flash / gemini-flash-latest are
         # DatedPrice entries — see DATED_CASES below.
+        # GPT-6 Sol / Luna (created 2026-09-14; rows added 2026-09-23 after a
+        # gpt-6-sol run showed no cost and reached no log): the same billed
+        # cache-write shape as astra and the 5.6 tiers, 1.25x input.
+        ("OpenAI", "gpt-6-sol"): {"input": 2.00 / 1_000_000, "output": 10.00 / 1_000_000,
+                                  "cache_read": 0.20 / 1_000_000, "cache_write": 2.50 / 1_000_000},
+        ("OpenAI", "gpt-6-luna"): {"input": 0.10 / 1_000_000, "output": 0.50 / 1_000_000,
+                                   "cache_read": 0.01 / 1_000_000, "cache_write": 0.125 / 1_000_000},
+        # ...and an unknown future gpt-6 tier stays unpriced (no family row)
+        ("OpenAI", "gpt-6-terra"): None,
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
         ("xAI", "grok-4.5"): {"input": 2e-06, "output": 6e-06},
         ("xAI", "grok-4.6"): {"input": 2e-06, "output": 6e-06},
@@ -227,6 +236,38 @@ class TestGetPricing(unittest.TestCase):
         # boundary the real clock is on, the result is a concrete rate dict.
         got = StreamingMixin._get_pricing("Google", "gemini-3.7-flash")
         self.assertIn(got, (GEMINI_FLASH_PROMO, GEMINI_FLASH_STICKER))
+
+
+class TestUnpricedModelWarning(unittest.TestCase):
+    """_unpriced_model_warning: the run-start ⚠ for a paid provider's model
+    with no pricing row at all (2026-09-23 — a gpt-6-sol run had shown no
+    cost line and reached no cost log, in silence)."""
+
+    def test_unpriced_paid_model_warns(self):
+        for provider, model in (("OpenAI", "gpt-7-nova"), ("Anthropic", "claude-future-99"),
+                                ("Google", "gemini-9-ultra"), ("Moonshot", "kimi-k9")):
+            with self.subTest(provider=provider, model=model):
+                msg = StreamingMixin._unpriced_model_warning(provider, model)
+                self.assertIsNotNone(msg)
+                self.assertIn(model, msg)
+                self.assertIn(f"{provider} pricing table", msg)
+                self.assertIn("NOT be written to the API cost log", msg)
+
+    def test_priced_models_are_silent(self):
+        for provider, model in (("OpenAI", "gpt-6-sol"), ("OpenAI", "gpt-6-luna"),
+                                ("OpenAI", "gpt-6-astra"), ("Anthropic", "claude-fable-5-1"),
+                                ("Moonshot", "kimi-k3")):
+            with self.subTest(provider=provider, model=model):
+                self.assertIsNone(StreamingMixin._unpriced_model_warning(provider, model))
+
+    def test_catch_all_row_is_the_generic_warnings_business(self):
+        # gemini-3-something prices by the bare "gemini-3" row: not unpriced
+        self.assertIsNone(StreamingMixin._unpriced_model_warning("Google", "gemini-3-future"))
+        self.assertIsNotNone(StreamingMixin._generic_pricing_warning("Google", "gemini-3-future"))
+
+    def test_free_and_authoritative_providers_never_warn(self):
+        self.assertIsNone(StreamingMixin._unpriced_model_warning("Ollama", "qwen3:32b"))
+        self.assertIsNone(StreamingMixin._unpriced_model_warning("xAI", "grok-9"))
 
 
 class TestGenericPricingWarning(unittest.TestCase):
