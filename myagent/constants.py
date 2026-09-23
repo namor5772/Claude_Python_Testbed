@@ -3736,6 +3736,14 @@ VOICE_PRICING_PER_MIN = {
     "grok-voice-transcribe":  0.10 / 60,
 }
 
+# The replies that end a Convo-mode conversation (streaming_mixin's check on
+# the Agent Request reply, which the dialog's stock prompt names) — and what a
+# DICTATED one is normalised to: a speech model writes a spoken "quit" down as
+# "Quit." (capitalised, full stop), which the check must not be taught to read,
+# so voice_mixin lands such a transcript as the bare word instead
+# (`_voice_end_word`, 2026-09-23). One tuple, so the two cannot drift.
+CONVO_END_WORDS = ("quit", "exit", "stop")
+
 PROVIDERS = ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"

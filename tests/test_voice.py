@@ -25,7 +25,10 @@ module pins, without a microphone, a key or the network:
   transcript that lands is sent as if Enter had been pressed — and only one
   that lands; unticked, nothing changes; the tick is written through to the
   applied instruction's entry and rides the applied snapshot like the tool
-  toggles, and every persistence site names it (a static scan);
+  toggles, and every persistence site names it (a static scan); a dictated
+  "Quit." / "Exit!" / "Stop" into an empty box lands as the bare word the
+  Convo-mode check reads (the one list, CONVO_END_WORDS), after typed text as
+  heard;
 * the wiring (a static scan): the dialog builds the row, owns the mnemonics,
   refuses to send mid-dictation, releases the microphone on close — and
   sounddevice is never imported at module level (~0.5 s, paid at first use).
@@ -53,8 +56,9 @@ from tests._util import stub
 from tests.test_state_skill_modes import _Host as _StateHost
 from myagent import voice_mixin
 from myagent.constants import (
-    META_TOOLS, VOICE_DEFAULT_MODELS, VOICE_FALLBACK_MODELS, VOICE_MODEL_NOTES,
-    VOICE_PROVIDERS, VOICE_RECORDING_BG, VOICE_UNAUDITED_NOTE, VOICE_UNSUITABLE_MODELS,
+    CONVO_END_WORDS, META_TOOLS, VOICE_DEFAULT_MODELS, VOICE_FALLBACK_MODELS,
+    VOICE_MODEL_NOTES, VOICE_PROVIDERS, VOICE_RECORDING_BG, VOICE_UNAUDITED_NOTE,
+    VOICE_UNSUITABLE_MODELS,
 )
 from myagent.ui_mixin import UIMixin
 from myagent.voice_mixin import VoiceMixin, _VoiceDictation, _VoiceRecorder
@@ -316,6 +320,36 @@ class SpacingTests(unittest.TestCase):
         self.assertEqual(spaced("a", "Hello", "b"), " Hello ")                     # mid-word gap
         self.assertEqual(spaced("a", "Hello", ","), " Hello")                      # before a comma
         self.assertEqual(spaced("a", "   ", "b"), "")                              # nothing heard
+
+
+class EndWordTests(unittest.TestCase):
+    """A spoken "quit" comes back "Quit." (2026-09-23): the transcript that IS
+    one of the Convo-ending words, whatever its case and closing punctuation,
+    is the bare word; anything more is dictation."""
+
+    def test_the_word_alone_however_cased_and_closed_is_the_bare_word(self):
+        end_word = VoiceMixin._voice_end_word
+        for heard, word in (("Quit.", "quit"), ("Exit.", "exit"), ("Stop.", "stop"),
+                            ("quit", "quit"), ("STOP", "stop"), ("Exit!", "exit"),
+                            ("Stop?", "stop"), ("Quit…", "quit"), ("Stop!!", "stop"),
+                            ("  Quit .  ", "quit"), ("Stop,", "stop"), ("\nquit.\n", "quit")):
+            self.assertEqual(end_word(heard), word, heard)
+
+    def test_anything_more_than_the_word_is_dictation(self):
+        end_word = VoiceMixin._voice_end_word
+        for heard in ("Hello there.", "Stop the payment.", "Stop stop.", "Quit the session",
+                      "quitting", "exits", "Please stop.", "", "   ", ".", "Stop. Quit."):
+            self.assertIsNone(end_word(heard), heard)
+
+    def test_what_lands_is_what_the_convo_mode_check_accepts(self):
+        # streaming_mixin ends the conversation on `reply.strip().lower() in
+        # CONVO_END_WORDS` — the rule a normalised transcript must satisfy for
+        # every word of the ONE list both read.
+        self.assertEqual(CONVO_END_WORDS, ("quit", "exit", "stop"))
+        for word in CONVO_END_WORDS:
+            landed = VoiceMixin._voice_end_word(f"{word.capitalize()}.")
+            self.assertEqual(landed, word)
+            self.assertIn(landed.strip().lower(), CONVO_END_WORDS)
 
 
 class DeviceTests(unittest.TestCase):
@@ -1030,6 +1064,36 @@ class AutoSendTests(unittest.TestCase):
                 self.assertEqual((self.sent, self.box.get("1.0", "end-1c")), ([], ""))
                 self.assertIn(expected, row.winfo_children()[-1].cget("text"))
 
+    def test_a_dictated_end_word_lands_bare_and_is_sent_so_convo_mode_ends(self):
+        # The user's report (2026-09-23): a spoken "quit" came back "Quit."
+        # and, auto-sent, did not end the conversation.
+        for heard, word in (("Quit.", "quit"), ("Exit!", "exit"), ("Stop", "stop")):
+            with self.subTest(heard=heard):
+                host = _RowHost(self.root, transcribe=lambda cfg, wav, heard=heard: (
+                    heard, {"model": "m", "note": "", "elapsed": 0.1}))
+                _, mike, auto, d = self.build(host)
+                auto.invoke()
+                self.sent = []
+                self.box.delete("1.0", "end")
+                self.dictate(mike, d)
+                self.assertEqual((self.box.get("1.0", "end-1c"), self.sent), (word, [word]))
+
+    def test_an_end_word_after_typed_text_lands_as_heard(self):
+        host = _RowHost(self.root, transcribe=lambda cfg, wav: (
+            "Stop.", {"model": "m", "note": "", "elapsed": 0.1}))
+        _, mike, auto, d = self.build(host)
+        auto.invoke()
+        self.box.insert("1.0", "Yes:")
+        self.dictate(mike, d)
+        self.assertEqual((self.box.get("1.0", "end-1c"), self.sent), ("Yes: Stop.", ["Yes: Stop."]))
+
+    def test_unticked_a_dictated_end_word_lands_bare_for_enter_to_send(self):
+        host = _RowHost(self.root, transcribe=lambda cfg, wav: (
+            "Quit.", {"model": "m", "note": "", "elapsed": 0.1}))
+        _, mike, _, d = self.build(host)
+        self.dictate(mike, d)
+        self.assertEqual((self.box.get("1.0", "end-1c"), self.sent), ("quit", []))
+
     def test_the_tick_is_kept_with_the_applied_instruction(self):
         host = _RowHost(self.root, name="Pay_bills",
                         disk={"Pay_bills": {"text": "t", "desktop": True}, "Other": {"text": "o"}})
@@ -1225,6 +1289,18 @@ class IndependenceTests(unittest.TestCase):
 
 class WiringTests(unittest.TestCase):
     """The dialog and the app are wired to the mixin (a static scan, no Tk)."""
+
+    def test_convo_mode_and_the_voice_row_read_the_one_end_word_list(self):
+        # The conversation-ending check and the transcript normaliser must
+        # not drift apart: streaming_mixin reads CONVO_END_WORDS (no literal
+        # tuple of its own), and the row normalises before it inserts.
+        streaming = (REPO / "myagent" / "streaming_mixin.py").read_text(encoding="utf-8")
+        self.assertIn("next_msg.strip().lower() in CONVO_END_WORDS", streaming)
+        self.assertNotIn('("quit", "exit", "stop")', streaming)
+        voice = (REPO / "myagent" / "voice_mixin.py").read_text(encoding="utf-8")
+        landed = voice[voice.index("def landed(transcript):"):voice.index("dictation = _VoiceDictation(")]
+        self.assertLess(landed.index("self._voice_end_word(transcript)"),
+                        landed.index("self._voice_insert_into(target_text, transcript)"))
 
     def test_the_agent_request_dialog_embeds_the_voice_row(self):
         src = (REPO / "myagent" / "safety_mixin.py").read_text(encoding="utf-8")

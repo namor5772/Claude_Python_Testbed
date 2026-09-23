@@ -18,7 +18,7 @@ from myagent.constants import (
     ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
-    APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES,
+    APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
                              rotate_log_if_needed)
@@ -1562,7 +1562,7 @@ class StreamingMixin:
                         )
                         prompt_images = self._take_prompt_images()
                         if (not next_msg
-                                or next_msg.strip().lower() in ("quit", "exit", "stop")):
+                                or next_msg.strip().lower() in CONVO_END_WORDS):
                             self._tool_info("Conversation ended.\n")
                             full_text = ""  # already appended above; don't double-add
                             break

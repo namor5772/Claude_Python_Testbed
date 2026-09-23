@@ -75,7 +75,7 @@ from myagent.constants import (
     VOICE_OPENAI_KEYWORD_PREFIXES, VOICE_GEMINI_DEDICATED_SUBSTRING,
     VOICE_XAI_MAX_KEYTERMS, VOICE_XAI_MAX_KEYTERM_CHARS,
     VOICE_UNSUITABLE_MODELS, VOICE_MODEL_NOTES, VOICE_UNAUDITED_NOTE,
-    VOICE_PRICING_PER_MIN, VOICE_RECORDING_BG,
+    VOICE_PRICING_PER_MIN, VOICE_RECORDING_BG, CONVO_END_WORDS,
 )
 from myagent.keyboard import bind_mnemonics
 
@@ -620,6 +620,20 @@ class VoiceMixin:
         return text
 
     @staticmethod
+    def _voice_end_word(transcript):
+        """The bare Convo-ending word a transcript IS, or None (2026-09-23).
+
+        A spoken "quit" comes back from a speech model as "Quit." — a
+        sentence, capitalised and closed — and streaming_mixin's end-of-
+        conversation check reads the reply case-folded but otherwise as
+        typed, so the session went on (the user's report, with Auto-send
+        ticked). Only a transcript that is NOTHING BUT one of the words —
+        whatever its case, however it is closed (. ! ? … , ; :) — is the
+        word; "Stop the payment." and "Stop stop." are dictation."""
+        word = transcript.strip().rstrip(".!?…,;:").strip().lower()
+        return word if word in CONVO_END_WORDS else None
+
+    @staticmethod
     def _voice_input_devices(devices, hostapi):
         """Microphone names for the picker: the input-capable devices of ONE
         host API. PortAudio lists every microphone once per API (four times on
@@ -903,7 +917,9 @@ class VoiceMixin:
         behaves exactly as it did before the box existed. Only a transcript
         that LANDS can be sent: silence, a slip, an empty transcript and an
         API error stop at the status line as ever, and on_text is never
-        called for them.
+        called for them. A transcript that is one of CONVO_END_WORDS, into an
+        empty box, lands as the bare word (`_voice_end_word`) — the one
+        transcript the dialog reads before it lands.
 
         The settings are NOT here: Voice Setup is a button on the main window
         (2026-09-20), so it can be reached before any run asks anything —
@@ -928,6 +944,13 @@ class VoiceMixin:
         status.grid(row=0, column=2, sticky="ew")
 
         def landed(transcript):
+            # A dictated "Quit." / "Exit!" / "Stop" is the whole reply when the
+            # box is otherwise empty, and lands as the bare word the Convo-mode
+            # check recognises (`_voice_end_word`) — so a spoken "quit" ends
+            # the conversation, sent by the tick or by Enter. After typed text
+            # ("Yes: Stop.") it is dictation and lands as heard.
+            if not target_text.get("1.0", "end-1c").strip():
+                transcript = self._voice_end_word(transcript) or transcript
             self._voice_insert_into(target_text, transcript)
             if auto_send.get():
                 send()      # the virtual Enter: the dialog's own send path
