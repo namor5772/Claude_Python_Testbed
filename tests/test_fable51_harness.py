@@ -53,7 +53,8 @@ class FableFeatures(unittest.TestCase):
     def test_whole_always_on_class(self):
         # Fable 5 / Mythos 5 accept both surfaces (and never act on the
         # binding check), so the class is gated by prefix, not by minor.
-        for model in ("claude-fable-5", "claude-mythos-5", "claude-mythos-5-1"):
+        for model in ("claude-fable-5", "claude-mythos-5", "claude-mythos-5-1",
+                      "claude-opus-5-5"):   # Opus 5.5 joined the class 2026-09-23
             with self.subTest(model=model):
                 self.assertIsNotNone(_host(model)._anthropic_fable_features())
 

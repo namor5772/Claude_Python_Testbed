@@ -82,8 +82,10 @@ class AnthropicMixin:
         return wire
 
     def _anthropic_fable_features(self):
-        """The Fable/Mythos-only request surface for this call, or None for
-        every other model: the beta headers to add plus the
+        """The always-on class's request surface for this call — Fable /
+        Mythos, and Claude Opus 5.5+ since 2026-09-23 (it carries preserved
+        thinking and the refusal fallbacks too; both accepted live that day)
+        — or None for every other model: the beta headers to add plus the
         `thinking.block_binding` and `fallbacks` values to send (constants.py
         explains both), minus any surface this session has already seen the
         API reject — `_anthropic_unsupported`, filled by the BadRequest rungs
@@ -149,10 +151,10 @@ class AnthropicMixin:
             "tools": tools,
         }
         model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-        # Fable/Mythos thinking is always on (an explicit disable is HTTP 400),
-        # so a stale thinking_mode of "off" — possible via headless state restore,
-        # which skips the UI coercion — still takes the thinking branch and is
-        # sent as plain adaptive.
+        # Fable/Mythos — and Opus 5.5+ — thinking is always on (an explicit
+        # disable is HTTP 400), so a stale thinking_mode of "off" — possible
+        # via headless state restore, which skips the UI coercion — still
+        # takes the thinking branch and is sent as plain adaptive.
         always_on = self._is_anthropic_always_on_thinking()
         # Fable 5.1's preserved-thinking binding + server-side refusal fallbacks
         # (None outside the always-on class; constants.py explains both).

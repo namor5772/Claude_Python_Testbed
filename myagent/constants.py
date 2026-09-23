@@ -1332,6 +1332,7 @@ else:
 
 FALLBACK_MODELS = [
     "claude-opus-5",
+    "claude-opus-5-5",      # the next Opus (live 2026-09-21): $4/$20, always-on thinking — see ANTHROPIC_ALWAYS_ON_OPUS_MIN
     "claude-opus-4-8",
     "claude-fable-5-1",
     "claude-fable-5",
@@ -1367,7 +1368,7 @@ ANTHROPIC_DEPRECATED_MODEL_PREFIXES = (
 )
 ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
-                            "claude-opus-5",
+                            "claude-opus-5", "claude-opus-5-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5", "claude-sonnet-4-6"}
 # Claude 5 Mythos-class models (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is
@@ -1377,6 +1378,19 @@ ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
 # drops the "Off" mode for these and the streaming path always takes the thinking
 # branch. Prefix-matched, so claude-fable-5-1 (2026-08-28) needed no new entry.
 ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
+# ...and since Claude Opus 5.5 (claude-opus-5-5, live 2026-09-21 — found by
+# the 2026-09-23 audit two days later) the Opus line too: "thinking.type.
+# disabled" is not supported for this model — HTTP 400 at every effort level,
+# the budget form likewise (probed live 2026-09-23); Opus 5 still accepts the
+# explicit disable at effort <= high. Version-gated in
+# _is_anthropic_always_on_thinking (an Opus minor of 5 or more, or a later
+# major; a dated snapshot's date in the minor slot does not count) so a later
+# Opus keeps the contract without a new entry. Opus 5.5 also carries the
+# Fable-class request surface — preserved thinking (block binding) and the
+# server-side refusal fallbacks — both accepted live 2026-09-23, so
+# _anthropic_fable_features serves it too. Its default effort is MEDIUM
+# (Opus 5's is high): the "Adaptive" mode sends no effort and runs there.
+ANTHROPIC_ALWAYS_ON_OPUS_MIN = (5, 5)
 # Claude Fable 5.1 / Mythos 5.1 added two beta surfaces that MyAgent sends for the
 # whole always-on class (Fable 5 / Mythos 5 accept both and simply never act on
 # the binding check), each learned-off per session by _stream_anthropic_call if
@@ -1505,6 +1519,43 @@ GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 # _gemini_uses_thinking_level.
 GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3", "gemini-pro-latest",
                             "gemini-flash-latest", "gemini-flash-lite-latest")
+# What the wire carries for a thinking-capable Gemini model when MyAgent's
+# Thinking checkbox is OFF (2026-09-23 audit). Sending NO thinking_config —
+# what "off" meant until then — leaves a Gemini 3.x tier thinking at its
+# DEFAULT: probed live that day (no config → thoughts_token_count on one
+# short question): 3.8-flash 168, 3.7-flash 148, 3.6-flash 237, 3.5-flash
+# 233, 3.1-pro-preview 295, 3-flash-preview 113 — billed at the output rate
+# with nothing shown, the checkbox saying off; only the -lite tiers (3.5 /
+# 3.1) idle at 0 by default. The quietest setting differs per tier, so it is
+# a LADDER tried in order and learned per model per session
+# (GeminiMixin._gemini_quiet_style; a 400 steps down one rung):
+#   "minimal"  thinking_level=minimal — 0 thoughts on 3.6 / 3.5 / 3.5-lite /
+#              3.1-lite / 3-flash-preview; HTTP 400 "Thinking level MINIMAL
+#              is not supported for this model" on 3.8, 3.7 and 3.1-pro
+#   "budget0"  thinking_budget=0 — the legacy disable: 0 thoughts on 3.6 /
+#              3.5 / 3.1-lite / 3-flash; on 3.8 / 3.7 ACCEPTED but ~50
+#              thoughts remain (their floor); 400 on 3.5-flash-lite ("Request
+#              contains an invalid argument") and on 3.1-pro ("Budget 0 is
+#              invalid. This model only works in thinking mode.")
+#   "low"      thinking_level=low — the floor of a tier that cannot stop
+#              (3.1-pro: 174 thoughts against 295 at its default)
+#   "none"     no thinking_config at all — the old behaviour, the last resort
+GEMINI_QUIET_STYLES = ("minimal", "budget0", "low", "none")
+# Where a served tier is known to land on that ladder (longest prefix wins;
+# an unlisted id starts at "minimal" and learns) — pre-seeded so the default
+# model does not pay a 400 round trip at the start of every session. The
+# -latest aliases are seeded at their CURRENT target's rung, like their
+# pricing rows: re-verify when an alias moves.
+GEMINI_QUIET_STYLE_PREFIXES = {
+    "gemini-3.8-flash": "budget0",
+    "gemini-3.7-flash": "budget0",
+    "gemini-flash-latest": "budget0",     # -> gemini-3.8-flash
+    "gemini-3.1-pro": "low",
+    "gemini-pro-latest": "low",           # -> gemini-3.1-pro-preview
+    "gemini-3-pro": "low",                # the retired 3 Pro preview: the same always-thinking line
+    "gemini-2.5-pro": "none",             # 2.5 Pro cannot stop thinking and knows no thinking_level
+    "gemini-2.5": "budget0",              # 2.5 Flash / Flash-Lite: the budget IS the knob
+}
 # models.list() entries that can't serve MyAgent's agentic loop (text chat +
 # custom function declarations on generateContent), dropped by substring in
 # _fetch_gemini_models. Groups: wrong output modality (TTS, image generation —
@@ -1666,11 +1717,16 @@ KIMI_FALLBACK_MODELS = ["kimi-k2.6", "kimi-k3",
                         "kimi-k2.7-code", "kimi-k2.7-code-highspeed"]
 KIMI_DEFAULT_MODEL = KIMI_FALLBACK_MODELS[0]
 # reasoning_effort support by family (longest prefix wins) — kimi-k3 only.
-# NOTE the sparse ladder: low/high/max, NO medium (the API default is max);
-# _kimi_reasoning_effort() coerces stale saved efforts from other providers.
+# NOTE the sparse ladder: none/low/high/max, NO medium (the API default is
+# max); _kimi_reasoning_effort() coerces stale saved efforts from other
+# providers. "none" joined 2026-09-23: probed live, it is a real OFF switch
+# (no reasoning_content, no reasoning tokens, and the prompt loses the
+# reasoning preamble — 31 prompt tokens against 99), where the API also
+# accepts "medium" and even "banana" in silence with no measurable effect,
+# so acceptance alone proved nothing and only "none" earned a rung.
 # k2.6/k2.5 use the thinking on/off checkbox instead; k2.7-code has no knob.
 KIMI_REASONING_EFFORT = {
-    "kimi-k3": ["low", "high", "max"],
+    "kimi-k3": ["none", "low", "high", "max"],
 }
 # Models whose thinking can be toggled via {"thinking": {"type": "enabled" |
 # "disabled"}} (thinking is ON by default server-side for both).
@@ -1685,9 +1741,14 @@ KIMI_ALWAYS_THINKING_PREFIXES = ("kimi-k3", "kimi-k2.7-code")
 # (the docs' direction of travel), backstopped by the 400 ladder.
 KIMI_NO_REASONING_ROUNDTRIP_PREFIXES = ("kimi-k2.5",)
 # Text-only Kimi families (no image input) — the weak-desktop-combo warning
-# fires for these. k3 / k2.6 / k2.5 are all vision-capable; the k2.7-code
-# coding line (incl. -highspeed) is text-only per the models doc.
-KIMI_NON_VISION_PREFIXES = ("kimi-k2.7-code",)
+# fires for these — the OFFLINE fallback behind _is_kimi_vision_model: the
+# /v1/models listing publishes supports_image_in per model (kept in
+# _kimi_caps by _fetch_kimi_models since 2026-09-23) and decides first.
+# EMPTY since that audit: every served Kimi model reports image input,
+# INCLUDING the k2.7-code coding line (the models doc once called it
+# text-only; live, both k2.7-code and -highspeed read a red test square as
+# "Red"). The tuple stays so a future text-only tier is one entry away.
+KIMI_NON_VISION_PREFIXES = ()
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document",
                        "read_file", "glob_files", "grep_files",
                        # run_instruction: each spawn is an independent child PROCESS, and a
@@ -3264,14 +3325,21 @@ ANTHROPIC_PRICING = {
     # keeps Fable 5's per-token rates but reads its prompt cache at $0.25/MTok
     # (0.025x input — every other row is 0.1x), so it needs its OWN row: the
     # longest-prefix match would otherwise bill 5.1's cache reads at Fable 5's
-    # $1.00, 4x too high. Mythos 5.1's cache-read rate was open at launch, so it
-    # deliberately falls through to the mythos-5 row (the conservative $1.00)
-    # until confirmed — over-reporting beats hiding spend in a cost tracker.
+    # $1.00, 4x too high. Mythos 5.1's cache-read rate was open at launch and
+    # fell through to the mythos-5 row (the conservative $1.00) until the
+    # pricing page confirmed 0.025x for it too (read 2026-09-23).
     "claude-fable-5-1":    (10.00, 50.00, 12.50, 0.25),
+    "claude-mythos-5-1":   (10.00, 50.00, 12.50, 0.25),
     "claude-fable-5":      (10.00, 50.00, 12.50, 1.00),
     "claude-mythos-5":     (10.00, 50.00, 12.50, 1.00),
     # Opus 5 — drop-in successor to Opus 4.8 at the same rates
     "claude-opus-5":       (5.00, 25.00, 6.25, 0.50),
+    # Opus 5.5 (live 2026-09-21; pricing page read 2026-09-23): the next Opus
+    # at a LOWER price — and cache reads at 0.05x input ($0.20/MTok), not the
+    # standard 0.1x — so it needs its own row: for its first two days it
+    # longest-prefix-matched the claude-opus-5 row, 25% over on every token
+    # and 2.5x over on cache reads. 5-minute writes 1.25x ($5.00).
+    "claude-opus-5-5":     (4.00, 20.00, 5.00, 0.20),
     # Claude 4.5+ family (new lower pricing)
     "claude-opus-4-8":     (5.00, 25.00, 6.25, 0.50),
     "claude-opus-4-7":     (5.00, 25.00, 6.25, 0.50),
@@ -3433,9 +3501,9 @@ GEMINI_PRICING = {
     "gemini-3.6-flash":    _GEMINI_FLASH_PROMO,
     # Gemini 3.5 family (-lite is a LONGER prefix, so it must be listed for
     # gemini-3.5-flash-lite not to match the pricier gemini-3.5-flash entry).
-    # The pricing page lists no context-caching rate for 3.5 Flash-Lite; the
-    # 1/10 slot is kept rather than None so that, should cached tokens ever be
-    # reported, they are priced by the family rule instead of silently free.
+    # The pricing page listed no context-caching rate for 3.5 Flash-Lite when
+    # the row was added; by 2026-09-23 it does — $0.03, the family's 1/10 —
+    # so the slot the family rule had filled is now the published rate.
     "gemini-3.5-flash-lite": (0.30, 2.50, 0.03),
     "gemini-3.5-flash":    (1.50, 9.00, 0.15),
     # Gemini 3.1 family  (3.1-pro doubles input above 200k tokens — the table

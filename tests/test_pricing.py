@@ -37,11 +37,12 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-fable-5-1"): {
             "input": 1e-05, "output": 5e-05,
             "cache_write": 1.25e-05, "cache_read": 2.5e-07},
-        # Mythos 5.1's cache-read rate was open at launch: it deliberately
-        # falls through to the mythos-5 row (the conservative $1.00).
+        # Mythos 5.1's cache-read rate was open at launch and fell through to
+        # the mythos-5 row ($1.00) until the pricing page confirmed 0.025x
+        # for it too (read 2026-09-23): its own row now.
         ("Anthropic", "claude-mythos-5-1"): {
             "input": 1e-05, "output": 5e-05,
-            "cache_write": 1.25e-05, "cache_read": 1e-06},
+            "cache_write": 1.25e-05, "cache_read": 2.5e-07},
         # Launched as intro pricing through 2026-08-31 ($2/$10); the pricing
         # page made it the permanent standard rate (checked 2026-08-25) —
         # there is no September flip to $3/$15.
@@ -52,6 +53,12 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-opus-5"): {
             "input": 5e-06, "output": 2.5e-05,
             "cache_write": 6.25e-06, "cache_read": 5e-07},
+        # Opus 5.5 (live 2026-09-21, row added 2026-09-23): cheaper than Opus
+        # 5 and cache reads at 0.05x input — its own row, or the opus-5
+        # prefix would bill it 25% over (2.5x on cache reads)
+        ("Anthropic", "claude-opus-5-5"): {
+            "input": 4.00 / 1_000_000, "output": 20.00 / 1_000_000,
+            "cache_write": 5.00 / 1_000_000, "cache_read": 0.20 / 1_000_000},
         # Retired generations were dropped from the table (2026-07 audit)
         ("Anthropic", "claude-3-haiku-20240307"): None,
         ("Anthropic", "claude-opus-4-1"): None,

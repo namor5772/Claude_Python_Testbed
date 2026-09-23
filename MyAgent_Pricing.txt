@@ -13,13 +13,16 @@
 
   Anthropic models include prompt caching pricing (5-minute cache writes
   and cache reads). Cache writes cost 1.25x base input; cache reads cost
-  0.1x base input — except Claude Fable 5.1, whose cache reads are 0.025x.
+  0.1x base input — except Claude Fable 5.1 and Mythos 5.1 (0.025x) and
+  Claude Opus 5.5 (0.05x). Every row re-verified against
+  platform.claude.com/docs/en/about-claude/pricing on 2026-09-23.
 
   Claude 5 Family (Mythos-class tier above Opus)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
   claude-fable-5-1       $10.00   $50.00   $12.50       $0.25
+  claude-mythos-5-1      $10.00   $50.00   $12.50       $0.25   (row added 2026-09-23)
   claude-fable-5         $10.00   $50.00   $12.50       $1.00
   claude-mythos-5        $10.00   $50.00   $12.50       $1.00
 
@@ -35,13 +38,20 @@
    row whose cache reads are NOT 0.1x input: $0.25/MTok = 0.025x, a
    quarter of Fable 5's rate and half of Opus 5's — which is why it has
    its own row above the "claude-fable-5" prefix. Mythos 5.1's cache-read
-   rate was open at launch, so it deliberately falls through to the
-   mythos-5 row's conservative $1.00 until confirmed.)
+   rate was open at launch and fell through to the mythos-5 row's $1.00
+   until the pricing page confirmed 0.025x for it too — its own row since
+   2026-09-23.)
 
   Claude 4.5+ Family (Current Generation)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
+  claude-opus-5-5        $4.00    $20.00   $5.00        $0.20   (live 2026-09-21,
+                                                                 row added 2026-09-23:
+                                                                 cheaper than Opus 5,
+                                                                 cache reads 0.05x;
+                                                                 always-on thinking,
+                                                                 default effort medium)
   claude-opus-5          $5.00    $25.00   $6.25        $0.50
   claude-opus-4-8        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-7        $5.00    $25.00   $6.25        $0.50
@@ -276,7 +286,10 @@
 
   Provider "Google" in MyAgent's picker (the company; the models are branded
   gemini-*). Gemini has a free tier (under rate limits). Prices below are
-  paid tier.
+  paid tier. Re-verified 2026-09-23 against ai.google.dev/gemini-api/docs/
+  pricing and the live catalog: every row matches, the 3.6 / 3.7 / 3.8 Flash
+  promo still reads "through December 31, 2026", the three -latest aliases
+  resolve where the rows say, and no text tier has shipped since 3.8.
 
   THINKING TOKENS bill at the OUTPUT rate but are NOT inside
   candidates_token_count — they are their own bucket, thoughts_token_count.
@@ -482,16 +495,19 @@
   https://api.moonshot.ai/v1 with MOONSHOT_API_KEY (or KIMI_API_KEY).
 
   Current Catalog — verified against platform.kimi.ai/docs/pricing 2026-07-25,
-  re-verified 2026-08-25 (k3 / k2.7-code / k2.6 rates unchanged)
+  re-verified 2026-08-25 and 2026-09-23 (rates unchanged; that day's audit
+  gave k3 a "none" reasoning_effort rung and found the k2.7-code line takes
+  images after all)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix              Input    Output   Cache-Hit Input
   ──────────────────────────────────────────────────────────────────────────
   kimi-k3                   $3.00    $15.00   $0.30   (1M context, vision,
-                                              always-reasoning,
-                                              reasoning_effort low/high/max)
+                                              reasoning_effort none/low/
+                                              high/max — none is a real off)
   kimi-k2.7-code-highspeed  $1.90    $8.00    $0.38   (~180 tok/s variant)
-  kimi-k2.7-code            $0.95    $4.00    $0.19   (coding line, text-only,
-                                              always-thinking, no knobs)
+  kimi-k2.7-code            $0.95    $4.00    $0.19   (coding line, takes images
+                                              after all, always-thinking,
+                                              no knobs)
   kimi-k2.6                 $0.95    $4.00    $0.16   (256K, vision, thinking
                                               toggle + Preserved Thinking)
   kimi-k2.5                 —        —        —       (UNPRICED since 2026-08-25:
@@ -603,5 +619,6 @@
     this file.
 
   Last updated: September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
-                OpenAI audit: gpt-6-sol / gpt-6-luna rows)
+                OpenAI audit: gpt-6-sol / gpt-6-luna rows; Gemini audit: re-verified;
+                Anthropic audit: claude-opus-5-5 + claude-mythos-5-1 rows; Moonshot: re-verified)
 ================================================================================

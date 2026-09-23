@@ -30,6 +30,19 @@ EXPECTED = {
                                    ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-opus-5":              (False, True,  True,  True,  True,
                                    ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    # Opus 5.5 (live 2026-09-21, audited 2026-09-23): the Opus line joins the
+    # always-on class — thinking.type.disabled and the budget form are HTTP
+    # 400 at every effort — so no Off; a dated 5.5 snapshot rides along, a
+    # dated Opus 5 snapshot (the date in the minor slot) does not, and a
+    # later major inherits the contract.
+    "claude-opus-5-5":            (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-opus-5-5-20260921":   (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-opus-5-20260724":     (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-opus-6":              (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-opus-4-8":            (False, True,  True,  True,  True,
                                    ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-opus-4-7":            (False, True,  True,  True,  True,
@@ -63,6 +76,7 @@ THINKING_DEFAULT_ON = {
     # Opus 5 runs adaptive thinking on omission (unlike Opus 4.8/4.7) — the
     # off branch must send an explicit disable (2026-07 audit fix).
     "claude-opus-5": True,
+    "claude-opus-5-5": True,
     "claude-sonnet-5": True,
     "claude-sonnet-5-20260601": True,
     "claude-sonnet-4-6": False,

@@ -337,6 +337,33 @@ class StreamingMixin:
             if tools:
                 payload["tools"] = self._tools_to_kimi(tools)
             payload.update(self._kimi_model_params())
+        elif self.provider == "Google":
+            # Gemini — mirror _stream_gemini_call (2026-09-23; until then
+            # Google fell through to the Anthropic-shaped dump below, which
+            # named thinking / max_tokens keys Gemini never sees):
+            # system_instruction + temperature always, thinking_config from
+            # the ONE decision the live call makes (_gemini_thinking_kwargs:
+            # the level with the checkbox on, the tier's quietest setting
+            # with it off), the custom function declarations (Gemini cannot
+            # mix its built-in tools with them, so there are none), and the
+            # internal messages — the Content translation is not rendered.
+            tools = self._get_tools()
+            payload = {
+                "model": self.model,
+                "stream": True,
+                "system_instruction": self._build_system_prompt(),
+                "temperature": self.temperature,
+            }
+            thinking_config, quiet_style = self._gemini_thinking_kwargs()
+            if thinking_config is not None:
+                payload["thinking_config"] = thinking_config.model_dump(
+                    mode="json", exclude_none=True)
+            if quiet_style is not None:
+                payload["thinking_off"] = self._gemini_quiet_describe(quiet_style)
+            payload["tools"] = [{"function_declarations": [
+                d.model_dump(mode="json", exclude_none=True)
+                for d in self._tools_to_gemini(tools)]}] if tools else []
+            payload["contents"] = display_msgs
         else:
             tools = self._get_tools()
             if self.provider == "Anthropic":
@@ -938,8 +965,9 @@ class StreamingMixin:
                     "Switch to grok-4.3 (or any grok-4.x chat tier) for desktop work."
                 )
         elif self.provider == "Moonshot":
-            # The k2.7-code coding line (incl. -highspeed) is text-only —
-            # it cannot see screenshots at all.
+            # No served Kimi model is text-only any more (the listing's
+            # supports_image_in decides — the k2.7-code line included since
+            # the 2026-09-23 audit); the branch stays for the next one that is.
             if not self._is_kimi_vision_model():
                 return (
                     f"{self.model} is a text-only model — it cannot see screenshots. "

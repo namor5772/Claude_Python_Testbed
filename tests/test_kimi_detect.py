@@ -1,10 +1,15 @@
 """Characterization tests: KimiMixin pure/detection helpers + translators.
 
 Locks the per-model contract verified against platform.kimi.ai docs
-2026-07-25: kimi-k3 has the sparse low/high/max reasoning_effort ladder
-(always-reasoning); kimi-k2.6/k2.5 take an enabled/disabled thinking toggle;
-kimi-k2.7-code (+ -highspeed) always thinks with no client knob and is
-text-only. The load-bearing piece is the reasoning_content ROUND-TRIP policy:
+2026-07-25 and re-probed live 2026-09-23: kimi-k3 has the sparse
+none/low/high/max reasoning_effort ladder ("none" is a real off switch —
+no reasoning tokens, found 2026-09-23; "medium" and even "banana" are
+accepted in silence with no measurable effect, so they earned no rung);
+kimi-k2.6/k2.5 take an enabled/disabled thinking toggle; kimi-k2.7-code
+(+ -highspeed) always thinks with no client knob — and, per the listing's
+supports_image_in flag and a live probe, takes images after all (the doc
+had called it text-only). The load-bearing piece is the reasoning_content
+ROUND-TRIP policy:
 required for k3 / k2.7-code / k2.6 (k2.6 with thinking.keep="all"), and
 forbidden for k2.5 (no Preserved Thinking support) — _messages_to_kimi must
 attach or strip reasoning_content accordingly, and _kimi_model_params must
@@ -32,9 +37,9 @@ class _CostStub(StreamingMixin, KimiMixin):
 
 class TestKimiReasoningValues(unittest.TestCase):
     CASES = {
-        "kimi-k3": ["low", "high", "max"],
+        "kimi-k3": ["none", "low", "high", "max"],
         # Dated/preview ids inherit the family knob by prefix
-        "kimi-k3-0801-preview": ["low", "high", "max"],
+        "kimi-k3-0801-preview": ["none", "low", "high", "max"],
         # Toggle/always-on families have no effort knob
         "kimi-k2.6": None,
         "kimi-k2.5": None,
@@ -70,6 +75,20 @@ class TestKimiEffortCoercion(unittest.TestCase):
                 self.assertEqual(
                     obj._kimi_reasoning_effort(["low", "high", "max"]), expected)
 
+    def test_k3_ladder_with_its_none_rung(self):
+        # k3's real ladder since 2026-09-23: a saved none passes through, a
+        # Claude off becomes none, the rest coerce as before
+        for saved, expected in {"none": "none", "off": "none", "low": "low", "max": "max",
+                                "medium": "high", "xhigh": "max", "minimal": "low",
+                                "adaptive": "max", "": "max"}.items():
+            with self.subTest(saved=saved):
+                obj = stub(KimiMixin, model="kimi-k3", thinking_effort=saved)
+                self.assertEqual(obj._kimi_reasoning_effort(["none", "low", "high", "max"]),
+                                 expected)
+        # A bare host without the attribute takes the default
+        self.assertEqual(stub(KimiMixin, model="kimi-k3")._kimi_reasoning_effort(
+            ["none", "low", "high", "max"]), "max")
+
 
 class TestKimiDetection(unittest.TestCase):
     def test_thinking_toggleable(self):
@@ -85,6 +104,11 @@ class TestKimiDetection(unittest.TestCase):
             with self.subTest(model=mid):
                 obj = stub(KimiMixin, model=mid, thinking_enabled=False)
                 self.assertTrue(obj._kimi_thinking_active())
+        # ...except k3 on its none rung, which really stops (2026-09-23)
+        self.assertFalse(stub(KimiMixin, model="kimi-k3", thinking_effort="none")
+                         ._kimi_thinking_active())
+        self.assertTrue(stub(KimiMixin, model="kimi-k3", thinking_effort="low")
+                        ._kimi_thinking_active())
         # Toggle families follow the checkbox
         for enabled in (True, False):
             obj = stub(KimiMixin, model="kimi-k2.6", thinking_enabled=enabled)
@@ -108,12 +132,23 @@ class TestKimiDetection(unittest.TestCase):
         self.assertTrue(obj._kimi_include_reasoning())
 
     def test_vision(self):
+        # Static fallback (no listing): every served model takes images
+        # since the 2026-09-23 audit — the k2.7-code line included
         for mid, expected in {"kimi-k3": True, "kimi-k2.6": True,
-                              "kimi-k2.5": True, "kimi-k2.7-code": False,
-                              "kimi-k2.7-code-highspeed": False}.items():
+                              "kimi-k2.5": True, "kimi-k2.7-code": True,
+                              "kimi-k2.7-code-highspeed": True}.items():
             with self.subTest(model=mid):
                 obj = stub(KimiMixin, model=mid)
                 self.assertEqual(obj._is_kimi_vision_model(), expected)
+
+    def test_vision_follows_the_listing_flag(self):
+        caps = {"kimi-k9-text": {"vision": False, "context": 1, "reasoning": True},
+                "kimi-k9-blank": {"vision": None, "context": 1, "reasoning": True}}
+        self.assertFalse(stub(KimiMixin, model="kimi-k9-text", _kimi_caps=caps)._is_kimi_vision_model())
+        # A listed model whose flag is missing falls back to the static rule
+        self.assertTrue(stub(KimiMixin, model="kimi-k9-blank", _kimi_caps=caps)._is_kimi_vision_model())
+        self.assertTrue(stub(KimiMixin, model="kimi-k2.7-code", _kimi_caps=caps)._is_kimi_vision_model())
+        self.assertEqual(stub(KimiMixin, model="kimi-k3", _kimi_caps=None)._kimi_model_caps(), {})
 
 
 class TestModelSupportsThinkingKimi(unittest.TestCase):
@@ -146,6 +181,14 @@ class TestKimiModelParams(unittest.TestCase):
         p = self.params("kimi-k3", effort="high")
         self.assertEqual(p, {"max_completion_tokens": 32768,
                              "reasoning_effort": "high"})
+
+    def test_k3_none_rung_sends_none_and_the_plain_cap(self):
+        p = self.params("kimi-k3", enabled=False, effort="none")
+        self.assertEqual(p, {"max_completion_tokens": 8192,
+                             "reasoning_effort": "none"})
+        # A Claude "off" lands on the none rung too
+        p = self.params("kimi-k3", enabled=False, effort="off")
+        self.assertEqual(p["reasoning_effort"], "none")
 
     def test_k26_thinking_on_gets_preserved_thinking(self):
         p = self.params("kimi-k2.6", enabled=True)
@@ -321,10 +364,29 @@ class TestKimiUsageDict(unittest.TestCase):
 
 class TestFetchKimiModels(unittest.TestCase):
     @staticmethod
-    def _client(ids):
-        data = [SimpleNamespace(id=i) for i in ids]
+    def _client(ids, flags=None):
+        data = [SimpleNamespace(id=i, **(flags or {}).get(i, {})) for i in ids]
         return SimpleNamespace(models=SimpleNamespace(
             list=lambda: SimpleNamespace(data=data)))
+
+    def test_capability_flags_are_kept(self):
+        # The listing's per-model flags (found 2026-09-23) drive
+        # _is_kimi_vision_model; a model without them gets None slots
+        flags = {"kimi-k3": {"supports_image_in": True, "supports_video_in": True,
+                             "supports_reasoning": True, "context_length": 1048576},
+                 "kimi-k9-text": {"supports_image_in": False, "context_length": 262144}}
+        obj = stub(KimiMixin, kimi_client=self._client(["kimi-k3", "kimi-k9-text", "kimi-k2.6"], flags))
+        self.assertEqual(obj._fetch_kimi_models(), ["kimi-k2.6", "kimi-k3", "kimi-k9-text"])
+        self.assertEqual(obj._kimi_caps["kimi-k3"], {"vision": True, "context": 1048576, "reasoning": True})
+        self.assertEqual(obj._kimi_caps["kimi-k2.6"], {"vision": None, "context": None, "reasoning": None})
+        self.assertFalse(obj._is_kimi_vision_model("kimi-k9-text"))
+        self.assertTrue(obj._is_kimi_vision_model("kimi-k2.6"))     # None flag → static rule
+        # A failed fetch clears the records
+        boom = SimpleNamespace(models=SimpleNamespace(list=lambda: (_ for _ in ()).throw(RuntimeError("down"))))
+        obj.kimi_client = boom
+        from myagent.constants import KIMI_FALLBACK_MODELS
+        self.assertEqual(obj._fetch_kimi_models(), list(KIMI_FALLBACK_MODELS))
+        self.assertEqual(obj._kimi_caps, {})
 
     def test_filters_legacy_and_non_k_series(self):
         obj = stub(KimiMixin, kimi_client=self._client([

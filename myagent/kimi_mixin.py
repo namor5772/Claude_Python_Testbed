@@ -86,7 +86,8 @@ from myagent.retry_util import rate_limit_backoff, server_error_backoff
 # "adaptive", junk — lands on "max", the API's own default.
 _KIMI_EFFORT_COERCE = {
     "minimal": "low",
-    "none": "low",
+    "none": "low",       # for a ladder WITHOUT a none rung; k3's has one since 2026-09-23
+    "off": "none",       # a Claude Off → no reasoning where the ladder allows it
     "medium": "high",
     "xhigh": "max",
 }
@@ -110,10 +111,13 @@ class KimiMixin:
     def _kimi_reasoning_effort(self, values):
         """The reasoning_effort to send: the saved effort when the model
         accepts it, else coerced onto the sparse ladder (medium→high,
-        xhigh→max, minimal/none→low, anything else→max, the API default)."""
-        if self.thinking_effort in values:
-            return self.thinking_effort
-        coerced = _KIMI_EFFORT_COERCE.get(self.thinking_effort, "max")
+        xhigh→max, minimal→low, none→low where there is no none rung, a
+        Claude off→none where there is one, anything else→max, the API
+        default)."""
+        effort = getattr(self, "thinking_effort", "") or ""
+        if effort in values:
+            return effort
+        coerced = _KIMI_EFFORT_COERCE.get(effort, "max")
         return coerced if coerced in values else values[-1]
 
     def _kimi_thinking_toggleable(self, model_id=None):
@@ -123,9 +127,14 @@ class KimiMixin:
         return mid.startswith(KIMI_THINKING_TOGGLE_PREFIXES)
 
     def _kimi_thinking_active(self, model_id=None):
-        """Whether this call will produce reasoning: always for k3 /
-        k2.7-code, the Thinking checkbox for k2.6 / k2.5, else False."""
+        """Whether this call will produce reasoning: k3 unless its effort is
+        the "none" rung (a real off switch, 2026-09-23), always for
+        k2.7-code, the Thinking checkbox for k2.6 / k2.5, else False. Sizes
+        max_completion_tokens (_kimi_model_params)."""
         mid = model_id or self.model or ""
+        values = self._kimi_reasoning_values(mid)
+        if values:
+            return self._kimi_reasoning_effort(values) != "none"
         if mid.startswith(KIMI_ALWAYS_THINKING_PREFIXES):
             return True
         if self._kimi_thinking_toggleable(mid):
@@ -149,10 +158,23 @@ class KimiMixin:
             return False
         return self._kimi_roundtrips_reasoning(mid)
 
+    def _kimi_model_caps(self):
+        """The per-model capability records the last successful models.list()
+        kept (_fetch_kimi_models): id → {"vision": bool | None, "context":
+        int | None, "reasoning": bool | None}. Empty until a fetch succeeds,
+        and after one fails — the static tables answer then."""
+        return getattr(self, "_kimi_caps", None) or {}
+
     def _is_kimi_vision_model(self, model_id=None):
-        """False for the text-only k2.7-code coding line (incl. -highspeed);
-        k3 / k2.6 / k2.5 all take image input."""
+        """Whether the model takes image input: the listing's
+        supports_image_in flag when it described this id (kept by
+        _fetch_kimi_models), else not a KIMI_NON_VISION_PREFIXES family — a
+        tuple empty since 2026-09-23, every served Kimi model (the k2.7-code
+        coding line included) reporting and honouring image input."""
         mid = model_id or self.model or ""
+        live = self._kimi_model_caps().get(mid)
+        if live is not None and live.get("vision") is not None:
+            return bool(live["vision"])
         return not mid.startswith(KIMI_NON_VISION_PREFIXES)
 
     def _fetch_kimi_models(self):
@@ -160,12 +182,18 @@ class KimiMixin:
         K-series (``kimi-k`` prefix: kimi-k2.5/k2.6/k2.7-code/k3), drops the
         discontinued DASH family (``kimi-k2-*`` — kimi-k2-thinking etc., EOL
         2026-05-25). moonshot-v1* (EOL 2026-08-31), kimi-latest and
-        kimi-thinking-preview fall out of the prefix rule."""
+        kimi-thinking-preview fall out of the prefix rule. The listing's
+        model objects carry supports_image_in / supports_video_in /
+        supports_reasoning / context_length (found 2026-09-23 — the OpenAI
+        SDK keeps the unknown fields), kept on the instance as _kimi_caps
+        for _is_kimi_vision_model; a failed fetch clears them."""
+        self._kimi_caps = {}
         if not getattr(self, "kimi_client", None):
             return list(KIMI_FALLBACK_MODELS)
         try:
             response = self.kimi_client.models.list()
             model_ids = []
+            caps = {}
             for m in response.data:
                 mid = m.id
                 if not mid.startswith("kimi-k"):
@@ -173,9 +201,15 @@ class KimiMixin:
                 if mid.startswith("kimi-k2-"):
                     continue
                 model_ids.append(mid)
+                caps[mid] = {"vision": getattr(m, "supports_image_in", None),
+                             "context": getattr(m, "context_length", None),
+                             "reasoning": getattr(m, "supports_reasoning", None)}
             model_ids.sort()
             self._kimi_model_display_names = {mid: mid for mid in model_ids}
-            return model_ids if model_ids else list(KIMI_FALLBACK_MODELS)
+            if not model_ids:
+                return list(KIMI_FALLBACK_MODELS)
+            self._kimi_caps = caps
+            return model_ids
         except Exception:
             self._kimi_model_display_names = {}
             return list(KIMI_FALLBACK_MODELS)

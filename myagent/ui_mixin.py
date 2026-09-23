@@ -7,7 +7,8 @@ from myagent.constants import (
     ANTHROPIC_DEPRECATED_MODEL_PREFIXES,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL,
     OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
-    ALWAYS_ON_THINKING_PREFIXES, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
+    ALWAYS_ON_THINKING_PREFIXES,
+    ANTHROPIC_ALWAYS_ON_OPUS_MIN, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
 from myagent.keyboard import (
@@ -614,16 +615,30 @@ class UIMixin:
         return None
 
     def _is_anthropic_always_on_thinking(self, model_id=None):
-        """True for Claude 5 Mythos-class models (Fable 5 / Mythos 5) where
-        thinking is ALWAYS ON: the API rejects thinking={"type": "disabled"} and
-        budget_tokens with HTTP 400 (only omitting the param or {"type":
-        "adaptive"} is accepted), and sampling params are rejected
-        unconditionally. The UI drops the "Off" mode for these and the streaming
-        path always takes the thinking branch."""
+        """True for the models whose thinking is ALWAYS ON: the Claude 5
+        Mythos-class (Fable 5 / 5.1, Mythos 5 / 5.1, by prefix) and — since
+        the 2026-09-23 audit — Claude Opus 5.5 and any later Opus (an Opus
+        minor of 5 or more, or a later major; a dated snapshot's date in the
+        minor slot does not count). The API rejects thinking={"type":
+        "disabled"} and budget_tokens with HTTP 400 (only omitting the param
+        or {"type": "adaptive"} is accepted — on Opus 5.5 the message is
+        '"thinking.type.disabled" is not supported for this model', probed
+        live), and sampling params are rejected unconditionally. The UI
+        drops the "Off" mode for these, the streaming path always takes the
+        thinking branch, and _anthropic_fable_features sends them the
+        preserved-thinking binding and the refusal fallbacks."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
-        return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
+        if mid.startswith(ALWAYS_ON_THINKING_PREFIXES):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        if version is None:
+            return False
+        major, minor = version
+        if minor >= 100:
+            minor = 0   # claude-opus-5-20260724: a date, not a minor
+        return (major, minor) >= ANTHROPIC_ALWAYS_ON_OPUS_MIN
 
     def _anthropic_thinking_on_by_default(self, model_id=None):
         """True for Anthropic models that run ADAPTIVE thinking when the
@@ -957,6 +972,12 @@ class UIMixin:
                 # xAI accepts temperature alongside reasoning (Gemini-style);
                 # _stream_xai_call drops it reactively if a model refuses.
                 show_temp = True
+            elif self.provider == "Moonshot":
+                # Every Kimi model fixes sampling server-side (a 400 to send)
+                # — including kimi-k3 on its None rung (2026-09-23), which
+                # the generic "none shows temperature" rule below would
+                # otherwise have surfaced.
+                show_temp = False
             elif mode in ("off", "none"):
                 if self.provider == "Anthropic" and self._anthropic_rejects_temperature():
                     show_temp = False  # Opus 4.7+ removed temperature (400 if sent)

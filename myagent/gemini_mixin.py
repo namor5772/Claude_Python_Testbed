@@ -6,7 +6,12 @@ import time
 
 from google.genai import types as genai_types
 
-from myagent.constants import GEMINI_FALLBACK_MODELS, GEMINI_NON_AGENTIC_SUBSTRINGS
+from myagent.constants import (
+    GEMINI_FALLBACK_MODELS,
+    GEMINI_NON_AGENTIC_SUBSTRINGS,
+    GEMINI_QUIET_STYLE_PREFIXES,
+    GEMINI_QUIET_STYLES,
+)
 from myagent.helpers import camera_aware_hint, is_camera_result
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
@@ -388,26 +393,27 @@ class GeminiMixin:
         return contents
 
     def _gemini_thinking_config(self, style=None):
-        """Build the ThinkingConfig for the current model + effort.
+        """Build the ThinkingConfig for the current model + effort, with the
+        Thinking checkbox ON.
 
         Gemini 3+ takes thinking_level using the UI's exact strength values
         (low/medium/high; a stale saved "max" coerces to high, "minimal" to
         low); Gemini 2.5 still requires the legacy thinking_budget —
-        thinking_level is HTTP 400 there (verified live 2026-07).
-        gemini-3-pro-preview accepts only low|high, so medium coerces to high
-        for it. include_thoughts=True makes thought summaries stream so the
-        Show Thinking pane gets text — without it Gemini returns no thought
-        parts at all. ``style`` ("level"/"budget") overrides the version
-        rules — used by the reactive 400 fallback in _stream_gemini_call when
-        a model rejects the style the rules picked."""
+        thinking_level is HTTP 400 there (verified live 2026-07). Every
+        served 3.x tier accepts all three levels (probed live 2026-09-23 —
+        the retired gemini-3-pro-preview's low|high-only rule is gone with
+        it; 3.1-pro takes medium). include_thoughts=True makes thought
+        summaries stream so the Show Thinking pane gets text — without it
+        Gemini returns no thought parts at all. ``style`` ("level"/"budget")
+        overrides the version rules — used by the reactive 400 fallback in
+        _stream_gemini_call when a model rejects the style the rules picked.
+        The checkbox OFF is _gemini_quiet_config's business."""
         if style is None:
             style = "level" if self._gemini_uses_thinking_level() else "budget"
         if style == "level":
             level_map = {"minimal": "low", "low": "low", "medium": "medium",
                          "high": "high", "max": "high"}
             level = level_map.get(self.thinking_effort, "medium")
-            if self.model.startswith("gemini-3-pro") and level == "medium":
-                level = "high"
             return genai_types.ThinkingConfig(
                 thinking_level=level, include_thoughts=True,
             )
@@ -417,6 +423,79 @@ class GeminiMixin:
             thinking_budget=budget_map.get(self.thinking_effort, 8192),
             include_thoughts=True,
         )
+
+    def _gemini_quiet_style(self, model_id=None):
+        """The rung of GEMINI_QUIET_STYLES this model is currently believed
+        to accept for "think as little as you can" — what the wire carries
+        when the Thinking checkbox is OFF. Learned per model per session
+        (_gemini_quiet_styles: a 400 in _stream_gemini_call steps it down one
+        rung and records it), pre-seeded from GEMINI_QUIET_STYLE_PREFIXES by
+        longest prefix, "minimal" for an unlisted id."""
+        mid = model_id or self.model or ""
+        cache = getattr(self, "_gemini_quiet_styles", None)
+        if cache is None:
+            cache = self._gemini_quiet_styles = {}
+        if mid not in cache:
+            best, best_len = GEMINI_QUIET_STYLES[0], 0
+            for prefix, style in GEMINI_QUIET_STYLE_PREFIXES.items():
+                if mid.startswith(prefix) and len(prefix) > best_len:
+                    best, best_len = style, len(prefix)
+            cache[mid] = best
+        return cache[mid]
+
+    @staticmethod
+    def _gemini_quiet_config(style):
+        """The ThinkingConfig for a quiet-ladder rung — None for "none" (no
+        thinking_config at all, the pre-2026-09-23 behaviour)."""
+        if style == "minimal":
+            return genai_types.ThinkingConfig(thinking_level="minimal")
+        if style == "budget0":
+            return genai_types.ThinkingConfig(thinking_budget=0)
+        if style == "low":
+            return genai_types.ThinkingConfig(thinking_level="low")
+        return None
+
+    @staticmethod
+    def _gemini_quiet_describe(style):
+        """One line on what a quiet-ladder rung does to the model."""
+        return {
+            "minimal": "thinking_level=minimal (no thinking tokens)",
+            "budget0": "thinking_budget=0 (this tier's floor — a few thinking tokens remain)",
+            "low": "thinking_level=low (this tier cannot stop thinking)",
+            "none": "no thinking config (the model thinks at its default)",
+        }.get(style, style)
+
+    def _gemini_thinking_kwargs(self):
+        """(thinking_config, quiet_style) for the current model and Thinking
+        checkbox — the ONE decision behind both the live request
+        (_stream_gemini_call) and the Debug payload (_payload_for_display):
+        (None, None) for a model with no thinking at all; (the level / budget
+        config, None) with the checkbox ON; (the tier's quietest config or
+        None, its rung) with the checkbox OFF — because a Gemini 3.x tier
+        sent nothing thinks at its default, silently, at the output rate
+        (see GEMINI_QUIET_STYLES)."""
+        if not self._is_gemini_thinking_model():
+            return None, None
+        if self.thinking_enabled:
+            return self._gemini_thinking_config(), None
+        style = self._gemini_quiet_style()
+        return self._gemini_quiet_config(style), style
+
+    def _gemini_announce_quiet(self, style):
+        """One Activity line per model per session saying what "thinking off"
+        is sending, so the setting the checkbox shows and the wire agree in
+        the window (a tier that cannot stop thinking says so)."""
+        announced = getattr(self, "_gemini_quiet_announced", None)
+        if announced is None:
+            announced = self._gemini_quiet_announced = set()
+        if self.model in announced:
+            return
+        announced.add(self.model)
+        queue = getattr(self, "queue", None)
+        if queue is not None:
+            queue.put({"type": "tool_info", "content": (
+                f"Thinking is off: {self.model} is sent "
+                f"{self._gemini_quiet_describe(style)}.\n")})
 
     def _stream_gemini_call(self, messages, max_retries, label_emitted):
         """Execute one Gemini API call with streaming and retry logic.
@@ -433,13 +512,18 @@ class GeminiMixin:
         }
         gemini_contents = self._messages_to_gemini(messages)
 
-        # Build config
+        # Build config — thinking from the ONE decision the Debug dump also
+        # shows (_gemini_thinking_kwargs): the level with the checkbox on,
+        # the tier's quietest setting with it off.
         config_kwargs = {
             "system_instruction": system_prompt,
             "temperature": self.temperature,
         }
-        if self.thinking_enabled and self._is_gemini_thinking_model():
-            config_kwargs["thinking_config"] = self._gemini_thinking_config()
+        thinking_config, quiet_style = self._gemini_thinking_kwargs()
+        if thinking_config is not None:
+            config_kwargs["thinking_config"] = thinking_config
+        if quiet_style is not None:
+            self._gemini_announce_quiet(quiet_style)
         if gemini_tools:
             config_kwargs["tools"] = gemini_tools
 
@@ -555,9 +639,39 @@ class GeminiMixin:
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []
+                elif (quiet_style is not None
+                      and (status == 400 or "400" in err_str
+                           or "invalid_argument" in err_str.lower())
+                      and quiet_style != GEMINI_QUIET_STYLES[-1]
+                      and attempt < max_retries - 1):
+                    # The Thinking checkbox is OFF and the model refused this
+                    # rung of the quiet ladder (3.8 / 3.7 / 3.1-pro reject
+                    # thinking_level=minimal, 3.5-flash-lite and 3.1-pro
+                    # reject thinking_budget=0 — probed 2026-09-23): step
+                    # down one rung, remember it for the session, retry.
+                    # The last rung sends no config at all, so this can
+                    # never end in a hard failure the old code did not have.
+                    quiet_style = GEMINI_QUIET_STYLES[GEMINI_QUIET_STYLES.index(quiet_style) + 1]
+                    self._gemini_quiet_styles[self.model] = quiet_style
+                    quiet_cfg = self._gemini_quiet_config(quiet_style)
+                    if quiet_cfg is None:
+                        config_kwargs.pop("thinking_config", None)
+                    else:
+                        config_kwargs["thinking_config"] = quiet_cfg
+                    config = genai_types.GenerateContentConfig(**config_kwargs)
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": (f"⚠ {self.model} rejected the thinking-off setting — retrying with "
+                                    f"{self._gemini_quiet_describe(quiet_style)} "
+                                    f"(attempt {attempt + 1}/{max_retries})...\n"),
+                    })
+                    full_text = ""
+                    thinking_text = ""
+                    tool_calls = []
                 elif ("thinking" in err_str.lower()
                       and ("invalid_argument" in err_str.lower() or "400" in err_str)
                       and not thinking_style_swapped
+                      and quiet_style is None
                       and "thinking_config" in config_kwargs
                       and attempt < max_retries - 1):
                     # The model rejected the thinking style the version rules
