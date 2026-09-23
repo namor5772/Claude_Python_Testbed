@@ -105,6 +105,7 @@ class InstructionsMixin:
                 "thinking_budget": entry.get("thinking_budget", 8192),
                 "thinking_mode": entry.get("thinking_mode", ""),
                 "text_verbosity": entry.get("text_verbosity", "medium"),
+                "fast_mode": entry.get("fast_mode", False),
                 "image_count": len(entry.get("images", [])),
                 "skill_modes": entry.get("skill_modes", {}),
                 "blocked_tools": entry.get("blocked_tools", []),
@@ -138,6 +139,7 @@ class InstructionsMixin:
                 "thinking_budget": self.thinking_budget,
                 "thinking_mode": self.thinking_mode,
                 "text_verbosity": self.text_verbosity,
+                "fast_mode": self.fast_mode,
                 "skill_modes": params.get("skill_modes",
                                {sn: sd["mode"] for sn, sd in self.skills.items()}),
                 "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
@@ -157,7 +159,7 @@ class InstructionsMixin:
                          "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
-                         "blocked_tools")
+                         "fast_mode", "blocked_tools")
             if all(params.get(k) is None for k in updatable):
                 return (
                     "Error: At least one of 'text', 'desktop', 'browser', 'meta', "
@@ -171,7 +173,7 @@ class InstructionsMixin:
                         "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity",
-                        "blocked_tools"):
+                        "fast_mode", "blocked_tools"):
                 val = params.get(key)
                 if val is not None:
                     entry[key] = sorted(val) if key == "blocked_tools" else val
@@ -303,7 +305,18 @@ class InstructionsMixin:
         self._verbosity_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._verbosity_combo.bind("<<ComboboxSelected>>", lambda e: self._on_verbosity_changed())
 
+        # Fast mode checkbox (Anthropic Opus 4.8 / 5 / 5.5 — research preview:
+        # speed="fast", 2.5x output speed at 2x price). Created last of the
+        # model-param widgets so Tab reaches it after the combos; packed only
+        # for a fast-capable model by _on_model_selected.
+        self._fast_check = tk.Checkbutton(
+            model_frame, text="Fast", variable=self._fast_var,
+            font=("Arial", 10), command=self._on_fast_toggled,
+        )
+        self._fast_check.pack(side=tk.LEFT, padx=(10, 0))
+
         # Sync adaptive thinking mode var from state before applying widget states
+        self._fast_var.set(bool(getattr(self, "fast_mode", False)))
         if self.thinking_mode == "off":
             self._thinking_mode_var.set("Off")
         elif self.thinking_mode == "none":
@@ -537,6 +550,7 @@ class InstructionsMixin:
         self._thinking_mode_label = None
         self._verbosity_label = None
         self._verbosity_combo = None
+        self._fast_check = None
         self.ps_safety_button = None
         self._instr_tree = None
         self._instr_list_pane = None
@@ -955,6 +969,7 @@ class InstructionsMixin:
             "thinking_budget": self.thinking_budget,
             "thinking_mode": self.thinking_mode,
             "text_verbosity": self.text_verbosity,
+            "fast_mode": self.fast_mode,
             "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
             "blocked_tools": sorted(getattr(self, "_blocked_tools", [])),
@@ -1067,6 +1082,8 @@ class InstructionsMixin:
         self._on_thinking_toggled()
         self.text_verbosity = "medium"
         self._text_verbosity_var.set("Medium")
+        self.fast_mode = False
+        self._fast_var.set(False)
         self._refresh_image_listbox()
 
     def _on_instruction_selected(self, event=None):

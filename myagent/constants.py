@@ -567,6 +567,16 @@ META_TOOLS = [
                         "there. Lower-cased to match the stored value."
                     ),
                 },
+                "fast_mode": {
+                    "type": "boolean",
+                    "description": (
+                        "Anthropic fast mode (research preview; Opus 5.5 / 5 / 4.8 only): "
+                        "the run sends speed=\"fast\" for up to 2.5x output speed at 2x "
+                        "the per-token price (Opus 5.5 $8/$40 per MTok, Opus 5 / 4.8 "
+                        "$10/$50). Ignored for every other provider/model. Optional for "
+                        "update; create inherits current."
+                    ),
+                },
                 "blocked_tools": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -1420,6 +1430,21 @@ ANTHROPIC_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 ANTHROPIC_THINKING_BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
 ANTHROPIC_SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 ANTHROPIC_SERVER_FALLBACKS = "default"
+# Fast mode (research preview, 2026-09-24): Opus 4.8 / 5 / 5.5 serve the SAME
+# model at up to 2.5x output tokens/sec for 2x the per-token price when the
+# request carries speed="fast" under this beta (docs read 2026-09-24:
+# platform.claude.com/docs/en/build-with-claude/fast-mode). Claude API only —
+# not Batch, not Priority Tier, not the cloud platforms. Capability is
+# version-gated in _anthropic_supports_fast_mode (Opus >= (4, 8)); the Fast
+# checkbox in the editor's model-params row drives it, persisted per
+# instruction as "fast_mode". A 400 naming speed / fast-mode (a model outside
+# the preview, or an org without access) learns the surface off for the
+# session via _anthropic_unsupported — the same rung pattern as the Fable
+# betas. Opus 4.7 rejects speed="fast" outright; Opus 4.6 would silently run
+# standard (usage.speed says so) — neither passes the version gate anyway.
+# The response's usage.speed ("fast" / "standard") is what a call is PRICED
+# by (ANTHROPIC_FAST_PRICING below), never the checkbox.
+ANTHROPIC_FAST_MODE_BETA = "fast-mode-2026-02-01"
 # Budget-based ("manual") extended thinking. Claude 3.5 Sonnet is intentionally
 # excluded: extended thinking arrived with Claude 3.7 / Claude 4, so sending a
 # thinking block to a 3.5 model returns HTTP 400. (Opus 4 / 4.1 / Sonnet 4 also
@@ -3358,6 +3383,24 @@ ANTHROPIC_PRICING = {
     "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
     # Haiku 4.5 (prefix also covers the dated claude-haiku-4-5-20251001 id)
     "claude-haiku-4":      (1.00, 5.00, 1.25, 0.10),
+}
+
+# Fast-mode pricing (see ANTHROPIC_FAST_MODE_BETA): the rates a call served at
+# speed="fast" bills at — exactly 2x the model's standard row in every bucket.
+# The pricing page (read 2026-09-24) lists fast input/output ($8/$40 Opus 5.5;
+# $10/$50 Opus 5 / 4.8) and says the caching multipliers apply ON TOP of fast
+# pricing, so the cache columns are the model's own multipliers of the FAST
+# input rate: 5-minute writes 1.25x, reads 0.1x (0.05x on Opus 5.5 — its
+# standard-row discount carries over). stream_worker prices a call by the
+# usage.speed the API reports; a fast-served model MISSING here is unpriced
+# (warned at run start), never billed from the standard table at half the
+# real rate. Same plain 4-tuple shape as ANTHROPIC_PRICING (which must stay
+# untouched — SelfBot unpacks it directly and never sends speed).
+ANTHROPIC_FAST_PRICING = {
+    # (input, output, 5min_cache_write, cache_read) per million tokens
+    "claude-opus-5-5":     (8.00, 40.00, 10.00, 0.40),
+    "claude-opus-5":       (10.00, 50.00, 12.50, 1.00),
+    "claude-opus-4-8":     (10.00, 50.00, 12.50, 1.00),
 }
 
 # OpenAI API pricing (USD per million tokens)

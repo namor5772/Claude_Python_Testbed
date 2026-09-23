@@ -66,6 +66,7 @@ class UIMixin:
         self._thinking_strength_var = tk.StringVar(value="high")
         self._thinking_mode_var = tk.StringVar(value="Off")
         self._text_verbosity_var = tk.StringVar(value="Medium")
+        self._fast_var = tk.BooleanVar(value=bool(getattr(self, "fast_mode", False)))
 
         # No model widgets until editor is opened
         self._provider_combo = None
@@ -77,6 +78,7 @@ class UIMixin:
         self._thinking_mode_combo = None
         self._verbosity_label = None
         self._verbosity_combo = None
+        self._fast_check = None
 
         # Row 0: Chat toolbar — START/STOP + Instruction + Save
         chat_toolbar = tk.Frame(self.root)
@@ -408,7 +410,8 @@ class UIMixin:
         for w in (self._temp_label, self._temp_spin,
                   self._thinking_check, self._thinking_strength_combo,
                   self._thinking_mode_label, self._thinking_mode_combo,
-                  self._verbosity_label, self._verbosity_combo):
+                  self._verbosity_label, self._verbosity_combo,
+                  self._fast_check):
             w.pack_forget()
 
     def _on_model_selected(self, event=None):
@@ -439,6 +442,14 @@ class UIMixin:
                     self._thinking_mode_var.set(coerced)
                 # Sync state from thinking_mode (may pack temp after combo)
                 self._on_thinking_mode_changed()
+                # Fast checkbox — only the fast-capable Opus tiers (4.8 / 5 /
+                # 5.5, all of which reject temperature, so it always lands
+                # right after the mode combo). The stored fast_mode value
+                # survives while the box is hidden — like temperature — and
+                # the request builder gates on _anthropic_fast_active, so a
+                # hidden True is never sent for an incapable model.
+                if self._anthropic_supports_fast_mode():
+                    self._fast_check.pack(side=tk.LEFT, padx=(10, 0))
             elif support == "extended" and self.provider == "OpenAI":
                 # GPT-5.1+: show mode combobox with None/Low/.../Xhigh (+Max on 5.6+)
                 self._thinking_mode_label.config(text="Reasoning")
@@ -734,6 +745,41 @@ class UIMixin:
         version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
         return version is not None and version >= (5, 0)
 
+    def _anthropic_supports_fast_mode(self, model_id=None):
+        """True for Anthropic models that serve fast mode (research preview:
+        speed="fast" under ANTHROPIC_FAST_MODE_BETA for up to 2.5x output
+        speed at 2x the per-token price) — Opus 4.8, Opus 5 and Opus 5.5,
+        version-parsed as Opus >= (4, 8) so a later Opus keeps the Fast
+        checkbox without a new entry (the docs list no other family, so this
+        stays Opus-only). Opus 4.7 rejects speed="fast" outright and 4.6
+        silently runs standard — both below the gate. A dated snapshot's
+        date in the minor slot does not count (claude-opus-4-20250514 is a
+        retired 4.0, not a 4.<date>); a dated Opus 5+ id clamps to minor 0
+        and passes. The reactive 400 rung in _stream_anthropic_call
+        backstops anything this over-admits."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        if version is None:
+            return False
+        major, minor = version
+        if minor >= 100:
+            minor = 0   # claude-opus-5-20260724: a date, not a minor
+        return (major, minor) >= (4, 8)
+
+    def _anthropic_fast_active(self, model_id=None):
+        """True when this run should send speed="fast": the Fast checkbox is
+        on, the model serves fast mode, and the session has not learned the
+        surface off (a 400 naming speed / fast-mode adds "speed" to
+        _anthropic_unsupported — an org outside the research preview, or a
+        model the version gate over-admitted). Shared by the live request
+        (_stream_anthropic_call), the Debug dump (_payload_for_display) and
+        the title / cost-log param summary, so all three tell one story."""
+        return (bool(getattr(self, "fast_mode", False))
+                and self._anthropic_supports_fast_mode(model_id)
+                and "speed" not in getattr(self, "_anthropic_unsupported", set()))
+
     def _anthropic_mode_values(self, model_id=None):
         """Thinking-mode combobox values for an Anthropic adaptive model.
         Always-on models (Fable/Mythos 5) get no "Off" entry; Xhigh and Max
@@ -902,6 +948,12 @@ class UIMixin:
         # Restore text verbosity
         self.text_verbosity = entry.get("text_verbosity", "medium")
         self._text_verbosity_var.set(self.text_verbosity.capitalize())
+        # Restore fast mode (Anthropic Opus 4.8+; an entry saved before the
+        # checkbox existed loads with it off). The var is getattr-guarded for
+        # the bare test hosts that predate it — the real App always has it.
+        self.fast_mode = bool(entry.get("fast_mode", False))
+        if getattr(self, "_fast_var", None) is not None:
+            self._fast_var.set(self.fast_mode)
         self._update_title()
 
     def _on_thinking_toggled(self):
@@ -1000,6 +1052,11 @@ class UIMixin:
         self._update_title()
         self._save_last_state()
 
+    def _on_fast_toggled(self):
+        self.fast_mode = bool(self._fast_var.get())
+        self._update_title()
+        self._save_last_state()
+
     def _get_model_param_summary(self):
         """Build a compact string of the parameters actually in effect for
         the current provider/model. Mirrors the per-model widget-visibility
@@ -1017,6 +1074,12 @@ class UIMixin:
                 parts.append(f"mode={mode.capitalize() or 'Off'}")
                 if mode == "off" and not self._anthropic_rejects_temperature():
                     parts.append(f"temp={self.temperature:g}")
+            # Fast mode changes every token's price (2x), so the title and the
+            # cost log's PARAMETERS field must say when the run asks for it —
+            # gated by the same _anthropic_fast_active the wire uses, so a
+            # session that learned the surface off stops claiming it.
+            if self._anthropic_fast_active():
+                parts.append("speed=fast")
         elif support == "extended" and self.provider == "OpenAI":
             # Report the effort that actually goes on the wire: the request
             # builder maps a stale value onto the nearest rung this model

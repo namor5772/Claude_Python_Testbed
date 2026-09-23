@@ -750,6 +750,7 @@ class StateMixin:
             "thinking_budget": self.thinking_budget,
             "thinking_mode": self.thinking_mode,
             "text_verbosity": self.text_verbosity,
+            "fast_mode": getattr(self, "fast_mode", False),
             "applied_instruction": {
                 "text": self.agent_instruction,
                 "images": [
@@ -775,6 +776,7 @@ class StateMixin:
                 "thinking_budget": self.thinking_budget,
                 "thinking_mode": self.thinking_mode,
                 "text_verbosity": self.text_verbosity,
+                "fast_mode": getattr(self, "fast_mode", False),
                 # The live per-skill modes ride along like every other field of
                 # the applied environment, so a relaunch comes back on the same
                 # skill layout the last Apply / Save / -l run left (2026-09-07).

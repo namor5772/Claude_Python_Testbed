@@ -6,6 +6,7 @@ from myagent.constants import (
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
     ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
+    ANTHROPIC_FAST_MODE_BETA,
 )
 from myagent.helpers import (parse_overflow_counts, strip_pre_fallback_blocks,
                              strip_thinking_blocks, trim_history_for_context)
@@ -202,7 +203,21 @@ class AnthropicMixin:
             # `fallbacks` is not a typed parameter in anthropic 0.84.0 (a typed
             # kwarg would raise) — extra_body merges it into the JSON body as-is.
             api_kwargs["extra_body"] = {"fallbacks": fable["fallbacks"]}
-        betas = _BASE_BETAS + (fable["betas"] if fable else [])
+        # Fast mode (research preview, Opus 4.8 / 5 / 5.5): the Fast checkbox
+        # sends speed="fast" under its beta — `speed` IS typed in anthropic
+        # 0.84.0, unlike `fallbacks`. Two refusal shapes, two rungs below: a
+        # 400 naming speed / fast-mode (a model the version gate over-admitted)
+        # learns the surface off, and a fast-mode 429 drops the call to
+        # standard speed — with an org outside the preview (fast limit of
+        # ZERO, a 429 that no backoff unblocks) learning it off for the
+        # session. Fast and standard prefixes do NOT share a prompt cache, so
+        # a mid-session learn-off costs one cache rebuild — accepted, it
+        # fires at most once per session.
+        fast_requested = self._anthropic_fast_active()
+        if fast_requested:
+            api_kwargs["speed"] = "fast"
+        betas = (_BASE_BETAS + (fable["betas"] if fable else [])
+                 + ([ANTHROPIC_FAST_MODE_BETA] if fast_requested else []))
         stripped_thinking = False  # one-shot guard for the signature-400 rung below
 
         for attempt in range(max_retries):
@@ -290,7 +305,36 @@ class AnthropicMixin:
                                 if fid:
                                     self.queue.put({"type": "ci_image", "url": "", "file_id": fid})
                 break  # success
-            except anthropic.RateLimitError:
+            except anthropic.RateLimitError as e:
+                # Fast mode has its OWN rate limit, and its 429 must not ride
+                # the backoff: an org outside the research preview has a fast
+                # limit of ZERO ("rate limit of 0 fast mode input tokens per
+                # minute", probed live 2026-09-24 — a 429, not a 400, so the
+                # BadRequest rung never sees it), which no amount of waiting
+                # unblocks. Limit-of-0 learns the surface off for the session;
+                # a genuine fast-capacity 429 drops just this call to standard
+                # speed (the docs' own fallback pattern — standard capacity is
+                # a separate pool, so the retry needs no sleep). Either way a
+                # standard-served call bills standard: pricing follows
+                # usage.speed, not the checkbox.
+                rl_msg = (getattr(e, "message", "") or str(e)).lower()
+                if "fast mode" in rl_msg and "speed" in api_kwargs:
+                    if "limit of 0" in rl_msg:
+                        self._anthropic_unsupported.add("speed")
+                        note = ("⚠ Fast mode is not enabled for this API key (its "
+                                "fast-mode rate limit is 0 — the research preview "
+                                "needs access; claude.com/fast-mode) — running at "
+                                "standard speed and standard rates for the rest of "
+                                "the session.\n")
+                    else:
+                        note = ("⚠ Fast mode is rate-limited right now — this call "
+                                "runs at standard speed and bills standard rates.\n")
+                    del api_kwargs["speed"]
+                    betas = [b for b in betas if b != ANTHROPIC_FAST_MODE_BETA]
+                    fast_requested = False
+                    self.queue.put({"type": "warning", "content": note})
+                    full_text = ""
+                    continue
                 if attempt < max_retries - 1:
                     wait = rate_limit_backoff(attempt)
                     self.queue.put({
@@ -314,6 +358,23 @@ class AnthropicMixin:
                         "type": "tool_info",
                         "content": "Model does not support temperature — retrying without it...\n",
                     })
+                    full_text = ""
+                    continue
+                # Fast mode refused (a model outside the research preview —
+                # Opus 4.7 rejects speed="fast" outright — or an org without
+                # access; an unrecognised beta 400 names the fast-mode flag):
+                # learn once for the session, drop it, retry at standard
+                # speed. A WARNING, not tool_info: the run the user priced at
+                # fast rates now bills at standard ones.
+                if ("speed" in msg or "fast-mode" in msg) and "speed" in api_kwargs:
+                    self._anthropic_unsupported.add("speed")
+                    del api_kwargs["speed"]
+                    betas = [b for b in betas if b != ANTHROPIC_FAST_MODE_BETA]
+                    fast_requested = False
+                    self.queue.put({"type": "warning", "content":
+                        "⚠ Fast mode is not available here (model outside the research "
+                        "preview, or this API key has no access) — retrying at standard "
+                        "speed; this run bills at standard rates.\n"})
                     full_text = ""
                     continue
                 # Claude Fable 5.1's preserved-thinking check: a replayed thinking
@@ -460,6 +521,15 @@ class AnthropicMixin:
                 # stream_worker prices the call by it, so a fallback-served
                 # call bills at the serving model's rates, not Fable's.
                 "model": served_model,
+                # The speed the API says served this call ("fast"/"standard")
+                # — what stream_worker PRICES the call by (ANTHROPIC_FAST_
+                # PRICING at "fast"). Falls back to the requested speed when
+                # the field is absent from the stream snapshot: a request
+                # that asked for fast and succeeded WAS served fast (an
+                # incapable model errors instead — only Opus 4.6, below the
+                # version gate, silently downgrades), so the fallback can
+                # only ever be honest.
+                "speed": getattr(usage, "speed", None) or ("fast" if fast_requested else None),
             }
 
         return final_message.stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict

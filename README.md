@@ -178,6 +178,8 @@ The parameter widgets are **model-aware**: controls that a model rejects are *hi
 | Moonshot kimi-k2.7-code (+`-highspeed`) | None — always thinks, no client knob (a coding line that takes images after all: the listing's `supports_image_in` flag and a live probe, 2026-09-23) | Hidden |
 | Ollama thinking models (Qwen3, DeepSeek-R1, gpt-oss) | Boolean `think` checkbox | Shown |
 
+**Anthropic fast mode (2026-09-24)** — Opus 5.5 / 5 / 4.8 (research preview) also get a **Fast** checkbox after the Thinking combo: ticked, every call carries `speed: "fast"` under its beta for up to 2.5x output tokens/sec at exactly **2x the per-token price** in every bucket (Opus 5.5 $8/$40, cache reads $0.40/MTok; Opus 5 / 4.8 $10/$50 — `ANTHROPIC_FAST_PRICING`). The setting is per-instruction (`fast_mode`), shows as `speed=fast` in the title bar and the cost log's PARAMETERS field, and each call is priced by the speed the API says served it (`usage.speed`), so a fall-back to standard speed bills standard. An org without preview access gets a 429 with a fast-mode rate limit of **zero** (probed live 2026-09-24) — MyAgent recognises it, posts a ⚠, and runs the rest of the session at standard speed instead of backing off forever; a genuine fast-capacity 429 drops just that call to standard, and a 400 naming speed (a model outside the preview) learns it off like the Fable betas. A fast-served model missing a fast pricing row is unpriced with a warning — never billed from the standard table at half the real rate. Claude API only: no Batch, no Priority Tier, and fast/standard prefixes don't share a prompt cache.
+
 ### Ollama (local inference)
 
 No key, no cost, no egress — at the price of speed (a 32B Q4 model on Apple Silicon streams ~10–30 tok/s).

@@ -15,7 +15,8 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE,
     _HAS_PHYSICAL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
-    ANTHROPIC_PRICING, OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
+    ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING,
+    OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
     APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS,
@@ -405,6 +406,10 @@ class StreamingMixin:
                     payload["temperature"] = self.temperature
             if fable and fable["fallbacks"]:
                 payload["fallbacks"] = fable["fallbacks"]
+            # Fast mode — the same gate the live request uses
+            # (_anthropic_fast_active), so the dump shows what is really sent.
+            if self.provider == "Anthropic" and self._anthropic_fast_active():
+                payload["speed"] = "fast"
         return self._debug_render(payload)
 
     def _get_tools(self):
@@ -1006,18 +1011,22 @@ class StreamingMixin:
                 "camera_capture will not work with this model.")
 
     @staticmethod
-    def _pricing_match(provider, model_name):
+    def _pricing_match(provider, model_name, table=None):
         """The (prefix, table entry) a model prices by — the LONGEST table
         prefix the id starts with — or (None, None) when the provider has no
         table or nothing matches. The entry is raw (possibly a DatedPrice):
         _get_pricing resolves and converts it; _generic_pricing_warning only
-        needs the prefix, to tell a model's own row from a family catch-all."""
-        table = {"Anthropic": ANTHROPIC_PRICING,
-                 "OpenAI": OPENAI_PRICING,
-                 "Google": GEMINI_PRICING,
-                 "xAI": XAI_PRICING,
-                 "Moonshot": KIMI_PRICING,
-                 "Ollama": OLLAMA_PRICING}.get(provider)
+        needs the prefix, to tell a model's own row from a family catch-all.
+        An explicit ``table`` overrides the provider's standard one — how the
+        fast-mode lookup (ANTHROPIC_FAST_PRICING) reuses this one
+        longest-prefix implementation."""
+        if table is None:
+            table = {"Anthropic": ANTHROPIC_PRICING,
+                     "OpenAI": OPENAI_PRICING,
+                     "Google": GEMINI_PRICING,
+                     "xAI": XAI_PRICING,
+                     "Moonshot": KIMI_PRICING,
+                     "Ollama": OLLAMA_PRICING}.get(provider)
         if not table:
             return None, None
         # Match longest prefix first for specificity
@@ -1046,7 +1055,7 @@ class StreamingMixin:
                 f"myagent/constants.py.")
 
     @staticmethod
-    def _unpriced_model_warning(provider, model_name):
+    def _unpriced_model_warning(provider, model_name, fast=False):
         """A ⚠ line for stream_worker when a PAID provider's model has no row
         in its pricing table at all — the 2026-09-23 report: a gpt-6-sol run
         on the Mac showed no cost line and never reached the cost log,
@@ -1057,9 +1066,24 @@ class StreamingMixin:
         its own or a family catch-all, which _generic_pricing_warning covers
         — for Ollama (free by design, logged at $0.0000) and for xAI (its
         API reports the billed cost per call, so a missing row costs
-        nothing)."""
+        nothing). With ``fast`` (this run will request Anthropic fast mode),
+        the FAST table is what must hold a row — fast-served calls never
+        price from the standard table, so a model missing there is unpriced
+        for the run however ordinary its standard row is."""
         if provider in ("Ollama", "xAI"):
             return None
+        if fast and provider == "Anthropic":
+            prefix, _entry = StreamingMixin._pricing_match(
+                provider, model_name, table=ANTHROPIC_FAST_PRICING)
+            if prefix is not None:
+                return None
+            return (f"{model_name} will run in FAST mode but has no row in "
+                    f"ANTHROPIC_FAST_PRICING (myagent/constants.py), so its calls "
+                    f"cannot be priced: no cost will be shown for this run and the "
+                    f"run will NOT be written to the API cost log (a $0.0000 line "
+                    f"would claim it was free — and the standard row would bill it "
+                    f"at half the fast rate). Token counts are still shown per "
+                    f"call. Add the model's fast row.")
         prefix, _entry = StreamingMixin._pricing_match(provider, model_name)
         if prefix is not None:
             return None
@@ -1070,9 +1094,14 @@ class StreamingMixin:
                 f"Token counts are still shown per call. Add the model's row.")
 
     @staticmethod
-    def _get_pricing(provider, model_name, today=None):
+    def _get_pricing(provider, model_name, today=None, speed=None):
         """Look up per-token pricing for a model.
         Returns a dict with per-token prices, or None if no match.
+        ``speed`` is what the provider says served the call (Anthropic's
+        usage.speed): "fast" prices from ANTHROPIC_FAST_PRICING — 2x the
+        standard row in every bucket — and a fast-served model MISSING there
+        returns None (unpriced, warned) rather than the standard row at half
+        the real rate. Any other speed, and every other provider, ignores it.
         Anthropic: {input, output, cache_write, cache_read}
         OpenAI/Gemini: {input, output, cache_read} — cache_read omitted for the
         few models with no cached tier (the OpenAI -pro ids, priced None);
@@ -1087,6 +1116,14 @@ class StreamingMixin:
         so a long-running agent flips at the boundary; tests pin it).
         The longest-prefix step lives in _pricing_match, shared with
         _generic_pricing_warning."""
+        if provider == "Anthropic" and speed == "fast":
+            _prefix, fast_match = StreamingMixin._pricing_match(
+                provider, model_name, table=ANTHROPIC_FAST_PRICING)
+            if fast_match is None:
+                return None
+            per_token = tuple(p / 1_000_000 for p in fast_match)
+            return {"input": per_token[0], "output": per_token[1],
+                    "cache_write": per_token[2], "cache_read": per_token[3]}
         _prefix, best_match = StreamingMixin._pricing_match(provider, model_name)
         if best_match is None:
             return None
@@ -1346,8 +1383,14 @@ class StreamingMixin:
             # ...and when a paid provider's model has NO row at all (a new
             # tier before its row is added — gpt-6-sol ran nine days that
             # way): no cost line and no cost-log line would follow, in
-            # silence, so this too is an always-shown warning.
-            unpriced = self._unpriced_model_warning(self.provider, self.model)
+            # silence, so this too is an always-shown warning. A fast-mode
+            # run needs its row in the FAST table instead (the getattr guard
+            # keeps bare test hosts without the UI mixin working).
+            fast_run = (self.provider == "Anthropic"
+                        and getattr(self, "fast_mode", False)
+                        and self._anthropic_fast_active())
+            unpriced = self._unpriced_model_warning(self.provider, self.model,
+                                                    fast=fast_run)
             if unpriced:
                 self.queue.put({"type": "warning", "content": f"⚠ {unpriced}\n"})
 
@@ -1419,9 +1462,14 @@ class StreamingMixin:
                     # Price by the model that actually produced the message when
                     # the provider reports one (Anthropic: a server-side refusal
                     # fallback serves the call on an Opus-tier model at ITS
-                    # rates), falling back to the configured model's row.
-                    pricing = (self._get_pricing(self.provider, usage.get("model") or self.model)
-                               or self._get_pricing(self.provider, self.model))
+                    # rates), falling back to the configured model's row — and by
+                    # the SPEED that served it (usage["speed"]="fast" prices from
+                    # the fast table at 2x; absent everywhere but Anthropic).
+                    call_speed = usage.get("speed")
+                    pricing = (self._get_pricing(self.provider, usage.get("model") or self.model,
+                                                 speed=call_speed)
+                               or self._get_pricing(self.provider, self.model,
+                                                    speed=call_speed))
                     # xAI reports the authoritative billed cost per call
                     # (cost_in_usd_ticks → cost_usd, set in _xai_usage_dict).
                     # Prefer it over the table estimate: it already includes
