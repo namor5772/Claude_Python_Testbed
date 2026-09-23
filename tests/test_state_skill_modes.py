@@ -24,7 +24,7 @@ from myagent.state_mixin import StateMixin
 
 TOGGLES = ("desktop_enabled", "browser_enabled", "excel_enabled", "physical_enabled",
            "meta_enabled", "mcp_enabled", "google_enabled", "proton_enabled",
-           "outlook_enabled", "conversational_enabled")
+           "outlook_enabled", "conversational_enabled", "dictation_auto_send")
 DISPLAY = ("show_activity", "show_thinking", "save_thinking", "debug_enabled",
            "tool_calls_enabled", "diag_enabled")
 

@@ -3,7 +3,9 @@
 The dialog's **Mike** button is a toggle: the first press starts recording the
 microphone, the second stops it, the recording goes to a speech-to-text model,
 and the transcript is inserted into the reply box at the cursor — to be edited
-like typed text before Enter sends it. **Voice Setup** — a button at the bottom
+like typed text before Enter sends it, or, with the **Auto-send** box right of
+Mike ticked (2026-09-23), sent that moment as if Enter had been pressed; the
+box is the applied instruction's setting. **Voice Setup** — a button at the bottom
 left of the MAIN window since 2026-09-20 (it began beside Mike, reachable only
 while a run was asking something) — picks the provider / model / language /
 vocabulary hint / microphone and tests the whole chain (microphone → API key →
@@ -11,9 +13,11 @@ model) with a Test button of its own.
 
 Pieces, outermost first:
 
-* `VoiceMixin._voice_build_row` — the Mike button and the status line the
-  Agent Request dialog embeds; `_voice_setup_from_main` / `_open_voice_setup`
-  — the main window's button and the setup dialog it opens.
+* `VoiceMixin._voice_build_row` — the Mike button, the Auto-send checkbox and
+  the status line the Agent Request dialog embeds (`_voice_auto_send_changed`
+  keeps the box's value with the applied instruction); `_voice_setup_from_main`
+  / `_open_voice_setup` — the main window's button and the setup dialog it
+  opens.
 * `_VoiceDictation` — the toggle's state machine (idle → recording →
   transcribing → idle), shared by the Mike button and the setup dialog's Test
   button. The API call runs on a worker thread and hands its result back
@@ -40,7 +44,10 @@ The settings are one per-user file, `~/.config/myagent-voice/config.json`
 (beside the mail mixins' config dirs), NOT agent_state.json: instance N and
 every headless child keep their own state file, and a microphone chosen once
 has to hold in all of them. API keys stay in the environment like every other
-provider's. All helpers are `_voice_`-prefixed (the flat-namespace MRO rule).
+provider's. The one dictation setting that IS per instruction is Auto-send
+(`dictation_auto_send`, on the App and in the instruction entry): it says what
+the dialog does with a transcript, not how one is made. All helpers are
+`_voice_`-prefixed (the flat-namespace MRO rule).
 """
 
 import array
@@ -881,34 +888,78 @@ class VoiceMixin:
         status.bind("<Configure>", lambda e: status.config(wraplength=max(e.width - 4, 120)))
         return status
 
-    def _voice_build_row(self, dlg, target_text):
-        """Mike + the status line, for the caller to grid under its reply box.
-        Returns (frame, mike_button, dictation); the caller owns the mnemonics
-        (one bind_mnemonics call per window) and calls dictation.shutdown() on
-        its close paths. The settings are NOT here: Voice Setup is a button on
-        the main window (2026-09-20), so it can be reached before any run asks
-        anything — this dialog only exists while one does."""
+    def _voice_build_row(self, dlg, target_text, auto_send, send):
+        """Mike, the Auto-send checkbox and the status line, for the caller to
+        grid under its reply box. Returns (frame, mike_button,
+        auto_send_button, dictation); the caller owns the mnemonics (one
+        bind_mnemonics call per window) and calls dictation.shutdown() on its
+        close paths.
+
+        `auto_send` is the app's BooleanVar behind the checkbox — the applied
+        instruction's setting, kept by `_voice_auto_send_changed` — and `send`
+        is what the caller does on Enter. Ticked, a transcript is sent the
+        moment it has landed in the box, as if Enter had been pressed (the
+        user's request, 2026-09-23: a hands-free reply); unticked, the row
+        behaves exactly as it did before the box existed. Only a transcript
+        that LANDS can be sent: silence, a slip, an empty transcript and an
+        API error stop at the status line as ever, and on_text is never
+        called for them.
+
+        The settings are NOT here: Voice Setup is a button on the main window
+        (2026-09-20), so it can be reached before any run asks anything —
+        this dialog only exists while one does."""
         row = tk.Frame(dlg)
-        row.grid_columnconfigure(1, weight=1)
+        row.grid_columnconfigure(2, weight=1)
         mike_btn = tk.Button(row, text="Mike", width=15)
         mike_btn.grid(row=0, column=0, padx=(0, 8), sticky="nw")
-        # Beside the one button. (While Voice Setup sat here too the status
-        # went UNDER the pair: the dialog's size is the user's — 567 px wide on
-        # one saved layout — and beside two buttons the longest message wrapped
-        # into eight lines. Beside one it is four, in less height than a row
-        # of its own would cost at idle.)
+        # Right of Mike, where the user asked for it, and created after it so
+        # Tab reaches it next. Tk flips the variable BEFORE running the
+        # command, which then keeps the new value with the instruction.
+        auto_btn = tk.Checkbutton(row, text="Auto-send", variable=auto_send,
+                                  command=self._voice_auto_send_changed)
+        auto_btn.grid(row=0, column=1, padx=(0, 8), sticky="nw")
+        # Beside the pair. (While Voice Setup sat here too the status went
+        # UNDER the buttons: the dialog's size is the user's — 567 px wide on
+        # one saved layout — and beside two BUTTONS the longest message
+        # wrapped into eight lines. Beside one it was four, in less height
+        # than a row of its own would cost at idle; the checkbox is a third
+        # of a button's width.)
         status = self._voice_status_label(row)
-        status.grid(row=0, column=1, sticky="ew")
+        status.grid(row=0, column=2, sticky="ew")
+
+        def landed(transcript):
+            self._voice_insert_into(target_text, transcript)
+            if auto_send.get():
+                send()      # the virtual Enter: the dialog's own send path
 
         dictation = _VoiceDictation(
-            self, dlg, mike_btn, status, self._voice_load_config,
-            lambda transcript: self._voice_insert_into(target_text, transcript),
+            self, dlg, mike_btn, status, self._voice_load_config, landed,
             idle_hint=VOICE_IDLE_HINT)
         mike_btn.config(command=dictation.toggle)
         dlg.bind("<Destroy>",
                  lambda e: dictation.shutdown() if str(e.widget) == str(dlg) else None,
                  add="+")
-        return row, mike_btn, dictation
+        return row, mike_btn, auto_btn, dictation
+
+    def _voice_auto_send_changed(self):
+        """The Auto-send checkbox was toggled. The Agent Request dialog is the
+        only place the setting is set, so it persists from here: the new value
+        goes to the applied instruction's entry in the shared store — a
+        targeted key write, nothing else in the entry is touched — so the next
+        run of that instruction, on any machine, starts the same way; and to
+        the applied snapshot in agent_state.json (`_save_last_state`), so a
+        relaunch does too. An ad-hoc run has no entry to write to and keeps
+        the value for the session and the snapshot alone; a value the entry
+        already holds is not rewritten (no OneDrive churn)."""
+        value = bool(self.dictation_auto_send.get())
+        name = getattr(self, "agent_instruction_name", "")
+        if name:
+            instructions = self._load_saved_instructions()
+            entry = instructions.get(name)
+            if isinstance(entry, dict) and bool(entry.get("dictation_auto_send", False)) != value:
+                entry["dictation_auto_send"] = value
+                self._save_instructions_to_disk(instructions)
+        self._save_last_state()
 
     # ── UI: Voice Setup ────────────────────────────────────────────────
 

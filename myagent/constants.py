@@ -523,6 +523,10 @@ META_TOOLS = [
                     "type": "boolean",
                     "description": "Enable Conversational mode — MyAgent enforces a chatbot loop by invoking user_prompt automatically when the model ends a turn without it (default false on create). Useful for smaller models that don't reliably follow always-call-user_prompt rules.",
                 },
+                "dictation_auto_send": {
+                    "type": "boolean",
+                    "description": "The Agent Request dialog's Auto-send checkbox (right of its Mike button): when true, a reply dictated with Mike is sent the moment its transcript lands in the reply box, as if Enter had been pressed; when false the transcript waits to be edited and sent by hand. Default false on create.",
+                },
                 "provider": {
                     "type": "string",
                     "enum": ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"],

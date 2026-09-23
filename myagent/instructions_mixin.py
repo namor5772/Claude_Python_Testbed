@@ -96,6 +96,7 @@ class InstructionsMixin:
                 "google": entry.get("google", False),
                 "outlook": entry.get("outlook", False),
                 "conversational": entry.get("conversational", False),
+                "dictation_auto_send": entry.get("dictation_auto_send", False),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
                 "temperature": entry.get("temperature", 1.0),
@@ -128,6 +129,7 @@ class InstructionsMixin:
                 "google": params.get("google", False),
                 "outlook": params.get("outlook", False),
                 "conversational": params.get("conversational", False),
+                "dictation_auto_send": params.get("dictation_auto_send", False),
                 "provider": self.provider,
                 "model": self.model,
                 "temperature": self.temperature,
@@ -151,7 +153,8 @@ class InstructionsMixin:
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
             updatable = ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
-                         "outlook", "conversational", "skill_modes", "provider", "model",
+                         "outlook", "conversational", "dictation_auto_send", "skill_modes",
+                         "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
                          "blocked_tools")
@@ -164,7 +167,8 @@ class InstructionsMixin:
                 )
             entry = instructions[name]
             for key in ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
-                        "outlook", "conversational", "provider", "model", "temperature",
+                        "outlook", "conversational", "dictation_auto_send", "provider",
+                        "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity",
                         "blocked_tools"):
@@ -940,6 +944,9 @@ class InstructionsMixin:
             "proton": self.proton_enabled.get(),
             "outlook": self.outlook_enabled.get(),
             "conversational": self.conversational_enabled.get(),
+            # The Agent Request dialog's Auto-send box: live state like the
+            # model params — it has no editor widget.
+            "dictation_auto_send": self.dictation_auto_send.get(),
             "provider": self.provider,
             "model": self.model,
             "temperature": self.temperature,
@@ -1025,6 +1032,7 @@ class InstructionsMixin:
         self._editor_conversational.set(False)
         self._disabled_confirm_patterns = set()
         self._blocked_tools = set()
+        self.dictation_auto_send.set(False)
         self._update_ps_safety_button()
         # Reset model controls to defaults
         if self._has_anthropic:
@@ -1100,6 +1108,9 @@ class InstructionsMixin:
             self._restore_skill_modes(entry)
             self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
             self._blocked_tools = set(entry.get("blocked_tools", []))
+            # Environment-level like the model params (no draft widget), so
+            # it is restored at once rather than on Apply.
+            self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
             self._update_ps_safety_button()
             self._refresh_image_listbox()
 

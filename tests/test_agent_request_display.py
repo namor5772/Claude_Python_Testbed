@@ -193,12 +193,17 @@ class _DialogHost(SafetyMixin):
     def __init__(self, root):
         self.root = root
         self.queue = queue.Queue()
+        self.dictation_auto_send = tk.BooleanVar(master=root, value=False)
+        self.send = None    # what the real row calls when Auto-send is ticked
 
-    def _voice_build_row(self, dlg, resp_text):
+    def _voice_build_row(self, dlg, resp_text, auto_send, send):
         row = tk.Frame(dlg)
         mike = tk.Button(row, text="Mike")
         mike.pack(side=tk.LEFT)
-        return row, mike, _Dictation()
+        auto = tk.Checkbutton(row, text="Auto-send", variable=auto_send)
+        auto.pack(side=tk.LEFT)
+        self.send = send
+        return row, mike, auto, _Dictation()
 
     def _place_window(self, win, kind, default_size, **_kwargs):
         win.attributes("-alpha", 0.0)   # mapped and focusable, never seen
@@ -231,7 +236,7 @@ class DialogTests(unittest.TestCase):
         """Run the real do_user_prompt(message) on a worker thread and hand
         the dialog, once it is on screen, to act(dialog). Returns the host and
         {"reply": ...} (or {"error": ...})."""
-        host = _DialogHost(self.root)
+        host = self.host = _DialogHost(self.root)
         outcome = {}
 
         def work():
@@ -318,6 +323,25 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(self.queued(host),
                          [{"type": "user_prompt_request", "content": asked},
                           {"type": "user_prompt_echo", "content": "yes, go ahead"}])
+
+    def test_a_transcript_sent_by_auto_send_answers_the_dialog_like_enter(self):
+        # The dialog hands the voice row its own send path (on_inject, which
+        # is defined AFTER the row is built — hence a late-bound lambda) for
+        # the Auto-send box (2026-09-23). Here the transcript "lands" by hand
+        # and the row's send is called, as voice_mixin does once it has.
+        asked = "Which account?"
+
+        def act(dialog):
+            box = [w for w in _walk(dialog)
+                   if isinstance(w, tk.Text) and str(w.cget("state")) == "normal"][0]
+            box.insert("1.0", "the joint account")
+            self.host.send()
+
+        host, outcome = self.run_dialog(asked, act)
+        self.assertEqual(outcome["reply"], "the joint account")
+        self.assertEqual(self.queued(host),
+                         [{"type": "user_prompt_request", "content": asked},
+                          {"type": "user_prompt_echo", "content": "the joint account"}])
 
 
 if __name__ == "__main__":

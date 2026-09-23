@@ -260,6 +260,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # without calling user_prompt itself. Useful for smaller models that
         # don't reliably follow "always call user_prompt" meta-rules.
         self.conversational_enabled = tk.BooleanVar(value=False)
+        # The Agent Request dialog's Auto-send checkbox (right of Mike): a
+        # dictated reply is sent the moment its transcript lands, as if Enter
+        # were pressed. Per instruction like the toggles above — but set from
+        # the dialog itself, which writes it through (voice_mixin).
+        self.dictation_auto_send = tk.BooleanVar(value=False)
         self._disabled_confirm_patterns = set()
         # Per-instruction hard tool blocklist: names here are stripped from the
         # offered tools AND refused at _execute_tool dispatch — a deterministic

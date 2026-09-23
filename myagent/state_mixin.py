@@ -766,6 +766,7 @@ class StateMixin:
                 "proton": self.proton_enabled.get(),
                 "outlook": self.outlook_enabled.get(),
                 "conversational": self.conversational_enabled.get(),
+                "dictation_auto_send": self.dictation_auto_send.get(),
                 "provider": self.provider,
                 "model": self.model,
                 "temperature": self.temperature,
@@ -896,6 +897,7 @@ class StateMixin:
         self.proton_enabled.set(entry.get("proton", False))
         self.outlook_enabled.set(entry.get("outlook", False))
         self.conversational_enabled.set(entry.get("conversational", False))
+        self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
         model_restored = "model" in entry
         if model_restored:
             self._restore_model_params(entry)

@@ -443,10 +443,15 @@ class SafetyMixin:
             resp_text.config(yscrollcommand=resp_sb.set)
 
             # Voice row (voice_mixin): Mike toggles a recording whose
-            # transcript lands in the reply box. (Its settings are the main
-            # window's Voice Setup button.) Built before the image row so Tab
-            # order follows the visual order.
-            voice_row, mike_btn, dictation = self._voice_build_row(dlg, resp_text)
+            # transcript lands in the reply box; the Auto-send box right of
+            # it — the applied instruction's setting — has that transcript
+            # sent at once, through on_inject: defined BELOW, which is why it
+            # is handed over as a lambda, looked up when a transcript lands
+            # and never at this line. (The settings are the main window's
+            # Voice Setup button.) Built before the image row so Tab order
+            # follows the visual order.
+            voice_row, mike_btn, auto_send_btn, dictation = self._voice_build_row(
+                dlg, resp_text, self.dictation_auto_send, lambda: on_inject())
             voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
 
             # Image attachment row — mirrors the instruction editor's
@@ -485,7 +490,8 @@ class SafetyMixin:
             # (buttons, then the list), as in the instruction editor.
             img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
-            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn})
+            bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn,
+                                 "a": auto_send_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with
