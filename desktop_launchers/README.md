@@ -169,6 +169,13 @@ success chime + self-dismissing dialog with the run's log line (from
 on failure. Unlike the AppleScript it needs no path patching — the repo is
 resolved from the script's own location — so only the Desktop shortcut is
 per-machine. `-DryRun` passes `--dry-run` through for a read-only test.
+It waits with `$proc.WaitForExit()` rather than `Start-Process -Wait`: since
+2026-09-24 `UnreadSummary.py` opens the digest in Notepad++ (or Notepad),
+and `-Wait` also waits for a process's descendants, so the "Run complete"
+dialog would have been held back until that viewer window was closed
+(verified 2026-09-24: the launcher returns while Notepad++ stays open). The
+AppleScript needs no change — the Mac's `open -t` hands the file to the
+default text editor and exits at once.
 
 Every hidden launcher's shortcut below targets `conhost.exe --headless powershell.exe …`
 rather than `powershell.exe -WindowStyle Hidden`. powershell.exe is a console

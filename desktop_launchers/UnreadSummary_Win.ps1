@@ -14,6 +14,11 @@
 # repo is resolved from this file's own location, so any clone works as-is;
 # only the .lnk is per-machine. -DryRun passes --dry-run through (read-only
 # pass, nothing sent or marked) for testing the plumbing end to end.
+#
+# The wait is $proc.WaitForExit(), NOT Start-Process -Wait: -Wait also waits
+# for the process's DESCENDANTS, and since 2026-09-24 UnreadSummary.py opens
+# the digest in Notepad++ (or Notepad), which would have held the "Run
+# complete" dialog back until that viewer window was closed.
 param([switch]$DryRun)
 
 $repoDir = Split-Path -Parent $PSScriptRoot
@@ -24,7 +29,8 @@ $pyArgs = @('UnreadSummary.py')
 if ($DryRun) { $pyArgs += '--dry-run' }
 
 $proc = Start-Process -FilePath $python -ArgumentList $pyArgs `
-    -WorkingDirectory $repoDir -WindowStyle Hidden -PassThru -Wait
+    -WorkingDirectory $repoDir -WindowStyle Hidden -PassThru
+$proc.WaitForExit()
 
 $shell = New-Object -ComObject WScript.Shell
 if ($proc.ExitCode -eq 0) {

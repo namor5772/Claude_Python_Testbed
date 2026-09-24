@@ -45,10 +45,19 @@ If a token is missing/unrefreshable the account is reported as an ERROR line
 in the sent summary (or the run fails if it's the sending account) — run
 MyAgent once interactively to repair, as with Heartbeat.py.
 
+Besides being emailed, the digest body is written to a text file beside the
+log (unread_summary.txt) — laid out 80 columns wide, dividers and wrapping,
+where the email keeps its 50-char dividers — and opened in a text viewer on
+the machine that ran the pass — Notepad++ (else Notepad) on Windows, the
+default text editor via `open -t` on macOS — so it can be read the moment the
+run ends rather than when the email arrives. --no-view keeps the file and
+skips the viewer.
+
 Usage:
   python UnreadSummary.py            # real run: acts on matches, sends email
   python UnreadSummary.py --dry-run  # read-only: prints the email to stdout,
                                      # no downloads, no mark/trash, no send
+  python UnreadSummary.py --no-view  # (either mode) don't open the viewer
 
 Designed for launchd/Task Scheduler (e.g. daily at 07:00); exits 0 on a
 normal pass (even with per-account errors — they're visible in the email AND
@@ -68,8 +77,10 @@ import json
 import os
 import platform
 import re
+import shutil
 import socket
 import ssl
+import subprocess
 import sys
 import textwrap
 from datetime import datetime
@@ -137,6 +148,79 @@ LOG_MAX_BYTES = 100_000
 
 def rotate_log_if_needed():
     _rotate_log(LOG_FILE, LOG_MAX_BYTES)
+
+
+# ── Digest file + viewer (2026-09-24) ────────────────────────────────────────
+# The body that is emailed is also written to DIGEST_FILE, beside the log, and
+# opened in a text viewer on the machine that ran the pass, so the digest is
+# readable the moment the run ends. The viewer is chosen per platform by
+# viewer_command: Notepad++ on Windows when it is installed (on PATH or in one
+# of NOTEPADPP_DIRS), else Notepad; `open -t` on macOS — the user's default
+# text editor, TextEdit unless changed; xdg-open elsewhere. Opening it is
+# fire-and-forget and best-effort: a viewer that fails to launch is a log
+# line, never a failed run, and --no-view skips it (the file is still written).
+DIGEST_FILE = LOG_FILE.with_name("unread_summary.txt")
+DIGEST_FILE_WIDTH = 80  # the file's line width — dividers and wrapping alike;
+# the email keeps its narrow 50-char dividers, which read cramped in a viewer
+
+# (environment variable, subfolder) pairs where a Notepad++ install lives:
+# the machine-wide installer's folder and the per-user one.
+NOTEPADPP_DIRS = (("ProgramFiles", "Notepad++"),
+                  ("ProgramFiles(x86)", "Notepad++"),
+                  ("ProgramW6432", "Notepad++"),
+                  ("LOCALAPPDATA", os.path.join("Programs", "Notepad++")))
+
+
+def viewer_command(path, system=None, which=shutil.which, exists=os.path.exists,
+                   env=os.environ):
+    """The argv that opens ``path`` in this platform's text viewer. Pure: the
+    platform and the three lookups are injectable so the tests can pin every
+    branch on any machine."""
+    system = system or platform.system()
+    if system == "Windows":
+        exe = which("notepad++")
+        if not exe:
+            for var, sub in NOTEPADPP_DIRS:
+                base = env.get(var)
+                if base:
+                    candidate = os.path.join(base, sub, "notepad++.exe")
+                    if exists(candidate):
+                        exe = candidate
+                        break
+        return [exe or "notepad.exe", path]
+    if system == "Darwin":
+        return ["open", "-t", path]
+    return ["xdg-open", path]
+
+
+def write_digest(body, path=None):
+    """Write the digest body to ``path`` (default DIGEST_FILE), replacing the
+    previous pass's file, and return the path."""
+    path = Path(path or DIGEST_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body + "\n", encoding="utf-8")
+    return path
+
+
+def show_digest(body, view=True, launch=subprocess.Popen):
+    """Write the digest file and, unless ``view`` is off, open it in the
+    platform's text viewer. Returns the one-line outcome for the log. Never
+    raises — the digest has already been built and (on a real run) is about
+    to be sent, and a viewer problem must not turn that into a failed pass."""
+    try:
+        path = write_digest(body)
+    except Exception as e:
+        return f"digest file NOT written ({type(e).__name__}: {e})"
+    if not view:
+        return f"digest written to {path}"
+    argv = viewer_command(str(path))
+    try:
+        launch(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+               stderr=subprocess.DEVNULL)
+    except Exception as e:
+        return (f"digest written to {path}; viewer {argv[0]} NOT opened "
+                f"({type(e).__name__}: {e})")
+    return f"digest written to {path}; opened with {argv[0]}"
 
 
 # ── SPECIFYING LIST (loaded from SpecifyingList.csv) ─────────────────────────
@@ -751,16 +835,16 @@ def outlook_send(account, account_email, subject, body):
 
 # ── Output assembly ──────────────────────────────────────────────────────────
 
-def _field(label, value, width=9):
+def _field(label, value, width=9, wrap=WRAP):
     """One wrapped 'Label: value' entry line with a hanging indent. ``width``
     widens the label column for labels that outgrow the default
-    ("Determine:" is 10 chars)."""
+    ("Determine:" is 10 chars); ``wrap`` is the column the line wraps at."""
     prefix = f"   {label:<{width}}"
-    return textwrap.fill(value or "", width=WRAP, initial_indent=prefix,
+    return textwrap.fill(value or "", width=wrap, initial_indent=prefix,
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
 
-def format_entry(n, entry):
+def format_entry(n, entry, wrap=WRAP):
     """A SPECIFYING match renders like any other email; the only additions
     are the bare "SPECIFYING LIST EMAIL" marker line at the top, followed by
     one "Type={Type}, Index={Index}" line echoing those rule columns
@@ -777,35 +861,45 @@ def format_entry(n, entry):
         lines.append(f"   Account:  {entry['account_email']}{tag}")
     else:
         lines.append(f"{num}Account:  {entry['account_email']}{tag}")
-    lines.append(_field("From:", entry["from"]))
+    lines.append(_field("From:", entry["from"], wrap=wrap))
     fwd = forwarded_to(entry, entry["account_email"])
     if fwd:
-        lines.append(_field("To:", fwd))
-    lines.append(_field("Subject:", entry["subject"]))
-    lines.append(_field("Date:", entry["date"]))
-    lines.append(_field("Summary:", summarize(entry["lines"], entry["subject"])))
+        lines.append(_field("To:", fwd, wrap=wrap))
+    lines.append(_field("Subject:", entry["subject"], wrap=wrap))
+    lines.append(_field("Date:", entry["date"], wrap=wrap))
+    lines.append(_field("Summary:", summarize(entry["lines"], entry["subject"]),
+                        wrap=wrap))
     pdfs = entry.get("pdfs") or []
     if pdfs:
-        lines.append(_field("PDFs:", "; ".join(pdfs)))
+        lines.append(_field("PDFs:", "; ".join(pdfs), wrap=wrap))
     if entry.get("spec"):
         lines.append(_field("Determine:",
-                            entry["spec"].get("determine") or "(none)", width=11))
+                            entry["spec"].get("determine") or "(none)", width=11,
+                            wrap=wrap))
     return "\n".join(lines)
 
 
-def build_body(account_order, entries_by_account, errors, dry_run):
+def build_body(account_order, entries_by_account, errors, dry_run, width=None,
+               now=None):
     """The emailed digest: a header, then the TOTAL section, then the
     per-account enumeration, closed by a bare divider. The enumeration is
     rendered FIRST so the TOTAL line that precedes it in the email can quote
     the exact count of entries that follow (n is the last sequence number
     used — the count can never drift from the numbering it introduces).
     TOTAL moved up from the footer on 2026-09-10 so the count, the
-    SPECIFYING tally and any ERRORS line are read before the list."""
-    now = datetime.now()
+    SPECIFYING tally and any ERRORS line are read before the list.
+
+    ``width`` is None for the email (the instruction's 50-char dividers, text
+    wrapped at WRAP) or a line width — the text-file copy uses
+    DIGEST_FILE_WIDTH — that sets both the dividers' length and the column
+    the entry lines wrap at. ``now`` lets the two renderings of one pass
+    carry the same Generated timestamp."""
+    now = now or datetime.now()
+    div, sub, wrap = ("=" * width, "-" * width, width) if width else (DIV, SUB, WRAP)
     listing = []
     n = 0
     for account, label in account_order:
-        listing += ["", SUB, f"Account: {label}", SUB]
+        listing += ["", sub, f"Account: {label}", sub]
         if account in errors:
             listing += ["", f"ERROR: {errors[account]}"]
             continue
@@ -814,23 +908,23 @@ def build_body(account_order, entries_by_account, errors, dry_run):
             listing += ["", "No unread emails."]
         for entry in entries:
             n += 1
-            listing += ["", format_entry(n, entry)]
+            listing += ["", format_entry(n, entry, wrap=wrap)]
     matched = [e for es in entries_by_account.values() for e in es if e.get("spec")]
 
-    out = [DIV, "COMPREHENSIVE LIST OF UNREAD EMAILS", DIV,
+    out = [div, "COMPREHENSIVE LIST OF UNREAD EMAILS", div,
            f"Generated {now:%Y-%m-%d %H:%M:%S} by UnreadSummary.py",
            "(deterministic, no LLM — summaries are each",
            "email's opening text)"]
     if dry_run:
         out.append("*** DRY RUN: no emails were modified ***")
-    out += ["", DIV,
+    out += ["", div,
             f"TOTAL: {n} unread email(s) across {len(account_order)} account(s); "
             f"{len(matched)} SPECIFYING match(es)"]
     if errors:
         out.append(f"ERRORS: {len(errors)} account(s) unreadable — see below")
-    out.append(DIV)
+    out.append(div)
     out += listing
-    out += ["", DIV]
+    out += ["", div]
     return "\n".join(out)
 
 
@@ -850,6 +944,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true",
                         help="read-only pass: print the email body, change nothing")
+    parser.add_argument("--no-view", action="store_true",
+                        help="write the digest text file but don't open it in a viewer")
     args = parser.parse_args()
 
     socket.setdefaulttimeout(60)  # imaplib has no per-call timeout; a hung
@@ -927,9 +1023,16 @@ def main():
     for account, reason in errors.items():
         log(f"ACCOUNT ERROR {account}: {reason}")
 
-    body = build_body(account_order, entries_by_account, errors, args.dry_run)
-    subject = f"{SUBJECT_PREFIX} - {datetime.now():%Y-%m-%d %H:%M:%S}"
+    now = datetime.now()
+    body = build_body(account_order, entries_by_account, errors, args.dry_run, now=now)
+    subject = f"{SUBJECT_PREFIX} - {now:%Y-%m-%d %H:%M:%S}"
     total = sum(len(v) for v in entries_by_account.values())
+
+    # The local copy first — the same digest laid out at the file's wider
+    # line width — so it exists whether or not the send below succeeds.
+    log(show_digest(build_body(account_order, entries_by_account, errors,
+                               args.dry_run, width=DIGEST_FILE_WIDTH, now=now),
+                    view=not args.no_view))
 
     if args.dry_run:
         print(f"Subject: {subject}\n")

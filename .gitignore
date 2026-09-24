@@ -67,6 +67,9 @@ heartbeat.log*
 
 # UnreadSummary per-pass log (repo-root fallback on Windows; macOS logs to ~/Library/Logs)
 unread_summary.log*
+# UnreadSummary's last digest, the text-file copy of the emailed body that it
+# opens in a viewer after each pass (beside the log — repo root on Windows)
+unread_summary.txt
 
 # MyAgent window-geometry diagnostic trace (per-machine; off by default,
 # opt in with MYAGENT_GEOMETRY_DEBUG=1 to debug window-placement reports)
