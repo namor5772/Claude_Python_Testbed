@@ -611,15 +611,38 @@ META_TOOLS = [
             "prompts (enabled), retrieved on demand (on_demand), or inactive (disabled). "
             "Each skill may carry a short description (what it does + when to use it), "
             "listed in the system prompt for on_demand skills as the trigger signal. "
-            "Actions: list, read, create, update, delete."
+            "Actions: list, read, create, update, delete (the skill and its SKILL.md) — "
+            "plus list_files, read_file, write_file, delete_file for the BUNDLED RESOURCE "
+            "FILES a skill's folder may carry beside SKILL.md (references/, scripts/, "
+            "tests/, …), addressed by skill name + a RELATIVE file_path inside the folder, "
+            "so a complete Agent-Skills-style skill (SKILL.md + resources) can be authored "
+            "with this one tool."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "read", "create", "update", "delete"],
+                    "enum": ["list", "read", "create", "update", "delete",
+                             "list_files", "read_file", "write_file", "delete_file"],
                     "description": "The operation to perform",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": (
+                        "RELATIVE path of a bundled resource file inside the skill's "
+                        "folder (required for read_file / write_file / delete_file), "
+                        "e.g. 'references/palette.md' or 'scripts/run.py'. Absolute "
+                        "paths, '..' and SKILL.md itself are refused; subdirectories "
+                        "are created on write and pruned when emptied by a delete."
+                    ),
+                },
+                "file_content": {
+                    "type": "string",
+                    "description": (
+                        "The full text content to write (required for write_file; "
+                        "UTF-8, overwrites an existing file atomically)."
+                    ),
                 },
                 "name": {
                     "type": "string",
@@ -3402,6 +3425,16 @@ ANTHROPIC_FAST_PRICING = {
     "claude-opus-5":       (10.00, 50.00, 12.50, 1.00),
     "claude-opus-4-8":     (10.00, 50.00, 12.50, 1.00),
 }
+
+# Anthropic's server-side web_search bills a flat fee per EXECUTED search
+# ($10 per 1,000, pricing page read 2026-09-25) on top of the token costs;
+# the count comes back in usage.server_tool_use.web_search_requests, which
+# went unread until 2026-09-25 — every search-heavy Anthropic run's cost
+# line and cost-log row was under by $0.01/search (a documented bias; xAI's
+# $0.005/tool fee was already folded in via its authoritative cost).
+# web_fetch has no per-use fee, and code execution is free while the
+# 20260209 web tools are declared (see _anthropic_server_tools).
+ANTHROPIC_WEB_SEARCH_FEE = 10.00 / 1000   # USD per executed search
 
 # OpenAI API pricing (USD per million tokens)
 # Each entry: (input_price, output_price)

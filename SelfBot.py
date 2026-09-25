@@ -43,7 +43,7 @@ try:
     from myagent.constants import (
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
         GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-        ANTHROPIC_PRICING, APICOST_LOG_MAX_BYTES,
+        ANTHROPIC_PRICING, ANTHROPIC_WEB_SEARCH_FEE, APICOST_LOG_MAX_BYTES,
         ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
         ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
         TOOLBAR_ACTIVE_BG, LIST_TITLE_BG,
@@ -61,6 +61,7 @@ except Exception:
     GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
     ANTHROPIC_PRICING = {}
+    ANTHROPIC_WEB_SEARCH_FEE = 10.00 / 1000   # USD per executed web search
     APICOST_LOG_MAX_BYTES = 100_000
     # Claude Fable 5.1 beta surfaces (see myagent/constants.py for the why):
     # preserved-thinking drop_block binding + server-side refusal fallbacks.
@@ -202,19 +203,43 @@ SELFBOT_META_TOOLS = [
     {
         "name": "manage_skills",
         "description": (
-            "Manage the shared skills library on disk (skills.json, shared with MyAgent). "
-            "Skills can be injected into the system prompt (enabled), retrieved on demand "
-            "(on_demand), or inactive (disabled). Each skill may carry a short description "
-            "(what it does + when to use it), listed in the system prompt for on_demand "
-            "skills as the trigger signal. Actions: list, read, create, update, delete."
+            "Manage the shared skills library on disk (the skills/ SKILL.md tree, shared "
+            "with MyAgent). Skills can be injected into the system prompt (enabled), "
+            "retrieved on demand (on_demand), or inactive (disabled). Each skill may carry "
+            "a short description (what it does + when to use it), listed in the system "
+            "prompt for on_demand skills as the trigger signal. "
+            "Actions: list, read, create, update, delete (the skill and its SKILL.md) — "
+            "plus list_files, read_file, write_file, delete_file for the BUNDLED RESOURCE "
+            "FILES a skill's folder may carry beside SKILL.md (references/, scripts/, "
+            "tests/, …), addressed by skill name + a RELATIVE file_path inside the folder, "
+            "so a complete Agent-Skills-style skill (SKILL.md + resources) can be authored "
+            "with this one tool."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "read", "create", "update", "delete"],
+                    "enum": ["list", "read", "create", "update", "delete",
+                             "list_files", "read_file", "write_file", "delete_file"],
                     "description": "The operation to perform",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": (
+                        "RELATIVE path of a bundled resource file inside the skill's "
+                        "folder (required for read_file / write_file / delete_file), "
+                        "e.g. 'references/palette.md' or 'scripts/run.py'. Absolute "
+                        "paths, '..' and SKILL.md itself are refused; subdirectories "
+                        "are created on write and pruned when emptied by a delete."
+                    ),
+                },
+                "file_content": {
+                    "type": "string",
+                    "description": (
+                        "The full text content to write (required for write_file; "
+                        "UTF-8, overwrites an existing file atomically)."
+                    ),
                 },
                 "name": {"type": "string", "description": ("Skill name (required for all except list). "
                                                            "On create it MUST be Agent-Skills kebab-case — lowercase "
@@ -1037,6 +1062,9 @@ try:
         save_skills_tree as _save_skills_tree,
         delete_skill_tree_entry as _delete_skill_tree_entry,
         copy_skill_resources as _copy_skill_resources,
+        list_skill_resources as _list_skill_resources,
+        skill_resource_path as _skill_resource_path,
+        skill_dir_for as _skill_dir_for,
     )
 except ImportError:
     def _resolve_store(name):
@@ -1187,54 +1215,81 @@ except ImportError:
                 return
             time.sleep(0.25 * (attempt + 1))
 
-    def _copy_skill_resources(dirpath, src_name, dst_name):
-        # The Skills Manager's save-as resource copy (mirrors
-        # myagent.datapaths.copy_skill_resources, 2026-09-25): the folder is
-        # the skill, so a SAVE under a new name carries the source folder's
-        # bundled files across — everything except the root SKILL.md, its
-        # SKILL-<label>.md conflict forks and writer temp files — never
-        # overwriting an existing destination file. Folders are resolved by
-        # FRONTMATTER name, as the loader reads them.
-        import shutil
-
-        def _dir_for(name):
-            if not os.path.isdir(dirpath):
-                return None
-            for sub in sorted(os.listdir(dirpath)):
-                md = os.path.join(dirpath, sub, "SKILL.md")
-                if not os.path.isfile(md):
-                    continue
-                try:
-                    with open(md, encoding="utf-8-sig") as f:
-                        meta, _ = _sb_skill_parse(f.read())
-                except OSError:
-                    continue
-                if (" ".join((meta.get("name") or "").split()) or sub) == name:
-                    return os.path.join(dirpath, sub)
+    # Bundled-resource-file stubs (mirror myagent.datapaths, 2026-09-25): the
+    # folder is the skill — SKILL.md may sit beside references/, scripts/, …
+    # which sync, copy and delete with it. Folders resolve by FRONTMATTER
+    # name, as the loader reads them.
+    def _skill_dir_for(dirpath, name):
+        if not os.path.isdir(dirpath):
             return None
+        for sub in sorted(os.listdir(dirpath)):
+            md = os.path.join(dirpath, sub, "SKILL.md")
+            if not os.path.isfile(md):
+                continue
+            try:
+                with open(md, encoding="utf-8-sig") as f:
+                    meta, _ = _sb_skill_parse(f.read())
+            except OSError:
+                continue
+            if (" ".join((meta.get("name") or "").split()) or sub) == name:
+                return os.path.join(dirpath, sub)
+        return None
 
-        src, dst = _dir_for(src_name), _dir_for(dst_name)
+    def _sb_is_skill_md_family(fname):
+        return (fname == "SKILL.md" or fname.startswith("SKILL.md.")
+                or (fname.startswith("SKILL-") and fname.lower().endswith(".md")))
+
+    def _list_skill_resources(dirpath, name):
+        folder = _skill_dir_for(dirpath, name)
+        if folder is None:
+            return None
+        rels = []
+        for root, dirs, files in os.walk(folder):
+            dirs.sort()
+            rel_root = os.path.relpath(root, folder)
+            for fname in sorted(files):
+                if rel_root == os.curdir and _sb_is_skill_md_family(fname):
+                    continue
+                rels.append(fname if rel_root == os.curdir
+                            else os.path.join(rel_root, fname))
+        return rels
+
+    def _skill_resource_path(dirpath, name, rel_path):
+        folder = _skill_dir_for(dirpath, name)
+        if folder is None:
+            return None, (f"skill '{name}' has no folder on disk yet — save the "
+                          "skill first")
+        rel = (rel_path or "").replace("\\", "/").strip()
+        if not rel or rel.endswith("/"):
+            return None, "file_path must name a file, not a directory"
+        if os.path.isabs(rel) or re.match(r"[A-Za-z]:", rel):
+            return None, "file_path must be RELATIVE to the skill's folder"
+        parts = [p for p in rel.split("/") if p not in ("", ".")]
+        if not parts or ".." in parts:
+            return None, "file_path may not leave the skill's folder ('..')"
+        if len(parts) == 1 and _sb_is_skill_md_family(parts[0]):
+            return None, ("SKILL.md (and its conflict forks) are managed by the "
+                          "create/update actions, not as resource files")
+        return os.path.join(folder, *parts), None
+
+    def _copy_skill_resources(dirpath, src_name, dst_name):
+        # The Skills Manager's save-as resource copy: everything but the root
+        # SKILL.md family, never overwriting a destination file.
+        import shutil
+        src, dst = _skill_dir_for(dirpath, src_name), _skill_dir_for(dirpath, dst_name)
         if src is None or dst is None or os.path.realpath(src) == os.path.realpath(dst):
             return []
         copied = []
-        for root, dirs, files in os.walk(src):
-            dirs.sort()
-            rel_root = os.path.relpath(root, src)
-            for fname in sorted(files):
-                if rel_root == os.curdir and (
-                        fname == "SKILL.md" or fname.startswith("SKILL.md.")
-                        or (fname.startswith("SKILL-") and fname.lower().endswith(".md"))):
-                    continue
-                rel = fname if rel_root == os.curdir else os.path.join(rel_root, fname)
-                target = os.path.join(dst, rel)
-                if os.path.exists(target):
-                    continue
-                try:
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    shutil.copy2(os.path.join(root, fname), target)
-                except OSError:
-                    continue
-                copied.append(rel)
+        for rel in _list_skill_resources(dirpath, src_name) or []:
+            target = os.path.join(dst, rel)
+            if os.path.exists(target):
+                continue
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(os.path.join(src, rel), target)
+            except OSError:
+                continue
+            copied.append(rel)
         return copied
 
 PROMPTS_FILE = _resolve_store("system_prompts.json")
@@ -5863,6 +5918,101 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                                "mode": sd.get("mode", "disabled"),
                                "description": sd.get("description", "")}, indent=2)
 
+        # --- Bundled resource files (2026-09-25, mirrors MyAgent's
+        # skills_mixin): the folder IS the skill — SKILL.md may sit beside
+        # references/, scripts/, tests/, … which sync, copy and delete with
+        # it. Addressed by skill name + a RELATIVE file_path, validated by
+        # _skill_resource_path (never absolute, never '..', never SKILL.md).
+        if action == "list_files":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            rels = _list_skill_resources(SKILLS_DIR, name)
+            if rels is None:
+                return (f"Skill '{name}' has no folder on disk yet — its bundled "
+                        "files appear after the first save.")
+            if not rels:
+                return f"Skill '{name}' has no bundled resource files (SKILL.md only)."
+            folder = _skill_dir_for(SKILLS_DIR, name)
+            lines = []
+            for rel in rels:
+                try:
+                    size = os.path.getsize(os.path.join(folder, rel))
+                except OSError:
+                    size = 0
+                lines.append(f"• {rel.replace(os.sep, '/')}  ({size} bytes)")
+            return f"Bundled resource files of '{name}':\n" + "\n".join(lines)
+
+        if action == "read_file":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            rel_arg = params.get("file_path", "")
+            path, err = _skill_resource_path(SKILLS_DIR, name, rel_arg)
+            if err:
+                return f"Error: {err}."
+            if not os.path.isfile(path):
+                return (f"Error: '{rel_arg}' does not exist in skill '{name}' "
+                        "(use list_files).")
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read(200_001)
+            except OSError as e:
+                return f"Error reading '{rel_arg}': {e}"
+            if b"\x00" in raw[:8192]:
+                return (f"'{rel_arg}' is a binary file "
+                        f"({os.path.getsize(path)} bytes) — read_file returns text only.")
+            text = raw.decode("utf-8", errors="replace")
+            if len(raw) > 200_000:
+                text = text[:200_000] + "\n...[truncated at 200,000 bytes]"
+            return text
+
+        if action == "write_file":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            file_content = params.get("file_content")
+            if file_content is None:
+                return "Error: 'file_content' is required for write_file."
+            rel_arg = params.get("file_path", "")
+            path, err = _skill_resource_path(SKILLS_DIR, name, rel_arg)
+            if err:
+                return f"Error: {err}."
+            existed = os.path.isfile(path)
+            try:
+                import tempfile
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                    f.write(file_content)
+                os.replace(tmp, path)
+            except OSError as e:
+                return f"Error writing '{rel_arg}': {e}"
+            verb = "Replaced" if existed else "Wrote"
+            return (f"{verb} '{rel_arg}' in skill '{name}' "
+                    f"({len(file_content.encode('utf-8'))} bytes).")
+
+        if action == "delete_file":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            rel_arg = params.get("file_path", "")
+            path, err = _skill_resource_path(SKILLS_DIR, name, rel_arg)
+            if err:
+                return f"Error: {err}."
+            if not os.path.isfile(path):
+                return f"Error: '{rel_arg}' does not exist in skill '{name}'."
+            try:
+                os.remove(path)
+            except OSError as e:
+                return f"Error deleting '{rel_arg}': {e}"
+            # Prune now-empty subdirectories, never the skill folder itself
+            folder = _skill_dir_for(SKILLS_DIR, name)
+            parent = os.path.dirname(path)
+            while folder and os.path.realpath(parent) != os.path.realpath(folder):
+                try:
+                    os.rmdir(parent)   # only succeeds when empty
+                except OSError:
+                    break
+                parent = os.path.dirname(parent)
+            return f"Deleted '{rel_arg}' from skill '{name}'."
+
         if action == "create":
             if name in self.skills:
                 return f"Error: Skill '{name}' already exists. Use 'update' to modify it."
@@ -6083,6 +6233,36 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     # the myagent import is the optional/stubbed kind. Rationale for each lives
     # in myagent/constants.py (the beta constants) and CLAUDE_MYAGENT.md.
 
+    def _anthropic_server_tools(self):
+        """The Anthropic server-side tool declarations for the current model —
+        (tools, extra_betas). Since 2026-09-25 the default is the CURRENT
+        triple: web_search_20260209 + web_fetch_20260209 (dynamic filtering,
+        no beta) and code_execution_20260521 — which also makes code
+        execution FREE (no container-hour billing while a 20260209 web tool
+        is declared, per the pricing page) and adds a real web-fetch
+        capability Anthropic runs never had. Probed live 2026-09-25: every
+        served model accepts the triple — Fable/Mythos 5 and 5.1, Opus 5.5 /
+        5 / 4.5, Sonnet 5 / 4.5 — EXCEPT Haiku 4.5, whose 400 says it "does
+        not support programmatic tool calling" (what the 20260209 filtering
+        runs on); Haiku keeps the older web pair (web_fetch_20250910 under
+        its beta) with the new code-execution type, also probed. A future
+        model rejecting the triple is learned off per session by the
+        BadRequest rung in _stream_anthropic_call ("server_tools_20260209"
+        in _anthropic_unsupported) and retried on the fallback set. The
+        definitions cost ~6.4K input tokens against the old pair's ~4K,
+        absorbed by the prompt cache after the first call."""
+        fallback = (self.model or "").startswith("claude-haiku") or (
+            "server_tools_20260209" in getattr(self, "_anthropic_unsupported", set()))
+        if fallback:
+            return ([{"type": "web_search_20250305", "name": "web_search"},
+                     {"type": "web_fetch_20250910", "name": "web_fetch"},
+                     {"type": "code_execution_20260521", "name": "code_execution"}],
+                    ["web-fetch-2025-09-10"])
+        return ([{"type": "web_search_20260209", "name": "web_search"},
+                 {"type": "web_fetch_20260209", "name": "web_fetch"},
+                 {"type": "code_execution_20260521", "name": "code_execution"}],
+                [])
+
     def _fable_features(self):
         """The Fable/Mythos-only request surface for this call, or None for
         every other model: the beta headers to add plus the
@@ -6277,9 +6457,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
                 # Build API kwargs dynamically
                 tools = self._get_tools()
-                # Add Anthropic server-side tools
-                tools.append({"type": "web_search_20250305", "name": "web_search"})
-                tools.append({"type": "code_execution_20250825", "name": "code_execution"})
+                # Add Anthropic server-side tools (current triple, or Haiku's
+                # fallback set — see _anthropic_server_tools)
+                server_tools, server_betas = self._anthropic_server_tools()
+                tools.extend(server_tools)
                 api_kwargs = {
                     "model": self.model,
                     "system": self._cache_system(self._build_system_prompt()),
@@ -6293,7 +6474,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 fable = self._fable_features()
                 if "fallbacks" in api_kwargs:
                     api_kwargs["extra_body"] = {"fallbacks": api_kwargs.pop("fallbacks")}
-                betas = ANTHROPIC_BETAS + (fable["betas"] if fable else [])
+                betas = ANTHROPIC_BETAS + server_betas + (fable["betas"] if fable else [])
                 stripped_thinking = False  # one-shot guard for the signature-400 rung
                 stop_details = None
 
@@ -6325,11 +6506,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                                         tool_name = getattr(block, "name", "")
                                         if tool_name == "web_search":
                                             self._tool_info("Searching the web...\n")
+                                        elif tool_name == "web_fetch":
+                                            self._tool_info("Fetching a web page...\n")
                                         elif tool_name == "code_execution":
                                             self._tool_info("Running code execution...\n")
                                     elif hasattr(block, "type") and block.type in (
                                             "code_execution_tool_result", "bash_code_execution_tool_result",
-                                            "web_search_tool_result"):
+                                            "web_search_tool_result", "web_fetch_tool_result"):
                                         pass  # Results extracted from final_message post-stream
                                 elif event.type == "content_block_delta":
                                     delta = event.delta
@@ -6452,6 +6635,23 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                                             "this API key — retrying without them...\n")
                             full_text = ""
                             continue
+                        # A model that rejects the current 20260209 server-tool
+                        # triple (Haiku 4.5's shape — gated up front — or a
+                        # future model the gate over-admits): learn once for
+                        # the session, rebuild on the fallback set, retry.
+                        if (e.status_code == 400
+                                and "server_tools_20260209" not in self._anthropic_unsupported
+                                and ("programmatic tool calling" in emsg
+                                     or "web_search_20260209" in emsg
+                                     or "web_fetch_20260209" in emsg)):
+                            self._anthropic_unsupported.add("server_tools_20260209")
+                            server_tools, server_betas = self._anthropic_server_tools()
+                            api_kwargs["tools"] = self._get_tools() + server_tools
+                            betas = betas + server_betas
+                            self._tool_info(f"{self.model} does not take the current server-side "
+                                            "web tools — retrying with the older variants...\n")
+                            full_text = ""
+                            continue
                         if e.status_code == 529 and attempt < max_retries - 1:
                             wait = min(2 ** attempt * 10, 90)  # 10s, 20s, 40s, 80s, 90s, 90s… (capped)
                             self.queue.put({
@@ -6515,6 +6715,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         # disjoint buckets, each with its own rate — no double-counting.
                         call_cost = (ci * pricing["input"] + co * pricing["output"]
                                      + cw * pricing["cache_write"] + cr * pricing["cache_read"])
+                        # Server-side web_search bills a flat $10/1,000 per
+                        # EXECUTED search on top of tokens (2026-09-25; the
+                        # count rides usage.server_tool_use, unread before).
+                        call_cost += (getattr(getattr(usage, "server_tool_use", None),
+                                              "web_search_requests", 0) or 0) * ANTHROPIC_WEB_SEARCH_FEE
                         self._session_cost += call_cost
                         self._session_tokens_in += ci
                         self._session_tokens_out += co

@@ -5,7 +5,9 @@ from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
                                COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
 from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
-                               load_skills_tree, save_skills_tree)
+                               list_skill_resources, load_skills_tree,
+                               save_skills_tree, skill_dir_for,
+                               skill_resource_path)
 from myagent.keyboard import bind_mnemonics
 from myagent.ui_mixin import list_title_band
 
@@ -81,6 +83,102 @@ class SkillsMixin:
             return json.dumps({"name": name, "content": sd.get("content", ""),
                                "mode": sd.get("mode", "disabled"),
                                "description": sd.get("description", "")}, indent=2)
+
+        # --- Bundled resource files (2026-09-25): the folder IS the skill —
+        # SKILL.md may sit beside references/, scripts/, tests/, … which sync,
+        # copy and delete with it. These four actions manage those files by
+        # skill name + a RELATIVE file_path, so a model with Meta access can
+        # author a COMPLETE skill without the native file tools. file_path is
+        # validated by datapaths.skill_resource_path (never absolute, never
+        # '..', never the SKILL.md family — that is create/update's job).
+        if action == "list_files":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            rels = list_skill_resources(SKILLS_DIR, name)
+            if rels is None:
+                return (f"Skill '{name}' has no folder on disk yet — its bundled "
+                        "files appear after the first save.")
+            if not rels:
+                return f"Skill '{name}' has no bundled resource files (SKILL.md only)."
+            folder = skill_dir_for(SKILLS_DIR, name)
+            lines = []
+            for rel in rels:
+                try:
+                    size = os.path.getsize(os.path.join(folder, rel))
+                except OSError:
+                    size = 0
+                lines.append(f"• {rel.replace(os.sep, '/')}  ({size} bytes)")
+            return f"Bundled resource files of '{name}':\n" + "\n".join(lines)
+
+        if action == "read_file":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            rel_arg = params.get("file_path", "")
+            path, err = skill_resource_path(SKILLS_DIR, name, rel_arg)
+            if err:
+                return f"Error: {err}."
+            if not os.path.isfile(path):
+                return (f"Error: '{rel_arg}' does not exist in skill '{name}' "
+                        "(use list_files).")
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read(200_001)
+            except OSError as e:
+                return f"Error reading '{rel_arg}': {e}"
+            if b"\x00" in raw[:8192]:
+                return (f"'{rel_arg}' is a binary file "
+                        f"({os.path.getsize(path)} bytes) — read_file returns text only.")
+            text = raw.decode("utf-8", errors="replace")
+            if len(raw) > 200_000:
+                text = text[:200_000] + "\n...[truncated at 200,000 bytes]"
+            return text
+
+        if action == "write_file":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            file_content = params.get("file_content")
+            if file_content is None:
+                return "Error: 'file_content' is required for write_file."
+            rel_arg = params.get("file_path", "")
+            path, err = skill_resource_path(SKILLS_DIR, name, rel_arg)
+            if err:
+                return f"Error: {err}."
+            existed = os.path.isfile(path)
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                    f.write(file_content)
+                os.replace(tmp, path)
+            except OSError as e:
+                return f"Error writing '{rel_arg}': {e}"
+            verb = "Replaced" if existed else "Wrote"
+            return (f"{verb} '{rel_arg}' in skill '{name}' "
+                    f"({len(file_content.encode('utf-8'))} bytes).")
+
+        if action == "delete_file":
+            if name not in self.skills:
+                return f"Error: Skill '{name}' not found."
+            rel_arg = params.get("file_path", "")
+            path, err = skill_resource_path(SKILLS_DIR, name, rel_arg)
+            if err:
+                return f"Error: {err}."
+            if not os.path.isfile(path):
+                return f"Error: '{rel_arg}' does not exist in skill '{name}'."
+            try:
+                os.remove(path)
+            except OSError as e:
+                return f"Error deleting '{rel_arg}': {e}"
+            # Prune now-empty subdirectories, never the skill folder itself
+            folder = skill_dir_for(SKILLS_DIR, name)
+            parent = os.path.dirname(path)
+            while folder and os.path.realpath(parent) != os.path.realpath(folder):
+                try:
+                    os.rmdir(parent)   # only succeeds when empty
+                except OSError:
+                    break
+                parent = os.path.dirname(parent)
+            return f"Deleted '{rel_arg}' from skill '{name}'."
 
         if action == "create":
             if name in self.skills:

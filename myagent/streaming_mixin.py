@@ -15,7 +15,7 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE,
     _HAS_PHYSICAL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
-    ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING,
+    ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
     OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
@@ -368,8 +368,10 @@ class StreamingMixin:
         else:
             tools = self._get_tools()
             if self.provider == "Anthropic":
-                tools.append({"type": "web_search_20250305", "name": "web_search"})
-                tools.append({"type": "code_execution_20250825", "name": "code_execution"})
+                # The same per-model triple / fallback decision the live call
+                # makes (_anthropic_server_tools), so the dump shows what is
+                # really declared.
+                tools.extend(self._anthropic_server_tools()[0])
             payload = {
                 "model": self.model,
                 "stream": True,
@@ -1485,6 +1487,14 @@ class StreamingMixin:
                                          + call_output * pricing["output"]
                                          + call_cache_write * pricing.get("cache_write", 0)
                                          + call_cache_read * pricing.get("cache_read", 0))
+                            # Anthropic's server-side web_search bills a flat
+                            # $10/1,000 per EXECUTED search on top of tokens —
+                            # usage carries the count (2026-09-25; only the
+                            # Anthropic usage dict has the key, and xAI's
+                            # authoritative cost above already folds its own
+                            # tool fees in).
+                            call_cost += (usage.get("web_search_requests", 0)
+                                          * ANTHROPIC_WEB_SEARCH_FEE)
                         total_cost += call_cost
                         self.queue.put({
                             "type": "cost_update",

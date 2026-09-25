@@ -82,6 +82,36 @@ class AnthropicMixin:
             placed += 1
         return wire
 
+    def _anthropic_server_tools(self):
+        """The Anthropic server-side tool declarations for the current model —
+        (tools, extra_betas). Since 2026-09-25 the default is the CURRENT
+        triple: web_search_20260209 + web_fetch_20260209 (dynamic filtering,
+        no beta) and code_execution_20260521 — which also makes code
+        execution FREE (no container-hour billing while a 20260209 web tool
+        is declared, per the pricing page) and adds a real web-fetch
+        capability Anthropic runs never had. Probed live 2026-09-25: every
+        served model accepts the triple — Fable/Mythos 5 and 5.1, Opus 5.5 /
+        5 / 4.5, Sonnet 5 / 4.5 — EXCEPT Haiku 4.5, whose 400 says it "does
+        not support programmatic tool calling" (what the 20260209 filtering
+        runs on); Haiku keeps the older web pair (web_fetch_20250910 under
+        its beta) with the new code-execution type, also probed. A future
+        model rejecting the triple is learned off per session by the
+        BadRequest rung in _stream_anthropic_call ("server_tools_20260209"
+        in _anthropic_unsupported) and retried on the fallback set. The
+        definitions cost ~6.4K input tokens against the old pair's ~4K,
+        absorbed by the prompt cache after the first call."""
+        fallback = (self.model or "").startswith("claude-haiku") or (
+            "server_tools_20260209" in getattr(self, "_anthropic_unsupported", set()))
+        if fallback:
+            return ([{"type": "web_search_20250305", "name": "web_search"},
+                     {"type": "web_fetch_20250910", "name": "web_fetch"},
+                     {"type": "code_execution_20260521", "name": "code_execution"}],
+                    ["web-fetch-2025-09-10"])
+        return ([{"type": "web_search_20260209", "name": "web_search"},
+                 {"type": "web_fetch_20260209", "name": "web_fetch"},
+                 {"type": "code_execution_20260521", "name": "code_execution"}],
+                [])
+
     def _anthropic_fable_features(self):
         """The always-on class's request surface for this call — Fable /
         Mythos, and Claude Opus 5.5+ since 2026-09-23 (it carries preserved
@@ -142,9 +172,10 @@ class AnthropicMixin:
         had_thinking = False
 
         tools = self._get_tools()
-        # Add Anthropic server-side tools
-        tools.append({"type": "web_search_20250305", "name": "web_search"})
-        tools.append({"type": "code_execution_20250825", "name": "code_execution"})
+        # Add Anthropic server-side tools (current triple, or Haiku's
+        # fallback set — see _anthropic_server_tools)
+        server_tools, server_betas = self._anthropic_server_tools()
+        tools.extend(server_tools)
         api_kwargs = {
             "model": self.model,
             "system": self._anthropic_cache_system(self._build_system_prompt()),
@@ -216,7 +247,7 @@ class AnthropicMixin:
         fast_requested = self._anthropic_fast_active()
         if fast_requested:
             api_kwargs["speed"] = "fast"
-        betas = (_BASE_BETAS + (fable["betas"] if fable else [])
+        betas = (_BASE_BETAS + server_betas + (fable["betas"] if fable else [])
                  + ([ANTHROPIC_FAST_MODE_BETA] if fast_requested else []))
         stripped_thinking = False  # one-shot guard for the signature-400 rung below
 
@@ -251,11 +282,13 @@ class AnthropicMixin:
                                 tool_name = getattr(block, "name", "")
                                 if tool_name == "web_search":
                                     self._tool_info("Searching the web...\n")
+                                elif tool_name == "web_fetch":
+                                    self._tool_info("Fetching a web page...\n")
                                 elif tool_name == "code_execution":
                                     self._tool_info("Running code execution...\n")
                             elif hasattr(block, "type") and block.type in (
                                     "code_execution_tool_result", "bash_code_execution_tool_result",
-                                    "web_search_tool_result"):
+                                    "web_search_tool_result", "web_fetch_tool_result"):
                                 pass  # Results extracted from final_message post-stream
                         elif event.type == "content_block_delta":
                             delta = event.delta
@@ -417,6 +450,24 @@ class AnthropicMixin:
                                     "API key — retrying without them...\n")
                     full_text = ""
                     continue
+                # A model that rejects the current 20260209 server-tool triple
+                # (Haiku 4.5's shape: "does not support programmatic tool
+                # calling", or a 400 naming one of the new types): learn once
+                # for the session, rebuild on the fallback set, retry. The
+                # known case (Haiku) never gets here — _anthropic_server_tools
+                # gates it up front — so this is the backstop for a future
+                # model the gate over-admits.
+                if ("server_tools_20260209" not in self._anthropic_unsupported
+                        and ("programmatic tool calling" in msg
+                             or "web_search_20260209" in msg or "web_fetch_20260209" in msg)):
+                    self._anthropic_unsupported.add("server_tools_20260209")
+                    server_tools, server_betas = self._anthropic_server_tools()
+                    api_kwargs["tools"] = self._get_tools() + server_tools
+                    betas = betas + server_betas
+                    self._tool_info(f"{self.model} does not take the current server-side "
+                                    "web tools — retrying with the older variants...\n")
+                    full_text = ""
+                    continue
                 # Input exceeds the model's context window ("prompt is too long:
                 # N tokens > M maximum"). Resending the same history can't fix it,
                 # so compact instead: drop the oldest conversation rounds (never
@@ -530,6 +581,13 @@ class AnthropicMixin:
                 # version gate, silently downgrades), so the fallback can
                 # only ever be honest.
                 "speed": getattr(usage, "speed", None) or ("fast" if fast_requested else None),
+                # Executed server-side web searches this call — billed at a
+                # flat $10/1,000 ON TOP of tokens (ANTHROPIC_WEB_SEARCH_FEE);
+                # stream_worker adds the fee to the call's cost. Only
+                # Anthropic emits the key (the other providers' usage dicts
+                # simply lack it).
+                "web_search_requests": getattr(
+                    getattr(usage, "server_tool_use", None), "web_search_requests", 0) or 0,
             }
 
         return final_message.stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict

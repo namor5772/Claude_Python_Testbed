@@ -18,6 +18,14 @@
   Claude Opus 5.5 (0.05x). Every row re-verified against
   platform.claude.com/docs/en/about-claude/pricing on 2026-09-23.
 
+  Server-side web_search additionally bills a FLAT $10 per 1,000 executed
+  searches (ANTHROPIC_WEB_SEARCH_FEE — counted into the cost line and cost
+  log since 2026-09-25 from usage.server_tool_use.web_search_requests; an
+  errored search bills nothing). web_fetch has no per-use fee, and code
+  execution is FREE while the 20260209 web tools are declared (the default
+  for every model but Haiku 4.5 since the same day; before it, CE billed
+  $0.05/container-hour past the 1,550 free monthly hours).
+
   Claude 5 Family (Mythos-class tier above Opus)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read

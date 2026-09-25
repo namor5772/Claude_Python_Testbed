@@ -861,6 +861,74 @@ def _skill_dir_for(dirpath, name):
     return None
 
 
+def _iter_skill_resources(folder):
+    """Yield the bundled resource files of a skill folder as relative paths,
+    sorted — everything EXCEPT the root SKILL.md, its `SKILL-<label>.md`
+    conflict forks and the writer's `SKILL.md.*.tmp` leftovers. The ONE
+    definition of "what counts as a resource", shared by the save-as copy,
+    the lister and (by omission) the path validator."""
+    for root, dirs, files in os.walk(folder):
+        dirs.sort()
+        rel_root = os.path.relpath(root, folder)
+        for fname in sorted(files):
+            if rel_root == os.curdir and _is_skill_md_family(fname):
+                continue
+            yield fname if rel_root == os.curdir else os.path.join(rel_root, fname)
+
+
+def _is_skill_md_family(fname):
+    """True for the root-level files that are the skill's OWN metadata rather
+    than a bundled resource: SKILL.md itself, a `SKILL-<label>.md` OneDrive
+    conflict fork, or a `SKILL.md.*.tmp` writer leftover."""
+    return (fname == SKILL_BASENAME
+            or fname.startswith(SKILL_BASENAME + ".")
+            or (fname.startswith("SKILL-") and fname.lower().endswith(".md")))
+
+
+def skill_dir_for(dirpath, name):
+    """Public face of _skill_dir_for — the folder currently holding skill
+    `name` (frontmatter-name match), or None. The manage_skills resource
+    actions use it for size listings and empty-directory pruning."""
+    return _skill_dir_for(dirpath, name)
+
+
+def list_skill_resources(dirpath, name):
+    """The bundled resource files of skill `name`, as sorted relative paths —
+    or None when the skill has no folder on disk (never saved yet). The
+    manage_skills `list_files` action's backend (2026-09-25)."""
+    folder = _skill_dir_for(dirpath, name)
+    if folder is None:
+        return None
+    return list(_iter_skill_resources(folder))
+
+
+def skill_resource_path(dirpath, name, rel_path):
+    """(absolute path, error) for a resource file inside skill `name`'s
+    folder — the validation gate of the manage_skills resource actions
+    (2026-09-25). The path must be RELATIVE and stay INSIDE the folder:
+    absolute paths, drive letters and any `..` component are refused (a
+    model-supplied path may be anything), as is the root SKILL.md family
+    (SKILL.md is managed by the create/update actions, forks by the healer).
+    Backslashes are accepted and normalised, so a Windows-style path from a
+    model works on both OSes. Returns (path, None) or (None, reason)."""
+    folder = _skill_dir_for(dirpath, name)
+    if folder is None:
+        return None, (f"skill '{name}' has no folder on disk yet — save the "
+                      "skill first")
+    rel = (rel_path or "").replace("\\", "/").strip()
+    if not rel or rel.endswith("/"):
+        return None, "file_path must name a file, not a directory"
+    if os.path.isabs(rel) or re.match(r"[A-Za-z]:", rel):
+        return None, "file_path must be RELATIVE to the skill's folder"
+    parts = [p for p in rel.split("/") if p not in ("", ".")]
+    if not parts or ".." in parts:
+        return None, "file_path may not leave the skill's folder ('..')"
+    if len(parts) == 1 and _is_skill_md_family(parts[0]):
+        return None, ("SKILL.md (and its conflict forks) are managed by the "
+                      "create/update actions, not as resource files")
+    return os.path.join(folder, *parts), None
+
+
 def copy_skill_resources(dirpath, src_name, dst_name):
     """Copy skill `src_name`'s bundled resource files — everything in its
     folder EXCEPT the root SKILL.md, its `SKILL-<label>.md` conflict forks
@@ -882,23 +950,14 @@ def copy_skill_resources(dirpath, src_name, dst_name):
     if src is None or dst is None or os.path.realpath(src) == os.path.realpath(dst):
         return []
     copied = []
-    for root, dirs, files in os.walk(src):
-        dirs.sort()
-        rel_root = os.path.relpath(root, src)
-        for fname in sorted(files):
-            if rel_root == os.curdir and (
-                    fname == SKILL_BASENAME
-                    or fname.startswith(SKILL_BASENAME + ".")
-                    or (fname.startswith("SKILL-") and fname.lower().endswith(".md"))):
-                continue
-            rel = fname if rel_root == os.curdir else os.path.join(rel_root, fname)
-            target = os.path.join(dst, rel)
-            if os.path.exists(target):
-                continue
-            try:
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                shutil.copy2(os.path.join(root, fname), target)
-            except OSError:
-                continue
-            copied.append(rel)
+    for rel in _iter_skill_resources(src):
+        target = os.path.join(dst, rel)
+        if os.path.exists(target):
+            continue
+        try:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            shutil.copy2(os.path.join(src, rel), target)
+        except OSError:
+            continue
+        copied.append(rel)
     return copied
