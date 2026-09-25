@@ -404,5 +404,75 @@ class ForkHealingTests(SkillsTreeCase):
         self.assertFalse((d / "SKILL-Laptop.md").exists())
 
 
+class ResourceCopyTests(SkillsTreeCase):
+    """copy_skill_resources — the completing half of the Skills Manager's
+    save-under-a-new-name (2026-09-25): the save writes only the new
+    SKILL.md, this carries the source folder's bundled files across."""
+
+    def _skill(self, sub, name, resources=()):
+        self.write_md(sub, f"---\nname: {name}\nmode: disabled\n---\n\nbody\n")
+        for rel in resources:
+            p = self.tree / sub / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(f"content of {rel}", encoding="utf-8")
+
+    def test_copies_nested_resources_and_skips_the_skill_md_family(self):
+        self._skill("alpha", "alpha", resources=(
+            "references/palette.md", "scripts/run.py", "tests/test_run.py",
+            "notes.txt"))
+        # Root-level files the copy must NOT carry: the source's own SKILL.md
+        # (the destination just wrote its own), a conflict fork, a writer temp.
+        self.write_md("alpha", "fork body", basename="SKILL-Laptop.md")
+        (self.tree / "alpha" / (dp.SKILL_BASENAME + ".abc.tmp")).write_text(
+            "tmp", encoding="utf-8")
+        self._skill("beta", "beta")
+
+        copied = dp.copy_skill_resources(str(self.tree), "alpha", "beta")
+        self.assertEqual(copied, sorted([
+            "notes.txt",
+            os.path.join("references", "palette.md"),
+            os.path.join("scripts", "run.py"),
+            os.path.join("tests", "test_run.py")]))
+        for rel in copied:
+            self.assertEqual((self.tree / "beta" / rel).read_text(encoding="utf-8"),
+                             "content of " + rel.replace(os.sep, "/"))
+        self.assertFalse((self.tree / "beta" / "SKILL-Laptop.md").exists())
+        self.assertFalse(list((self.tree / "beta").glob("SKILL.md.*.tmp")))
+        # The destination's SKILL.md is its own, untouched.
+        name, _ = dp._entry_from_md(dp._read_text(self.md_path("beta")), "beta")
+        self.assertEqual(name, "beta")
+        # ...and the source folder is intact.
+        self.assertTrue((self.tree / "alpha" / "references" / "palette.md").is_file())
+
+    def test_never_overwrites_a_destination_file(self):
+        self._skill("alpha", "alpha", resources=("scripts/run.py",))
+        self._skill("beta", "beta")
+        own = self.tree / "beta" / "scripts" / "run.py"
+        own.parent.mkdir(parents=True)
+        own.write_text("beta's own", encoding="utf-8")
+        copied = dp.copy_skill_resources(str(self.tree), "alpha", "beta")
+        self.assertEqual(copied, [])
+        self.assertEqual(own.read_text(encoding="utf-8"), "beta's own")
+
+    def test_resolves_folders_by_frontmatter_name_not_dirname(self):
+        # The source skill lives in a NUMBERED SIBLING folder (the case-folding
+        # writer's escape hatch): the dirname says alpha_2, the frontmatter
+        # says alpha — the frontmatter wins, exactly as delete resolves it.
+        self._skill("alpha", "something-else")
+        self._skill("alpha_2", "alpha", resources=("references/notes.md",))
+        self._skill("beta", "beta")
+        copied = dp.copy_skill_resources(str(self.tree), "alpha", "beta")
+        self.assertEqual(copied, [os.path.join("references", "notes.md")])
+
+    def test_missing_source_destination_or_resources_copy_nothing(self):
+        self._skill("alpha", "alpha")   # no resources
+        self._skill("beta", "beta")
+        self.assertEqual(dp.copy_skill_resources(str(self.tree), "alpha", "beta"), [])
+        self.assertEqual(dp.copy_skill_resources(str(self.tree), "ghost", "beta"), [])
+        self.assertEqual(dp.copy_skill_resources(str(self.tree), "alpha", "ghost"), [])
+        # Same skill under both names → same folder, nothing to do.
+        self.assertEqual(dp.copy_skill_resources(str(self.tree), "alpha", "alpha"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

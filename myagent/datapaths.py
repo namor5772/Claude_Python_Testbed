@@ -835,3 +835,70 @@ def delete_skill_tree_entry(dirpath, name):
                 _rmtree_verified(d)
         elif sub.lower() == _skill_dirname(name).lower() and os.path.isdir(d):
             _rmtree_verified(d)  # husk match is case-insensitive (case-folding FS)
+
+
+def _skill_dir_for(dirpath, name):
+    """The folder currently holding skill `name` — the subfolder whose
+    SKILL.md frontmatter name matches, which covers numbered siblings
+    (`<dirname>_2`) and legacy folder names alike — or None. The read-only
+    twin of delete_skill_tree_entry's resolution loop."""
+    if not os.path.isdir(dirpath):
+        return None
+    try:
+        subs = os.listdir(dirpath)
+    except OSError:
+        return None
+    for sub in subs:
+        d = os.path.join(dirpath, sub)
+        md = os.path.join(d, SKILL_BASENAME)
+        if os.path.isfile(md):
+            try:
+                fname, _ = _entry_from_md(_read_text(md), sub)
+            except OSError:
+                continue
+            if fname == name:
+                return d
+    return None
+
+
+def copy_skill_resources(dirpath, src_name, dst_name):
+    """Copy skill `src_name`'s bundled resource files — everything in its
+    folder EXCEPT the root SKILL.md, its `SKILL-<label>.md` conflict forks
+    and the writer's `SKILL.md.*.tmp` leftovers — into `dst_name`'s folder,
+    subdirectories (references/, scripts/, tests/, …) included.
+
+    The completing half of the Skills Manager's save-under-a-new-name
+    (2026-09-25): the save itself writes only the new SKILL.md, but THE
+    FOLDER IS THE SKILL — bundled files ride along on delete and sync — so
+    a "copy" that left them behind was not a copy of the skill. Existing
+    destination files are never overwritten (a later re-save must not
+    clobber files the new skill has since grown), and each file is
+    best-effort like save_skills_tree's writes. Returns the copied paths
+    relative to the destination folder, sorted — [] when either skill's
+    folder is missing, both names resolve to the same folder, or the source
+    carries no resources."""
+    src = _skill_dir_for(dirpath, src_name)
+    dst = _skill_dir_for(dirpath, dst_name)
+    if src is None or dst is None or os.path.realpath(src) == os.path.realpath(dst):
+        return []
+    copied = []
+    for root, dirs, files in os.walk(src):
+        dirs.sort()
+        rel_root = os.path.relpath(root, src)
+        for fname in sorted(files):
+            if rel_root == os.curdir and (
+                    fname == SKILL_BASENAME
+                    or fname.startswith(SKILL_BASENAME + ".")
+                    or (fname.startswith("SKILL-") and fname.lower().endswith(".md"))):
+                continue
+            rel = fname if rel_root == os.curdir else os.path.join(rel_root, fname)
+            target = os.path.join(dst, rel)
+            if os.path.exists(target):
+                continue
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(os.path.join(root, fname), target)
+            except OSError:
+                continue
+            copied.append(rel)
+    return copied

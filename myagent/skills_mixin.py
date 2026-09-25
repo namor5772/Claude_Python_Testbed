@@ -4,7 +4,8 @@ from tkinter import messagebox
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
                                COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
-from myagent.datapaths import delete_skill_tree_entry, load_skills_tree, save_skills_tree
+from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
+                               load_skills_tree, save_skills_tree)
 from myagent.keyboard import bind_mnemonics
 from myagent.ui_mixin import list_title_band
 
@@ -429,6 +430,14 @@ class SkillsMixin:
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
+        # The skill whose content the editor currently shows (set by the list
+        # selection, cleared by NEW). SAVE under a DIFFERENT, NEW name is a
+        # save-as: the loaded skill is its source, and the source's bundled
+        # resource files (references/, scripts/, …) are copied into the new
+        # folder — the folder is the skill, so a copy that carried only
+        # SKILL.md was not a copy of the skill (user report, 2026-09-25).
+        loaded = {"name": None}
+
         def save_skill():
             name = name_entry.get().strip()
             if not name:
@@ -460,6 +469,7 @@ class SkillsMixin:
             if not content:
                 messagebox.showwarning("Empty", "The skill content is empty.", parent=win)
                 return
+            is_new = name not in self.skills
             # Merge into the existing entry (never whole-entry replace) so fields
             # this editor doesn't show — e.g. one added by a newer version on
             # another machine — survive a SAVE here.
@@ -473,6 +483,18 @@ class SkillsMixin:
                 entry.pop("description", None)
             self.skills[name] = entry
             self._save_skills()
+            # Save-as: a NEW name while another skill's content is loaded
+            # copies the source's bundled resource files into the new folder
+            # (never onto an EXISTING skill, whose folder owns its own files).
+            src = loaded["name"]
+            if is_new and src and src != name and src in self.skills:
+                copied = copy_skill_resources(SKILLS_DIR, src, name)
+                if copied:
+                    messagebox.showinfo(
+                        "Bundled files copied",
+                        f"Copied {len(copied)} bundled resource file(s) from "
+                        f"'{src}' into the new skill's folder.", parent=win)
+            loaded["name"] = name
             refresh_list()
             self._update_skills_button()
 
@@ -503,6 +525,8 @@ class SkillsMixin:
                 name_entry.delete(0, tk.END)
                 desc_entry.delete("1.0", tk.END)
                 text_editor.delete("1.0", tk.END)
+                if loaded["name"] == name:
+                    loaded["name"] = None   # its fields were just cleared too
                 self._update_skills_button()
 
         def new_skill():
@@ -510,6 +534,7 @@ class SkillsMixin:
             desc_entry.delete("1.0", tk.END)
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
+            loaded["name"] = None   # a fresh skill has no save-as source
 
         # The three buttons hug the right edge (their frame packs RIGHT; the
         # name_entry above, fill=X + expand, absorbs the space in between) but
@@ -587,6 +612,7 @@ class SkillsMixin:
                 desc_entry.insert("1.0", self.skills[name].get("description", ""))
                 text_editor.delete("1.0", tk.END)
                 text_editor.insert("1.0", self.skills[name]["content"])
+                loaded["name"] = name
 
         def toggle_skill():
             sel = skill_listbox.curselection()
