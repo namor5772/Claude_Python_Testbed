@@ -1036,6 +1036,7 @@ try:
         load_skills_tree as _load_skills_tree,
         save_skills_tree as _save_skills_tree,
         delete_skill_tree_entry as _delete_skill_tree_entry,
+        copy_skill_resources as _copy_skill_resources,
     )
 except ImportError:
     def _resolve_store(name):
@@ -1185,6 +1186,56 @@ except ImportError:
             if not os.path.exists(target):
                 return
             time.sleep(0.25 * (attempt + 1))
+
+    def _copy_skill_resources(dirpath, src_name, dst_name):
+        # The Skills Manager's save-as resource copy (mirrors
+        # myagent.datapaths.copy_skill_resources, 2026-09-25): the folder is
+        # the skill, so a SAVE under a new name carries the source folder's
+        # bundled files across — everything except the root SKILL.md, its
+        # SKILL-<label>.md conflict forks and writer temp files — never
+        # overwriting an existing destination file. Folders are resolved by
+        # FRONTMATTER name, as the loader reads them.
+        import shutil
+
+        def _dir_for(name):
+            if not os.path.isdir(dirpath):
+                return None
+            for sub in sorted(os.listdir(dirpath)):
+                md = os.path.join(dirpath, sub, "SKILL.md")
+                if not os.path.isfile(md):
+                    continue
+                try:
+                    with open(md, encoding="utf-8-sig") as f:
+                        meta, _ = _sb_skill_parse(f.read())
+                except OSError:
+                    continue
+                if (" ".join((meta.get("name") or "").split()) or sub) == name:
+                    return os.path.join(dirpath, sub)
+            return None
+
+        src, dst = _dir_for(src_name), _dir_for(dst_name)
+        if src is None or dst is None or os.path.realpath(src) == os.path.realpath(dst):
+            return []
+        copied = []
+        for root, dirs, files in os.walk(src):
+            dirs.sort()
+            rel_root = os.path.relpath(root, src)
+            for fname in sorted(files):
+                if rel_root == os.curdir and (
+                        fname == "SKILL.md" or fname.startswith("SKILL.md.")
+                        or (fname.startswith("SKILL-") and fname.lower().endswith(".md"))):
+                    continue
+                rel = fname if rel_root == os.curdir else os.path.join(rel_root, fname)
+                target = os.path.join(dst, rel)
+                if os.path.exists(target):
+                    continue
+                try:
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    shutil.copy2(os.path.join(root, fname), target)
+                except OSError:
+                    continue
+                copied.append(rel)
+        return copied
 
 PROMPTS_FILE = _resolve_store("system_prompts.json")
 # Same cost log MyAgent writes: APICostLog_<machine>.txt in the OneDrive share
@@ -3013,6 +3064,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
+        # The skill whose content the editor currently shows (set by the list
+        # selection, cleared by NEW). SAVE under a DIFFERENT, NEW name is a
+        # save-as: the loaded skill is its source, and the source's bundled
+        # resource files (references/, scripts/, …) are copied into the new
+        # folder — the folder is the skill, so a copy that carried only
+        # SKILL.md was not a copy of the skill (mirrors MyAgent, 2026-09-25).
+        loaded = {"name": None}
+
         def save_skill():
             name = name_entry.get().strip()
             if not name:
@@ -3044,6 +3103,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if not content:
                 messagebox.showwarning("Empty", "The skill content is empty.", parent=win)
                 return
+            is_new = name not in self.skills
             # Merge into the existing entry (never whole-entry replace) so fields
             # this editor doesn't show — e.g. one added by a newer version on
             # another machine — survive a SAVE here.
@@ -3057,6 +3117,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 entry.pop("description", None)
             self.skills[name] = entry
             self._save_skills()
+            # Save-as: a NEW name while another skill's content is loaded
+            # copies the source's bundled resource files into the new folder
+            # (never onto an EXISTING skill, whose folder owns its own files).
+            src = loaded["name"]
+            if is_new and src and src != name and src in self.skills:
+                copied = _copy_skill_resources(SKILLS_DIR, src, name)
+                if copied:
+                    messagebox.showinfo(
+                        "Bundled files copied",
+                        f"Copied {len(copied)} bundled resource file(s) from "
+                        f"'{src}' into the new skill's folder.", parent=win)
+            loaded["name"] = name
             refresh_list()
             self._update_skills_button()
 
@@ -3086,6 +3158,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 name_entry.delete(0, tk.END)
                 desc_entry.delete("1.0", tk.END)
                 text_editor.delete("1.0", tk.END)
+                if loaded["name"] == name:
+                    loaded["name"] = None   # its fields were just cleared too
                 self._update_skills_button()
 
         def new_skill():
@@ -3093,6 +3167,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             desc_entry.delete("1.0", tk.END)
             text_editor.delete("1.0", tk.END)
             skill_listbox.selection_clear(0, tk.END)
+            loaded["name"] = None   # a fresh skill has no save-as source
 
         # Packed side=RIGHT in reverse order so the visual left-to-right order stays
         # SAVE, DELETE, NEW while the buttons hug the right edge; the name entry
@@ -3167,6 +3242,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 desc_entry.insert("1.0", self.skills[name].get("description", ""))
                 text_editor.delete("1.0", tk.END)
                 text_editor.insert("1.0", self.skills[name]["content"])
+                loaded["name"] = name
 
         def toggle_skill():
             sel = skill_listbox.curselection()
