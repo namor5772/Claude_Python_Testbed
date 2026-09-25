@@ -15,8 +15,6 @@ import queue
 import types as pytypes
 import unittest
 
-from google.genai import types as genai_types
-
 from myagent.constants import GEMINI_QUIET_STYLES
 from myagent.gemini_mixin import GeminiMixin
 from myagent.streaming_mixin import StreamingMixin
