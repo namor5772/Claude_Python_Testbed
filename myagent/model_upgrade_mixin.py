@@ -7,18 +7,28 @@ task a stronger model does better, so the dialog carries an **Upgrade** box:
 ticked, the reply is sent as usual and every API call FROM THAT REPLY ON goes
 to the upgrade model with its own thinking level; the conversation, the tools,
 the system prompt and the run's other settings (temperature, verbosity, Fast)
-are untouched. The upgrade lasts for the rest of the run; it never outlives it
+are untouched. The switch lasts for the rest of the run; it never outlives it
 and never reaches the applied instruction, the state file or the store.
 
-The upgrade model is chosen per provider in **Model Setup**, a button beside
-Voice Setup at the bottom left of the main window: a run upgrades within its
-own provider only — the history's provider-specific reasoning artefacts stay
-readable there (live-probed 2026-09-27: a Sonnet 5 thinking block replayed to
-Fable 5.1 or Opus 5, a Gemini 3.8 Flash thought signature replayed to 3.1
-Pro, a gpt-5.6-terra function call replayed to gpt-6-astra — all HTTP 200
-with no history edit; stripping a Gemini signature is the one thing that
-FAILS, so nothing is ever stripped). The settings are the user's and the
-machine's, like Voice Setup's: ~/.config/myagent-upgrade/config.json.
+WHICH model is a setting of the INSTRUCTION (the user's decision, the day it
+shipped: it was per-user at first, like Voice Setup): `upgrade_target` in the
+instruction entry, `{"provider", "model", "level"}`, carried through every
+site the other per-instruction settings pass (the editor's SAVE / select /
+CLEAR, the applied snapshot, `_apply_instruction_entry`, manage_instructions)
+exactly like the Auto-send tick, `dictation_auto_send`. It is edited in
+**Model Setup**, a button beside Voice Setup at the bottom left of the main
+window, whose Save writes the value through to the instruction's store entry
+at once (a targeted key write, the Auto-send way). An instruction without one
+gets its provider's default (UPGRADE_DEFAULT_TARGETS); a model of "" is an
+explicit "no upgrade"; a target saved for another provider (the instruction's
+provider was changed since) does not apply.
+
+A run upgrades within its own provider only — the history's provider-specific
+reasoning artefacts stay readable there (live-probed 2026-09-27: a Sonnet 5
+thinking block replayed to Fable 5.1 or Opus 5, a Gemini 3.8 Flash thought
+signature replayed to 3.1 Pro, a gpt-5.6-terra function call replayed to
+gpt-6-astra — all HTTP 200 with no history edit; stripping a Gemini signature
+is the one thing that FAILS, so nothing is ever stripped).
 
 Mechanics. `_upgrade_apply` runs on the streaming worker inside
 `do_user_prompt`, after the reply is captured and before the worker returns to
@@ -35,14 +45,9 @@ thinking fields by `_upgrade_params_for`, which mirrors the instruction
 editor's three handlers; the levels offered for a model come from the same
 per-family helpers the editor's combobox uses, evaluated on a PROBE (a bare
 instance carrying only provider + model + the fetched capability tables),
-never on the live app, which may be mid-call on another provider.
+never on the live app.
 """
 
-import json
-import os
-import queue
-import tempfile
-import threading
 import tkinter as tk
 from tkinter import ttk
 
@@ -50,9 +55,6 @@ from myagent.constants import (
     BUDGET_PRESETS, PROVIDERS, UPGRADE_DEFAULT_TARGETS, UPGRADE_NO_MODEL_LABEL,
 )
 from myagent.keyboard import bind_mnemonics
-
-UPGRADE_CONFIG_DIR = os.path.expanduser("~/.config/myagent-upgrade")
-UPGRADE_CONFIG_FILE = os.path.join(UPGRADE_CONFIG_DIR, "config.json")
 
 UPGRADE_MUTED_FG = "#555555"
 UPGRADE_ERROR_FG = "#b00020"
@@ -69,75 +71,82 @@ UPGRADE_NOTE = ("Ticked in an Agent Request dialog, the upgrade model answers fr
 
 class ModelUpgradeMixin:
 
-    # ── Settings (pure: no Tk, no network) ──────────────────────────────
+    # ── The instruction's setting (pure: no Tk, no network) ────────────
 
     @staticmethod
-    def _upgrade_sanitize_config(raw):
-        """Any JSON value → {"targets": {provider: {"model", "level"}}} holding
-        only well-formed targets for known providers. A provider absent here
-        has NO upgrade (the dialog's box is then disabled for its runs)."""
-        raw = raw if isinstance(raw, dict) else {}
-        saved = raw.get("targets")
-        targets = {}
-        if isinstance(saved, dict):
-            for provider in PROVIDERS:
-                entry = saved.get(provider)
-                if not isinstance(entry, dict):
-                    continue
-                model = entry.get("model")
-                if not isinstance(model, str) or not model.strip():
-                    continue
-                level = entry.get("level")
-                level = level.strip() if isinstance(level, str) else ""
-                targets[provider] = {"model": model.strip(), "level": level}
-        return {"targets": targets}
+    def _upgrade_sanitize_target(raw, provider=None):
+        """An instruction entry's `upgrade_target` → {"provider", "model",
+        "level"}, or None when it names none (absent or malformed: the
+        provider default applies). A model of "" is an explicit "no upgrade"
+        (its level is then ""). `provider` fills a value that carries none
+        (manage_instructions passes the entry's own)."""
+        if not isinstance(raw, dict):
+            return None
+        chosen = raw.get("provider") or provider
+        if chosen not in PROVIDERS:
+            return None
+        model = raw.get("model")
+        model = model.strip() if isinstance(model, str) else ""
+        level = raw.get("level")
+        level = level.strip() if isinstance(level, str) and model else ""
+        return {"provider": chosen, "model": model, "level": level}
 
-    @staticmethod
-    def _upgrade_load_config(path=None):
-        """The saved targets; the curated defaults (UPGRADE_DEFAULT_TARGETS)
-        only when there is no file yet — a saved file that names no target
-        for a provider means the user cleared it."""
+    def _upgrade_own_target(self):
+        """The live instruction's own setting for the run's provider, or None
+        when it has none for it (never set, or set before its provider was
+        changed)."""
+        own = self._upgrade_sanitize_target(getattr(self, "upgrade_target", None))
+        return own if own is not None and own["provider"] == self.provider else None
+
+    def _upgrade_target(self):
+        """The upgrade a run of the live instruction gets: {"model", "level"}
+        — the instruction's own, else its provider's default — or None for
+        no upgrade (an explicit "no upgrade", or no default for the
+        provider)."""
+        own = self._upgrade_own_target()
+        if own is not None:
+            return {"model": own["model"], "level": own["level"]} if own["model"] else None
+        default = UPGRADE_DEFAULT_TARGETS.get(self.provider)
+        return dict(default) if default else None
+
+    def _upgrade_instruction_name(self):
+        """The saved instruction whose settings are LIVE, which is the one
+        Model Setup edits: the page the Instruction Editor shows while it is
+        open (selecting a page there restores its model settings at once —
+        the upgrade model among them — before any Apply), else the applied
+        instruction; "" for one not saved yet (the value then lives in the
+        session and the applied snapshot until the editor's SAVE)."""
+        editor = getattr(self, "instruction_editor_window", None)
         try:
-            with open(path or UPGRADE_CONFIG_FILE, encoding="utf-8") as f:
-                raw = json.load(f)
-        except (OSError, ValueError):
-            return ModelUpgradeMixin._upgrade_sanitize_config(
-                {"targets": UPGRADE_DEFAULT_TARGETS})
-        return ModelUpgradeMixin._upgrade_sanitize_config(raw)
+            if editor is not None and editor.winfo_exists():
+                return getattr(self, "_instr_shown_name", "") or ""
+        except tk.TclError:
+            pass
+        return getattr(self, "agent_instruction_name", "") or ""
 
-    @staticmethod
-    def _upgrade_save_config(cfg, path=None):
-        """Atomic write (mkstemp + os.replace beside the target), as the voice
-        settings: two instances may save at once."""
-        path = path or UPGRADE_CONFIG_FILE
-        folder = os.path.dirname(path)
-        os.makedirs(folder, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(prefix="config_", suffix=".tmp", dir=folder)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(ModelUpgradeMixin._upgrade_sanitize_config(cfg), f, indent=2)
-            os.replace(tmp, path)
-        except BaseException:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            raise
-
-    def _upgrade_target(self, provider=None):
-        """The saved upgrade for `provider` (the run's by default):
-        {"model", "level"} or None."""
-        cfg = self._upgrade_load_config()
-        return cfg["targets"].get(provider or self.provider)
+    def _upgrade_set_target(self, value):
+        """Model Setup's Save: the live value, then written through to the
+        instruction's store entry — a targeted key write, nothing else in the
+        entry is touched, and a value it already holds is not rewritten (no
+        OneDrive churn) — and to the applied snapshot (`_save_last_state`),
+        exactly as the Auto-send tick is kept."""
+        self.upgrade_target = value
+        name = self._upgrade_instruction_name()
+        if name:
+            instructions = self._load_saved_instructions()
+            entry = instructions.get(name)
+            if isinstance(entry, dict) and entry.get("upgrade_target") != value:
+                entry["upgrade_target"] = value
+                self._save_instructions_to_disk(instructions)
+        self._save_last_state()
 
     # ── Levels: what a model offers, and what a level means ───────────
 
     def _upgrade_probe(self, provider, model):
         """A bare instance of this app's class carrying only what the
         per-family detection helpers read — provider, model, the capability
-        tables the live fetches filled — so a model of ANY provider can be
-        asked what it supports without touching the live app (which may be
-        mid-call on a different provider on the worker thread)."""
+        tables the live fetches filled — so a model can be asked what it
+        supports without touching the live app's fields."""
         probe = object.__new__(type(self))
         probe.provider = provider
         probe.model = model
@@ -149,11 +158,11 @@ class ModelUpgradeMixin:
         return probe
 
     def _upgrade_level_values(self, provider, model):
-        """The thinking levels the Model Setup dialog offers for a model — the
-        rungs the instruction editor's own controls would show for it, with
-        an "Off" (or the boolean "On") where the editor uses a checkbox, and
-        [] for a model with no thinking control at all. Lower-cased, each is
-        what `_upgrade_params_for` reads."""
+        """The thinking levels Model Setup offers for a model — the rungs the
+        instruction editor's own controls would show for it, with an "Off"
+        (or the boolean "On") where the editor uses a checkbox, and [] for a
+        model with no thinking control at all. Lower-cased, each is what
+        `_upgrade_params_for` reads."""
         probe = self._upgrade_probe(provider, model)
         support = probe._model_supports_thinking()
         if support is None:
@@ -282,7 +291,7 @@ class ModelUpgradeMixin:
 
     def _upgrade_box_state(self, target):
         """(enabled, ticked, label) for the dialog's box, from the run's state
-        and the provider's saved target."""
+        and the instruction's upgrade target."""
         if self._upgrade_active():
             level = self.thinking_mode.capitalize() if self.thinking_enabled else ""
             return (False, True,
@@ -290,7 +299,7 @@ class ModelUpgradeMixin:
                     f"{f' ({level})' if level else ''} for the rest of this run")
         if not target:
             return (False, False,
-                    f"Upgrade: no upgrade model set for {self.provider} "
+                    "Upgrade: no upgrade model set for this instruction "
                     "(Model Setup, on the main window)")
         if target["model"] == self.model:
             return (False, False,
@@ -302,9 +311,10 @@ class ModelUpgradeMixin:
 
     def _upgrade_build_row(self, dlg):
         """The Upgrade checkbox for the caller to grid under the voice row.
-        Returns (frame, checkbutton, var, target): the caller reads `var`
-        when the reply is sent and calls `_upgrade_apply(target)` on the
-        worker if it is set; the caller owns the mnemonics."""
+        Returns (frame, checkbutton, var, target): `target` is what the box's
+        label names, None when the box is disabled; the caller reads `var`
+        when the reply is sent and hands the target to `_upgrade_apply` on
+        the worker if it is set; the caller owns the mnemonics."""
         target = self._upgrade_target()
         enabled, ticked, label = self._upgrade_box_state(target)
         row = tk.Frame(dlg)
@@ -320,36 +330,26 @@ class ModelUpgradeMixin:
         """The main window's Model Setup button (bottom left, Alt+M)."""
         self._open_upgrade_setup(self.root)
 
-    def _upgrade_providers_available(self):
-        """The providers a run can be on here — a key set, or Ollama up."""
-        flags = {"Anthropic": "_has_anthropic", "OpenAI": "_has_openai",
-                 "Google": "_has_gemini", "xAI": "_has_xai",
-                 "Moonshot": "_has_kimi", "Ollama": "_has_ollama"}
-        return [p for p in PROVIDERS if getattr(self, flags[p], False)]
-
-    def _upgrade_model_cache(self):
-        """provider → the model list fetched this session for the dialog.
-        The run's own provider needs no fetch: `available_models` is it."""
-        cache = getattr(self, "_upgrade_models_fetched", None)
-        if cache is None:
-            cache = self._upgrade_models_fetched = {}
-        return cache
-
-    def _upgrade_fetch_models(self, provider):
-        """The live model list for one provider (worker thread: network
-        only) — the same fetchers the editor's picker uses. NOT called for
-        the run's own provider (its fetch resets capability tables the live
-        run reads)."""
-        fetch = {"OpenAI": "_fetch_openai_models", "Google": "_fetch_gemini_models",
-                 "xAI": "_fetch_xai_models", "Moonshot": "_fetch_kimi_models",
-                 "Ollama": "_fetch_ollama_models"}.get(provider, "_fetch_available_models")
-        return list(getattr(self, fetch)())
+    def _upgrade_setup_draft(self):
+        """(shown, source) for Model Setup: the target the dialog opens on —
+        {"provider", "model", "level"} for the live provider — and where it
+        comes from: "own" (the instruction's), "default" (the provider's,
+        the instruction has none of its own) or "none" (no upgrade)."""
+        own = self._upgrade_own_target()
+        if own is not None:
+            return own, ("own" if own["model"] else "none")
+        default = UPGRADE_DEFAULT_TARGETS.get(self.provider)
+        if default:
+            return {"provider": self.provider, **default}, "default"
+        return {"provider": self.provider, "model": "", "level": ""}, "none"
 
     def _open_upgrade_setup(self, parent):
-        """The modal settings dialog over `parent`: one upgrade model + level
-        per provider. Save writes ~/.config/myagent-upgrade/config.json, read
-        afresh by every Agent Request dialog — in this instance and every
-        other, whatever instruction is applied."""
+        """The modal dialog over `parent` that sets the upgrade model of the
+        instruction whose settings are live (`_upgrade_instruction_name`) for
+        its provider — the run's provider, so its model list is the one the
+        app already holds (`available_models`) and nothing is fetched. Save
+        writes the value through (`_upgrade_set_target`); Cancel keeps
+        nothing."""
         existing = getattr(self, "_upgrade_setup_dialog", None)
         try:
             if existing is not None and existing.winfo_exists():
@@ -358,99 +358,85 @@ class ModelUpgradeMixin:
                 return
         except tk.TclError:
             pass
-        cfg = self._upgrade_load_config()
-        targets = {p: dict(t) for p, t in cfg["targets"].items()}   # the draft
-        providers = self._upgrade_providers_available() or [self.provider]
-        cache = self._upgrade_model_cache()
-        cache.setdefault(self.provider, list(getattr(self, "available_models", None) or []))
+        name = self._upgrade_instruction_name()
+        provider = self.provider
+        shown, source = self._upgrade_setup_draft()
 
         dlg = tk.Toplevel(parent)
         self._upgrade_setup_dialog = dlg
         dlg.withdraw()
-        dlg.title("Model Setup")
+        dlg.title(f"Model Setup — {name}" if name else "Model Setup")
         dlg.transient(parent)
         dlg.resizable(False, False)
         dlg.grid_columnconfigure(1, weight=1)
         font = ("Arial", 10)
+        small = ("Arial", 9)
 
         def label(row, text):
             tk.Label(dlg, text=text, font=font, anchor="w").grid(
                 row=row, column=0, sticky="w", padx=(15, 8), pady=4)
 
-        label(0, "Provider:")
-        shown = [self.provider if self.provider in providers else providers[0]]
-        provider_var = tk.StringVar(value=shown[0])
-        provider_combo = ttk.Combobox(dlg, textvariable=provider_var, state="readonly",
-                                      values=providers, font=font, width=44)
-        provider_combo.grid(row=0, column=1, sticky="ew", padx=(0, 15), pady=4)
+        def value(row, text):
+            tk.Label(dlg, text=text, font=font, anchor="w", justify="left",
+                     wraplength=420).grid(row=row, column=1, sticky="w", padx=(0, 15), pady=4)
 
-        label(1, "Upgrade model:")
+        label(0, "Instruction:")
+        value(0, name or "(not saved yet: kept for this session until the editor's SAVE)")
+        label(1, "Provider:")
+        value(1, f"{provider} — this instruction runs on {self._get_display_name(self.model)}")
+
+        label(2, "Upgrade model:")
         model_var = tk.StringVar()
+        model_values = [UPGRADE_NO_MODEL_LABEL] + list(getattr(self, "available_models", None) or [])
+        if shown["model"] and shown["model"] not in model_values:
+            model_values.insert(1, shown["model"])     # saved, but off today's list
         model_combo = ttk.Combobox(dlg, textvariable=model_var, state="readonly",
-                                   font=font, width=44)
-        model_combo.grid(row=1, column=1, sticky="ew", padx=(0, 15), pady=4)
+                                   values=model_values, font=font, width=44)
+        model_combo.grid(row=2, column=1, sticky="ew", padx=(0, 15), pady=4)
 
-        label(2, "Thinking:")
+        label(3, "Thinking:")
         level_var = tk.StringVar()
         level_combo = ttk.Combobox(dlg, textvariable=level_var, state="readonly",
                                    font=font, width=44)
-        level_combo.grid(row=2, column=1, sticky="ew", padx=(0, 15), pady=4)
+        level_combo.grid(row=3, column=1, sticky="ew", padx=(0, 15), pady=4)
 
-        note = tk.Label(dlg, text=UPGRADE_NOTE, font=("Arial", 9), fg=UPGRADE_MUTED_FG,
-                        anchor="w", justify="left", wraplength=440)
-        note.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
-        status = tk.Label(dlg, text="", font=("Arial", 9), fg=UPGRADE_ERROR_FG,
-                          anchor="w", justify="left", wraplength=440)
-        status.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15)
+        origin = {"own": "Saved with this instruction.",
+                  "default": (f"This instruction has no upgrade model of its own yet: the "
+                              f"{provider} default is shown. Save keeps it with the instruction."),
+                  "none": "No upgrade: the Agent Request dialog's Upgrade box stays disabled."}
+        def wrapping(text, fg):
+            # A modest starting wraplength keeps the text from widening the
+            # dialog's natural size; once laid out, it wraps at the full
+            # width the dropdowns give the dialog (the voice status pattern).
+            lbl = tk.Label(dlg, text=text, font=small, fg=fg, anchor="w", justify="left",
+                           wraplength=440)
+            lbl.bind("<Configure>", lambda e: lbl.config(wraplength=max(e.width - 4, 200)))
+            return lbl
 
-        def keep_draft():
-            """The shown provider's fields → the draft."""
-            provider = shown[0]
+        origin_label = wrapping(origin[source], UPGRADE_MUTED_FG)
+        origin_label.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 0))
+        note = wrapping(UPGRADE_NOTE, UPGRADE_MUTED_FG)
+        note.grid(row=5, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
+        status = wrapping("", UPGRADE_ERROR_FG)
+        status.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15)
+
+        def show_levels(saved_level):
             model = model_var.get()
-            if not model or model == UPGRADE_NO_MODEL_LABEL:
-                targets.pop(provider, None)
-            else:
-                targets[provider] = {"model": model, "level": level_var.get()}
-
-        def show_levels(event=None):
-            model = model_var.get()
-            if not model or model == UPGRADE_NO_MODEL_LABEL:
-                level_combo.config(values=[], state="disabled")
-                level_var.set("")
-                return
-            values = self._upgrade_level_values(shown[0], model)
+            values = ([] if not model or model == UPGRADE_NO_MODEL_LABEL
+                      else self._upgrade_level_values(provider, model))
             if not values:
                 level_combo.config(values=[], state="disabled")
                 level_var.set("")
                 return
             level_combo.config(values=values, state="readonly")
-            saved = targets.get(shown[0], {}).get("level") if \
-                targets.get(shown[0], {}).get("model") == model else level_var.get()
-            level_var.set(self._upgrade_level_for(shown[0], model, saved))
-
-        def show_models(provider):
-            values = [UPGRADE_NO_MODEL_LABEL] + list(cache.get(provider) or [])
-            target = targets.get(provider)
-            if target and target["model"] not in values:
-                values.insert(1, target["model"])      # saved, but off today's list
-            model_combo.config(values=values)
-            model_var.set(target["model"] if target else UPGRADE_NO_MODEL_LABEL)
-            show_levels()
+            level_var.set(self._upgrade_level_for(provider, model, saved_level))
 
         def on_model(event=None):
-            level_var.set("")       # a fresh pick takes the model's strongest level
-            show_levels()
+            show_levels("")         # a fresh pick lands on the model's strongest level
 
         model_combo.bind("<<ComboboxSelected>>", on_model)
-        level_combo.bind("<<ComboboxSelected>>", lambda e: keep_draft())
-
-        def on_provider(event=None):
-            keep_draft()
-            shown[0] = provider_var.get()
-            show_models(shown[0])
-
-        provider_combo.bind("<<ComboboxSelected>>", on_provider)
-        show_models(shown[0])
+        model_var.set(shown["model"] or UPGRADE_NO_MODEL_LABEL)
+        show_levels(shown["level"])
 
         def close(event=None):
             self._upgrade_setup_dialog = None
@@ -458,69 +444,43 @@ class ModelUpgradeMixin:
             return "break"
 
         def save():
-            keep_draft()
+            model = model_var.get()
+            if model == UPGRADE_NO_MODEL_LABEL:
+                model = ""
             try:
-                self._upgrade_save_config({"targets": targets})
+                self._upgrade_set_target({"provider": provider, "model": model,
+                                          "level": level_var.get() if model else ""})
             except OSError as exc:
-                status.config(text=f"Could not save the settings: {exc}")
+                status.config(text=f"Could not save the setting: {exc}")
                 return
             close()
 
         btn_row = tk.Frame(dlg)
-        btn_row.grid(row=5, column=0, columnspan=2, pady=(8, 12))
+        btn_row.grid(row=7, column=0, columnspan=2, pady=(8, 12))
         save_btn = tk.Button(btn_row, text="Save", width=10, command=save)
         save_btn.pack(side=tk.LEFT, padx=8)
         cancel_btn = tk.Button(btn_row, text="Cancel", width=10, command=close)
         cancel_btn.pack(side=tk.LEFT, padx=8)
 
         dlg.protocol("WM_DELETE_WINDOW", close)
-        dlg.bind("<Escape>", close)     # three small settings: no draft worth protecting
-        bind_mnemonics(dlg, {"p": provider_combo, "m": model_combo, "t": level_combo,
+        dlg.bind("<Escape>", close)     # two small settings: no draft worth protecting
+        bind_mnemonics(dlg, {"m": model_combo, "t": level_combo,
                              "s": save_btn, "c": cancel_btn})
-
-        # The other providers' live model lists are network calls: a worker
-        # fetches, the Tk thread drains; fetched once per session.
-        fetched = queue.Queue()
-        missing = [p for p in providers if p not in cache]
-
-        def fetch():
-            for provider in missing:
-                try:
-                    fetched.put((provider, self._upgrade_fetch_models(provider)))
-                except Exception:
-                    pass
-            fetched.put(None)
-
-        def drain():
-            try:
-                if not dlg.winfo_exists():
-                    return
-                while True:
-                    item = fetched.get_nowait()
-                    if item is None:
-                        return
-                    provider, values = item
-                    cache[provider] = values
-                    if provider == shown[0]:
-                        keep_draft()
-                        show_models(provider)
-            except queue.Empty:
-                dlg.after(100, drain)
-            except tk.TclError:
-                pass
-
-        if missing:
-            threading.Thread(target=fetch, daemon=True).start()
-            dlg.after(100, drain)
 
         dlg.update_idletasks()
         placed = self._place_window(dlg, "model_setup",
                                     (dlg.winfo_reqwidth(), dlg.winfo_reqheight()), parent=parent)
+        # Keep the position, give the size back to Tk: the notes re-wrap to
+        # the dialog's width once it is laid out, and a size fixed now would
+        # leave the height they give back as a blank strip under the buttons
+        # (a position-only geometry does not cancel a size already set;
+        # the empty one does).
         position = self._parse_geometry(placed)
+        dlg.geometry("")
         if position:
             dlg.geometry(f"+{position[2]}+{position[3]}")
         dlg.deiconify()
-        provider_combo.focus_set()
+        model_combo.focus_set()
         dlg.wait_visibility()
         dlg.grab_set()
         dlg.wait_window()

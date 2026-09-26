@@ -303,6 +303,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # first model at.
         self._upgrade_original = None
         self._run_call_num = 0
+        # WHICH model the Upgrade box moves to: the live instruction's
+        # setting ({"provider", "model", "level"}; None = its provider's
+        # default), per instruction like the Auto-send tick and written
+        # through from Model Setup.
+        self.upgrade_target = None
         self.instruction_editor_window = None
         # The editor's Instructions list (2026-09-11): the width of its
         # pane and the sections the user collapsed, both kept in agent_state.json

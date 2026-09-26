@@ -577,6 +577,21 @@ META_TOOLS = [
                         "update; create inherits current."
                     ),
                 },
+                "upgrade_target": {
+                    "type": "object",
+                    "description": (
+                        "The model the Agent Request dialog's Upgrade box moves a run of "
+                        "this instruction to, from the ticked reply to the end of the run: "
+                        "{model, level} — a model of the instruction's OWN provider and "
+                        "its thinking level as the editor names it (e.g. 'Max', 'Xhigh', "
+                        "'Adaptive'). model '' = no upgrade. Absent = the provider default "
+                        "(Anthropic claude-fable-5-1 Max, OpenAI gpt-6-astra Max)."
+                    ),
+                    "properties": {
+                        "model": {"type": "string"},
+                        "level": {"type": "string"},
+                    },
+                },
                 "blocked_tools": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -3823,13 +3838,14 @@ CONVO_END_WORDS = ("quit", "exit", "stop")
 PROVIDERS = ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 # Model upgrade for the rest of a run (model_upgrade_mixin, 2026-09-27): the
 # Agent Request dialog's Upgrade box moves the run to a stronger model of the
-# SAME provider from that reply on. Which model, per provider, is Model Setup
-# (a button beside Voice Setup); these are the defaults a machine starts with
-# until it saves its own — the user's two examples — and the label the setup
-# dialog's model picker offers for "no upgrade for this provider".
+# SAME provider from that reply on. Which model is a setting of the
+# INSTRUCTION ("upgrade_target", set in Model Setup, a button beside Voice
+# Setup); these are the provider defaults an instruction without one of its
+# own gets — the user's two examples — and the label Model Setup's model
+# picker offers for an explicit "no upgrade".
 UPGRADE_DEFAULT_TARGETS = {"Anthropic": {"model": "claude-fable-5-1", "level": "Max"},
                            "OpenAI": {"model": "gpt-6-astra", "level": "Max"}}
-UPGRADE_NO_MODEL_LABEL = "(none — no upgrade for this provider)"
+UPGRADE_NO_MODEL_LABEL = "(none — no upgrade for this instruction)"
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
 # Background of the toolbar button pressed most recently (Instruction / START /

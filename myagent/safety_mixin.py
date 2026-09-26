@@ -375,8 +375,8 @@ class SafetyMixin:
         _take_prompt_images() (same thread — the streaming worker blocks on
         the dialog and reads the result synchronously)."""
         event = threading.Event()
-        # [reply_text, [(b64, media_type, filename)], upgrade the model?]
-        result_holder = ["", [], False]
+        # [reply_text, [(b64, media_type, filename)], the upgrade target or None]
+        result_holder = ["", [], None]
 
         # Show the request in the chat display too (the echo's twin, below):
         # the dialog is gone once answered, and the output pane — which is
@@ -456,11 +456,12 @@ class SafetyMixin:
             voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
 
             # Upgrade row (model_upgrade_mixin): ticked, the run moves to the
-            # provider's upgrade model — Model Setup on the main window —
+            # instruction's upgrade model — Model Setup on the main window —
             # from this reply to the end of the run. The box is disabled,
             # with a label saying why, when there is nothing to move to or
             # the run has already moved. Read when the reply is sent; the
-            # switch itself happens on the worker below, after the wait.
+            # switch itself happens on the worker below, after the wait, to
+            # the very target the box's label named.
             upgrade_row, upgrade_btn, upgrade_var, upgrade_target = self._upgrade_build_row(dlg)
             upgrade_row.grid(row=5, column=0, sticky="ew", padx=15, pady=(2, 0))
 
@@ -540,7 +541,7 @@ class SafetyMixin:
                     text = "[See attached image(s)]"
                 result_holder[0] = text
                 result_holder[1] = list(attached_images)
-                result_holder[2] = upgrade_target is not None and bool(upgrade_var.get())
+                result_holder[2] = upgrade_target if upgrade_var.get() else None
                 _capture_and_close()
                 event.set()
                 dlg.destroy()
@@ -591,7 +592,7 @@ class SafetyMixin:
             # (the target was read when the dialog opened, on the Tk thread).
             # An empty reply stops the agent, so it upgrades nothing.
             if result_holder[2] and response.strip():
-                self._upgrade_apply(self._upgrade_target())
+                self._upgrade_apply(result_holder[2])
         return response
 
     def _take_prompt_images(self):

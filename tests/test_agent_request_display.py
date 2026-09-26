@@ -28,6 +28,7 @@ without a display; the answered-dialog test also where the display will not
 grant the keyboard focus a synthetic Return needs.
 """
 
+import gc
 import queue
 import threading
 import tkinter as tk
@@ -240,6 +241,14 @@ class DialogTests(unittest.TestCase):
         self.root.attributes("-alpha", 0.0)
 
     def tearDown(self):
+        # The dialog's closures and the host form reference cycles holding Tk
+        # variables: collect them HERE, on the main thread with the
+        # interpreter alive, before the root goes — left to the cyclic
+        # collector they are finalised on whatever thread allocates next
+        # (another module's worker), where Tk raises "main thread is not in
+        # main loop".
+        self.host = None
+        gc.collect()
         self.root.destroy()
 
     def run_dialog(self, message, act):

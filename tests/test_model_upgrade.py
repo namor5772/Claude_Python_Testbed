@@ -1,35 +1,43 @@
 """Characterization tests for the model upgrade (myagent/model_upgrade_mixin.py,
 2026-09-27): the Agent Request dialog's Upgrade box moves a run to a stronger
-model of the same provider from that reply on; Model Setup, a button beside
-Voice Setup, chooses the model + thinking level per provider.
+model of the same provider from that reply on; WHICH model is a setting of the
+instruction (`upgrade_target`, edited in Model Setup — a button beside Voice
+Setup — and written through to the instruction's store entry, the Auto-send
+way; per-user at first, per instruction by the user's decision the same day).
 
 Pinned here, without a key or the network:
 
-* the settings: sanitising, the curated defaults for a machine with no file
-  yet (and NOT for a file that names no target), the atomic save;
+* the instruction's setting: sanitising, the target a run gets (its own, an
+  explicit "no upgrade", the provider default — also for a target saved for
+  another provider), which instruction Model Setup edits (the editor's page
+  while the editor is open, else the applied one), and the write-through;
+* every per-instruction site carries `upgrade_target` (a static scan, the
+  Auto-send list) and manage_instructions reads / creates / updates it;
 * the levels a model is offered — the instruction editor's own rungs for it,
   via a probe that never touches the live app — across every provider's
-  kinds (mode combobox, checkbox + strength, token budgets, boolean), and how
-  a saved level lands on a model that lacks it (the strongest offered);
+  kinds, and how a saved level lands on a model that lacks it;
 * what a level means: the four live thinking fields, as the editor's three
   handlers would leave them;
 * the switch on a bare host: the originals stashed BEFORE the live fields
   change, the pane line, the title refresh scheduled on the Tk thread, one
   upgrade per run, the restore at the loop's end, the title / cost-log part;
 * the state file: while an upgrade is active `_save_last_state` writes the
-  run's OWN model fields, never the upgrade's;
+  run's OWN model fields, never the upgrade's; the applied snapshot carries
+  the instruction's upgrade_target;
 * the dialog's box on the REAL Agent Request dialog (inside a real mainloop
-  with do_user_prompt on a worker thread, as a run calls it): its three
-  states, and the switch applied only for a sent, non-empty reply with the
-  box ticked;
-* Model Setup on real widgets: the saved target shown, the level list
-  following the model, "(none)" clearing a provider, Save writing the file;
+  with do_user_prompt on a worker thread, as a run calls it): its states,
+  and the switch applied — to the target the label named — only for a sent,
+  non-empty reply with the box ticked;
+* Model Setup on real widgets: the default shown for an instruction without
+  its own, levels following the model, Save written through to the right
+  instruction, "(none)" an explicit no-upgrade, Cancel keeping nothing;
 * the wiring (a static scan): the row between the voice row and the image
   row, the mnemonic, the worker-side apply, the loop's two restore sites,
   the state file's stash read, the main window's button, the App's bases —
-  and the module's independence from the instruction store.
+  and a switch that never persists anything.
 """
 
+import gc
 import json
 import os
 import pathlib
@@ -39,14 +47,13 @@ import threading
 import tkinter as tk
 import unittest
 from tkinter import ttk
-from unittest import mock
 
 from tests._util import stub
 from tests.test_agent_request_display import _Dictation, _walk
 from tests.test_state_skill_modes import _Host as _StateHost
-from myagent import model_upgrade_mixin as mu
-from myagent.constants import UPGRADE_DEFAULT_TARGETS, UPGRADE_NO_MODEL_LABEL
+from myagent.constants import META_TOOLS, UPGRADE_DEFAULT_TARGETS, UPGRADE_NO_MODEL_LABEL
 from myagent.gemini_mixin import GeminiMixin
+from myagent.instructions_mixin import InstructionsMixin
 from myagent.kimi_mixin import KimiMixin
 from myagent.model_upgrade_mixin import ModelUpgradeMixin, UPGRADE_FIELDS
 from myagent.ollama_mixin import OllamaMixin
@@ -77,20 +84,69 @@ class _Root:
         self.scheduled.append(fn)
 
 
+class _Window:
+    """An open (or closed) Instruction Editor, as far as winfo_exists goes."""
+
+    def __init__(self, open_=True):
+        self.open = open_
+
+    def winfo_exists(self):
+        return self.open
+
+
+class _Host(_Probe):
+    """The stand-ins are METHODS, not lambdas closing over the instance: a
+    closure over its own host is a reference cycle, freed only by the cyclic
+    collector — on whatever thread next allocates — and a host holding a Tk
+    root or variable must never be finalised off the main thread (it killed
+    test_physical_mixin's capture thread in the full suite: "main thread is
+    not in main loop", "Tcl_AsyncDelete: async handler deleted by the wrong
+    thread")."""
+
+    def _tool_info(self, text):
+        self.infos.append(text)
+
+    def _update_title(self):
+        pass
+
+    def _get_display_name(self, model_id):
+        return {"claude-fable-5-1": "Claude Fable 5.1"}.get(model_id, model_id)
+
+    def _load_saved_instructions(self):
+        return json.loads(json.dumps(self.store))
+
+    def _save_instructions_to_disk(self, data):
+        self.writes.append(data)
+        self.store = data
+
+    def _save_last_state(self):
+        self.state_saves.append(True)
+
+
 def host(**attrs):
-    """A run mid-way: Sonnet 5, adaptive, twelve calls in."""
+    """A run mid-way: Sonnet 5, adaptive, twelve calls in, applied instruction
+    "Balance" with a store of its own."""
     base = dict(provider="Anthropic", model="claude-sonnet-5", thinking_enabled=True,
                 thinking_effort="high", thinking_budget=8192, thinking_mode="adaptive",
                 temperature=1.0, fast_mode=False, _anthropic_unsupported=set(),
                 queue=queue.Queue(), root=_Root(), _run_call_num=12, _upgrade_original=None,
-                infos=[])
+                upgrade_target=None, agent_instruction_name="Balance",
+                instruction_editor_window=None, _instr_shown_name="",
+                infos=[], store={"Balance": {"text": "t", "provider": "Anthropic"},
+                                 "Other": {"text": "o", "provider": "Anthropic"}},
+                writes=[], state_saves=[])
     base.update(attrs)
-    h = probe(**base)
-    h._tool_info = h.infos.append
-    h._update_title = lambda: None
-    h._get_display_name = lambda model_id: {"claude-fable-5-1": "Claude Fable 5.1"}.get(
-        model_id, model_id)
-    return h
+    return stub(_Host, **base)
+
+
+def free_tk_garbage_then_destroy(test):
+    """tearDown for the real-widget tests: drop the host, collect its cycles
+    HERE, on the main thread with the interpreter alive — the dialog's
+    closures reach the host and its Tk variables — and only then destroy
+    the root."""
+    test.host = None
+    gc.collect()
+    test.root.destroy()
 
 
 def drained(q):
@@ -100,65 +156,169 @@ def drained(q):
     return items
 
 
-# ── Settings ────────────────────────────────────────────────────────────
+# ── The instruction's setting ──────────────────────────────────────────
 
-class ConfigTests(unittest.TestCase):
+class TargetTests(unittest.TestCase):
 
-    def test_anything_sanitises_to_well_formed_targets_for_known_providers(self):
-        self.assertEqual(ModelUpgradeMixin._upgrade_sanitize_config(None), {"targets": {}})
-        self.assertEqual(ModelUpgradeMixin._upgrade_sanitize_config([1]), {"targets": {}})
-        cfg = ModelUpgradeMixin._upgrade_sanitize_config({"targets": {
-            "Anthropic": {"model": " claude-fable-5-1 ", "level": " Max "},
-            "OpenAI": {"model": "gpt-6-astra"},                 # level optional
-            "Google": {"model": ""},                            # no model: no target
-            "xAI": "grok-4.7",                                  # wrong shape
-            "Bedrock": {"model": "x", "level": "y"},            # unknown provider
-        }})
-        self.assertEqual(cfg, {"targets": {
-            "Anthropic": {"model": "claude-fable-5-1", "level": "Max"},
-            "OpenAI": {"model": "gpt-6-astra", "level": ""}}})
+    def test_sanitising(self):
+        s = ModelUpgradeMixin._upgrade_sanitize_target
+        self.assertIsNone(s(None))
+        self.assertIsNone(s("claude-fable-5-1"))
+        self.assertIsNone(s({"provider": "Bedrock", "model": "x"}))       # unknown provider
+        self.assertIsNone(s({"model": "x"}))                               # no provider at all
+        self.assertEqual(s({"model": " claude-opus-5-5 ", "level": " High "}, "Anthropic"),
+                         {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"})
+        # An explicit "no upgrade": the model is "", and so is its level.
+        self.assertEqual(s({"provider": "OpenAI", "model": "", "level": "Max"}),
+                         {"provider": "OpenAI", "model": "", "level": ""})
+        # A value's own provider wins over the fallback.
+        self.assertEqual(s({"provider": "OpenAI", "model": "gpt-6-astra"}, "Anthropic")["provider"],
+                         "OpenAI")
 
-    def test_no_file_yet_means_the_curated_defaults(self):
-        with tempfile.TemporaryDirectory() as folder:
-            cfg = ModelUpgradeMixin._upgrade_load_config(os.path.join(folder, "config.json"))
-        self.assertEqual(cfg["targets"], UPGRADE_DEFAULT_TARGETS)
-        self.assertEqual(set(cfg["targets"]), {"Anthropic", "OpenAI"})
+    def test_an_instruction_without_its_own_gets_the_provider_default(self):
+        self.assertEqual(host()._upgrade_target(), UPGRADE_DEFAULT_TARGETS["Anthropic"])
+        self.assertEqual(host(provider="OpenAI", model="gpt-5.6-terra")._upgrade_target(),
+                         {"model": "gpt-6-astra", "level": "Max"})
+        self.assertIsNone(host(provider="Google", model="gemini-3.8-flash")._upgrade_target())
 
-    def test_a_saved_file_is_taken_as_it_is_with_no_defaults_added(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"targets": {"Google": {"model": "gemini-3.1-pro-preview",
-                                                  "level": "High"}}}, f)
-            cfg = ModelUpgradeMixin._upgrade_load_config(path)
-        self.assertEqual(cfg["targets"], {"Google": {"model": "gemini-3.1-pro-preview",
-                                                     "level": "High"}})
+    def test_its_own_wins_and_an_explicit_none_means_no_upgrade(self):
+        own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
+        self.assertEqual(host(upgrade_target=own)._upgrade_target(),
+                         {"model": "claude-opus-5-5", "level": "High"})
+        none = {"provider": "Anthropic", "model": "", "level": ""}
+        self.assertIsNone(host(upgrade_target=none)._upgrade_target())
 
-    def test_save_then_load_round_trips_and_leaves_no_temp_file(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, "sub", "config.json")
-            targets = {"Anthropic": {"model": "claude-opus-5-5", "level": "High"}}
-            ModelUpgradeMixin._upgrade_save_config({"targets": targets}, path)
-            self.assertEqual(os.listdir(os.path.dirname(path)), ["config.json"])
-            self.assertEqual(ModelUpgradeMixin._upgrade_load_config(path)["targets"], targets)
+    def test_a_target_saved_for_another_provider_does_not_apply(self):
+        # The instruction's provider was changed after its upgrade model was set.
+        h = host(upgrade_target={"provider": "OpenAI", "model": "gpt-6-astra", "level": "Max"})
+        self.assertIsNone(h._upgrade_own_target())
+        self.assertEqual(h._upgrade_target(), UPGRADE_DEFAULT_TARGETS["Anthropic"])
 
-    def test_a_torn_file_loads_as_the_defaults(self):
-        with tempfile.TemporaryDirectory() as folder:
-            path = os.path.join(folder, "config.json")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write('{"targets": {"Anth')
-            cfg = ModelUpgradeMixin._upgrade_load_config(path)
-        self.assertEqual(cfg["targets"], UPGRADE_DEFAULT_TARGETS)
+    def test_model_setup_edits_the_instruction_whose_settings_are_live(self):
+        self.assertEqual(host()._upgrade_instruction_name(), "Balance")          # applied
+        self.assertEqual(host(instruction_editor_window=_Window(False))._upgrade_instruction_name(),
+                         "Balance")                                               # editor closed
+        editing = host(instruction_editor_window=_Window(), _instr_shown_name="Other")
+        self.assertEqual(editing._upgrade_instruction_name(), "Other")           # the editor's page
+        unsaved = host(instruction_editor_window=_Window(), _instr_shown_name="")
+        self.assertEqual(unsaved._upgrade_instruction_name(), "")
+        self.assertEqual(host(agent_instruction_name="")._upgrade_instruction_name(), "")
 
-    def test_the_target_is_the_runs_provider_unless_asked_otherwise(self):
+    def test_save_writes_through_one_key_of_one_entry(self):
         h = host()
-        with mock.patch.object(ModelUpgradeMixin, "_upgrade_load_config",
-                               staticmethod(lambda path=None: {"targets": {
-                                   "Anthropic": {"model": "a", "level": "Max"},
-                                   "OpenAI": {"model": "o", "level": "Low"}}})):
-            self.assertEqual(h._upgrade_target(), {"model": "a", "level": "Max"})
-            self.assertEqual(h._upgrade_target("OpenAI"), {"model": "o", "level": "Low"})
-            self.assertIsNone(h._upgrade_target("Google"))
+        value = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
+        h._upgrade_set_target(value)
+        self.assertEqual(h.upgrade_target, value)
+        self.assertEqual(len(h.writes), 1)
+        self.assertEqual(h.store["Balance"], {"text": "t", "provider": "Anthropic",
+                                              "upgrade_target": value})
+        self.assertEqual(h.store["Other"], {"text": "o", "provider": "Anthropic"})
+        self.assertEqual(len(h.state_saves), 1)                  # the applied snapshot too
+        h._upgrade_set_target(dict(value))                       # already held: no rewrite
+        self.assertEqual(len(h.writes), 1)
+        self.assertEqual(len(h.state_saves), 2)
+
+    def test_an_unsaved_instruction_keeps_it_for_the_session_and_the_snapshot(self):
+        h = host(agent_instruction_name="")
+        value = {"provider": "Anthropic", "model": "", "level": ""}
+        h._upgrade_set_target(value)
+        self.assertEqual((h.upgrade_target, h.writes, len(h.state_saves)), (value, [], 1))
+
+    def test_with_the_editor_open_its_page_is_written(self):
+        h = host(instruction_editor_window=_Window(), _instr_shown_name="Other")
+        value = {"provider": "Anthropic", "model": "claude-fable-5-1", "level": "Xhigh"}
+        h._upgrade_set_target(value)
+        self.assertEqual(h.store["Other"]["upgrade_target"], value)
+        self.assertNotIn("upgrade_target", h.store["Balance"])
+
+    def test_what_model_setup_opens_on(self):
+        self.assertEqual(host()._upgrade_setup_draft(),
+                         ({"provider": "Anthropic", "model": "claude-fable-5-1", "level": "Max"},
+                          "default"))
+        own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
+        self.assertEqual(host(upgrade_target=own)._upgrade_setup_draft(), (own, "own"))
+        none = {"provider": "Anthropic", "model": "", "level": ""}
+        self.assertEqual(host(upgrade_target=none)._upgrade_setup_draft(), (none, "none"))
+        self.assertEqual(host(provider="Google")._upgrade_setup_draft(),
+                         ({"provider": "Google", "model": "", "level": ""}, "none"))
+
+
+class ManageInstructionsTests(unittest.TestCase):
+    """The meta tool reads, creates and updates the setting like the other
+    per-instruction keys (it never touches the live session)."""
+
+    class _Host(InstructionsMixin, ModelUpgradeMixin):
+        pass
+
+    def tool_host(self, store):
+        h = stub(self._Host, provider="Anthropic", model="claude-sonnet-5", temperature=1.0,
+                 thinking_enabled=True, thinking_effort="low", thinking_budget=8192,
+                 thinking_mode="low", text_verbosity="medium", fast_mode=False, skills={},
+                 _disabled_confirm_patterns=set(), _blocked_tools=set(),
+                 agent_instruction_name="", upgrade_target=None)
+        h.store = store
+        h._load_saved_instructions = lambda: h.store
+        h._save_instructions_to_disk = lambda data: setattr(h, "store", data)
+        return h
+
+    def test_create_read_update(self):
+        h = self.tool_host({})
+        h.do_manage_instructions({"action": "create", "name": "New", "text": "do it",
+                                  "upgrade_target": {"model": "claude-opus-5-5", "level": "High"}})
+        self.assertEqual(h.store["New"]["upgrade_target"],
+                         {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"})
+        h.do_manage_instructions({"action": "create", "name": "Plain", "text": "do it"})
+        self.assertIsNone(h.store["Plain"]["upgrade_target"])            # the provider default
+        read = json.loads(h.do_manage_instructions({"action": "read", "name": "New"}))
+        self.assertEqual(read["upgrade_target"]["model"], "claude-opus-5-5")
+        # An update that also moves the instruction to OpenAI: the target is
+        # the new provider's.
+        h.do_manage_instructions({"action": "update", "name": "New", "provider": "OpenAI",
+                                  "model": "gpt-5.6-terra",
+                                  "upgrade_target": {"model": "gpt-6-astra", "level": "Xhigh"}})
+        self.assertEqual(h.store["New"]["upgrade_target"],
+                         {"provider": "OpenAI", "model": "gpt-6-astra", "level": "Xhigh"})
+        self.assertIsNone(h.upgrade_target)                              # the session untouched
+        # upgrade_target alone is enough for an update.
+        result = h.do_manage_instructions({"action": "update", "name": "Plain",
+                                           "upgrade_target": {"model": ""}})
+        self.assertIn("updated", result)
+        self.assertEqual(h.store["Plain"]["upgrade_target"],
+                         {"provider": "Anthropic", "model": "", "level": ""})
+
+    def test_the_schema_offers_it(self):
+        tool = next(t for t in META_TOOLS if t["name"] == "manage_instructions")
+        prop = tool["input_schema"]["properties"]["upgrade_target"]
+        self.assertEqual(prop["type"], "object")
+        self.assertEqual(set(prop["properties"]), {"model", "level"})
+
+
+class PersistenceScanTests(unittest.TestCase):
+    """`upgrade_target` at every site the Auto-send tick passes through."""
+
+    @staticmethod
+    def between(src, start, end):
+        return src[src.index(start):src.index(end)]
+
+    def test_every_per_instruction_site(self):
+        instr = (REPO / "myagent" / "instructions_mixin.py").read_text(encoding="utf-8")
+        state = (REPO / "myagent" / "state_mixin.py").read_text(encoding="utf-8")
+        self.assertIn('"upgrade_target": getattr(self, "upgrade_target", None),',
+                      self.between(instr, "def _save_instruction(", "def _delete_instruction("))
+        self.assertIn("self.upgrade_target = None",
+                      self.between(instr, "def _clear_instruction_editor(", "def _on_instruction_selected("))
+        self.assertIn('self.upgrade_target = entry.get("upgrade_target")',
+                      self.between(instr, "def _on_instruction_selected(", "def _apply_instruction("))
+        manage = self.between(instr, "def do_manage_instructions(", "def open_instruction_editor(")
+        self.assertIn('"upgrade_target": entry.get("upgrade_target"),', manage)          # read
+        self.assertIn('params.get("upgrade_target"), self.provider)', manage)            # create
+        self.assertIn('"dictation_auto_send", "upgrade_target",', manage)               # update
+        self.assertIn('"upgrade_target": getattr(self, "upgrade_target", None),',
+                      self.between(state, "def _save_last_state(", "def _load_last_state("))
+        self.assertIn('self.upgrade_target = entry.get("upgrade_target")',
+                      self.between(state, "def _apply_instruction_entry(", "def _merge_extra_text("))
+        init = (REPO / "MyAgent.py").read_text(encoding="utf-8")
+        self.assertIn("self.upgrade_target = None", init[init.index("def __init__"):])
 
 
 # ── Levels ──────────────────────────────────────────────────────────────
@@ -223,8 +383,7 @@ class LevelTests(unittest.TestCase):
 class ParamTests(unittest.TestCase):
 
     def params(self, provider, model, level):
-        h = host()
-        return h._upgrade_params_for(provider, model, level)
+        return host()._upgrade_params_for(provider, model, level)
 
     def test_a_mode_rung_is_the_mode_and_the_effort(self):
         self.assertEqual(self.params("Anthropic", "claude-fable-5-1", "Max"), {
@@ -285,6 +444,9 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(h.root.scheduled, [h._update_title])      # the Tk thread's job
         self.assertTrue(h._upgrade_active())
         self.assertEqual(h._upgrade_summary_part(), "upgraded-from=claude-sonnet-5@call12")
+        # The switch is the RUN's: the instruction's setting and the store are untouched.
+        self.assertIsNone(h.upgrade_target)
+        self.assertEqual((h.writes, h.state_saves), ([], []))
 
     def test_the_stash_goes_up_before_the_live_fields_change(self):
         # _save_last_state may run on the Tk thread between the two writes:
@@ -354,7 +516,8 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(h._upgrade_box_state(self.TARGET),
                          (True, False, "Upgrade to Claude Fable 5.1 (Max) for the rest of this run"))
         self.assertEqual(h._upgrade_box_state(None), (False, False,
-                         "Upgrade: no upgrade model set for Anthropic (Model Setup, on the main window)"))
+                         "Upgrade: no upgrade model set for this instruction "
+                         "(Model Setup, on the main window)"))
         self.assertEqual(h._upgrade_box_state({"model": "claude-sonnet-5", "level": "Max"}),
                          (False, False, "Upgrade: this run is already on claude-sonnet-5"))
         h._upgrade_apply(self.TARGET)
@@ -364,7 +527,8 @@ class SwitchTests(unittest.TestCase):
 
 class StateFileTests(unittest.TestCase):
     """While an upgrade is active the state file goes on describing the
-    instruction's model — this method runs every five seconds."""
+    instruction's model — this method runs every five seconds — and the
+    applied snapshot carries the instruction's upgrade model."""
 
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -398,14 +562,20 @@ class StateFileTests(unittest.TestCase):
         self.assertEqual((state["last_model"], state["thinking_mode"]), ("gpt-6-astra", "max"))
         self.assertEqual(state["applied_instruction"]["model"], "gpt-6-astra")
 
+    def test_the_applied_snapshot_carries_the_instructions_upgrade_model(self):
+        h = _StateHost({}, self.state_file)
+        self.assertIsNone(self.saved(h)["applied_instruction"]["upgrade_target"])
+        h.upgrade_target = {"provider": "OpenAI", "model": "gpt-6-astra", "level": "Xhigh"}
+        self.assertEqual(self.saved(h)["applied_instruction"]["upgrade_target"], h.upgrade_target)
+
 
 # ── The Agent Request dialog's box (the real dialog) ────────────────────
 
 class _DialogHost(SafetyMixin, _Probe):
     """do_user_prompt's host: the dialog and the Upgrade row are the real
     ones (over the real detection helpers, which the row's probe needs); the
-    voice row, geometry persistence and the settings file are stand-ins.
-    `applied` records what the worker-side switch was handed."""
+    voice row, geometry persistence and the target are stand-ins. `applied`
+    records what the worker-side switch was handed."""
 
     _headless = True
     _prompt_dialog = None
@@ -424,7 +594,7 @@ class _DialogHost(SafetyMixin, _Probe):
     def _get_display_name(self, model_id):
         return model_id
 
-    def _upgrade_target(self, provider=None):
+    def _upgrade_target(self):
         return self.target
 
     def _upgrade_apply(self, target):
@@ -461,7 +631,7 @@ class DialogTests(unittest.TestCase):
         self.root.attributes("-alpha", 0.0)
 
     def tearDown(self):
-        self.root.destroy()
+        free_tk_garbage_then_destroy(self)
 
     def run_dialog(self, target, act, upgraded=False):
         host = self.host = _DialogHost(self.root, target)
@@ -509,7 +679,7 @@ class DialogTests(unittest.TestCase):
                  if isinstance(w, tk.Text) and str(w.cget("state")) == "normal"][0]
         return upgrade, reply
 
-    def test_ticked_and_sent_the_reply_upgrades_the_run(self):
+    def test_ticked_and_sent_the_reply_upgrades_the_run_to_the_named_target(self):
         state = {}
 
         def act(dialog):
@@ -517,8 +687,7 @@ class DialogTests(unittest.TestCase):
             state["label"] = box.cget("text")
             state["state"] = str(box.cget("state"))
             # Between the voice row and the image row, as a Tab would find it.
-            rows = {str(w.master.grid_info().get("row")): w.master for w in (box,)}
-            state["row"] = list(rows)[0]
+            state["row"] = str(box.master.grid_info().get("row"))
             state["attach_row"] = str([w for w in _walk(dialog) if isinstance(w, tk.Button)
                                        and w.cget("text") == "Attach Images"][0]
                                       .master.grid_info().get("row"))
@@ -574,6 +743,7 @@ class DialogTests(unittest.TestCase):
 
         host, outcome = self.run_dialog(None, act)
         self.assertEqual(state["state"], "disabled")
+        self.assertIn("this instruction", state["label"])
         self.assertIn("Model Setup", state["label"])
         self.assertEqual(host.applied, [])
 
@@ -596,10 +766,6 @@ class DialogTests(unittest.TestCase):
 
 # ── Model Setup (real widgets) ──────────────────────────────────────────
 
-class _SetupHost(_Probe):
-    pass
-
-
 class SetupDialogTests(unittest.TestCase):
 
     def setUp(self):
@@ -612,33 +778,26 @@ class SetupDialogTests(unittest.TestCase):
         # block for ever).
         self.root.geometry("240x240+0+0")
         self.root.attributes("-alpha", 0.0)
-        self.folder = tempfile.TemporaryDirectory()
-        self.path = os.path.join(self.folder.name, "config.json")
-        self.patch = mock.patch.object(mu, "UPGRADE_CONFIG_FILE", self.path)
-        self.patch.start()
 
     def tearDown(self):
-        self.patch.stop()
-        self.folder.cleanup()
-        self.root.destroy()
+        free_tk_garbage_then_destroy(self)
 
-    def open(self, act, provider="Anthropic"):
-        h = stub(_SetupHost, provider=provider, model="claude-sonnet-5", root=self.root,
-                 _has_anthropic=True, _has_openai=True, _has_gemini=False, _has_xai=False,
-                 _has_kimi=False, _has_ollama=False,
-                 available_models=["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"],
-                 _upgrade_models_fetched={"OpenAI": ["gpt-5.6-terra", "gpt-6-astra"]},
-                 _upgrade_setup_dialog=None)
+    def open(self, act, **attrs):
+        h = host(root=self.root,
+                 available_models=["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1",
+                                   "claude-sonnet-5"],
+                 _upgrade_setup_dialog=None, **attrs)
         h._place_window = lambda win, kind, size, parent=None: "+0+0"
         h._parse_geometry = lambda geo: None
-        self.host = h
+        seen = {}
 
         def when_up():
             # Once it is on screen: acting on the withdrawn window would
             # destroy it under its own wait_visibility.
             dlg = h._upgrade_setup_dialog
             if dlg is not None and dlg.winfo_exists() and dlg.winfo_ismapped():
-                act(dlg)
+                seen["title"] = dlg.title()
+                act(dlg, seen)
             else:
                 self.root.after(20, when_up)
 
@@ -646,56 +805,81 @@ class SetupDialogTests(unittest.TestCase):
         watchdog = self.root.after(15000, lambda: h._upgrade_setup_dialog.destroy())
         h._open_upgrade_setup(self.root)
         self.root.after_cancel(watchdog)
-        return h
+        return h, seen
 
     @staticmethod
     def widgets(dlg):
         combos = [w for w in _walk(dlg) if isinstance(w, ttk.Combobox)]
         buttons = {w.cget("text"): w for w in _walk(dlg) if isinstance(w, tk.Button)}
-        return combos, buttons
+        labels = [w.cget("text") for w in _walk(dlg) if isinstance(w, tk.Label)]
+        return combos, buttons, labels
 
     @staticmethod
     def pick(combo, value):
         combo.set(value)
         combo.event_generate("<<ComboboxSelected>>")
 
-    def test_the_saved_target_is_shown_and_the_levels_follow_the_model(self):
-        seen = {}
-
-        def act(dlg):
-            (provider, model, level), buttons = self.widgets(dlg)
-            seen["provider"] = provider.get()
+    def test_an_instruction_without_its_own_opens_on_the_default_and_cancel_keeps_nothing(self):
+        def act(dlg, seen):
+            (model, level), buttons, labels = self.widgets(dlg)
             seen["model"], seen["level"] = model.get(), level.get()
-            seen["level_values"] = list(level.cget("values"))
-            seen["model_values"] = list(model.cget("values"))[:2]
+            seen["levels"] = list(level.cget("values"))
+            seen["first_values"] = list(model.cget("values"))[:2]
+            seen["labels"] = labels
             self.pick(model, "claude-opus-5")
             seen["after"] = (level.get(), list(level.cget("values")))
             buttons["Cancel"].invoke()
 
-        self.open(act)
-        self.assertEqual(seen["provider"], "Anthropic")
-        self.assertEqual((seen["model"], seen["level"]), ("claude-fable-5-1", "Max"))   # the default
-        self.assertEqual(seen["level_values"], ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"])
-        self.assertEqual(seen["model_values"], [UPGRADE_NO_MODEL_LABEL, "claude-opus-5"])
+        h, seen = self.open(act)
+        self.assertEqual(seen["title"], "Model Setup — Balance")
+        self.assertEqual((seen["model"], seen["level"]), ("claude-fable-5-1", "Max"))
+        self.assertEqual(seen["levels"], ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"])
+        self.assertEqual(seen["first_values"], [UPGRADE_NO_MODEL_LABEL, "claude-opus-5-5"])
+        self.assertTrue(any("no upgrade model of its own yet" in t for t in seen["labels"]))
         # A fresh pick lands on the model's strongest level, from its own rungs.
         self.assertEqual(seen["after"], ("Max", ["Off", "Adaptive", "Low", "Medium", "High",
                                                 "Xhigh", "Max"]))
-        self.assertFalse(os.path.exists(self.path))          # Cancel saved nothing
+        self.assertIsNone(h.upgrade_target)
+        self.assertEqual((h.writes, h.state_saves), ([], []))
 
-    def test_save_keeps_every_providers_draft_and_none_clears_one(self):
-        def act(dlg):
-            (provider, model, level), buttons = self.widgets(dlg)
+    def test_save_writes_the_choice_through_to_the_instruction(self):
+        def act(dlg, seen):
+            (model, level), buttons, _labels = self.widgets(dlg)
             self.pick(model, "claude-opus-5-5")
             self.pick(level, "High")
-            self.pick(provider, "OpenAI")
-            self.assertEqual(model.get(), "gpt-6-astra")        # OpenAI's saved default
-            self.pick(model, UPGRADE_NO_MODEL_LABEL)
-            self.assertEqual(str(level.cget("state")), "disabled")
             buttons["Save"].invoke()
 
-        self.open(act)
-        self.assertEqual(ModelUpgradeMixin._upgrade_load_config(self.path)["targets"],
-                         {"Anthropic": {"model": "claude-opus-5-5", "level": "High"}})
+        h, seen = self.open(act)
+        value = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
+        self.assertEqual(h.upgrade_target, value)
+        self.assertEqual(h.store["Balance"]["upgrade_target"], value)
+        self.assertEqual(len(h.state_saves), 1)
+        self.assertEqual(h._upgrade_target(), {"model": "claude-opus-5-5", "level": "High"})
+
+    def test_none_is_an_explicit_no_upgrade(self):
+        def act(dlg, seen):
+            (model, level), buttons, _labels = self.widgets(dlg)
+            self.pick(model, UPGRADE_NO_MODEL_LABEL)
+            seen["level_state"] = str(level.cget("state"))
+            buttons["Save"].invoke()
+
+        own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
+        h, seen = self.open(act, upgrade_target=own)
+        self.assertEqual(seen["level_state"], "disabled")
+        self.assertEqual(h.store["Balance"]["upgrade_target"],
+                         {"provider": "Anthropic", "model": "", "level": ""})
+        self.assertIsNone(h._upgrade_target())
+
+    def test_with_the_editor_open_it_edits_the_editors_page(self):
+        def act(dlg, seen):
+            (model, level), buttons, _labels = self.widgets(dlg)
+            self.pick(model, "claude-fable-5-1")
+            buttons["Save"].invoke()
+
+        h, seen = self.open(act, instruction_editor_window=_Window(), _instr_shown_name="Other")
+        self.assertEqual(seen["title"], "Model Setup — Other")
+        self.assertEqual(h.store["Other"]["upgrade_target"]["model"], "claude-fable-5-1")
+        self.assertNotIn("upgrade_target", h.store["Balance"])
 
 
 # ── Wiring ──────────────────────────────────────────────────────────────
@@ -705,20 +889,19 @@ class WiringTests(unittest.TestCase):
     def src(self, *parts):
         return (REPO.joinpath(*parts)).read_text(encoding="utf-8")
 
-    def test_the_dialog_builds_the_row_and_applies_the_switch_on_the_worker(self):
+    def test_the_dialog_builds_the_row_and_applies_the_named_target_on_the_worker(self):
         src = self.src("myagent", "safety_mixin.py")
         # Between the voice row and the image row: Tab order is creation order.
         self.assertLess(src.index("self._voice_build_row("), src.index("self._upgrade_build_row(dlg)"))
         self.assertLess(src.index("self._upgrade_build_row(dlg)"), src.index("attach_btn = tk.Button("))
         self.assertIn('"u": upgrade_btn', src)
         # Read when the reply is sent; applied after the wait, on the worker,
-        # only for a sent, non-empty reply.
+        # only for a sent, non-empty reply — to the target the label named.
         inject = src[src.index("def on_inject("):src.index("def on_close(")]
-        self.assertIn("result_holder[2] = upgrade_target is not None and bool(upgrade_var.get())",
-                      inject)
+        self.assertIn("result_holder[2] = upgrade_target if upgrade_var.get() else None", inject)
         tail = src[src.index("event.wait()"):src.index("def _take_prompt_images(")]
         self.assertIn("if result_holder[2] and response.strip():", tail)
-        self.assertIn("self._upgrade_apply(self._upgrade_target())", tail)
+        self.assertIn("self._upgrade_apply(result_holder[2])", tail)
         self.assertLess(tail.index('"user_prompt_echo"'), tail.index("self._upgrade_apply("))
 
     def test_the_loop_counts_calls_for_it_and_restores_at_both_ends(self):
@@ -764,14 +947,26 @@ class WiringTests(unittest.TestCase):
         self.assertIn("self._upgrade_original = None", init)
         self.assertIn("self._run_call_num = 0", init)
 
-    def test_the_upgrade_never_reaches_the_instruction_store(self):
+    def test_the_switch_never_persists_and_the_setting_has_one_writer(self):
         module = self.src("myagent", "model_upgrade_mixin.py")
-        for forbidden in ("_save_instructions_to_disk(", "_load_saved_instructions(",
-                          "save_store(", "agent_instructions", "self._save_last_state("):
-            self.assertNotIn(forbidden, module)
-        for name in ("instructions_mixin.py", "instruction_layout.py", "datapaths.py",
-                     "skills_mixin.py"):
-            self.assertNotIn("upgrade", self.src("myagent", name).lower(), name)
+
+        def method(name):
+            start = module.index(f"    def {name}(")
+            end = module.find("\n    def ", start + 10)
+            return module[start:end]
+
+        for name in ("_upgrade_apply", "_upgrade_end_run"):
+            body = method(name)
+            for forbidden in ("_save_instructions_to_disk(", "_save_last_state(",
+                              "upgrade_target"):
+                self.assertNotIn(forbidden, body, name)
+        # Model Setup's Save is the one writer: one targeted key of one entry.
+        writer = method("_upgrade_set_target")
+        self.assertIn('entry["upgrade_target"] = value', writer)
+        self.assertEqual(module.count("_save_instructions_to_disk("), 1)
+        # No per-user settings file any more.
+        self.assertNotIn("~/.config", module)
+        self.assertNotIn("expanduser", module)
         self.assertNotIn("upgrade", self.src("Heartbeat.py").lower())
         self.assertEqual(UPGRADE_FIELDS, ("model", "thinking_enabled", "thinking_effort",
                                           "thinking_budget", "thinking_mode"))

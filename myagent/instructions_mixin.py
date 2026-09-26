@@ -106,6 +106,7 @@ class InstructionsMixin:
                 "thinking_mode": entry.get("thinking_mode", ""),
                 "text_verbosity": entry.get("text_verbosity", "medium"),
                 "fast_mode": entry.get("fast_mode", False),
+                "upgrade_target": entry.get("upgrade_target"),
                 "image_count": len(entry.get("images", [])),
                 "skill_modes": entry.get("skill_modes", {}),
                 "blocked_tools": entry.get("blocked_tools", []),
@@ -140,6 +141,9 @@ class InstructionsMixin:
                 "thinking_mode": self.thinking_mode,
                 "text_verbosity": self.text_verbosity,
                 "fast_mode": self.fast_mode,
+                # None (absent) = the provider default (model_upgrade_mixin).
+                "upgrade_target": self._upgrade_sanitize_target(
+                    params.get("upgrade_target"), self.provider),
                 "skill_modes": params.get("skill_modes",
                                {sn: sd["mode"] for sn, sd in self.skills.items()}),
                 "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
@@ -155,8 +159,8 @@ class InstructionsMixin:
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
             updatable = ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
-                         "outlook", "conversational", "dictation_auto_send", "skill_modes",
-                         "provider", "model",
+                         "outlook", "conversational", "dictation_auto_send", "upgrade_target",
+                         "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
                          "fast_mode", "blocked_tools")
@@ -182,6 +186,12 @@ class InstructionsMixin:
                 existing = entry.get("skill_modes", {})
                 existing.update(skill_modes)
                 entry["skill_modes"] = existing
+            upgrade = params.get("upgrade_target")
+            if upgrade is not None:
+                # For the entry's provider — the updated one, when the same
+                # call changes it (the loop above ran first).
+                entry["upgrade_target"] = self._upgrade_sanitize_target(
+                    upgrade, entry.get("provider", "Anthropic"))
             self._save_instructions_to_disk(instructions)
             if name == self.agent_instruction_name:
                 return f"Instruction '{name}' updated on disk. Changes will take effect next time it is loaded."
@@ -970,6 +980,10 @@ class InstructionsMixin:
             "thinking_mode": self.thinking_mode,
             "text_verbosity": self.text_verbosity,
             "fast_mode": self.fast_mode,
+            # The Upgrade box's model (Model Setup, on the main window): live
+            # state like the model params — it has no editor widget; None =
+            # the provider default.
+            "upgrade_target": getattr(self, "upgrade_target", None),
             "skill_modes": {sn: sk["mode"] for sn, sk in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
             "blocked_tools": sorted(getattr(self, "_blocked_tools", [])),
@@ -1048,6 +1062,7 @@ class InstructionsMixin:
         self._disabled_confirm_patterns = set()
         self._blocked_tools = set()
         self.dictation_auto_send.set(False)
+        self.upgrade_target = None      # a new instruction starts on the provider default
         self._update_ps_safety_button()
         # Reset model controls to defaults
         if self._has_anthropic:
@@ -1126,8 +1141,9 @@ class InstructionsMixin:
             self._disabled_confirm_patterns = set(entry.get("disabled_confirm_patterns", []))
             self._blocked_tools = set(entry.get("blocked_tools", []))
             # Environment-level like the model params (no draft widget), so
-            # it is restored at once rather than on Apply.
+            # they are restored at once rather than on Apply.
             self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
+            self.upgrade_target = entry.get("upgrade_target")
             self._update_ps_safety_button()
             self._refresh_image_listbox()
 

@@ -790,6 +790,9 @@ class StateMixin:
                 "thinking_mode": model_fields["thinking_mode"],
                 "text_verbosity": self.text_verbosity,
                 "fast_mode": getattr(self, "fast_mode", False),
+                # The Upgrade box's model (model_upgrade_mixin) — the applied
+                # instruction's setting, not touched by a switch.
+                "upgrade_target": getattr(self, "upgrade_target", None),
                 # The live per-skill modes ride along like every other field of
                 # the applied environment, so a relaunch comes back on the same
                 # skill layout the last Apply / Save / -l run left (2026-09-07).
@@ -913,6 +916,7 @@ class StateMixin:
         self.outlook_enabled.set(entry.get("outlook", False))
         self.conversational_enabled.set(entry.get("conversational", False))
         self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
+        self.upgrade_target = entry.get("upgrade_target")
         model_restored = "model" in entry
         if model_restored:
             self._restore_model_params(entry)
