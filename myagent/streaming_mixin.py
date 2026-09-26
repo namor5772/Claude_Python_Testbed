@@ -1355,6 +1355,18 @@ class StreamingMixin:
                                        total_cache_write_tokens,
                                        total_cache_read_tokens))
 
+        def _end_run():
+            # The log line first — it records the run under the model it
+            # ENDED on, with an upgraded-from part — then an upgraded run
+            # (model_upgrade_mixin: a stronger model from an Agent Request
+            # reply on) goes back to the instruction's model for the next
+            # START. The getattr guard keeps bare test hosts without the
+            # mixin working.
+            _log_run()
+            end_upgrade = getattr(self, "_upgrade_end_run", None)
+            if end_upgrade is not None:
+                end_upgrade()
+
         try:
             # Sync temperature from spinbox
             try:
@@ -1418,6 +1430,9 @@ class StreamingMixin:
                     break
 
                 call_num += 1
+                # Mirrored on the instance for the model upgrade's "left the
+                # first model at call #N" line (model_upgrade_mixin).
+                self._run_call_num = call_num
                 if call_num > 1:
                     self.queue.put({"type": "ensure_newline"})
                 payload_text = self._payload_for_display(messages)
@@ -1658,7 +1673,7 @@ class StreamingMixin:
 
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
-            _log_run()
+            _end_run()
             self._write_result_file(
                 "stopped" if self.stop_requested else "completed", messages)
             self.queue.put({"type": "complete"})
@@ -1674,7 +1689,7 @@ class StreamingMixin:
             # Mirror the success path: persist whatever cost accrued before the
             # failure, and never leave a headless run as a zombie process — an
             # unattended error should exit (the auto-saved transcript records it).
-            _log_run()
+            _end_run()
             self._write_result_file("error", messages, error=str(e))
             if self._headless or self._result_file:
                 self.root.after(500, self._on_close)

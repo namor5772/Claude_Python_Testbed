@@ -215,27 +215,39 @@ class UIMixin:
             bottom_row.grid_columnconfigure(column, weight=1)
 
         # The speech-to-text settings behind the Agent Request dialog's Mike
-        # button (voice_mixin). Here, not in that dialog, so they can be set
-        # up before a run ever asks anything. Created before the checkboxes:
-        # Tab order is creation order, and it sits to their left.
+        # button (voice_mixin), and — since 2026-09-27, right of it — the
+        # upgrade model behind the same dialog's Upgrade box
+        # (model_upgrade_mixin). Here, not in that dialog, so they can be
+        # set up before a run ever asks anything. Both sit in one frame in
+        # the edge column, so the mirror column matches the pair's width.
+        # Created before the checkboxes: Tab order is creation order, and
+        # they sit to their left.
+        self.setup_buttons = tk.Frame(bottom_row)
+        self.setup_buttons.grid(row=0, column=0, sticky="w", padx=(10, 0))
         self.voice_setup_button = tk.Button(
-            bottom_row, text="Voice Setup", font=("Arial", 9),
+            self.setup_buttons, text="Voice Setup", font=("Arial", 9),
             command=self._voice_setup_from_main,
         )
-        self.voice_setup_button.grid(row=0, column=0, sticky="w", padx=(10, 0))
+        self.voice_setup_button.pack(side=tk.LEFT)
+        self.model_setup_button = tk.Button(
+            self.setup_buttons, text="Model Setup", font=("Arial", 9),
+            command=self._upgrade_setup_from_main,
+        )
+        self.model_setup_button.pack(side=tk.LEFT, padx=(5, 0))
 
         checkbox_frame = tk.Frame(bottom_row)
         checkbox_frame.grid(row=0, column=2)
 
-        # A window too narrow for button + checkboxes side by side (three of
+        # A window too narrow for buttons + checkboxes side by side (three of
         # the user's saved monitor layouts are: 638-791 px, against the 798
-        # the pair needs at 150 % DPI) would push Diag off the right edge. There
-        # the checkboxes take the line BELOW the button instead — the full
-        # width, as before the button existed. Below, not above: Tab order is
-        # creation order, and the button was created first.
+        # the pair needed at 150 % DPI with one button) would push Diag off
+        # the right edge. There the checkboxes take the line BELOW the buttons
+        # instead — the full width, as before the buttons existed. Below, not
+        # above: Tab order is creation order, and the buttons were created
+        # first.
         def arrange_bottom_row(event=None):
             stacked = self._bottom_row_stacked(
-                bottom_row.winfo_width(), self.voice_setup_button.winfo_reqwidth() + 10,
+                bottom_row.winfo_width(), self.setup_buttons.winfo_reqwidth() + 10,
                 checkbox_frame.winfo_reqwidth())
             if stacked != arrange_bottom_row.stacked:
                 arrange_bottom_row.stacked = stacked
@@ -297,14 +309,16 @@ class UIMixin:
             "t": self._stop_button,
             "c": self.chat_name_entry,
             "v": self.voice_setup_button,
+            "m": self.model_setup_button,
         })
         self.instruction_button.focus_set()
 
     @staticmethod
     def _bottom_row_stacked(available, button_width, checkbox_width):
-        """Must the checkbox row go under the Voice Setup button? Yes when the
-        two do not fit side by side in `available` pixels. A width of 1 is a
-        window that has not been laid out yet, not a narrow one."""
+        """Must the checkbox row go under the Voice Setup / Model Setup
+        buttons? Yes when the two do not fit side by side in `available`
+        pixels. A width of 1 is a window that has not been laid out yet, not
+        a narrow one."""
         return 1 < available < button_width + checkbox_width
 
     # ── Toolbar "last pressed" highlight ────────────────────────────────
@@ -1142,6 +1156,15 @@ class UIMixin:
                 parts.append(f"temp={self.temperature:g}")
             if self._has_openai_verbosity():
                 parts.append(f"verbosity={self.text_verbosity}")
+
+        # A run moved to a stronger model from an Agent Request reply on
+        # (model_upgrade_mixin) says which model it started on and at which
+        # call it left it — in the title, and in the cost log's PARAMETERS
+        # field, whose MODEL field carries the model the run ended on. One
+        # token, so the comma-joined log field cannot split.
+        upgraded = getattr(self, "_upgrade_summary_part", None)
+        if upgraded is not None and upgraded():
+            parts.append(upgraded())
 
         return " ".join(parts)
 

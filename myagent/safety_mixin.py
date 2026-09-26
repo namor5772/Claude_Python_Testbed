@@ -375,7 +375,8 @@ class SafetyMixin:
         _take_prompt_images() (same thread — the streaming worker blocks on
         the dialog and reads the result synchronously)."""
         event = threading.Event()
-        result_holder = ["", []]  # [reply_text, [(b64, media_type, filename)]]
+        # [reply_text, [(b64, media_type, filename)], upgrade the model?]
+        result_holder = ["", [], False]
 
         # Show the request in the chat display too (the echo's twin, below):
         # the dialog is gone once answered, and the output pane — which is
@@ -454,6 +455,15 @@ class SafetyMixin:
                 dlg, resp_text, self.dictation_auto_send, lambda: on_inject())
             voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
 
+            # Upgrade row (model_upgrade_mixin): ticked, the run moves to the
+            # provider's upgrade model — Model Setup on the main window —
+            # from this reply to the end of the run. The box is disabled,
+            # with a label saying why, when there is nothing to move to or
+            # the run has already moved. Read when the reply is sent; the
+            # switch itself happens on the worker below, after the wait.
+            upgrade_row, upgrade_btn, upgrade_var, upgrade_target = self._upgrade_build_row(dlg)
+            upgrade_row.grid(row=5, column=0, sticky="ew", padx=15, pady=(2, 0))
+
             # Image attachment row — mirrors the instruction editor's
             # Attach/Remove pattern so a reply can carry images back to the
             # model (they ride the tool_result / user message as standard
@@ -461,7 +471,7 @@ class SafetyMixin:
             attached_images = []  # (b64_data, media_type, filename)
 
             img_frame = tk.Frame(dlg)
-            img_frame.grid(row=5, column=0, sticky="ew", padx=15, pady=(5, 10))
+            img_frame.grid(row=6, column=0, sticky="ew", padx=15, pady=(5, 10))
             img_frame.grid_columnconfigure(2, weight=1)
 
             def _refresh_prompt_images():
@@ -491,7 +501,7 @@ class SafetyMixin:
             img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
             bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn,
-                                 "a": auto_send_btn})
+                                 "a": auto_send_btn, "u": upgrade_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with
@@ -530,6 +540,7 @@ class SafetyMixin:
                     text = "[See attached image(s)]"
                 result_holder[0] = text
                 result_holder[1] = list(attached_images)
+                result_holder[2] = upgrade_target is not None and bool(upgrade_var.get())
                 _capture_and_close()
                 event.set()
                 dlg.destroy()
@@ -575,6 +586,12 @@ class SafetyMixin:
                 names = ", ".join(fn for _d, _mt, fn in result_holder[1])
                 echo += f"\n[Attached image(s): {names}]"
             self.queue.put({"type": "user_prompt_echo", "content": echo})
+            # The Upgrade box: switch the run's model here, on the worker,
+            # so the call that answers THIS reply is the first upgraded one
+            # (the target was read when the dialog opened, on the Tk thread).
+            # An empty reply stops the agent, so it upgrades nothing.
+            if result_holder[2] and response.strip():
+                self._upgrade_apply(self._upgrade_target())
         return response
 
     def _take_prompt_images(self):

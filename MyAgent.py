@@ -64,6 +64,7 @@ from myagent.excel_mixin import ExcelMixin
 from myagent.physical_mixin import PhysicalMixin
 from myagent.safety_mixin import SafetyMixin
 from myagent.voice_mixin import VoiceMixin
+from myagent.model_upgrade_mixin import ModelUpgradeMixin
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
 
@@ -78,7 +79,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           XAIMixin, KimiMixin, OllamaMixin, MCPMixin, GmailMixin,
           ProtonMailMixin, OutlookMixin, DocumentMixin, FileMixin,
           DesktopMixin, BrowserMixin, ExcelMixin, PhysicalMixin, SafetyMixin,
-          VoiceMixin, ChatMixin, EventLoopMixin):
+          VoiceMixin, ModelUpgradeMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
                  extra_file=None):
@@ -294,6 +295,14 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.thinking_mode = "off"  # off/adaptive/low/medium/high/max (for adaptive models)
         self.text_verbosity = "medium"  # low/medium/high (for gpt-5 family)
         self.fast_mode = False  # Anthropic fast mode (Opus 4.8/5/5.5: speed="fast", 2x price)
+        # A run upgraded to a stronger model from an Agent Request reply on
+        # (model_upgrade_mixin): the run's OWN model fields while the upgrade
+        # is active — what _save_last_state keeps writing and what the loop's
+        # end restores — else None. _run_call_num is stream_worker's "Call #N"
+        # counter, mirrored here so the switch can say which call it left the
+        # first model at.
+        self._upgrade_original = None
+        self._run_call_num = 0
         self.instruction_editor_window = None
         # The editor's Instructions list (2026-09-11): the width of its
         # pane and the sections the user collapsed, both kept in agent_state.json

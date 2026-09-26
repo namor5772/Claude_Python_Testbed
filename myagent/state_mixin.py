@@ -740,15 +740,28 @@ class StateMixin:
                     existing = json.load(f)
             except (json.JSONDecodeError, OSError):
                 pass
+        # A run upgraded to a stronger model from an Agent Request reply on
+        # (model_upgrade_mixin) keeps its OWN model fields in
+        # _upgrade_original until the loop ends; the state file describes
+        # THOSE — the instruction's model — never the upgrade, or a relaunch
+        # (this method runs every five seconds) would come back on it.
+        kept = getattr(self, "_upgrade_original", None) or {}
+        model_fields = {
+            "model": kept.get("model", self.model),
+            "thinking_enabled": kept.get("thinking_enabled", self.thinking_enabled),
+            "thinking_effort": kept.get("thinking_effort", self.thinking_effort),
+            "thinking_budget": kept.get("thinking_budget", self.thinking_budget),
+            "thinking_mode": kept.get("thinking_mode", self.thinking_mode),
+        }
         state = {
             "provider": self.provider,
             "last_instruction_name": self.agent_instruction_name,
-            "last_model": self.model,
+            "last_model": model_fields["model"],
             "temperature": self.temperature,
-            "thinking_enabled": self.thinking_enabled,
-            "thinking_effort": self.thinking_effort,
-            "thinking_budget": self.thinking_budget,
-            "thinking_mode": self.thinking_mode,
+            "thinking_enabled": model_fields["thinking_enabled"],
+            "thinking_effort": model_fields["thinking_effort"],
+            "thinking_budget": model_fields["thinking_budget"],
+            "thinking_mode": model_fields["thinking_mode"],
             "text_verbosity": self.text_verbosity,
             "fast_mode": getattr(self, "fast_mode", False),
             "applied_instruction": {
@@ -769,12 +782,12 @@ class StateMixin:
                 "conversational": self.conversational_enabled.get(),
                 "dictation_auto_send": self.dictation_auto_send.get(),
                 "provider": self.provider,
-                "model": self.model,
+                "model": model_fields["model"],
                 "temperature": self.temperature,
-                "thinking_enabled": self.thinking_enabled,
-                "thinking_effort": self.thinking_effort,
-                "thinking_budget": self.thinking_budget,
-                "thinking_mode": self.thinking_mode,
+                "thinking_enabled": model_fields["thinking_enabled"],
+                "thinking_effort": model_fields["thinking_effort"],
+                "thinking_budget": model_fields["thinking_budget"],
+                "thinking_mode": model_fields["thinking_mode"],
                 "text_verbosity": self.text_verbosity,
                 "fast_mode": getattr(self, "fast_mode", False),
                 # The live per-skill modes ride along like every other field of

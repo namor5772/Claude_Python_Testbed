@@ -63,6 +63,7 @@ class PaneTests(unittest.TestCase):
         app._get_display_name = lambda model_id: model_id
         app.open_instruction_editor = app._start_agent = app._stop_agent = lambda: None
         app._voice_setup_from_main = lambda: None
+        app._upgrade_setup_from_main = lambda: None
         app.setup_ui()
         self.app = app
         self.pane = app.chat_display
@@ -204,6 +205,15 @@ class _DialogHost(SafetyMixin):
         auto.pack(side=tk.LEFT)
         self.send = send
         return row, mike, auto, _Dictation()
+
+    def _upgrade_build_row(self, dlg):
+        # model_upgrade_mixin's row: here a box with nothing to move to (the
+        # real row is pinned in tests/test_model_upgrade.py).
+        row = tk.Frame(dlg)
+        var = tk.BooleanVar(master=dlg, value=False)
+        box = tk.Checkbutton(row, text="Upgrade", variable=var, state="disabled")
+        box.pack(side=tk.LEFT)
+        return row, box, var, None
 
     def _place_window(self, win, kind, default_size, **_kwargs):
         win.attributes("-alpha", 0.0)   # mapped and focusable, never seen

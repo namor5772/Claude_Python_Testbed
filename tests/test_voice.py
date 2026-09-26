@@ -1175,12 +1175,16 @@ class MainWindowButtonTests(unittest.TestCase):
         app._get_display_name = lambda model_id: model_id
         app.open_instruction_editor = app._start_agent = app._stop_agent = lambda: None
         app._voice_setup_from_main = lambda: self.opened.append("setup")
+        app._upgrade_setup_from_main = lambda: self.opened.append("model setup")
         app.setup_ui()
         self.app = app
         self.button, self.debug, self.diag = (app.voice_setup_button, app.debug_toggle,
                                               app.diag_toggle)
         self.root.update()      # a Frame only knows its requested width after an idle pass
-        self.need = self.button.winfo_reqwidth() + 10 + self.debug.master.winfo_reqwidth()
+        # Since 2026-09-27 the Model Setup button shares the corner (in one
+        # frame, right of Voice Setup): the pair's width is what the
+        # checkboxes must fit beside.
+        self.need = app.setup_buttons.winfo_reqwidth() + 10 + self.debug.master.winfo_reqwidth()
 
     def tearDown(self):
         self.root.destroy()
@@ -1207,7 +1211,12 @@ class MainWindowButtonTests(unittest.TestCase):
         at = self.lay_out(width)
         self.assertFalse(at["below"])
         self.assertEqual(at["button"], 10)                          # the bottom-left corner
-        self.assertLess(at["button"] + self.button.winfo_width(), at["debug"])
+        # Model Setup right of it, and the checkboxes right of both.
+        model_setup = self.app.model_setup_button
+        self.assertGreater(model_setup.winfo_rootx() - self.root.winfo_rootx(),
+                           at["button"] + self.button.winfo_width())
+        self.assertLess(model_setup.winfo_rootx() - self.root.winfo_rootx()
+                        + model_setup.winfo_width(), at["debug"])
         # Centred on the WINDOW, as before the button existed (the mirror column).
         self.assertAlmostEqual((at["debug"] + at["diag_end"]) / 2, width / 2, delta=6)
 
@@ -1229,9 +1238,12 @@ class MainWindowButtonTests(unittest.TestCase):
         self.lay_out(self.need + 400)
         after_pane = self.app.chat_display.tk_focusNext()
         self.assertIs(after_pane, self.button)
-        self.assertIs(after_pane.tk_focusNext(), self.debug)
+        # Model Setup (2026-09-27) is the next stop, then the checkboxes.
+        self.assertIs(after_pane.tk_focusNext(), self.app.model_setup_button)
+        self.assertIs(self.app.model_setup_button.tk_focusNext(), self.debug)
         self.button.invoke()
-        self.assertEqual(self.opened, ["setup"])
+        self.app.model_setup_button.invoke()
+        self.assertEqual(self.opened, ["setup", "model setup"])
 
 
 class IndependenceTests(unittest.TestCase):
@@ -1310,7 +1322,7 @@ class WiringTests(unittest.TestCase):
         # 2026-09-20, where it can be reached before a run asks anything).
         flat = re.sub(r"\s+", " ", src)
         self.assertIn('bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn, '
-                      '"a": auto_send_btn})', flat)
+                      '"a": auto_send_btn, "u": upgrade_btn})', flat)
         self.assertNotIn("voice_setup_btn", src)
         # The Auto-send box gets the app's per-instruction variable and the
         # dialog's own send path — on_inject, defined further down, hence the
