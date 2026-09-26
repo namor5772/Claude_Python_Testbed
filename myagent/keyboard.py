@@ -29,6 +29,14 @@ adds only the three things Tk leaves out, plus two workarounds:
   which Tk leaves the drawing to Aqua, which paints the system's rounded
   blue ring where it belongs. Windows draws its dotted ring correctly and is
   untouched. SelfBot carries a byte-identical in-file copy.
+* `install_scrollbar_defaults`: a scrollbar is never a Tab stop. Tk's fallback
+  rule for a widget whose `takefocus` is unset (`tk::FocusOK`) counts any
+  viewable, enabled widget whose class carries a Key binding, and Tk 9.0.3's
+  Scrollbar class binds Page Up / Page Down — so on the Mac Tab from the
+  output pane landed on its scrollbar instead of Voice Setup, and the same
+  rule put every scrollbar created right after a text box in Escape's path
+  (2026-09-26). The option database gives every LATER tk.Scrollbar a
+  `takefocus` of 0, on every platform.
 
 Everything here is plain widget configuration on Tk objects: no App state, so
 the helpers are shared by every mixin that builds a window and are unit-tested
@@ -72,6 +80,27 @@ def install_focus_ring_defaults(root):
     """
     if root.tk.call("tk", "windowingsystem") == "aqua":
         root.option_add("*Button.highlightThickness", 3)
+
+
+def install_scrollbar_defaults(root):
+    """Once per Tk instance, BEFORE any scrollbar exists: none is a Tab stop.
+
+    A widget whose `takefocus` is unset is a Tab stop by Tk's fallback rule
+    (`tk::FocusOK`): viewable, not disabled, and its class carries some Key
+    binding. Tk 9.0.3's Scrollbar class binds Page Up / Page Down, so on the
+    Mac (2026-09-26) Tab from the read-only output pane landed on its
+    scrollbar instead of Voice Setup, and the same rule put every scrollbar
+    created right after a text box — the editor's, the Skills Manager's, the
+    dialogs' — in the path of Escape's `focus_next`. A scrollbar has nothing
+    to offer the keyboard (the widget it scrolls takes the same keys), so the
+    option database gives every LATER tk.Scrollbar a `takefocus` of 0. On
+    every platform: the intended Tab order is the same everywhere, and where
+    a scrollbar was never a stop this changes nothing. An explicit
+    `takefocus=` on a widget still wins, a scrollbar that already exists is
+    not touched, and ttk scrollbars (class TScrollbar) are not covered —
+    MyAgent has none.
+    """
+    root.option_add("*Scrollbar.takeFocus", "0")
 
 
 def install_class_bindings(root):

@@ -13,6 +13,7 @@ from myagent.constants import (
 )
 from myagent.keyboard import (
     bind_mnemonics, install_class_bindings, install_focus_ring_defaults,
+    install_scrollbar_defaults,
 )
 
 
@@ -46,11 +47,14 @@ class UIMixin:
     # ── UI Setup ────────────────────────────────────────────────────────
 
     def setup_ui(self):
-        # Before the first button exists (myagent/keyboard.py): on macOS the
-        # option database gives every tk.Button a focus ring Aqua draws — the
-        # Tk-drawn default came out as a black line across the focused
-        # Instruction button (Tk 9.0.3 / macOS 26). A no-op elsewhere.
+        # Before the first button or scrollbar exists (myagent/keyboard.py):
+        # on macOS the option database gives every tk.Button a focus ring Aqua
+        # draws — the Tk-drawn default came out as a black line across the
+        # focused Instruction button (Tk 9.0.3 / macOS 26); a no-op elsewhere.
+        # And every tk.Scrollbar stays out of the Tab order — Tk 9.0.3 counted
+        # them as stops, so Tab from the output pane landed on its scrollbar.
         install_focus_ring_defaults(self.root)
+        install_scrollbar_defaults(self.root)
         self.root.grid_rowconfigure(0, weight=0)
         self.root.grid_rowconfigure(1, weight=1)
         self.root.grid_rowconfigure(2, weight=0)
@@ -136,6 +140,7 @@ class UIMixin:
         )
         self.chat_display.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=10)
 
+        # Not a Tab stop (install_scrollbar_defaults): Tab goes on to Voice Setup.
         scrollbar = tk.Scrollbar(self.root, command=self.chat_display.yview)
         scrollbar.grid(row=1, column=1, sticky="ns", pady=10, padx=(0, 10))
         self.chat_display.config(yscrollcommand=scrollbar.set)

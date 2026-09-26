@@ -14,6 +14,9 @@ stop; this module pins what keyboard.py adds on top:
 * On macOS every tk.Button created after `install_focus_ring_defaults` gets a
   3-px focus ring, the width from which Aqua draws it (Tk's own 1-px one is a
   stray black line on Tk 9.0.3 / macOS 26); other platforms are untouched.
+* No tk.Scrollbar created after `install_scrollbar_defaults` is a Tab stop, on
+  any platform (Tk 9.0.3 counted them as stops: on the Mac, Tab from the
+  output pane landed on its scrollbar instead of Voice Setup).
 
 The widget tests need a real Tk root that HOLDS the keyboard focus, because a
 synthetic key event is delivered to the focus window: the root is a fully
@@ -289,6 +292,48 @@ class FocusRingDefaultTests(unittest.TestCase):
                              self.defaults[cls], cls.__name__)
 
 
+class ScrollbarDefaultTests(unittest.TestCase):
+    """A later tk.Scrollbar is no Tab stop: Tab goes from a Text to the button after it.
+
+    Tk's fallback rule (`tk::FocusOK`) makes a scrollbar a stop wherever its
+    class carries a Key binding, as Tk 9.0.3's does (Page Up / Page Down):
+    the main window's Tab-order test in test_voice.py had failed on the Mac
+    since it was written (2026-09-20). The root must be MAPPED (transparent
+    here) because the rule also asks whether a widget is viewable, and a
+    withdrawn window's widgets never are; nothing needs the keyboard focus.
+    """
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.geometry("240x240+0+0")
+        self.root.attributes("-alpha", 0.0)
+        self.before = tk.Scrollbar(self.root)   # exists before the call
+        keyboard.install_scrollbar_defaults(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_a_later_scrollbar_takes_no_focus_and_tab_skips_it(self):
+        # Small and in a row, so all three fit the window: the rule also asks
+        # whether a widget is viewable, and one pushed outside is not.
+        text = tk.Text(self.root, width=10, height=2)
+        bar = tk.Scrollbar(self.root, command=text.yview)
+        button = tk.Button(self.root)
+        for widget in (text, bar, button):
+            widget.pack(side="left")
+        self.root.update()
+        self.assertEqual(str(bar.cget("takefocus")), "0")
+        self.assertIs(text.tk_focusNext(), button)
+
+    def test_an_existing_scrollbar_and_an_explicit_value_are_left_alone(self):
+        self.assertEqual(str(self.before.cget("takefocus")), "")
+        explicit = tk.Scrollbar(self.root, takefocus=1)
+        self.assertEqual(str(explicit.cget("takefocus")), "1")
+
+
 class WiringTests(unittest.TestCase):
     """Every window builder uses the helpers (a static scan, no Tk needed)."""
 
@@ -303,6 +348,10 @@ class WiringTests(unittest.TestCase):
         # exists (the option database only fills options at creation).
         self.assertLess(src["ui_mixin.py"].index("install_focus_ring_defaults(self.root)"),
                         src["ui_mixin.py"].index("tk.Button("))
+        # ... and no scrollbar is a Tab stop: that default too goes in before
+        # the first one exists.
+        self.assertLess(src["ui_mixin.py"].index("install_scrollbar_defaults(self.root)"),
+                        src["ui_mixin.py"].index("tk.Scrollbar("))
         for name, text in src.items():
             self.assertIn("bind_mnemonics(", text, name)
         self.assertIn("link_embedded_checkbuttons(text_widget, cbs)", src["safety_mixin.py"])
