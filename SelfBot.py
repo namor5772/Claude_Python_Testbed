@@ -1378,6 +1378,35 @@ def install_focus_ring_defaults(root):
         root.option_add("*Button.highlightThickness", 3)
 
 
+# ── Scrollbars out of the Tab order (2026-09-26) — an in-file copy of keyboard.py's ──
+# Tk's fallback focus rule counts a viewable, enabled widget whose class has a
+# Key binding, and Tk 9.0.3's Scrollbar class binds Page Up / Page Down, so on
+# the Mac each of SelfBot's six tk.Scrollbars (chat display, System Prompt
+# editor, Skills Manager list + text, Safety dialog, confirm-command dialog) was
+# a Tab stop. Byte-identical to myagent/keyboard.py's by
+# tests/test_selfbot_focus_ring.py; called right after install_focus_ring_defaults
+# in setup_ui, before any scrollbar exists.
+def install_scrollbar_defaults(root):
+    """Once per Tk instance, BEFORE any scrollbar exists: none is a Tab stop.
+
+    A widget whose `takefocus` is unset is a Tab stop by Tk's fallback rule
+    (`tk::FocusOK`): viewable, not disabled, and its class carries some Key
+    binding. Tk 9.0.3's Scrollbar class binds Page Up / Page Down, so on the
+    Mac (2026-09-26) Tab from the read-only output pane landed on its
+    scrollbar instead of Voice Setup, and the same rule put every scrollbar
+    created right after a text box — the editor's, the Skills Manager's, the
+    dialogs' — in the path of Escape's `focus_next`. A scrollbar has nothing
+    to offer the keyboard (the widget it scrolls takes the same keys), so the
+    option database gives every LATER tk.Scrollbar a `takefocus` of 0. On
+    every platform: the intended Tab order is the same everywhere, and where
+    a scrollbar was never a stop this changes nothing. An explicit
+    `takefocus=` on a widget still wins, a scrollbar that already exists is
+    not touched, and ttk scrollbars (class TScrollbar) are not covered —
+    MyAgent has none.
+    """
+    root.option_add("*Scrollbar.takeFocus", "0")
+
+
 def _get_window_pid(hwnd):
     """Get the process ID that owns a given window handle."""
     if IS_WINDOWS:
@@ -1561,9 +1590,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.root.after(500, self._poll_auto_msg)
 
     def setup_ui(self):
-        # Before the first button exists: on macOS the option database gives
-        # every tk.Button a focus ring Aqua draws (the in-file copy above).
+        # Before the first button or scrollbar exists (the in-file copies
+        # above): on macOS the option database gives every tk.Button a focus
+        # ring Aqua draws, and every tk.Scrollbar stays out of the Tab order.
         install_focus_ring_defaults(self.root)
+        install_scrollbar_defaults(self.root)
 
         # Grid weights for resizing
         self.root.grid_rowconfigure(0, weight=0, minsize=40)
@@ -1730,7 +1761,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         )
         self.chat_display.grid(row=3, column=0, sticky="nsew", padx=(10, 0), pady=10)
 
-        # Scrollbar
+        # Scrollbar (not a Tab stop: install_scrollbar_defaults)
         scrollbar = tk.Scrollbar(self.root, command=self.chat_display.yview)
         scrollbar.grid(row=3, column=1, sticky="ns", pady=10, padx=(0, 10))
         self.chat_display.config(yscrollcommand=scrollbar.set)

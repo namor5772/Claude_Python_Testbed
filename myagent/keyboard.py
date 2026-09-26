@@ -36,7 +36,8 @@ adds only the three things Tk leaves out, plus two workarounds:
   output pane landed on its scrollbar instead of Voice Setup, and the same
   rule put every scrollbar created right after a text box in Escape's path
   (2026-09-26). The option database gives every LATER tk.Scrollbar a
-  `takefocus` of 0, on every platform.
+  `takefocus` of 0, on every platform. SelfBot carries a byte-identical
+  in-file copy.
 
 Everything here is plain widget configuration on Tk objects: no App state, so
 the helpers are shared by every mixin that builds a window and are unit-tested

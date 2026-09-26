@@ -11,6 +11,12 @@ setup_ui, before any button exists, because the option database only fills
 options at creation; the Auto toggle's explicit highlightthickness=0 still
 wins. tests/test_keyboard.py pins what the helper itself does per platform.
 
+Since 2026-09-26 the same holds for `install_scrollbar_defaults`, the copy that
+keeps SelfBot's six tk.Scrollbars out of the Tab order (Tk 9.0.3's Scrollbar
+class binds Page Up / Page Down, which Tk's fallback focus rule counts as
+focusable): byte-identical to keyboard.py's, called right after the focus-ring
+one, before any scrollbar exists.
+
 SelfBot is importable in-process (module import builds no Tk root); nothing
 here needs a display.
 """
@@ -50,6 +56,18 @@ class CopyTests(unittest.TestCase):
         self.assertLess(src.index("def setup_ui(self):"), call)
         self.assertLess(call, src.index("tk.Button("))
         self.assertEqual(src.count("install_focus_ring_defaults(self.root)"), 1)
+
+    def test_the_scrollbar_copy_is_byte_identical_to_keyboards(self):
+        self.assertEqual(inspect.getsource(SelfBot.install_scrollbar_defaults),
+                         inspect.getsource(keyboard.install_scrollbar_defaults))
+
+    def test_it_is_installed_next_in_setup_ui_before_any_scrollbar_exists(self):
+        src = (REPO / "SelfBot.py").read_text(encoding="utf-8")
+        ring = src.index("install_focus_ring_defaults(self.root)")
+        call = src.index("install_scrollbar_defaults(self.root)")
+        self.assertLess(ring, call)
+        self.assertLess(call, src.index("tk.Scrollbar("))
+        self.assertEqual(src.count("install_scrollbar_defaults(self.root)"), 1)
 
     def test_the_auto_toggle_keeps_its_explicit_zero(self):
         # Its colour IS its state: no ring area, on any platform.
