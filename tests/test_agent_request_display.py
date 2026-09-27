@@ -70,6 +70,17 @@ class PaneTests(unittest.TestCase):
         self.pane = app.chat_display
 
     def tearDown(self):
+        # feed() runs the REAL check_queue, which re-arms its own 50 ms poll:
+        # cancel it, or it fires into this destroyed root during a later
+        # module's event loop (Tcl: invalid command name "…check_queue").
+        # And collect the stub's reference cycles (Tk variables among them)
+        # HERE, on the main thread, before the root goes — DialogTests' rule
+        # below: left to the cyclic collector they were finalised on another
+        # module's worker thread, aborting the run (Tcl_AsyncDelete).
+        for after_id in self.root.tk.splitlist(self.root.tk.call("after", "info")):
+            self.root.after_cancel(after_id)
+        self.app = self.pane = None
+        gc.collect()
         self.root.destroy()
 
     def feed(self, *messages):

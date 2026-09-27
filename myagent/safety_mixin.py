@@ -13,6 +13,13 @@ from myagent.keyboard import bind_mnemonics, link_embedded_checkbuttons
 from ddgs import DDGS
 import httpx
 
+# Prepended (on its own line) to every run_command on Windows: PowerShell 5.1
+# writes redirected output in the console's OEM code page unless told
+# otherwise. UTF8Encoding($false) = no BOM; the try keeps a host without a
+# console on its default instead of failing the user's command.
+_PS_UTF8_OUTPUT = ("try { [Console]::OutputEncoding = "
+                   "New-Object System.Text.UTF8Encoding $false } catch {}")
+
 
 class SafetyMixin:
 
@@ -124,7 +131,8 @@ class SafetyMixin:
         tk.Label(
             dlg, text="Checked items require confirmation before execution.\n"
                        "Uncheck to bypass the confirmation dialog. Command\n"
-                       "patterns are matched by regex; Gmail entries match the tool name.",
+                       "patterns are matched by regex; mail entries (Gmail / IMAP /\n"
+                       "Outlook) match the tool name.",
             font=("Arial", 9), justify="left",
         ).pack(padx=15, pady=(12, 6), anchor="w")
 
@@ -257,22 +265,31 @@ class SafetyMixin:
         for pattern in COMMAND_BLOCKED:
             if re.search(pattern, command, re.IGNORECASE):
                 return "blocked", f"BLOCKED: Command matches dangerous pattern ({pattern})"
+        # Every confirm pattern is checked, not only the first that matches:
+        # unticking a pattern in the Safety dialog bypasses THAT pattern, never
+        # a still-ticked one the same command also matches ("Remove-Item x
+        # -Recurse" with Remove-Item unticked still confirms on -Recurse).
+        # Skipped only when every matching pattern is unticked.
+        bypassed = None
         for pattern in COMMAND_CONFIRM:
             if re.search(pattern, command, re.IGNORECASE):
-                if pattern in self._disabled_confirm_patterns:
-                    return "skipped", pattern
-                return "confirm", pattern
+                if pattern not in self._disabled_confirm_patterns:
+                    return "confirm", pattern
+                if bypassed is None:
+                    bypassed = pattern
+        if bypassed is not None:
+            return "skipped", bypassed
         return "safe", ""
 
     def _request_confirmation(self, command, matched_pattern=""):
         event = threading.Event()
         result_holder = [False]
 
-        def ask():
+        def build():
             dlg = tk.Toplevel(self.root)
             self._confirm_dialog = dlg
             dlg.withdraw()  # Hide until geometry is set
-            dlg.title("PowerShell — Confirm Command")
+            dlg.title(("PowerShell" if IS_WINDOWS else "Shell") + " — Confirm Command")
             if not self._headless:
                 if IS_WINDOWS:
                     dlg.transient(self.root)
@@ -360,12 +377,46 @@ class SafetyMixin:
             dlg.deiconify()  # Show with correct geometry
             deny_btn.focus_set()
 
+        failure = []
+
+        def ask():
+            # A dialog that fails to build must not park the worker on
+            # event.wait() for good (it has no timeout), nor leave its grab on
+            # a window nobody can see: the command is denied instead.
+            try:
+                build()
+            except Exception as exc:
+                # Its TEXT only: the exception's traceback holds the builder's
+                # frame and so its Tk widgets and variables, which must be
+                # freed here on the Tk thread — the worker freeing them later
+                # raises "main thread is not in main loop" and can abort the
+                # process (Tcl_AsyncDelete).
+                failure.append(repr(exc))
+                self._abandon_dialog("_confirm_dialog")
+                event.set()
+
         self.root.after(0, ask)
         # Time parked on the user's Allow/Deny doesn't count as run time
         # (cost log TIME(sec)) — see helpers.input_wait_timer.
         with input_wait_timer(self):
             event.wait()
+        if failure:
+            self.queue.put({"type": "warning", "content":
+                            f"⚠ The command confirmation dialog failed "
+                            f"({failure[0]}) — the command was denied.\n"})
         return result_holder[0]
+
+    def _abandon_dialog(self, attr):
+        """Destroy a half-built dialog held on self.<attr> — its grab goes
+        with it — and clear the reference: the recovery path when building
+        the dialog raised."""
+        dlg = getattr(self, attr, None)
+        setattr(self, attr, None)
+        if dlg is not None:
+            try:
+                dlg.destroy()
+            except tk.TclError:
+                pass
 
     def do_user_prompt(self, message):
         """Pause the agent and ask the user for input via a modal dialog.
@@ -374,6 +425,9 @@ class SafetyMixin:
         self._prompt_attached_images for the caller to pop via
         _take_prompt_images() (same thread — the streaming worker blocks on
         the dialog and reads the result synchronously)."""
+        # The model's tool input: a sloppy (local) model can send null or a
+        # non-string, and Text.insert(None) raises inside the dialog builder.
+        message = "" if message is None else str(message)
         event = threading.Event()
         # [reply_text, [(b64, media_type, filename)], the upgrade target or None]
         result_holder = ["", [], None]
@@ -385,7 +439,7 @@ class SafetyMixin:
         # user_prompt tool (the model's text) and Convo mode (the stock text).
         self.queue.put({"type": "user_prompt_request", "content": message})
 
-        def ask():
+        def build():
             dlg = tk.Toplevel(self.root)
             self._prompt_dialog = dlg
             dlg.withdraw()  # Hide until geometry is set
@@ -573,6 +627,20 @@ class SafetyMixin:
 
             resp_text.focus_set()
 
+        failure = []
+
+        def ask():
+            # A dialog that fails to build must not park the worker on
+            # event.wait() for good (it has no timeout), nor leave its grab on
+            # a window nobody can see — the main window, STOP included, would
+            # take no input. Close whatever was built and end the run.
+            try:
+                build()
+            except Exception as exc:
+                failure.append(repr(exc))   # text only — see _request_confirmation
+                self._abandon_dialog("_prompt_dialog")
+                event.set()
+
         self.root.after(0, ask)
         # Time parked on the user's reply doesn't count as run time
         # (cost log TIME(sec)) — see helpers.input_wait_timer.
@@ -581,6 +649,14 @@ class SafetyMixin:
         # Echo the user's response in the chat display so it's visible
         response = result_holder[0]
         self._prompt_attached_images = list(result_holder[1])
+        if failure:
+            # "" stops the run on both callers (the user_prompt tool and Convo
+            # mode); any text would be a reply nobody gave and, in Convo mode,
+            # would loop on a dialog that cannot open.
+            self.queue.put({"type": "warning", "content":
+                            f"⚠ The Agent Request dialog could not be shown "
+                            f"({failure[0]}) — stopping the run.\n"})
+            return ""
         if response and response != "[User dismissed the dialog without responding]":
             echo = response
             if result_holder[1]:
@@ -646,7 +722,16 @@ class SafetyMixin:
         elif safety == "confirm" and not self._request_confirmation(command, info):
             return "Command was rejected by the user."
         try:
-            shell_cmd = (["powershell", "-NoProfile", "-Command", command]
+            # Windows PowerShell writes redirected output in the OEM code page
+            # (437 here) while Python's text mode decoded it as ANSI (cp1252):
+            # non-ASCII came back garbled, and a byte cp1252 leaves undefined
+            # (ü, É, Å …) killed communicate()'s reader thread, so the WHOLE
+            # stdout came back None — "[No output]". PowerShell is told to write
+            # UTF-8 (no BOM; a console-less host just keeps its default) on its
+            # own line, so an error's char position in the command stays true,
+            # and it is decoded as UTF-8 with replacement: never a lost stream.
+            shell_cmd = (["powershell", "-NoProfile", "-Command",
+                          _PS_UTF8_OUTPUT + "\n" + command]
                          if IS_WINDOWS else ["/bin/bash", "-c", command])
             # Popen, not subprocess.run: on timeout the whole process TREE must
             # die before the final pipe read, and POSIX needs its own session
@@ -659,6 +744,8 @@ class SafetyMixin:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 **popen_kwargs,
             )
             try:

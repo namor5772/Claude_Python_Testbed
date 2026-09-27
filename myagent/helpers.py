@@ -364,7 +364,7 @@ def camera_aware_hint(screen_hint, from_camera):
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
-def normalize_save_path(path, home=None):
+def normalize_save_path(path, home=None, param="save_to"):
     """Make a model-supplied save path usable on this machine.
 
     Models sometimes hallucinate a path from the wrong OS — e.g. grok wrote
@@ -374,7 +374,9 @@ def normalize_save_path(path, home=None):
 
     Returns ``(usable_path, note)`` — ``note`` is "" when nothing was
     redirected, else a sentence for the tool result so the model learns where
-    the file actually went. ``home`` overrides ``~`` for tests.
+    the file actually went; it names the tool's own argument (``param``: the
+    mail tools' save_to, camera_capture's save_path). ``home`` overrides ``~``
+    for tests.
     """
     home = home or os.path.expanduser("~")
     expanded = os.path.expanduser(path)
@@ -383,7 +385,7 @@ def normalize_save_path(path, home=None):
         basename = rest.rsplit("/", 1)[-1]
         redirected = os.path.join(home, "Temp", basename or "attachment.bin")
         return redirected, (
-            f"note: save_to {path!r} is a Windows path, invalid on this "
+            f"note: {param} {path!r} is a Windows path, invalid on this "
             f"machine — saved to {redirected} instead"
         )
     return expanded, ""

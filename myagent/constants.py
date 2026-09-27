@@ -1301,11 +1301,14 @@ if IS_WINDOWS:
         r"\bStop-Computer\b",
         r"\bRestart-Computer\b",
         r"\bSet-ExecutionPolicy\b",
-        r"\breg\s+delete\b",
-        r"\bRemove-ItemProperty\b.*\\\\HKLM",
-        r"\bRemove-ItemProperty\b.*\\\\HKCU",
-        r"\bRemove-Item\b.*\\\\HKLM",
-        r"\bRemove-Item\b.*\\\\HKCU",
+        r"\breg(?:\.exe)?\s+delete\b",
+        # Registry deletes under HKLM / HKCU, in PowerShell's own path forms
+        # (HKLM:\…, Registry::HKEY_LOCAL_MACHINE\…). The four patterns these
+        # replaced (2026-09-28) wanted a literal "\\HKLM" that no real path
+        # has, so they never matched — Remove-ItemProperty ran undialogued.
+        r"\bRemove-Item(?:Property)?\b.*\b(?:HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER)\b",
+        # shutdown.exe at command position with any switch but /a (abort).
+        r"(?:^|[\n;&|({])\s*shutdown(?:\.exe)?\s+[/-](?!a\b)",
         r"\bbcdedit\b",
         r"\bdiskpart\b",
         r"\bnet\s+user\b.*(/add|/delete)",
@@ -1342,6 +1345,22 @@ if IS_WINDOWS:
         # the flag must sit at a line start or after whitespace.
         r"(?<!\S)-Recurse\b",
         r"(?<!\S)-Force\b",
+        # Built-in aliases of the cmdlets above (2026-09-28), matched only at
+        # command position — line start or after ; & | ( { — so the word in a
+        # string or a path doesn't trip them. APPENDED, never renamed: an
+        # instruction's saved bypass list names patterns by their text.
+        # (`start`, Start-Process's everyday alias, is deliberately not here:
+        # unattended runs launch programs with it and would stall on a dialog.)
+        # (…|$: a bare alias ending a pipeline acts on everything piped in.)
+        r"(?:^|[\n;&|({])\s*(?:ri|erase)(?:\s|$)",      # Remove-Item
+        r"(?:^|[\n;&|({])\s*(?:mi|move|mv)(?:\s|$)",    # Move-Item
+        r"(?:^|[\n;&|({])\s*(?:rni|ren)(?:\s|$)",       # Rename-Item
+        r"(?:^|[\n;&|({])\s*(?:sc|clc)(?:\s|$)",        # Set-Content / Clear-Content
+        r"(?:^|[\n;&|({])\s*spps(?:\s|$)",              # Stop-Process
+        r"(?:^|[\n;&|({])\s*saps(?:\s|$)",              # Start-Process
+        r"\b(?:iwr|curl|wget)\b.*-OutFile",         # Invoke-WebRequest to a file
+        r"\biex\s*\(",                              # Invoke-Expression with (…)
+        r"\bRemove-ItemProperty\b",                 # registry values (HKLM/HKCU: blocked)
     ]
 else:
     COMMAND_BLOCKED = [

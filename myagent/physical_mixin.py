@@ -169,7 +169,8 @@ class PhysicalMixin:
         folder, and an EXISTING file (a photo must never replace something the
         user has) are refused — all before the camera is switched on.
         `home` overrides ~ for tests."""
-        path, note = normalize_save_path(str(save_path).strip(), home=home)
+        path, note = normalize_save_path(str(save_path).strip(), home=home,
+                                         param="save_path")
         path = os.path.abspath(path)
         if os.path.isdir(path):
             return None, "", f"save_path {path} is a folder — give a file name."
@@ -424,8 +425,14 @@ class PhysicalMixin:
             # page on Windows and fails — silently, returning False — on a path
             # with characters outside it.
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "wb") as f:
+            # "xb", not "wb": _camera_save_target refused an existing file,
+            # but that was before the self-timer (up to 600 s) and the settle,
+            # and a file created meanwhile must not be replaced either.
+            with open(path, "xb") as f:
                 f.write(encoded.tobytes())
+        except FileExistsError:
+            return (f"⚠ NOT saved: {path} appeared while the photo was being "
+                    f"taken (a photo never overwrites an existing file).")
         except OSError as e:
             return f"⚠ NOT saved to {path}: {e}"
         return f"Saved at full resolution ({width} by {height}) to {path}."
