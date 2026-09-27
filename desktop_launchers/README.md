@@ -114,10 +114,15 @@ folder) — see the Windows section.
 
 The **API Cost Log** launcher is the same viewer pattern for the API cost log
 (`{timestamp};{provider};{model};{cost}[;{params}[;{secs}[;{instruction}[;{calls}
-[;{in};{out};{cache_write};{cache_read}]]]]]`,
+[;{in};{out};{cache_write};{cache_read}[;{split}]]]]]]`,
 semicolon-delimited, gitignored — the trailing fields arrived 2026-08-10 /
-2026-08-12 / 2026-08-16 / 2026-09-14 and are absent on older lines, which both viewers
-still accept).
+2026-08-12 / 2026-08-16 / 2026-09-14 / 2026-09-27 and are absent on older lines, which both viewers
+still accept; `{split}` is written only for a run more than one model served —
+a MyAgent Model upgrade, or an Anthropic refusal fallback — as
+`model,cost,in,out,cache_w,cache_r` per model joined by `|`, and both viewers'
+By-model blocks split such a run between its models (`Expand-ModelSplit` on
+Windows, the `$S` field in `bucket` / `token_rollup` on macOS, whose merged
+rows are 14 fields wide since), while every other block counts it once).
 Since 2026-08-03 each machine writes its own `APICostLog_<machine>.txt` into
 `<OneDrive>/MyAppShare` (per-machine files never conflict-fork, yet OneDrive
 syncs them all everywhere — see `myagent/datapaths.py`), so

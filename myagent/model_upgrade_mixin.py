@@ -259,10 +259,38 @@ class ModelUpgradeMixin:
             f"⬆ Model upgraded for the rest of this run: {original['model']} → "
             f"{self.model}{f' ({level})' if level else ''}, from call "
             f"#{original['call'] + 1} on.\n")})
+        for note in self._upgrade_pricing_warnings():
+            self.queue.put({"type": "warning", "content": f"⚠ {note}\n"})
         root = getattr(self, "root", None)
         if root is not None:
             root.after(0, self._update_title)
         return True
+
+    def _upgrade_pricing_warnings(self):
+        """The run-start pricing checks (streaming_mixin), for the model the
+        run has just moved to — the run-start ones only ever saw the model it
+        started on. A model priced by a family catch-all row gets that
+        warning as it stands; a model with NO row gets its own text here,
+        because the run-start one ("the run will NOT be written to the cost
+        log") is wrong mid-run: the calls before the switch were priced, so
+        the run IS logged — with a cost that leaves out every call from here
+        on, while its token fields still count them. Same exemptions and the
+        same fast-table rule, by asking `_unpriced_model_warning` whether it
+        would warn."""
+        notes = []
+        generic = self._generic_pricing_warning(self.provider, self.model)
+        if generic:
+            notes.append(generic)
+        fast = (self.provider == "Anthropic" and getattr(self, "fast_mode", False)
+                and self._anthropic_fast_active())
+        if self._unpriced_model_warning(self.provider, self.model, fast=fast):
+            table = "ANTHROPIC_FAST_PRICING" if fast else f"{self.provider} pricing table"
+            notes.append(
+                f"{self.model} has no row in the {table} (myagent/constants.py), so "
+                f"its calls from here on cannot be priced: they show token counts "
+                f"only, and this run's cost-log row will count only the calls "
+                f"before the switch — its cost will be too low. Add the model's row.")
+        return notes
 
     def _upgrade_end_run(self):
         """The loop has ended: put the run's own model fields back, so the

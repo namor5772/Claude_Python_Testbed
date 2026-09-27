@@ -47,6 +47,7 @@ import threading
 import tkinter as tk
 import unittest
 from tkinter import ttk
+from unittest import mock
 
 from tests._util import stub
 from tests.test_agent_request_display import _Dictation, _walk
@@ -59,6 +60,7 @@ from myagent.model_upgrade_mixin import ModelUpgradeMixin, UPGRADE_FIELDS
 from myagent.ollama_mixin import OllamaMixin
 from myagent.openai_mixin import OpenAIMixin
 from myagent.safety_mixin import SafetyMixin
+from myagent.streaming_mixin import StreamingMixin
 from myagent.ui_mixin import UIMixin
 from myagent.xai_mixin import XAIMixin
 
@@ -66,8 +68,9 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
 class _Probe(ModelUpgradeMixin, UIMixin, OpenAIMixin, XAIMixin, KimiMixin,
-             GeminiMixin, OllamaMixin):
-    """The detection helpers the mixin's probe consults, as the App carries them."""
+             GeminiMixin, OllamaMixin, StreamingMixin):
+    """The detection helpers the mixin's probe consults, and the pricing
+    checks the switch runs, as the App carries them."""
 
 
 def probe(**attrs):
@@ -478,6 +481,43 @@ class SwitchTests(unittest.TestCase):
         self.assertFalse(h._upgrade_apply({"model": "claude-opus-5-5", "level": "High"}))
         self.assertEqual(h.model, "claude-fable-5-1")
         self.assertEqual(drained(h.queue), [])
+
+    def test_an_unpriced_upgrade_model_is_announced_at_the_switch(self):
+        # The run-start check only saw the model the run began on; the switch
+        # repeats it for the new one — with the mid-run consequence, not the
+        # run-start text ("will NOT be written to the cost log" is untrue now).
+        h = host()
+        h._upgrade_apply({"model": "claude-nova-9", "level": ""})
+        upgraded, warning = drained(h.queue)
+        self.assertTrue(upgraded["content"].startswith("⬆ Model upgraded"))
+        self.assertEqual(warning["type"], "warning")
+        self.assertIn("claude-nova-9 has no row in the Anthropic pricing table", warning["content"])
+        self.assertIn("count only the calls before the switch", warning["content"])
+        self.assertNotIn("NOT be written", warning["content"])
+
+    def test_a_model_priced_by_a_family_catch_all_row_says_so(self):
+        h = host(provider="Google", model="gemini-3.8-flash")
+        h._upgrade_apply({"model": "gemini-3.9-flash", "level": "High"})
+        _upgraded, warning = drained(h.queue)
+        self.assertIn("generic 'gemini-3' fallback row", warning["content"])
+
+    def test_the_fast_table_is_what_a_fast_run_needs(self):
+        # Fast stays on across a switch; a fast-capable model with no FAST row
+        # would be unpriced for this run however ordinary its standard row.
+        h = host(model="claude-opus-4-8", fast_mode=True)
+        with mock.patch.dict("myagent.streaming_mixin.ANTHROPIC_FAST_PRICING", {}, clear=True):
+            h._upgrade_apply({"model": "claude-opus-5-5", "level": "High"})
+        _upgraded, warning = drained(h.queue)
+        self.assertIn("no row in the ANTHROPIC_FAST_PRICING", warning["content"])
+
+    def test_a_priced_upgrade_model_gets_the_switch_line_alone(self):
+        for provider, model, target in (("Anthropic", "claude-sonnet-5", "claude-fable-5-1"),
+                                        ("OpenAI", "gpt-5.6-terra", "gpt-6-astra"),
+                                        ("xAI", "grok-4.3", "grok-no-row-needed")):
+            with self.subTest(target):
+                h = host(provider=provider, model=model)
+                h._upgrade_apply({"model": target, "level": ""})
+                self.assertEqual(len(drained(h.queue)), 1)   # xAI reports its own cost
 
     def test_no_target_is_no_switch(self):
         h = host()

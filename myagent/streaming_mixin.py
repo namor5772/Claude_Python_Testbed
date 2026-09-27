@@ -1153,14 +1153,39 @@ class StreamingMixin:
             priced["cache_write"] = per_token[3]
         return priced
 
+    @staticmethod
+    def _cost_split_field(split):
+        """The cost log's 13th field (2026-09-27): a run's cost and token
+        buckets per model that served its calls — "model,cost,in,out,
+        cache_write,cache_read" per model, first-used first, joined by "|" —
+        written only when MORE than one model served the run (a Model upgrade
+        from an Agent Request reply on, or an Anthropic refusal fallback
+        served by an Opus tier). The viewers' By-model summaries split such a
+        run between its models; every other block, and a line without the
+        field, reads as before. "" when there is nothing to split, and then
+        the field is not written at all. Cost at six places, so the parts sum
+        to the row's four-place total; a model id's field separators, which
+        no provider uses, are neutralised."""
+        if not split or len(split) < 2:
+            return ""
+        parts = []
+        for model, (cost, tok_in, tok_out, tok_cw, tok_cr) in split.items():
+            name = str(model).replace(",", "_").replace("|", "_").replace(";", "_")
+            parts.append(f"{name},{cost:.6f},{int(tok_in)},{int(tok_out)},"
+                         f"{int(tok_cw)},{int(tok_cr)}")
+        return "|".join(parts)
+
     def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,
-                      instruction="", calls=None, tokens=None):
+                      instruction="", calls=None, tokens=None, split=None):
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
         Line format:
         {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
-        ;{in};{out};{cache_write};{cache_read}
+        ;{in};{out};{cache_write};{cache_read}[;{split}]
+        — split (13th field, 2026-09-27, `_cost_split_field`) is present
+        only for a run served by more than one model, and the MODEL field is
+        then the model the run ENDED on;
         — params is the compact _get_model_param_summary() string
         (comma-joined), so the log records the thinking/temperature settings
         the run used alongside its cost; secs (6th field, 2026-08-12) is the
@@ -1240,12 +1265,16 @@ class StreamingMixin:
             # rather than "not recorded".
             tok_s = (";;;" if not tokens
                      else ";".join(f"{int(t)}" for t in tokens))
+            # 13th field: the per-model split, only for a run more than one
+            # model served — a one-model line keeps its 12 fields exactly.
+            split_s = self._cost_split_field(split)
+            split_s = f";{split_s}" if split_s else ""
             # ';' delimiter (not ',') so a comma inside a model name, the
             # params field or an instruction name can't be misread as a
             # field separator.
             line = (f"{timestamp};{self.provider};{self.model};"
                     f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
-                    f"{tok_s}\n")
+                    f"{tok_s}{split_s}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
@@ -1340,6 +1369,13 @@ class StreamingMixin:
         total_output_tokens = 0
         total_cache_write_tokens = 0
         total_cache_read_tokens = 0
+        # The same five figures per model that served a call — model →
+        # [cost, in, out, cache_write, cache_read], in first-use order — for
+        # the cost log's 13th field (2026-09-27): a run served by more than one
+        # model (a Model upgrade from an Agent Request reply on, or an
+        # Anthropic refusal fallback) is split between them by the viewers'
+        # By-model summaries. Hoisted with the totals for the same reason.
+        per_model = {}
         instr_name = getattr(self, "agent_instruction_name", "")
         run_started = time.monotonic()
         self._input_wait_secs = 0.0
@@ -1353,7 +1389,8 @@ class StreamingMixin:
                                instruction=instr_name, calls=call_num,
                                tokens=(total_input_tokens, total_output_tokens,
                                        total_cache_write_tokens,
-                                       total_cache_read_tokens))
+                                       total_cache_read_tokens),
+                               split=per_model)
 
         def _end_run():
             # The log line first — it records the run under the model it
@@ -1476,6 +1513,19 @@ class StreamingMixin:
                     total_output_tokens += call_output
                     total_cache_write_tokens += call_cache_write
                     total_cache_read_tokens += call_cache_read
+                    # ...and under the model that served this call (the one
+                    # it is priced by, below), for the cost log's per-model
+                    # split. A dated snapshot the API echoes for an alias is
+                    # the same model, kept under the name the MODEL field
+                    # shows. The call's cost joins part[0] once it is priced.
+                    served = usage.get("model") or self.model
+                    if re.fullmatch(re.escape(self.model) + r"-\d{8}", served):
+                        served = self.model
+                    part = per_model.setdefault(served, [0.0, 0, 0, 0, 0])
+                    part[1] += call_input
+                    part[2] += call_output
+                    part[3] += call_cache_write
+                    part[4] += call_cache_read
                     # Price by the model that actually produced the message when
                     # the provider reports one (Anthropic: a server-side refusal
                     # fallback serves the call on an Opus-tier model at ITS
@@ -1511,6 +1561,7 @@ class StreamingMixin:
                             call_cost += (usage.get("web_search_requests", 0)
                                           * ANTHROPIC_WEB_SEARCH_FEE)
                         total_cost += call_cost
+                        part[0] += call_cost
                         self.queue.put({
                             "type": "cost_update",
                             "call_cost": call_cost,

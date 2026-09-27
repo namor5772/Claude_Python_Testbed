@@ -39,7 +39,13 @@
 # divides real cost by real tokens — the only way to see what a model ACTUALLY
 # costs per MTok once cache reads are in the mix — and, since 2026-09-15, a
 # CACHE% column: cache reads as a share of the input side, the cache effect on
-# its own (the blended rate also carries output tokens).
+# its own (the blended rate also carries output tokens). The 13th field
+# (2026-09-27) is present only on a run that more than one model served —
+# MyAgent's Model upgrade from an Agent Request reply on, or an Anthropic
+# refusal fallback — whose MODEL field is the model it ENDED on:
+# "model,cost,in,out,cache_w,cache_r" per model, joined by "|". The two
+# By-model blocks split such a run between its models; every other block and
+# the full log read it as one run, as before.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -88,10 +94,11 @@ fi
 #  cache_r;machine", sorted by timestamp — cross-machine order comes from the
 # field, not file order. Shorter historic shapes (4-field pre-params, 5-field
 # pre-secs, 6-field pre-instruction/calls, 8-field pre-tokens) are padded with
-# empty fields so every merged row is uniformly 13 fields: machine is ALWAYS
-# $W (=13), then cache_r $12, cache_w $11, out $10, in $9 (the 2026-09-14
-# token group), calls $8, instruction $7, secs $6, params $5 — any of the
-# middle eight possibly empty. Since 2026-08-16 SelfBot writes an EMPTY secs,
+# empty fields so every merged row is uniformly 14 fields: machine is ALWAYS
+# $W (=14), then the per-model split $S (=13, 2026-09-27 — empty unless more
+# than one model served the run), cache_r $12, cache_w $11, out $10, in $9
+# (the 2026-09-14 token group), calls $8, instruction $7, secs $6, params $5
+# — any of the middle nine possibly empty. Since 2026-08-16 SelfBot writes an EMPTY secs,
 # so it lands in the same shape. W is the one place the merged width lives:
 # every awk below takes it as -v W, so a future field costs only W and the
 # column list in the FULL LOG awk. NF>=4 keeps the guard the old per-width
@@ -101,7 +108,8 @@ fi
 # The sub() strips the CR that Windows-written lines carry (CRLF via Python
 # text mode until 2026-08-03, and any not-yet-updated writer): without it the
 # last field ends in \r and the viewer shows ^M after every Windows row.
-W=13
+W=14
+S=13
 MERGED="$(mktemp)"
 trap 'rm -f "$MERGED"' EXIT
 for i in "${!LOGS[@]}"; do
@@ -127,10 +135,18 @@ TOK_FN='function tok(v) {
 # $W machine); $3 pads the key column, $4 is the count suffix (" runs" / "").
 # Rows with an empty key are skipped (only ever the instruction field). The
 # format string is built in the shell (awk -v turns its \n into a newline)
-# rather than with printf's "*" width, which not every awk supports.
+# rather than with printf's "*" width, which not every awk supports. Keyed on
+# the model (3), a row carrying the per-model split ($S, 2026-09-27) counts
+# under EACH model that served it, with that model's own cost — the Windows
+# twin's Expand-ModelSplit.
 bucket() {
   local fmt="    %-$3s \$%10.4f  (%d$4)\n"
-  awk -F';' -v K="$1" -v P="$2" -v W="$W" 'NF>=W && substr($1,1,length(P))==P && $K!="" { m[$K]+=$4; c[$K]++ }
+  awk -F';' -v K="$1" -v P="$2" -v W="$W" -v S="$S" 'NF>=W && substr($1,1,length(P))==P && $K!="" {
+      if (K == 3 && $S != "") {
+        np = split($S, parts, "|")
+        for (i = 1; i <= np; i++) { if (split(parts[i], p, ",") >= 6) { m[p[1]] += p[2]; c[p[1]]++ } }
+      } else { m[$K]+=$4; c[$K]++ }
+    }
     END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
     | sort -rn | awk -F'\t' -v FMT="$fmt" '{ printf FMT, $2, $1+0, $3 }'
 }
@@ -145,8 +161,18 @@ bucket() {
 # arrays (the bucket() shape), ranked by a leading cost key that cut strips.
 token_rollup() {
   local rows
-  rows="$(awk -F';' -v W="$W" "$TOK_FN"'
-    NF>=W && $9!="" { ti[$3]+=$9; to[$3]+=$10; tw[$3]+=$11; tr[$3]+=$12; c[$3]+=$4; n[$3]++ }
+  rows="$(awk -F';' -v W="$W" -v S="$S" "$TOK_FN"'
+    NF>=W && $9!="" {
+      # A run more than one model served (the per-model split, $S) counts
+      # under each of its models, with each model its own buckets.
+      if ($S != "") {
+        np = split($S, parts, "|")
+        for (i = 1; i <= np; i++) {
+          if (split(parts[i], p, ",") < 6) continue
+          ti[p[1]]+=p[3]; to[p[1]]+=p[4]; tw[p[1]]+=p[5]; tr[p[1]]+=p[6]; c[p[1]]+=p[2]; n[p[1]]++
+        }
+      } else { ti[$3]+=$9; to[$3]+=$10; tw[$3]+=$11; tr[$3]+=$12; c[$3]+=$4; n[$3]++ }
+    }
     END {
       for (k in c) {
         all = ti[k] + to[k] + tw[k] + tr[k]

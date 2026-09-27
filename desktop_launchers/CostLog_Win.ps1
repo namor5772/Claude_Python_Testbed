@@ -35,6 +35,12 @@
 # ACTUALLY costs per MTok once cache reads are in the mix -- and, since
 # 2026-09-15, a CACHE% column: cache reads as a share of the input side, the
 # cache effect on its own (the blended rate also carries output tokens).
+# The 13th field (2026-09-27) is present only on a run that more than one
+# model served -- MyAgent's Model upgrade from an Agent Request reply on, or
+# an Anthropic refusal fallback -- whose MODEL field is the model it ENDED
+# on: "model,cost,in,out,cache_w,cache_r" per model, joined by "|". The two
+# By-model blocks split such a run between its models (Expand-ModelSplit);
+# every other block and the full log read it as one run, as before.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -119,6 +125,27 @@ function Parse-TokGroup([string[]]$f) {
     return @($null, $null, $null, $null)
 }
 
+# The rows the two By-model blocks group: a row whose run more than one model
+# served (the 13th field, 2026-09-27) becomes one row per model, each with
+# that model's own cost and token buckets -- so a run upgraded from Sonnet to
+# Fable puts Sonnet's calls under Sonnet, not under the model it ended on --
+# and every other row passes through unchanged. A model counts each run it
+# served, so an upgraded run counts once under each of its models.
+function Expand-ModelSplit([object[]]$set) {
+    foreach ($r in $set) {
+        if (-not $r.Split) { $r; continue }
+        foreach ($part in $r.Split.Split('|')) {
+            $p = $part.Split(',')
+            if ($p.Count -lt 6) { continue }
+            [pscustomobject]@{
+                Model = $p[0]; Cost = [double]::Parse($p[1], $inv)
+                TokIn = [double]$p[2]; TokOut = [double]$p[3]
+                TokCW = [double]$p[4]; TokCR = [double]$p[5]
+            }
+        }
+    }
+}
+
 # Per-model token totals + the EFFECTIVE blended rate (total cost / total
 # tokens), over rows that actually carry token fields. This is the block that
 # answers "what does model X really cost me per MTok" -- the per-token table
@@ -126,7 +153,7 @@ function Parse-TokGroup([string[]]$f) {
 # cheap cache reads. Lifetime only (the month-scoped rollups stay cost-only):
 # a blended rate over a handful of runs is noise.
 function Get-TokenRollup([object[]]$set) {
-    $withTok = @($set | Where-Object { $null -ne $_.TokIn })
+    $withTok = @(Expand-ModelSplit $set | Where-Object { $null -ne $_.TokIn })
     if ($withTok.Count -eq 0) { return @() }
     # A positive alignment in a .NET format string already right-aligns
     # ("{2,8}"); there is no '>' flag, and one would throw at render time.
@@ -175,7 +202,7 @@ function Get-Rollups([object[]]$set, [string]$qual) {
         Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
         ForEach-Object { '    {0,-12} ${1,10:N4}  ({2} runs)' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
     $lines += @('', "  By model (${lead}highest spend first):")
-    $lines += @($set | Group-Object Model |
+    $lines += @(Expand-ModelSplit $set | Group-Object Model |
         Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
         ForEach-Object { '    {0,-32} ${1,10:N4}  ({2})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
     # Only rows that carry an instruction name (2026-08-16 lines onward;
@@ -209,7 +236,8 @@ try {
     # 2026-08-10), secs (6th, added 2026-08-12), instruction (7th) and calls
     # (8th, both added 2026-08-16) are blank on older lines, as are the four
     # token fields (9th-12th, added 2026-09-14: input / output / cache-write /
-    # cache-read, the buckets _get_pricing rates).
+    # cache-read, the buckets _get_pricing rates). The per-model split (13th,
+    # added 2026-09-27) exists only on a run more than one model served.
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -224,6 +252,7 @@ try {
                 Instr = if ($f.Count -ge 7) { $f[6] } else { '' }
                 Calls = if ($f.Count -ge 8) { $f[7] } else { '' }
                 TokIn = $tok[0]; TokOut = $tok[1]; TokCW = $tok[2]; TokCR = $tok[3]
+                Split = if ($f.Count -ge 13) { $f[12] } else { '' }
             }
         }
     }

@@ -172,5 +172,87 @@ class DayRowTests(_ViewerCase):
         self.assertEqual([line[-7:] for line in block], ["$0.0000"] * 9)
 
 
+def tok(n):
+    """The viewers' compact token count (Format-Tok / tok())."""
+    if n >= 1000000:
+        return f"{n / 1000000:.2f}M"
+    if n >= 10000:
+        return f"{n / 1000:.1f}k"
+    return str(int(n))
+
+
+class ModelSplitTests(_ViewerCase):
+    """A run more than one model served (the 13th field, 2026-09-27: a Model
+    upgrade from an Agent Request reply on, or a refusal fallback) is split
+    between its models in BOTH By-model blocks — cost, lifetime and this
+    month, and tokens + blended rate — while every other block counts it as
+    the one run it was. The numbers avoid rounding ties, so the two
+    platforms' formatting cannot disagree on them."""
+
+    UPGRADED = ("claude-sonnet-5,0.250000,1000,300,0,10000"
+                "|claude-fable-5-1,1.000000,2000,400,10000,10000")
+
+    def write(self, today):
+        day = today.isoformat()
+        lines = [
+            f"{day} 08:00:00;Anthropic;claude-sonnet-5;0.5000;mode=Low;30;Split_Test;4;"
+            "1000;200;0;5000",
+            f"{day} 09:00:00;Anthropic;claude-fable-5-1;1.2500;mode=Max, "
+            f"upgraded-from=claude-sonnet-5@call2;60;Split_Test;5;3000;700;10000;20000;"
+            f"{self.UPGRADED}",
+            f"{day} 10:00:00;Anthropic;claude-fable-5-1;2.0000;mode=Max;20;Split_Test;3;"
+            "1000;200;0;5000",
+        ]
+        (self.share / "APICostLog_MACHINE-A.txt").write_bytes(
+            ("\n".join(lines) + "\n").encode("utf-8"))
+
+    @staticmethod
+    def block(lines, heading):
+        """The lines under `heading`, up to the next blank line."""
+        start = lines.index(heading) + 1
+        end = start
+        while end < len(lines) and lines[end].strip():
+            end += 1
+        return lines[start:end]
+
+    def test_both_by_model_blocks_split_the_upgraded_run_and_nothing_else_does(self):
+        for _attempt in range(2):          # a run crossing a month boundary retries
+            today = datetime.date.today()
+            self.write(today)
+            lines = self.run_viewer()
+            if datetime.date.today() == today:
+                break
+        cost_rows = ["    claude-fable-5-1                 $    3.0000  (2)",
+                     "    claude-sonnet-5                  $    0.7500  (2)"]
+        self.assertEqual(self.block(lines, "  By model (highest spend first):"), cost_rows)
+        self.assertEqual(self.block(lines, "  By model (this month; highest spend first):"),
+                         cost_rows)
+
+        def token_row(model, runs, tin, tout, tcw, tcr, cost):
+            everything = tin + tout + tcw + tcr
+            rate = f"{cost / everything * 1000000:.4f}"
+            share = f"{tcr / (tin + tcw + tcr) * 100:.1f}%"
+            return (f"    {model:<32} {runs:>5} {tok(tin):>8} {tok(tout):>8} {tok(tcw):>8} "
+                    f"{tok(tcr):>8} {cost:>10.4f} {rate:>9} {share:>7}")
+
+        header = (f"    {'MODEL':<32} {'RUNS':>5} {'IN':>8} {'OUT':>8} {'CACHE-W':>8} "
+                  f"{'CACHE-R':>8} {'COST(USD)':>10} {'$/MTok':>9} {'CACHE%':>7}")
+        self.assertEqual(
+            self.block(lines, "  By model (tokens and effective blended rate; "
+                              "runs logged with token counts):"),
+            [header,
+             token_row("claude-fable-5-1", 2, 3000, 600, 10000, 15000, 3.0),
+             token_row("claude-sonnet-5", 2, 2000, 500, 0, 15000, 0.75)])
+        # Everything else still counts the upgraded run once, whole.
+        self.assertEqual(self.block(lines, "  By machine:"),
+                         ["    MACHINE-A                $    3.7500  (3 runs)"])
+        self.assertEqual(self.block(lines, "  By provider:"),
+                         ["    Anthropic    $    3.7500  (3 runs)"])
+        self.assertIn("  3 runs", "\n".join(lines))
+        full = [line for line in lines if " claude-fable-5-1 " in line and "upgraded-from" in line]
+        self.assertEqual(len(full), 1)          # one FULL LOG row, under the model it ended on
+        self.assertIn("1.2500", full[0])
+
+
 if __name__ == "__main__":
     unittest.main()
