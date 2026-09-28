@@ -55,7 +55,7 @@ import base64
 import json
 import mimetypes
 import os
-from myagent.mail_common import confirm_action
+from myagent.mail_common import confirm_action, run_per_id
 
 from myagent.helpers import extract_text_from_html, normalize_save_path
 
@@ -81,6 +81,10 @@ OUTLOOK_SCOPES = [
     "https://graph.microsoft.com/Mail.ReadWrite",
     "https://graph.microsoft.com/Mail.Send",
 ]
+# Seconds a browser sign-in may take (it waited forever), and MSAL's own HTTP
+# timeout (its default None disables every socket timeout).
+OUTLOOK_SIGNIN_TIMEOUT = 300
+OUTLOOK_HTTP_TIMEOUT = 60
 
 # Graph's single-request JSON body limit is ~4 MB; base64 inflates raw bytes by
 # ~33%, so cap combined raw attachment bytes at 3 MB to stay safely under it.
@@ -176,8 +180,12 @@ class OutlookMixin:
                     cache.deserialize(f.read())
             except Exception:
                 pass
+        # timeout= bounds MSAL's own HTTP calls (a silent refresh included):
+        # its default is None, which overrides any socket default — a stalled
+        # connection to login.microsoftonline.com hung the call for good.
         app = msal.PublicClientApplication(
-            client_id, authority=authority, token_cache=cache
+            client_id, authority=authority, token_cache=cache,
+            timeout=OUTLOOK_HTTP_TIMEOUT,
         )
         self._outlook_apps[account] = (app, cache, cache_path)
         return self._outlook_apps[account]
@@ -208,11 +216,21 @@ class OutlookMixin:
             if cached:
                 result = app.acquire_token_silent(OUTLOOK_SCOPES, account=cached[0])
         if not result:
+            # A headless run has nobody to finish a browser sign-in: it waited
+            # forever (STOP could not end it, the scheduled child never
+            # exited). A 401's force=True retry lands here too.
+            if getattr(self, "_headless", False):
+                raise RuntimeError(
+                    f"Outlook account '{account}' needs a browser sign-in, which "
+                    f"a headless run cannot do. Run MyAgent with a window once "
+                    f"to sign in.")
             # Interactive: opens the system browser, runs a transient localhost
             # redirect server. prompt='select_account' so the user can pick the
             # right MS account even when already signed in to another.
+            # Bounded, so a sign-in nobody finishes cannot hold the run.
             result = app.acquire_token_interactive(
-                OUTLOOK_SCOPES, login_hint=email, prompt="select_account"
+                OUTLOOK_SCOPES, login_hint=email, prompt="select_account",
+                timeout=OUTLOOK_SIGNIN_TIMEOUT,
             )
         if not result or "access_token" not in result:
             err = (result or {}).get("error", "unknown")
@@ -748,16 +766,15 @@ class OutlookMixin:
                 + (f" (+{len(message_ids) - 10} more)" if len(message_ids) > 10 else ""),
             ):
                 return "user denied: outlook_trash skipped"
-            moved = []
-            for mid in message_ids:
-                res = self._outlook_graph(
-                    account, "POST", f"/me/messages/{mid}/move",
-                    json_body={"destinationId": "deleteditems"},
-                )
-                moved.append(res.get("id", mid))
+            # Per id: one bad id no longer loses the NEW ids of the ones
+            # already moved (outlook_untrash needs them).
+            moved, failed = run_per_id(message_ids, lambda mid: self._outlook_graph(
+                account, "POST", f"/me/messages/{mid}/move",
+                json_body={"destinationId": "deleteditems"},
+            ).get("id", mid))
             return json.dumps({
                 "account": account, "trashed_count": len(moved),
-                "moved_ids": moved,
+                "moved_ids": moved, **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"outlook_trash failed: {type(e).__name__}: {e}"
@@ -771,16 +788,13 @@ class OutlookMixin:
             message_ids = params["message_ids"]
             if isinstance(message_ids, str):
                 message_ids = [message_ids]
-            restored = []
-            for mid in message_ids:
-                res = self._outlook_graph(
-                    account, "POST", f"/me/messages/{mid}/move",
-                    json_body={"destinationId": "inbox"},
-                )
-                restored.append(res.get("id", mid))
+            restored, failed = run_per_id(message_ids, lambda mid: self._outlook_graph(
+                account, "POST", f"/me/messages/{mid}/move",
+                json_body={"destinationId": "inbox"},
+            ).get("id", mid))
             return json.dumps({
                 "account": account, "untrashed_count": len(restored),
-                "moved_ids": restored,
+                "moved_ids": restored, **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"outlook_untrash failed: {type(e).__name__}: {e}"
@@ -874,8 +888,8 @@ class OutlookMixin:
             if isinstance(remove_labels, str):
                 remove_labels = [remove_labels]
             remove_set = set(remove_labels)
-            modified = []
-            for mid in message_ids:
+
+            def modify_one(mid):
                 cur = self._outlook_graph(
                     account, "GET", f"/me/messages/{mid}",
                     params={"$select": "categories"},
@@ -889,10 +903,13 @@ class OutlookMixin:
                     account, "PATCH", f"/me/messages/{mid}",
                     json_body={"categories": categories},
                 )
-                modified.append(mid)
+                return mid
+
+            modified, failed = run_per_id(message_ids, modify_one)
             return json.dumps({
                 "account": account, "modified_count": len(modified),
                 "modified_ids": modified, "add": add_labels, "remove": remove_labels,
+                **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"outlook_modify_labels failed: {type(e).__name__}: {e}"
@@ -905,17 +922,13 @@ class OutlookMixin:
             if isinstance(message_ids, str):
                 message_ids = [message_ids]
             read = bool(params.get("read", True))
-            updated = []
-            for mid in message_ids:
-                self._outlook_graph(
-                    account, "PATCH", f"/me/messages/{mid}",
-                    json_body={"isRead": read},
-                )
-                updated.append(mid)
+            updated, failed = run_per_id(message_ids, lambda mid: (self._outlook_graph(
+                account, "PATCH", f"/me/messages/{mid}", json_body={"isRead": read},
+            ), mid)[1])
             return json.dumps({
                 "account": account,
                 "marked_read" if read else "marked_unread": len(updated),
-                "message_ids": updated,
+                "message_ids": updated, **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"outlook_mark_read failed: {type(e).__name__}: {e}"

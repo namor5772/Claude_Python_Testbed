@@ -3080,9 +3080,10 @@ PROTON_TOOLS = [
             "Send a new Proton Mail email via SMTP through Bridge. ALWAYS prompts "
             "the user with a modal confirmation dialog showing recipient/subject "
             "before sending. The user can deny — if so the tool returns 'user "
-            "denied'. After sending, the message is APPEND'd to the 'Sent' folder "
-            "so it shows up in Proton's UI. Supports optional file attachments "
-            "(combined raw size up to ~20 MB)."
+            "denied'. After sending, the message is in the 'Sent' folder (Proton "
+            "Bridge saves it itself; other IMAP servers get it APPENDed). Recipients "
+            "the SMTP server refused are listed as refused_recipients. Supports "
+            "optional file attachments (combined raw size up to ~20 MB)."
         ),
         "input_schema": {
             "type": "object",
@@ -3166,7 +3167,8 @@ PROTON_TOOLS = [
         "name": "proton_send_draft",
         "description": (
             "Send an existing draft by UID. Pulls the draft from the Drafts "
-            "folder, SMTP-sends it, APPENDs to Sent, then deletes from Drafts. "
+            "folder, SMTP-sends it, files it in Sent (Proton Bridge does so "
+            "itself; other servers get it APPENDed), then deletes from Drafts. "
             "Prompts the user with a modal confirmation showing recipient + "
             "subject before sending."
         ),

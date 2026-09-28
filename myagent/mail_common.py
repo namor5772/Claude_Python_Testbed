@@ -40,3 +40,20 @@ def confirm_action(app, provider_label, tool_name, title, summary, detail):
             return bool(messagebox.askyesno(title, message, parent=app.root))
     except Exception:
         return False
+
+
+def run_per_id(ids, act):
+    """Apply act(id) to every id of a batch mail operation, carrying on past
+    failures. Returns (results, failed): act's return values for the ids that
+    worked, in order, and [{"id", "error"}] for the rest. A batch used to stop
+    at its first bad id with a bare "failed", losing the ids already handled
+    — on Outlook their NEW ids after a move, which the model needs to undo
+    it — and a retry of the same list then failed at once on the first,
+    already-moved id."""
+    results, failed = [], []
+    for item in ids:
+        try:
+            results.append(act(item))
+        except Exception as e:
+            failed.append({"id": item, "error": f"{type(e).__name__}: {e}"})
+    return results, failed

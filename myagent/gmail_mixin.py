@@ -18,7 +18,9 @@ Architecture notes:
   need arises, add a separate ``do_gmail_delete_forever`` tool and request
   the broader scope at OAuth time.
 
-* Destructive operations (``gmail_send``, ``gmail_send_draft``, ``gmail_trash``)
+* Destructive operations (``gmail_send``, ``gmail_reply``, ``gmail_send_draft``,
+  ``gmail_trash``, ``gmail_delete_label``, and ``gmail_modify_labels`` when it
+  adds TRASH or SPAM — asked under gmail_trash's key)
   pop a modal Tk confirmation dialog showing what's about to happen. Click
   Yes to proceed, No to cancel — the tool returns a "user denied" string
   so the agent can decide what to do next. Headless runs see the same
@@ -35,7 +37,7 @@ import mimetypes
 import os
 import re
 from email.message import EmailMessage
-from myagent.mail_common import confirm_action
+from myagent.mail_common import confirm_action, run_per_id
 
 from myagent.helpers import extract_text_from_html, normalize_save_path
 
@@ -63,6 +65,8 @@ GOOGLE_OAUTH_CLIENT_FILE = os.path.join(GOOGLE_CONFIG_DIR, "oauth_client.json")
 # permanent delete. That's deliberate; trash is recoverable from the
 # Gmail UI, permanent delete is not.
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+# Seconds a browser sign-in may take before the tool gives up (it waited forever).
+OAUTH_SIGNIN_TIMEOUT = 300
 
 
 class GmailMixin:
@@ -141,6 +145,14 @@ class GmailMixin:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
             else:
+                # A browser sign-in has nobody to complete it in a headless
+                # run — it would wait forever, STOP could not end it, and the
+                # scheduled child would never exit.
+                if getattr(self, "_headless", False):
+                    raise RuntimeError(
+                        f"Gmail account '{account}' needs a browser sign-in (no "
+                        f"valid token), which a headless run cannot do. Run "
+                        f"MyAgent with a window once to sign in.")
                 if not os.path.exists(GOOGLE_OAUTH_CLIENT_FILE):
                     raise RuntimeError(
                         f"OAuth client credentials not found at "
@@ -154,7 +166,9 @@ class GmailMixin:
                 # prompt='select_account' so the user can pick the right
                 # account explicitly even when already signed in to another
                 # Google account in the browser — crucial for multi-account.
-                creds = flow.run_local_server(port=0, prompt="select_account")
+                # Bounded: a sign-in nobody finishes must not hold the run.
+                creds = flow.run_local_server(port=0, prompt="select_account",
+                                              timeout_seconds=OAUTH_SIGNIN_TIMEOUT)
             with open(token_path, "w", encoding="utf-8") as f:
                 f.write(creds.to_json())
             # google-auth writes tokens with the default umask (typically 644).
@@ -235,6 +249,17 @@ class GmailMixin:
         return default
 
     @staticmethod
+    def _gmail_part_charset(part):
+        """The charset a Gmail payload part declares in its Content-Type
+        header, else utf-8."""
+        for header in part.get("headers", []) or []:
+            if (header.get("name") or "").lower() == "content-type":
+                m = re.search(r'charset\s*=\s*"?([^";\s]+)', header.get("value") or "", re.I)
+                if m:
+                    return m.group(1)
+        return "utf-8"
+
+    @staticmethod
     def _extract_bodies(payload):
         """Walk a Gmail message payload tree once and collect BOTH the
         text/plain body and the raw text/html body, if present.
@@ -252,8 +277,16 @@ class GmailMixin:
             mime = part.get("mimeType", "")
             data = part.get("body", {}).get("data")
             if data:
+                # body.data is the part's bytes in its OWN charset (the API
+                # does not transcode): a windows-1252 / ISO-8859-1 body read
+                # as UTF-8 came out full of U+FFFD.
+                charset = GmailMixin._gmail_part_charset(part)
                 try:
-                    decoded = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+                    raw = base64.urlsafe_b64decode(data)
+                    try:
+                        decoded = raw.decode(charset, errors="replace")
+                    except LookupError:        # a charset name Python lacks
+                        decoded = raw.decode("utf-8", errors="replace")
                 except Exception:
                     decoded = ""
                 if mime == "text/plain" and not text_body:
@@ -458,6 +491,7 @@ class GmailMixin:
             parent_dir = os.path.dirname(os.path.abspath(save_to))
             if parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
+            existed = os.path.exists(save_to)   # before the write, or it always says True
             with open(save_to, "wb") as f:
                 f.write(decoded)
 
@@ -468,7 +502,7 @@ class GmailMixin:
                 "saved_to": os.path.abspath(save_to),
                 **({"note": path_note} if path_note else {}),
                 "bytes_written": len(decoded),
-                "overwrote_existing": overwrite and os.path.exists(save_to),
+                "overwrote_existing": existed,
             }, indent=2)
         except Exception as e:
             return f"gmail_get_attachment failed: {type(e).__name__}: {e}"
@@ -560,8 +594,8 @@ class GmailMixin:
             if not orig_msgid:
                 return ("gmail_reply failed: original message has no Message-ID "
                         "header (cannot construct In-Reply-To)")
-            # Reply target: explicit override > original sender. Strip display
-            # name from "Name <addr>" form if the model passed the full From line.
+            # Reply target: explicit override > original sender. The From line
+            # is used as it stands — "Name <addr>" is a valid To: value.
             reply_to = override_to or orig_from
             # References header chains the conversation: existing refs + the
             # message we're replying to. Gmail uses this to thread on the
@@ -718,13 +752,11 @@ class GmailMixin:
             ):
                 return "user denied: gmail_trash skipped"
             service = self._gmail_service(account)
-            trashed = []
-            for mid in message_ids:
-                service.users().messages().trash(userId="me", id=mid).execute()
-                trashed.append(mid)
+            trashed, failed = run_per_id(message_ids, lambda mid: (
+                service.users().messages().trash(userId="me", id=mid).execute(), mid)[1])
             return json.dumps({
                 "account": account, "trashed_count": len(trashed),
-                "trashed_ids": trashed,
+                "trashed_ids": trashed, **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"gmail_trash failed: {type(e).__name__}: {e}"
@@ -736,13 +768,11 @@ class GmailMixin:
             if isinstance(message_ids, str):
                 message_ids = [message_ids]
             service = self._gmail_service(account)
-            restored = []
-            for mid in message_ids:
-                service.users().messages().untrash(userId="me", id=mid).execute()
-                restored.append(mid)
+            restored, failed = run_per_id(message_ids, lambda mid: (
+                service.users().messages().untrash(userId="me", id=mid).execute(), mid)[1])
             return json.dumps({
                 "account": account, "untrashed_count": len(restored),
-                "untrashed_ids": restored,
+                "untrashed_ids": restored, **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"gmail_untrash failed: {type(e).__name__}: {e}"
@@ -832,21 +862,33 @@ class GmailMixin:
                 message_ids = [message_ids]
             add_labels = params.get("add_labels", []) or []
             remove_labels = params.get("remove_labels", []) or []
+            # Adding TRASH or SPAM moves the mail out of sight just as
+            # gmail_trash does — so it asks just as gmail_trash does, under
+            # that tool's bypass key. (It was an unconfirmed side door the
+            # tool's own description advertised.)
+            if ({str(label).upper() for label in add_labels} & {"TRASH", "SPAM"}
+                    and not self._confirm_gmail_action(
+                        "gmail_trash",
+                        "Confirm Gmail trash",
+                        f"Add {', '.join(add_labels)} to {len(message_ids)} message(s) "
+                        f"on account '{account}'",
+                        f"Message IDs: {', '.join(str(m) for m in message_ids[:10])}"
+                        + (f" (+{len(message_ids) - 10} more)" if len(message_ids) > 10 else ""),
+                    )):
+                return "user denied: gmail_modify_labels to TRASH/SPAM skipped"
             service = self._gmail_service(account)
             body = {}
             if add_labels:
                 body["addLabelIds"] = add_labels
             if remove_labels:
                 body["removeLabelIds"] = remove_labels
-            modified = []
-            for mid in message_ids:
-                service.users().messages().modify(
-                    userId="me", id=mid, body=body
-                ).execute()
-                modified.append(mid)
+            modified, failed = run_per_id(message_ids, lambda mid: (
+                service.users().messages().modify(userId="me", id=mid, body=body).execute(),
+                mid)[1])
             return json.dumps({
                 "account": account, "modified_count": len(modified),
                 "modified_ids": modified, "add": add_labels, "remove": remove_labels,
+                **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"gmail_modify_labels failed: {type(e).__name__}: {e}"
@@ -861,15 +903,12 @@ class GmailMixin:
             read = bool(params.get("read", True))
             service = self._gmail_service(account)
             body = {"removeLabelIds": ["UNREAD"]} if read else {"addLabelIds": ["UNREAD"]}
-            updated = []
-            for mid in message_ids:
-                service.users().messages().modify(
-                    userId="me", id=mid, body=body
-                ).execute()
-                updated.append(mid)
+            updated, failed = run_per_id(message_ids, lambda mid: (
+                service.users().messages().modify(userId="me", id=mid, body=body).execute(),
+                mid)[1])
             return json.dumps({
                 "account": account, "marked_read" if read else "marked_unread": len(updated),
-                "message_ids": updated,
+                "message_ids": updated, **({"failed": failed} if failed else {}),
             }, indent=2)
         except Exception as e:
             return f"gmail_mark_read failed: {type(e).__name__}: {e}"

@@ -76,7 +76,7 @@ import re
 import smtplib
 import ssl
 from email.message import EmailMessage
-from email.utils import formatdate, make_msgid, parseaddr
+from email.utils import formatdate, getaddresses, make_msgid, parseaddr
 from myagent.mail_common import confirm_action
 
 from myagent.helpers import extract_text_from_html, normalize_save_path
@@ -160,6 +160,13 @@ class ProtonMailMixin:
 
     # ── Connection helpers ──────────────────────────────────────────────────
 
+    _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
+
+    @staticmethod
+    def _is_loopback_host(host):
+        """True for this machine's own addresses (Proton Bridge's case)."""
+        return (host or "").strip().lower() in ProtonMailMixin._LOOPBACK_HOSTS
+
     @staticmethod
     def _build_ssl_context(account_cfg):
         """Build an ssl.SSLContext for an IMAP/SMTP account.
@@ -206,10 +213,8 @@ class ProtonMailMixin:
             return ctx
 
         # 3. Loopback detection (Bridge case) — preserve existing behaviour
-        LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
-        imap_host = (account_cfg.get("imap_host") or "").strip().lower()
-        smtp_host = (account_cfg.get("smtp_host") or "").strip().lower()
-        if imap_host in LOOPBACK_HOSTS or smtp_host in LOOPBACK_HOSTS:
+        if (ProtonMailMixin._is_loopback_host(account_cfg.get("imap_host"))
+                or ProtonMailMixin._is_loopback_host(account_cfg.get("smtp_host"))):
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
@@ -254,12 +259,22 @@ class ProtonMailMixin:
             conn = imaplib.IMAP4(host, port)
             try:
                 conn.starttls(ssl_context=ctx)
-            except imaplib.IMAP4.error:
+            except imaplib.IMAP4.error as e:
                 # Some Bridge versions return a quirky CAPABILITY after
-                # STARTTLS. If STARTTLS isn't advertised, fall through and
-                # try login on the plain connection — Bridge on localhost
-                # accepts it but flag it so it's visible in the activity log.
-                pass
+                # STARTTLS: Bridge on THIS machine gets the plain login, which
+                # never leaves it. Any other host would receive the app
+                # password in clear — an attacker who strips STARTTLS reads
+                # it — so there the login is refused instead.
+                if not self._is_loopback_host(host):
+                    try:
+                        conn.shutdown()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"STARTTLS failed for IMAP account '{account}' ({host}): {e} — "
+                        f"refusing to send its password unencrypted. Set imap_ssl: true "
+                        f"in {PROTON_ACCOUNTS_FILE} if the server speaks implicit TLS."
+                    ) from e
         try:
             conn.login(username, password)
         except imaplib.IMAP4.error as e:
@@ -306,8 +321,18 @@ class ProtonMailMixin:
             try:
                 client.starttls(context=ctx)
                 client.ehlo()
-            except smtplib.SMTPException:
-                pass
+            except smtplib.SMTPException as e:
+                # Plain login only on this machine (Bridge) — see _proton_imap.
+                if not self._is_loopback_host(host):
+                    try:
+                        client.close()
+                    except Exception:
+                        pass
+                    raise RuntimeError(
+                        f"STARTTLS failed for SMTP account '{account}' ({host}): {e} — "
+                        f"refusing to send its password unencrypted. Set smtp_ssl: true "
+                        f"in {PROTON_ACCOUNTS_FILE} if the server speaks implicit TLS."
+                    ) from e
         try:
             client.login(username, password)
         except smtplib.SMTPException as e:
@@ -367,10 +392,12 @@ class ProtonMailMixin:
         flags to discover where the server keeps each special-purpose folder
         (Sent, Drafts, Trash, etc.).
 
-        Returns a dict mapping role names to actual folder paths. Falls back
-        to default constants for any role the server didn't tag. Failures
-        (network, parse errors) silently return defaults — discovery is
-        best-effort, callers must always get a usable folder name.
+        Returns a dict mapping role names to actual folder paths, with the
+        default constants for any role the server didn't tag — or None when
+        the LIST itself failed (network, a stale connection), so that
+        _proton_folder serves defaults for this call only and retries: a
+        failure cached as "the server tags nothing" sent a dovecot account's
+        trash to "Trash" instead of "INBOX.Trash" for the whole session.
 
         Discovered example for a dovecot server (WebCentral): {
             "sent": "INBOX.Sent", "drafts": "INBOX.Drafts",
@@ -385,7 +412,9 @@ class ProtonMailMixin:
         try:
             conn = self._proton_imap(account)
             typ, data = conn.list()
-            if typ != "OK" or not data:
+            if typ != "OK":
+                return None
+            if not data:
                 return discovered
             for raw in data:
                 if not raw:
@@ -404,8 +433,10 @@ class ProtonMailMixin:
                     if role:
                         discovered[role] = name
         except Exception:
-            # Best-effort: discovery failure is non-fatal, defaults stand
-            pass
+            # Non-fatal, but NOT an answer: drop the connection it failed on
+            # (a stale socket would fail the next call too) and report None.
+            self._proton_drop_imap(account)
+            return None
         return discovered
 
     def _proton_folder(self, account, role):
@@ -435,9 +466,13 @@ class ProtonMailMixin:
         if override:
             return override
 
-        # 2. Cached auto-discovery (one IMAP LIST per account, ever)
+        # 2. Cached auto-discovery (one SUCCESSFUL IMAP LIST per account; a
+        # failed one serves the defaults for this call and is retried)
         if account not in self._proton_folder_cache:
-            self._proton_folder_cache[account] = self._proton_discover_folders(account)
+            found = self._proton_discover_folders(account)
+            if found is None:
+                return self._FOLDER_ROLE_DEFAULTS.get(role, PROTON_INBOX)
+            self._proton_folder_cache[account] = found
 
         return self._proton_folder_cache[account].get(
             role, self._FOLDER_ROLE_DEFAULTS.get(role, PROTON_INBOX)
@@ -456,7 +491,7 @@ class ProtonMailMixin:
     @staticmethod
     def _attach_proton_files(msg, attachments):
         """Attach files to an EmailMessage. Returns (ok, summary_or_error).
-        Matches Gmail's ``_attach_proton_files`` semantics."""
+        Matches Gmail's ``_attach_files`` semantics."""
         if not attachments:
             return True, ""
         if isinstance(attachments, str):
@@ -523,12 +558,29 @@ class ProtonMailMixin:
             parts = []
             for text, charset in decoded:
                 if isinstance(text, bytes):
-                    parts.append(text.decode(charset or "utf-8", errors="replace"))
+                    parts.append(ProtonMailMixin._decode_header_bytes(text, charset))
                 else:
                     parts.append(text)
             return "".join(parts)
         except Exception:
             return str(value)
+
+    @staticmethod
+    def _decode_header_bytes(raw, charset):
+        """One decoded header chunk's bytes as text. A raw 8-bit header
+        (RFC 6532 UTF-8 with no encoded-word) arrives labelled 'unknown-8bit'
+        — a charset no codec has, so the decode raised and the header came
+        back as str(Header), every non-ASCII letter a U+FFFD. It, and any
+        other charset Python doesn't know, is read as UTF-8, else Latin-1."""
+        if charset and charset.lower() not in ("unknown-8bit", "x-unknown"):
+            try:
+                return raw.decode(charset, errors="replace")
+            except LookupError:
+                pass
+        try:
+            return raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return raw.decode("latin-1")
 
     @staticmethod
     def _extract_proton_bodies(msg):
@@ -590,7 +642,7 @@ class ProtonMailMixin:
 
     @staticmethod
     def _format_proton_summary(uid, folder, msg):
-        """Compact summary dict — analogous to Gmail's ``_format_proton_summary``
+        """Compact summary dict — analogous to Gmail's ``_format_message_summary``
         but with IMAP-native (folder, uid) addressing."""
         return {
             "uid": uid,
@@ -603,25 +655,21 @@ class ProtonMailMixin:
         }
 
     def _fetch_envelope(self, conn, uid):
-        """Fetch RFC822 headers + flags for a single UID. Returns
-        (email.Message, flags_list) or (None, []) on failure."""
-        typ, data = conn.uid("fetch", str(uid), "(BODY.PEEK[HEADER] FLAGS)")
+        """Fetch the RFC822 headers of a single UID (PEEK: nothing is marked
+        read) -> email.Message, or None on failure. (It also fetched FLAGS,
+        which both callers discarded — and which its parser, looking only
+        outside the literal's tuple, would rarely have found.)"""
+        typ, data = conn.uid("fetch", str(uid), "(BODY.PEEK[HEADER])")
         if typ != "OK" or not data or not data[0]:
-            return None, []
+            return None
         raw = b""
-        flags = []
         for item in data:
             if isinstance(item, tuple) and len(item) >= 2:
                 raw = item[1] or b""
-            elif isinstance(item, bytes):
-                m = re.search(rb"FLAGS \(([^)]*)\)", item)
-                if m:
-                    flags = m.group(1).decode("ascii", "replace").split()
         try:
-            msg = email.message_from_bytes(raw)
+            return email.message_from_bytes(raw)
         except Exception:
-            msg = None
-        return msg, flags
+            return None
 
     def _fetch_full(self, conn, uid):
         """Fetch full RFC822 message (body + attachments) for a UID."""
@@ -691,7 +739,7 @@ class ProtonMailMixin:
             results = []
             for raw_uid in uids:
                 uid = raw_uid.decode("ascii", "replace")
-                msg, _flags = self._fetch_envelope(conn, uid)
+                msg = self._fetch_envelope(conn, uid)
                 if msg is None:
                     continue
                 results.append(self._format_proton_summary(uid, folder, msg))
@@ -838,24 +886,30 @@ class ProtonMailMixin:
 
     def _smtp_send(self, account, msg, from_address):
         """Open SMTP, send, close. Recipients gathered from To/Cc/Bcc.
-        Bcc header is stripped before send (server-side delivery only)."""
-        to_addrs = []
-        for hdr in ("To", "Cc", "Bcc"):
-            for raw in (msg.get(hdr, "") or "").split(","):
-                _, addr = parseaddr(raw)
-                if addr:
-                    to_addrs.append(addr)
+        Bcc header is stripped before send (server-side delivery only).
+        Returns {address: "code reason"} for the recipients the server
+        REFUSED — {} when all were accepted (smtplib raises only when EVERY
+        recipient is refused, so a partial refusal went unreported)."""
+        # getaddresses, not a split on ",": a quoted display name may hold a
+        # comma — '"Smith, John" <john@x.com>' split into 'Smith' and 'John',
+        # and john never became an envelope recipient although the To:
+        # header showed him.
+        to_addrs = [addr for _name, addr in getaddresses(
+            [str(value) for hdr in ("To", "Cc", "Bcc") for value in msg.get_all(hdr, [])])
+            if addr]
         # Don't leak Bcc to recipients
         if "Bcc" in msg:
             del msg["Bcc"]
         client = self._proton_smtp(account)
         try:
-            client.send_message(msg, from_addr=from_address, to_addrs=to_addrs)
+            refused = client.send_message(msg, from_addr=from_address, to_addrs=to_addrs)
         finally:
             try:
                 client.quit()
             except Exception:
                 pass
+        return {addr: f"{code} {reason.decode('utf-8', 'replace') if isinstance(reason, bytes) else reason}"
+                for addr, (code, reason) in (refused or {}).items()}
 
     def _imap_append_to_drafts(self, account, msg, folder=None):
         """APPEND a raw EmailMessage to a folder (used by create_draft and
@@ -932,7 +986,7 @@ class ProtonMailMixin:
             return "user denied: proton_send was rejected by the user"
         try:
             msg, att_info = self._build_outgoing_message(params, from_address)
-            self._smtp_send(account, msg, from_address)
+            refused = self._smtp_send(account, msg, from_address)
             # APPEND a copy to Sent only when SMTP didn't already store one.
             # Proton Bridge always saves sent mail server-side, so APPENDing
             # there duplicates it; generic IMAP needs the APPEND to populate
@@ -944,6 +998,7 @@ class ProtonMailMixin:
                     pass
             return json.dumps({
                 "ok": True,
+                **({"refused_recipients": refused} if refused else {}),
                 "to": params.get("to"),
                 "subject": params.get("subject", ""),
                 "attachments": att_info,
@@ -999,7 +1054,7 @@ class ProtonMailMixin:
                 msg["In-Reply-To"] = orig_msg_id
             if new_refs:
                 msg["References"] = new_refs
-            self._smtp_send(account, msg, from_address)
+            refused = self._smtp_send(account, msg, from_address)
             # Skip the Sent APPEND when SMTP auto-saves (Proton Bridge) to
             # avoid a duplicate; see _smtp_autosaves_to_sent.
             if not self._smtp_autosaves_to_sent(cfg):
@@ -1009,6 +1064,7 @@ class ProtonMailMixin:
                     pass
             return json.dumps({
                 "ok": True,
+                **({"refused_recipients": refused} if refused else {}),
                 "to": to_addr,
                 "subject": reply_subject,
                 "attachments": att_info,
@@ -1075,7 +1131,7 @@ class ProtonMailMixin:
         ):
             return "user denied: proton_send_draft was rejected by the user"
         try:
-            self._smtp_send(account, msg, from_address)
+            refused = self._smtp_send(account, msg, from_address)
             # Skip the Sent APPEND when SMTP auto-saves (Proton Bridge) to
             # avoid a duplicate; see _smtp_autosaves_to_sent.
             if not self._smtp_autosaves_to_sent(cfg):
@@ -1088,10 +1144,11 @@ class ProtonMailMixin:
                 conn = self._proton_imap(account)
                 self._select_folder(conn, drafts_folder, readonly=False)
                 conn.uid("store", str(uid), "+FLAGS", r"(\Deleted)")
-                conn.expunge()
+                self._imap_uid_expunge(conn, str(uid))   # this draft only
             except Exception:
                 pass
-            return json.dumps({"ok": True, "sent_uid": str(uid), "subject": subject, "to": to_addr})
+            return json.dumps({"ok": True, "sent_uid": str(uid), "subject": subject, "to": to_addr,
+                               **({"refused_recipients": refused} if refused else {})})
         except Exception as e:
             return f"error: {e}"
 
@@ -1114,16 +1171,9 @@ class ProtonMailMixin:
             self._select_folder(conn, folder, readonly=False)
             uid_set = ",".join(uids)
             trash_folder = self._proton_folder(account, "trash")
-            # Prefer MOVE (RFC 6851) — Bridge supports it. Falls back to
-            # COPY+STORE-Deleted+EXPUNGE on servers that don't.
-            try:
-                typ, data = conn.uid("move", uid_set, self._quote_mailbox(trash_folder))
-                if typ != "OK":
-                    raise imaplib.IMAP4.error(str(data))
-            except imaplib.IMAP4.error:
-                conn.uid("copy", uid_set, self._quote_mailbox(trash_folder))
-                conn.uid("store", uid_set, "+FLAGS", r"(\Deleted)")
-                conn.expunge()
+            # MOVE (RFC 6851) — Bridge supports it; _imap_move falls back to
+            # a CHECKED COPY + UID EXPUNGE only on servers that lack it.
+            self._imap_move(conn, uid_set, trash_folder)
             return json.dumps({"ok": True, "trashed": len(uids), "from_folder": folder, "to_folder": trash_folder})
         except Exception as e:
             self._proton_drop_imap(account)
@@ -1140,14 +1190,7 @@ class ProtonMailMixin:
             conn = self._proton_imap(account)
             self._select_folder(conn, self._proton_folder(account, "trash"), readonly=False)
             uid_set = ",".join(uids)
-            try:
-                typ, data = conn.uid("move", uid_set, self._quote_mailbox(target_folder))
-                if typ != "OK":
-                    raise imaplib.IMAP4.error(str(data))
-            except imaplib.IMAP4.error:
-                conn.uid("copy", uid_set, self._quote_mailbox(target_folder))
-                conn.uid("store", uid_set, "+FLAGS", r"(\Deleted)")
-                conn.expunge()
+            self._imap_move(conn, uid_set, target_folder)
             return json.dumps({"ok": True, "restored": len(uids), "to_folder": target_folder})
         except Exception as e:
             self._proton_drop_imap(account)
@@ -1226,16 +1269,74 @@ class ProtonMailMixin:
             self._proton_drop_imap(account)
             return f"error: {e}"
 
+    @staticmethod
+    def _imap_reply_text(data):
+        """An IMAP response's data list as readable text (for error messages)."""
+        return " ".join(d.decode("utf-8", "replace") if isinstance(d, bytes) else str(d)
+                        for d in (data or []) if d is not None) or "(no detail)"
+
     def _imap_move(self, conn, uid_set, destination):
-        """Issue UID MOVE with COPY+STORE+EXPUNGE fallback for older servers."""
+        """UID MOVE (RFC 6851) of `uid_set` from the selected folder.
+
+        Only a server that does not KNOW MOVE — it answers BAD, which imaplib
+        raises — gets the COPY + STORE \\Deleted + UID EXPUNGE fallback, and
+        only once the COPY succeeded. A MOVE the server REFUSES (NO: e.g. a
+        destination that does not exist, [TRYCREATE]) raises. The fallback
+        used to run for a refusal too, ignore its equally refused COPY and
+        expunge the messages: a mistyped folder permanently deleted them
+        while the tool reported ok."""
+        dest = self._quote_mailbox(destination)
         try:
-            typ, data = conn.uid("move", uid_set, self._quote_mailbox(destination))
-            if typ != "OK":
-                raise imaplib.IMAP4.error(str(data))
+            typ, data = conn.uid("move", uid_set, dest)
+        except imaplib.IMAP4.abort:
+            raise                              # the connection died: nothing to fall back on
         except imaplib.IMAP4.error:
-            conn.uid("copy", uid_set, self._quote_mailbox(destination))
-            conn.uid("store", uid_set, "+FLAGS", r"(\Deleted)")
+            typ, data = None, None             # BAD: this server has no MOVE
+        if typ == "OK":
+            return
+        if typ is not None:
+            raise imaplib.IMAP4.error(
+                f"MOVE to {destination!r} was refused: {self._imap_reply_text(data)}")
+        typ, data = conn.uid("copy", uid_set, dest)
+        if typ != "OK":
+            raise imaplib.IMAP4.error(
+                f"COPY to {destination!r} was refused: {self._imap_reply_text(data)}")
+        conn.uid("store", uid_set, "+FLAGS", r"(\Deleted)")
+        self._imap_uid_expunge(conn, uid_set)
+
+    def _imap_uid_expunge(self, conn, uid_set):
+        """Expunge exactly `uid_set` — UID EXPUNGE (RFC 4315 UIDPLUS). A plain
+        EXPUNGE also destroys every message another client (Thunderbird's
+        mark-as-deleted mode, say) has flagged \\Deleted in the folder. Only a
+        server that rejects UID EXPUNGE outright (BAD: no UIDPLUS) gets the
+        plain form; a refusal (NO) leaves the messages flagged \\Deleted for
+        a later expunge rather than widening it."""
+        try:
+            conn.uid("expunge", uid_set)
+        except imaplib.IMAP4.abort:
+            raise
+        except imaplib.IMAP4.error:
             conn.expunge()
+
+    @staticmethod
+    def _proton_message_ids(conn, uid_set):
+        """{uid (bytes): Message-ID, lower-cased} for `uid_set` in the selected
+        folder; a message without one is left out. BODY.PEEK marks nothing
+        read."""
+        found = {}
+        if not uid_set:
+            return found
+        typ, data = conn.uid("fetch", uid_set, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])")
+        if typ != "OK":
+            return found
+        for item in data or []:
+            if not isinstance(item, tuple) or len(item) < 2:
+                continue
+            uid = re.search(rb"UID (\d+)", item[0] or b"")
+            mid = email.message_from_bytes(item[1] or b"").get("Message-ID")
+            if uid and mid:
+                found[uid.group(1)] = str(mid).strip().lower()
+        return found
 
     def do_proton_modify_labels(self, params):
         """Apply or move messages between Proton folders/labels.
@@ -1262,18 +1363,40 @@ class ProtonMailMixin:
         if not account or not uids or not add_to:
             return "error: account, uids, and add_to are required"
         uids = [str(u) for u in uids]
+        # A move to the account's Trash or Spam hides the mail just as
+        # proton_trash does, so it asks just as proton_trash does — under
+        # that tool's bypass key, so an instruction that bypasses trash
+        # confirmation bypasses this too. (It was an unconfirmed side door
+        # the tool description even advertised.)
+        try:
+            bins = {self._proton_folder(account, "trash").lower(),
+                    self._proton_folder(account, "spam").lower()}
+        except Exception:
+            bins = {PROTON_TRASH.lower(), PROTON_SPAM.lower()}
+        if str(add_to).lower() in bins and not self._confirm_proton_action(
+                "proton_trash",
+                "Confirm Proton Trash",
+                f"Move {len(uids)} message(s) to {add_to} in {account}?",
+                f"Folder: {folder}\nUIDs: {', '.join(uids[:10])}{'...' if len(uids) > 10 else ''}",
+        ):
+            return "user denied: proton_modify_labels to trash/spam was rejected by the user"
         try:
             conn = self._proton_imap(account)
             is_label_source = folder.startswith("Labels/")
 
             # Snapshot source UIDs before the move so we can detect transient
-            # new entries created by Bridge's label-removal sync afterward.
+            # new entries created by Bridge's label-removal sync afterward —
+            # and the moved messages' Message-IDs, which tell such a stray
+            # (the same message back under a new UID) from a message
+            # genuinely labelled in the meantime.
             old_uids = set()
+            moved_ids = set()
             if is_label_source:
                 self._select_folder(conn, folder, readonly=True)
                 typ, data = conn.uid("search", None, "ALL")
                 if typ == "OK" and data and data[0]:
                     old_uids = set(data[0].split())
+                moved_ids = set(self._proton_message_ids(conn, ",".join(uids)).values())
 
             # Perform the primary MOVE
             self._select_folder(conn, folder, readonly=False)
@@ -1289,6 +1412,13 @@ class ProtonMailMixin:
                     new_uids = set(data[0].split()) if typ == "OK" and data and data[0] else set()
                     # Unexpected = present now but weren't before, and aren't the original moved UIDs
                     unexpected = new_uids - old_uids - moved_set
+                    if unexpected and moved_ids:
+                        # Only the SAME messages back under new UIDs: another
+                        # message labelled in this window (a filter, another
+                        # client) keeps its label.
+                        found = self._proton_message_ids(
+                            conn, b",".join(sorted(unexpected)).decode("ascii"))
+                        unexpected = {u for u in unexpected if found.get(u) in moved_ids}
                     if not unexpected:
                         break
                     self._select_folder(conn, folder, readonly=False)
@@ -1362,7 +1492,7 @@ class ProtonMailMixin:
                 if not group:
                     continue
                 root_uid = group[0]
-                msg, _flags = self._fetch_envelope(conn, root_uid)
+                msg = self._fetch_envelope(conn, root_uid)
                 if msg is None:
                     continue
                 decorated.append({
