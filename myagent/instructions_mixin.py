@@ -50,6 +50,16 @@ class InstructionsMixin:
     def _save_instructions_to_disk(self, instructions):
         save_store(INSTRUCTIONS_FILE, instructions)
 
+    def _store_model_fields(self):
+        """The five model fields a write to the instruction store records: the
+        stashed originals while a run is upgraded (model_upgrade_mixin), else
+        the live values — an upgrade never reaches a store (the rule
+        _save_last_state follows for the state file)."""
+        kept = getattr(self, "_upgrade_original", None) or {}
+        return {field: kept.get(field, getattr(self, field))
+                for field in ("model", "thinking_enabled", "thinking_effort",
+                              "thinking_budget", "thinking_mode")}
+
     def do_manage_instructions(self, params):
         """CRUD operations on the saved instruction library."""
         action = params.get("action", "")
@@ -133,12 +143,9 @@ class InstructionsMixin:
                 "conversational": params.get("conversational", False),
                 "dictation_auto_send": params.get("dictation_auto_send", False),
                 "provider": self.provider,
-                "model": self.model,
+                # (the instruction's model, never a Model upgrade's)
+                **self._store_model_fields(),
                 "temperature": self.temperature,
-                "thinking_enabled": self.thinking_enabled,
-                "thinking_effort": self.thinking_effort,
-                "thinking_budget": self.thinking_budget,
-                "thinking_mode": self.thinking_mode,
                 "text_verbosity": self.text_verbosity,
                 "fast_mode": self.fast_mode,
                 # None (absent) = the provider default (model_upgrade_mixin).
@@ -972,12 +979,11 @@ class InstructionsMixin:
             # model params — it has no editor widget.
             "dictation_auto_send": self.dictation_auto_send.get(),
             "provider": self.provider,
-            "model": self.model,
+            # The instruction's model — the stashed original while a run is
+            # upgraded, so a SAVE in an editor left open over the run never
+            # stores the upgrade model.
+            **self._store_model_fields(),
             "temperature": self.temperature,
-            "thinking_enabled": self.thinking_enabled,
-            "thinking_effort": self.thinking_effort,
-            "thinking_budget": self.thinking_budget,
-            "thinking_mode": self.thinking_mode,
             "text_verbosity": self.text_verbosity,
             "fast_mode": self.fast_mode,
             # The Upgrade box's model (Model Setup, on the main window): live

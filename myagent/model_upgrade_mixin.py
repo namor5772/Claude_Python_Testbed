@@ -298,9 +298,13 @@ class ModelUpgradeMixin:
         original = getattr(self, "_upgrade_original", None)
         if original is None:
             return
-        self._upgrade_original = None
+        # Restore FIRST, then drop the stash — _upgrade_apply's order in
+        # reverse: while the stash exists, _save_last_state (Tk thread, every
+        # 5 s) writes it, so a save landing between the two steps writes the
+        # instruction's model either way, never the upgrade's.
         for field in UPGRADE_FIELDS:
             setattr(self, field, original[field])
+        self._upgrade_original = None
         self._tool_info(f"Model restored to {self.model} for the next run.\n")
         root = getattr(self, "root", None)
         if root is not None:

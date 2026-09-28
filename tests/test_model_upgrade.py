@@ -936,11 +936,13 @@ class WiringTests(unittest.TestCase):
         self.assertLess(src.index("self._upgrade_build_row(dlg)"), src.index("attach_btn = tk.Button("))
         self.assertIn('"u": upgrade_btn', src)
         # Read when the reply is sent; applied after the wait, on the worker,
-        # only for a sent, non-empty reply — to the target the label named.
+        # only for a sent, non-empty reply that is not a Convo end word (the
+        # run ends on it; 2026-09-28) — to the target the label named.
         inject = src[src.index("def on_inject("):src.index("def on_close(")]
         self.assertIn("result_holder[2] = upgrade_target if upgrade_var.get() else None", inject)
-        tail = src[src.index("event.wait()"):src.index("def _take_prompt_images(")]
-        self.assertIn("if result_holder[2] and response.strip():", tail)
+        tail = src[src.index("def do_user_prompt("):src.index("def _take_prompt_images(")]
+        tail = tail[tail.index("event.wait()"):]
+        self.assertIn("if result_holder[2] and response.strip() and not ends_convo:", tail)
         self.assertIn("self._upgrade_apply(result_holder[2])", tail)
         self.assertLess(tail.index('"user_prompt_echo"'), tail.index("self._upgrade_apply("))
 

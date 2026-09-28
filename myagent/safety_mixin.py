@@ -4,7 +4,7 @@ from tkinter import messagebox
 from myagent.constants import (
     IS_WINDOWS, _SUBPROCESS_NOWND, COMMAND_BLOCKED, COMMAND_CONFIRM,
     GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-    MONO_FONT,
+    MONO_FONT, CONVO_END_WORDS,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
 )
 from myagent.helpers import extract_text_from_html, input_wait_timer
@@ -418,7 +418,7 @@ class SafetyMixin:
             except tk.TclError:
                 pass
 
-    def do_user_prompt(self, message):
+    def do_user_prompt(self, message, convo=False):
         """Pause the agent and ask the user for input via a modal dialog.
 
         Returns the reply text; any images the user attached are stashed on
@@ -666,8 +666,12 @@ class SafetyMixin:
             # The Upgrade box: switch the run's model here, on the worker,
             # so the call that answers THIS reply is the first upgraded one
             # (the target was read when the dialog opened, on the Tk thread).
-            # An empty reply stops the agent, so it upgrades nothing.
-            if result_holder[2] and response.strip():
+            # An empty reply stops the agent, so it upgrades nothing — and in
+            # Convo mode (convo=True, stream_worker's own prompt) neither does
+            # an end word: the run ends on it, and an upgrade with no call
+            # left to serve would log the run under a model that never ran.
+            ends_convo = convo and response.strip().lower() in CONVO_END_WORDS
+            if result_holder[2] and response.strip() and not ends_convo:
                 self._upgrade_apply(result_holder[2])
         return response
 

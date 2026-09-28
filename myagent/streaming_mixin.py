@@ -1167,19 +1167,25 @@ class StreamingMixin:
         return priced
 
     @staticmethod
-    def _cost_split_field(split):
+    def _cost_split_field(split, logged_model=None):
         """The cost log's 13th field (2026-09-27): a run's cost and token
         buckets per model that served its calls — "model,cost,in,out,
         cache_write,cache_read" per model, first-used first, joined by "|" —
-        written only when MORE than one model served the run (a Model upgrade
+        written when MORE than one model served the run (a Model upgrade
         from an Agent Request reply on, or an Anthropic refusal fallback
-        served by an Opus tier). The viewers' By-model summaries split such a
-        run between its models; every other block, and a line without the
-        field, reads as before. "" when there is nothing to split, and then
-        the field is not written at all. Cost at six places, so the parts sum
-        to the row's four-place total; a model id's field separators, which
-        no provider uses, are neutralised."""
-        if not split or len(split) < 2:
+        served by an Opus tier), or when the ONE model that served it is not
+        the row's MODEL field (`logged_model`: a run upgraded on its last
+        reply, whose new model never served a priced call, is logged under the
+        new model — without this field the viewers credited it the original
+        model's whole cost). The viewers' By-model summaries split such a run
+        between its models; every other block, and a line without the field,
+        reads as before. "" when there is nothing to split, and then the
+        field is not written at all. Cost at six places, so the parts sum to
+        the row's four-place total; a model id's field separators, which no
+        provider uses, are neutralised."""
+        if not split:
+            return ""
+        if len(split) < 2 and (logged_model is None or logged_model in split):
             return ""
         parts = []
         for model, (cost, tok_in, tok_out, tok_cw, tok_cr) in split.items():
@@ -1197,8 +1203,8 @@ class StreamingMixin:
         {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
         ;{in};{out};{cache_write};{cache_read}[;{split}]
         — split (13th field, 2026-09-27, `_cost_split_field`) is present
-        only for a run served by more than one model, and the MODEL field is
-        then the model the run ENDED on;
+        only for a run served by more than one model, or by one model other
+        than the MODEL field, which is the model the run ENDED on;
         — params is the compact _get_model_param_summary() string
         (comma-joined), so the log records the thinking/temperature settings
         the run used alongside its cost; secs (6th field, 2026-08-12) is the
@@ -1279,8 +1285,9 @@ class StreamingMixin:
             tok_s = (";;;" if not tokens
                      else ";".join(f"{int(t)}" for t in tokens))
             # 13th field: the per-model split, only for a run more than one
-            # model served — a one-model line keeps its 12 fields exactly.
-            split_s = self._cost_split_field(split)
+            # model served (or one model other than the MODEL field) — a line
+            # its MODEL field describes keeps its 12 fields exactly.
+            split_s = self._cost_split_field(split, self.model)
             split_s = f";{split_s}" if split_s else ""
             # ';' delimiter (not ',') so a comma inside a model name, the
             # params field or an instruction name can't be misread as a
@@ -1733,7 +1740,8 @@ class StreamingMixin:
                     if convo_mode and full_text:
                         messages.append({"role": "assistant", "content": full_text})
                         next_msg = self.do_user_prompt(
-                            "Reply, or type empty / 'quit' / 'exit' / 'stop' to end."
+                            "Reply, or type empty / 'quit' / 'exit' / 'stop' to end.",
+                            convo=True,   # an end word here ends the run: no upgrade
                         )
                         prompt_images = self._take_prompt_images()
                         if (not next_msg
