@@ -13,7 +13,9 @@ from myagent.helpers import input_wait_timer
 
 def confirm_action(app, provider_label, tool_name, title, summary, detail):
     """Modal dialog confirming a destructive mail action. Returns True if the
-    user clicks Yes, False otherwise.
+    user clicks Yes, False otherwise. The dialog opens on **No** (since
+    2026-09-28, the rule the DELETE confirmations follow), so a reflexive
+    Enter declines the send / trash instead of approving it.
 
     Honours the per-instruction bypass list: if ``tool_name`` is in
     ``app._disabled_confirm_patterns`` (managed via the PS/Shell Safety dialog),
@@ -37,7 +39,8 @@ def confirm_action(app, provider_label, tool_name, title, summary, detail):
         # Time parked on the user's Yes/No doesn't count as run time
         # (cost log TIME(sec)) — see helpers.input_wait_timer.
         with input_wait_timer(app):
-            return bool(messagebox.askyesno(title, message, parent=app.root))
+            return bool(messagebox.askyesno(title, message, default=messagebox.NO,
+                                            parent=app.root))
     except Exception:
         return False
 
