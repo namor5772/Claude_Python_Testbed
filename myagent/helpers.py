@@ -364,6 +364,19 @@ def camera_aware_hint(screen_hint, from_camera):
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
+def note_served_models(owner, provider, model_ids):
+    """Record on `owner` every model id `provider`'s live listing SERVES,
+    before the picker's filters hide retiring / deprecated ids (None: the
+    fetch failed, so nothing is known). _restore_model_params keeps a pinned
+    model found here although the picker hides it — the retirement policy:
+    picker and pricing drop a retiring model at once, but its param wiring
+    stays so a pinned instruction runs until the provider's real shutdown."""
+    served = getattr(owner, "_served_model_ids", None)
+    if served is None:
+        served = owner._served_model_ids = {}
+    served[provider] = None if model_ids is None else set(model_ids)
+
+
 def normalize_save_path(path, home=None, param="save_to"):
     """Make a model-supplied save path usable on this machine.
 

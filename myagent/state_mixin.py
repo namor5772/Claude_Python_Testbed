@@ -1,4 +1,4 @@
-import os, re, json, time, subprocess, ctypes, tkinter as tk
+import os, re, json, time, tempfile, subprocess, ctypes, tkinter as tk
 from tkinter import messagebox
 from myagent.constants import IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY, _BASE_DIR
 from myagent.helpers import rotate_log_if_needed
@@ -31,6 +31,11 @@ GEOMETRY_KINDS = {
 GEOMETRY_VISIBLE_W = 50
 GEOMETRY_TITLE_STRIP = 30
 GEOMETRY_TITLE_VISIBLE_H = 10
+
+# When this module was imported — the process's start, near enough: an
+# instance lock naming our own pid that is older than this can only be a
+# crashed predecessor's (see _claim_instance_number).
+_PROCESS_STARTED = time.time()
 
 
 class StateMixin:
@@ -65,18 +70,16 @@ class StateMixin:
                         return False
                 finally:
                     kernel32.CloseHandle(handle)
-                # Verify command line contains MyAgent.py
-                try:
-                    result = subprocess.run(
-                        ["wmic", "process", "where", f"ProcessId={pid}",
-                         "get", "CommandLine", "/value"],
-                        capture_output=True, text=True, timeout=5,
-                        creationflags=0x08000000,  # CREATE_NO_WINDOW
-                    )
-                    return "MyAgent.py" in result.stdout
-                except Exception:
-                    # If we can't check command line, accept the exe name match
-                    return True
+                # Verify the command line names MyAgent.py. It is read straight
+                # from the process (NtQueryInformationProcess): the wmic this
+                # used is gone from current Windows 11 builds, and its failure
+                # fell through to "accept the exe name" — so ANY python.exe
+                # reusing a stale lock's PID (a Heartbeat child, a tool script)
+                # held the slot, and the next launch became instance 2.
+                cmdline = StateMixin._win_process_cmdline(pid)
+                if cmdline is None:
+                    return True   # unreadable: keep the exe-name answer (conservative)
+                return "MyAgent.py" in cmdline
             except Exception:
                 return False
         else:
@@ -93,6 +96,43 @@ class StateMixin:
                 return "MyAgent.py" in result.stdout
             except Exception:
                 return True
+
+    @staticmethod
+    def _win_process_cmdline(pid):
+        """Process `pid`'s command line (Windows 8.1+), or None when it cannot
+        be read: NtQueryInformationProcess with ProcessCommandLineInformation
+        (60), which needs only PROCESS_QUERY_LIMITED_INFORMATION — no WMI and
+        no child process. Private WinDLL instances, so the argtypes set here
+        never leak onto ctypes.windll's shared function objects."""
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32")
+        ntdll = ctypes.WinDLL("ntdll")
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        query = ntdll.NtQueryInformationProcess
+        query.restype = ctypes.c_long
+        query.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                          wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)]
+
+        class _UnicodeString(ctypes.Structure):
+            _fields_ = [("Length", wintypes.USHORT), ("MaximumLength", wintypes.USHORT),
+                        ("Buffer", ctypes.c_void_p)]
+
+        handle = kernel32.OpenProcess(0x1000, False, pid)   # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            # The answer is a UNICODE_STRING followed by its text in the same
+            # buffer; a command line is at most 32767 UTF-16 units.
+            buf = ctypes.create_string_buffer(65536 + ctypes.sizeof(_UnicodeString))
+            returned = wintypes.ULONG(0)
+            if query(handle, 60, buf, ctypes.sizeof(buf), ctypes.byref(returned)) != 0:
+                return None
+            text = _UnicodeString.from_buffer(buf)
+            return ctypes.wstring_at(text.Buffer, text.Length // 2) if text.Buffer else ""
+        finally:
+            kernel32.CloseHandle(handle)
 
     def _claim_instance_number(self):
         """Claim the lowest available instance number via lock files.
@@ -113,7 +153,16 @@ class StateMixin:
                 try:
                     with open(lock_path) as f:
                         stale_content = f.read().strip()
-                    claimed_by_live = self._is_pid_alive(int(stale_content))
+                    # A lock naming OUR pid that predates this process is a
+                    # crashed predecessor's whose pid Windows handed us — we
+                    # are alive, so the liveness check alone would call it
+                    # live and push this launch to the next slot. (One written
+                    # since we started is a claimant's: the parallel-children
+                    # tests model siblings as threads sharing our pid.)
+                    own_predecessor = (stale_content == me and
+                                       os.path.getmtime(lock_path) < _PROCESS_STARTED)
+                    claimed_by_live = (not own_predecessor
+                                       and self._is_pid_alive(int(stale_content)))
                 except (ValueError, OSError):
                     # Unreadable PID: a sibling may be mid-claim (its O_EXCL
                     # create landed, its PID write hasn't yet). A FRESH lock is
@@ -388,7 +437,8 @@ class StateMixin:
     def _sanitize_geometry(geo, min_w=200, min_h=150):
         """Return `geo` normalised if it is a usable position on the CURRENT
         layout, else None — the caller then applies its own default (each
-        dialog has its own; the main window uses DEFAULT_GEOMETRY). Rejects
+        dialog has its own; the main window uses _default_main_geometry(),
+        DEFAULT_GEOMETRY centred on the primary monitor). Rejects
         tiny windows and positions whose title bar no monitor shows."""
         parsed = StateMixin._parse_geometry(geo)
         if parsed is None:
@@ -732,6 +782,14 @@ class StateMixin:
     # ── State Persistence ───────────────────────────────────────────────
 
     def _save_last_state(self):
+        # A --headless run never writes the state file: its instruction,
+        # provider and model are a child's (a Heartbeat run, a run_instruction
+        # spawn), and a child that claimed slot 1 while the GUI was closed
+        # rewrote agent_state.json with them — the next GUI launch opened on
+        # whatever ran last. (Its geometry was already protected by
+        # _geometry_dirty; these fields were not.)
+        if getattr(self, "_headless", False):
+            return
         # Read existing state to preserve geometry entries for other monitor configs
         existing = {}
         if os.path.exists(self._state_file):
@@ -823,8 +881,24 @@ class StateMixin:
         state["collapsed_sections"] = sorted(getattr(self, "_collapsed_sections", None) or ())
         if getattr(self, "_instr_list_width", None):
             state["instruction_list_width"] = self._instr_list_width
-        with open(self._state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, indent=2)
+        # Atomic — a temp file beside it, then os.replace — like the shared
+        # stores: the file is rewritten every 5 s and embeds the applied
+        # instruction's images, and a process killed mid-write (taskkill /F is
+        # routine here) left it truncated: the next launch restored nothing,
+        # and its first save wrote every monitor layout's geometry away.
+        directory = os.path.dirname(os.path.abspath(self._state_file))
+        fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp",
+                                   prefix=os.path.basename(self._state_file) + ".")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp, self._state_file)
+        except BaseException:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
 
     def _load_last_state(self):
         if not os.path.exists(self._state_file):
@@ -938,12 +1012,30 @@ class StateMixin:
                 "launching process) ---\n"
                 f"{extra_text}")
 
+    def _unattended_launch(self):
+        """A --headless run, or a --result-file one (a run_instruction child,
+        even with a window): nobody is there to answer a dialog."""
+        return bool(getattr(self, "_headless", False) or getattr(self, "_result_file", None))
+
+    def _auto_launch_failed(self, title, message):
+        """A -l launch that cannot start. A GUI session gets the dialog; an
+        unattended one has nobody to answer it — a modal messagebox blocked its
+        Tk thread for good, and the invisible process lived on holding its
+        instance lock while a waiting parent sat out its whole timeout — so it
+        writes its result file as an error and closes."""
+        if not self._unattended_launch():
+            messagebox.showerror(title, message)
+            return
+        self.queue.put({"type": "error", "content": f"{title}: {message}\n"})
+        self._write_result_file("error", [], error=f"{title}: {message}")
+        self.root.after(0, self._on_close)
+
     def _auto_launch(self):
         """Auto-load an instruction by name and start the agent (from -l arg)."""
         name = self._launch_instruction
         instructions = self._load_saved_instructions()
         if name not in instructions:
-            messagebox.showerror(
+            self._auto_launch_failed(
                 "Instruction Not Found",
                 f"No saved instruction named '{name}'.\n\n"
                 f"Available: {', '.join(sorted(instructions)) or '(none)'}",
@@ -952,6 +1044,11 @@ class StateMixin:
         self._apply_instruction_entry(name, instructions[name])
         self.agent_instruction = self._merge_extra_text(
             self.agent_instruction, getattr(self, "_extra_text", ""))
+        if not self.agent_instruction.strip() and self._unattended_launch():
+            # (A GUI session gets _start_agent's own "No instruction" warning.)
+            self._auto_launch_failed("No instruction",
+                                     f"The saved instruction '{name}' has no text.")
+            return
         auto_name = f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}"
         self.chat_name_entry.delete(0, tk.END)
         self.chat_name_entry.insert(0, auto_name)

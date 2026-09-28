@@ -12,7 +12,7 @@ from myagent.constants import (
     GEMINI_QUIET_STYLE_PREFIXES,
     GEMINI_QUIET_STYLES,
 )
-from myagent.helpers import camera_aware_hint, is_camera_result
+from myagent.helpers import camera_aware_hint, is_camera_result, note_served_models
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -853,14 +853,19 @@ class GeminiMixin:
         previews and variants (e.g. -customtools), and the floating -latest
         aliases."""
         if not self.gemini_client:
+            note_served_models(self, "Google", None)
             return list(GEMINI_FALLBACK_MODELS)
         try:
             model_ids = []
+            served = []   # every id a pinned instruction may still run (2.5 until its sunset)
             for m in self.gemini_client.models.list():
                 mid = m.name  # e.g. "models/gemini-2.5-flash"
                 # Strip "models/" prefix
                 if mid.startswith("models/"):
                     mid = mid[len("models/"):]
+                # ...but not the shut-down generations the API still lists.
+                if not mid.startswith(("gemini-2.0-", "gemini-1.")):
+                    served.append(mid)
                 actions = getattr(m, "supported_actions", None) or []
                 if actions and "generateContent" not in actions:
                     continue
@@ -873,7 +878,9 @@ class GeminiMixin:
                 model_ids.append(mid)
             model_ids.sort()
             self._gemini_model_display_names = {mid: mid for mid in model_ids}
+            note_served_models(self, "Google", served)
             return model_ids if model_ids else list(GEMINI_FALLBACK_MODELS)
         except Exception:
             self._gemini_model_display_names = {}
+            note_served_models(self, "Google", None)
             return list(GEMINI_FALLBACK_MODELS)

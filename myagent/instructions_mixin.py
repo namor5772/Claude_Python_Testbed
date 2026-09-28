@@ -1049,7 +1049,25 @@ class InstructionsMixin:
         self._refresh_instruction_list(instructions)   # its row goes, and the selection with it
         self._instr_name_entry.delete(0, tk.END)
 
+    def _editor_run_guard(self):
+        """True — after saying why — while a run is live. Selecting a page or
+        CLEAR restores environment-level settings at once (model params, skill
+        modes, the tool blocklist, confirm bypasses, the upgrade target), and
+        the running run reads them on every call: an editor opened before
+        START (the Instruction button is disabled only for new opens) could
+        change the model and the safety gates UNDER the run."""
+        if not getattr(self, "streaming", False):
+            return False
+        messagebox.showinfo(
+            "Run in progress",
+            "A run is using the applied instruction's settings. Finish it or "
+            "press STOP before switching or clearing instructions here.",
+            parent=self.instruction_editor_window)
+        return True
+
     def _clear_instruction_editor(self):
+        if self._editor_run_guard():
+            return
         self._instr_text.delete("1.0", tk.END)
         self._instr_name_entry.delete(0, tk.END)
         self._instr_shown_name = ""
@@ -1118,6 +1136,10 @@ class InstructionsMixin:
         opens on it. Selecting a section header loads nothing."""
         name = self._selected_instruction_name()
         if not name or name == getattr(self, "_instr_shown_name", ""):
+            return
+        if self._editor_run_guard():
+            shown = getattr(self, "_instr_shown_name", "")
+            self._select_instruction_row(("page", shown) if shown else None)
             return
         instructions = self._load_saved_instructions()
         if name in instructions:

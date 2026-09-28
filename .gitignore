@@ -18,6 +18,8 @@ MyAgent_Tools_Report.txt
 
 # Runtime state files
 agent_state*.json
+# ...and the temp file each atomic save writes beside it (left only by a crash)
+agent_state*.json.*.tmp
 app_state*.json
 # Authored-content stores — live in <OneDrive>/MyAppShare/ (synced across machines
 # by OneDrive, not git; see myagent/datapaths.py). These repo-root names are the

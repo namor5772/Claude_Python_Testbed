@@ -16,7 +16,7 @@ from myagent.constants import (
     _HAS_DESKTOP,
     resolve_price,
 )
-from myagent.helpers import responses_usage_dict
+from myagent.helpers import note_served_models, responses_usage_dict
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -211,10 +211,14 @@ class OpenAIMixin:
     def _fetch_openai_models(self):
         """Fetch available OpenAI chat models suitable for agentic tool use."""
         if not self.openai_client:
+            note_served_models(self, "OpenAI", None)
             return list(OPENAI_FALLBACK_MODELS)
         try:
             response = self.openai_client.models.list()
             model_ids = []
+            # Everything served, before the filters below hide retiring ids —
+            # a pinned instruction keeps running one until OpenAI shuts it down.
+            note_served_models(self, "OpenAI", [m.id for m in response.data])
             for m in response.data:
                 mid = m.id
                 # Skip non-chat model types
@@ -237,6 +241,7 @@ class OpenAIMixin:
             return model_ids if model_ids else list(OPENAI_FALLBACK_MODELS)
         except Exception:
             self._openai_model_display_names = {}
+            note_served_models(self, "OpenAI", None)
             return list(OPENAI_FALLBACK_MODELS)
 
     def _fetch_models_for_provider(self):

@@ -72,7 +72,7 @@ from myagent.constants import (
     XAI_REASONING_EFFORT,
     _HAS_DESKTOP,
 )
-from myagent.helpers import responses_usage_dict
+from myagent.helpers import note_served_models, responses_usage_dict
 from myagent.openai_mixin import OpenAIMixin
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
@@ -194,6 +194,7 @@ class XAIMixin:
         static tables answer, and serves XAI_FALLBACK_MODELS."""
         self._xai_caps = {}
         self._xai_model_display_names = {}
+        note_served_models(self, "xAI", None)
         if not getattr(self, "xai_client", None):
             return list(XAI_FALLBACK_MODELS)
         try:
@@ -206,6 +207,9 @@ class XAIMixin:
             return list(XAI_FALLBACK_MODELS)
         if not model_ids:
             return list(XAI_FALLBACK_MODELS)
+        # Served = the ids AND their aliases (a pinned grok-latest is no
+        # picker entry, yet it runs).
+        note_served_models(self, "xAI", set(model_ids) | set(caps))
         self._xai_caps = caps
         self._xai_model_display_names = {mid: mid for mid in model_ids}
         return model_ids

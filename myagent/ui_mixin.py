@@ -11,6 +11,7 @@ from myagent.constants import (
     ANTHROPIC_ALWAYS_ON_OPUS_MIN, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
     BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
 )
+from myagent.helpers import note_served_models
 from myagent.keyboard import (
     bind_mnemonics, install_class_bindings, install_focus_ring_defaults,
     install_scrollbar_defaults,
@@ -373,9 +374,12 @@ class UIMixin:
             response = self.client.models.list(limit=100)
             self._model_display_names = {}
             model_ids = []
+            note_served_models(self, "Anthropic", [m.id for m in response.data])
             for m in response.data:
                 # Hide deprecated / retiring ids (2026-07 audit) — a pinned
-                # instruction can still run one; this only prunes the picker.
+                # instruction still runs one while it is served (the listing
+                # noted above, read by _restore_model_params); this only
+                # prunes the picker.
                 if m.id.startswith(ANTHROPIC_DEPRECATED_MODEL_PREFIXES):
                     continue
                 self._model_display_names[m.id] = m.display_name
@@ -383,11 +387,29 @@ class UIMixin:
             return model_ids if model_ids else FALLBACK_MODELS
         except Exception:
             self._model_display_names = {}
+            note_served_models(self, "Anthropic", None)
             return list(FALLBACK_MODELS)
 
     def _has_model_widgets(self):
         """Return True if the editor model widgets currently exist."""
         return self._model_combo is not None
+
+    @staticmethod
+    def _anthropic_mode_coerce(current, values):
+        """A Thinking-mode value (another provider's, or one this model lacks)
+        → the nearest meaning on an Anthropic model's ladder `values`:
+        thinking off — "Off", or another provider's "None" — stays Off, or is
+        Adaptive on an always-on model; "Minimal" (reason a little) is Low; an
+        unsupported Xhigh / Max steps down to High. (None and Minimal used to
+        become High: switching an OpenAI instruction with reasoning OFF to
+        Anthropic switched thinking ON at a dearer level.)"""
+        if current in values:
+            return current
+        if current in ("Off", "None"):
+            return "Off" if "Off" in values else "Adaptive"
+        if current == "Minimal":
+            return "Low" if "Low" in values else "High"
+        return "High"
 
     @staticmethod
     def _default_model_for_provider(provider):
@@ -454,11 +476,9 @@ class UIMixin:
                 # releases are covered without editing a hardcoded list.
                 values = self._anthropic_mode_values()
                 self._thinking_mode_combo["values"] = values
-                if self._thinking_mode_var.get() not in values:
-                    # "Off" on an always-on model coerces to Adaptive; an
-                    # unsupported Xhigh/Max coerces down to High.
-                    coerced = "Adaptive" if self._thinking_mode_var.get() == "Off" else "High"
-                    self._thinking_mode_var.set(coerced)
+                current = self._thinking_mode_var.get()
+                if current not in values:
+                    self._thinking_mode_var.set(self._anthropic_mode_coerce(current, values))
                 # Sync state from thinking_mode (may pack temp after combo)
                 self._on_thinking_mode_changed()
                 # Fast checkbox — only the fast-capable Opus tiers (4.8 / 5 /
@@ -895,12 +915,28 @@ class UIMixin:
                          f"staying on {self.provider}\n")
                 self._model_drift_warnings.append(drift)
                 self.queue.put({"type": "warning", "content": drift})
-        # Restore model (fall back to first available if saved model doesn't match provider)
+        # Restore model (fall back to the provider's curated default if the
+        # saved model is neither in the picker nor served by the provider)
         model_key = "last_model" if state_file else "model"
         model = entry.get(model_key, "")
+        served = (getattr(self, "_served_model_ids", None) or {}).get(self.provider) or ()
         if model and model in self.available_models:
             self.model = model
             self._model_var.set(self._get_display_name(model))
+        elif model and model in served:
+            # Hidden from the picker (a retiring / deprecated id, or an alias)
+            # yet still served: a pinned instruction runs on it until the
+            # provider's real shutdown — the retirement policy, which drops a
+            # retiring model from picker and pricing only. It used to be
+            # swapped for the default like a model of another provider.
+            self.model = model
+            self._model_var.set(self._get_display_name(model))
+            if not state_file:
+                note = (f"⚠ {model} is hidden from the model picker (retiring or "
+                        f"deprecated) but still served — running it as pinned; "
+                        f"re-point this instruction before {self.provider} retires it\n")
+                self._model_drift_warnings.append(note)
+                self.queue.put({"type": "warning", "content": note})
         elif self.available_models:
             # Fall back to the provider's curated default, not available_models[0]:
             # fetched lists are sorted, and lexicographic-first can be a terrible
@@ -1000,6 +1036,14 @@ class UIMixin:
             self._thinking_strength_combo["values"] = values
             if self._thinking_strength_var.get() not in values:
                 self._thinking_strength_var.set(self.thinking_effort if self.thinking_effort in values else "high")
+            # What the combo shows is what is sent and saved: an effort this
+            # ladder lacks (Anthropic Xhigh, then Provider → Google) used to
+            # stay in thinking_effort — the wire sent the provider's own map
+            # of it (Gemini: MEDIUM) while the title and a SAVE said "xhigh".
+            # (OpenAI / Google only: the strength IS their wire value; the
+            # boolean-toggle kinds never send it.)
+            if self.provider in ("OpenAI", "Google") and self.thinking_effort not in values:
+                self.thinking_effort = self._thinking_strength_var.get()
         elif support == "manual":
             values = list(BUDGET_PRESETS.keys())
             self._thinking_strength_combo["values"] = values
