@@ -592,6 +592,81 @@ class InstructionsMixin:
         # Initial focus: the text area, cursor at the end of the instruction
         self._instr_text.mark_set("insert", "end-1c")
         self._instr_text.focus_set()
+        # The environment [X] goes back to if a page selection replaces it
+        self._editor_mark_env()
+
+    # ── [X] discards what a page selection brought in ─────────────────────
+    #
+    # Selecting a page applies its environment-level settings at once — they
+    # are live state, not draft (the model widgets ARE the live model). [X]
+    # discards the draft, so it puts those settings back too; without that,
+    # the browsed page's model, skill modes, Safety bypasses, blocklist,
+    # Auto-send tick and upgrade model stayed live under the applied
+    # instruction's name and text, and the close saved the mix.
+
+    def _editor_env_snapshot(self):
+        """The environment-level settings a page selection (or CLEAR) replaces,
+        shaped like a state-file entry so _restore_model_params(...,
+        state_file=True) takes them back quietly. The model fields are the
+        stashed originals while a run is upgraded (_store_model_fields)."""
+        fields = self._store_model_fields()
+        return {
+            "provider": self.provider,
+            "last_model": fields["model"],
+            "thinking_enabled": fields["thinking_enabled"],
+            "thinking_effort": fields["thinking_effort"],
+            "thinking_budget": fields["thinking_budget"],
+            "thinking_mode": fields["thinking_mode"],
+            "temperature": self.temperature,
+            "text_verbosity": self.text_verbosity,
+            "fast_mode": bool(self.fast_mode),
+            "skill_modes": {sn: sk.get("mode", "disabled")
+                            for sn, sk in self.skills.items()},
+            "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
+            "blocked_tools": sorted(getattr(self, "_blocked_tools", set())),
+            "dictation_auto_send": bool(self.dictation_auto_send.get()),
+            "upgrade_target": getattr(self, "upgrade_target", None),
+        }
+
+    def _editor_mark_env(self):
+        """Record the live environment as the one [X] goes back to: when the
+        editor opens, and after each SAVE (which makes the saved page the
+        applied instruction)."""
+        self._editor_env = self._editor_env_snapshot()
+        self._editor_env_replaced = False
+
+    def _editor_discard_env(self):
+        """Put back the environment the editor opened on (or its last SAVE) if
+        a page selection or CLEAR has replaced it since — the [X] close, and
+        the app's close with the editor still open. Never while a run is
+        streaming: it reads these settings on every call (the rule behind
+        _editor_run_guard). Auto-send and the upgrade model are written
+        through to the applied instruction's store entry, so a saved
+        instruction's values are read back from there."""
+        snap = getattr(self, "_editor_env", None)
+        replaced = getattr(self, "_editor_env_replaced", False)
+        self._editor_env = None
+        self._editor_env_replaced = False
+        if snap is None or not replaced or getattr(self, "streaming", False):
+            return
+        self._restore_model_params(snap, state_file=True)
+        for sname, mode in snap["skill_modes"].items():
+            if sname in self.skills:
+                self.skills[sname]["mode"] = mode
+        self._update_skills_button()
+        self._disabled_confirm_patterns = set(snap["disabled_confirm_patterns"])
+        self._blocked_tools = set(snap["blocked_tools"])
+        auto, target = snap["dictation_auto_send"], snap["upgrade_target"]
+        name = getattr(self, "agent_instruction_name", "")
+        if name:
+            entry = self._load_saved_instructions().get(name)
+            if isinstance(entry, dict):
+                auto = entry.get("dictation_auto_send", auto)
+                target = entry.get("upgrade_target", target)
+        self.dictation_auto_send.set(bool(auto))
+        self.upgrade_target = target
+        self._update_ps_safety_button()
+        self._update_title()
 
     def _nullify_editor_widgets(self):
         """Clear editor widget references so _has_model_widgets() returns False."""
@@ -631,8 +706,13 @@ class InstructionsMixin:
         self._nullify_editor_widgets()
 
     def _on_editor_close(self, win):
-        """Handle editor [X] close."""
+        """Handle editor [X] close: the draft is discarded, and so is any
+        environment a page selection or CLEAR brought in (_editor_discard_env)."""
         self._close_editor()
+        try:
+            self._editor_discard_env()
+        except Exception:
+            pass
         try:
             self._save_last_state()
         except Exception:
@@ -1059,6 +1139,9 @@ class InstructionsMixin:
         self._refresh_instruction_list(instructions, select=("page", name))
         self._update_title()
         self._save_last_state()
+        # SAVE made this page the applied instruction: its environment is
+        # the one a later [X] keeps
+        self._editor_mark_env()
 
     def _delete_instruction(self):
         row = self._selected_instruction_row()
@@ -1118,6 +1201,7 @@ class InstructionsMixin:
     def _clear_instruction_editor(self):
         if self._editor_run_guard():
             return
+        self._editor_env_replaced = True    # [X] puts the environment back
         self._instr_text.delete("1.0", tk.END)
         self._instr_name_entry.delete(0, tk.END)
         self._instr_shown_name = ""
@@ -1222,6 +1306,7 @@ class InstructionsMixin:
             # they are restored at once rather than on Apply.
             self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
             self.upgrade_target = entry.get("upgrade_target")
+            self._editor_env_replaced = True    # [X] puts the environment back
             self._update_ps_safety_button()
             self._refresh_image_listbox()
 
@@ -1251,4 +1336,6 @@ class InstructionsMixin:
             self._restore_skill_modes(instructions[instr_name])
         self._update_title()
         self._save_last_state()
+        self._editor_env = None     # Apply commits the environment as it stands
+        self._editor_env_replaced = False
         self._close_editor()

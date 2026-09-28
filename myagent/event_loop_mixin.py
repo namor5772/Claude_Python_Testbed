@@ -267,6 +267,12 @@ class EventLoopMixin:
         if self.streaming:
             self.root.after(200, self._finish_close)
             return
+        # An Instruction Editor still open is discarded as its [X] does: a
+        # page it was browsing must not leave its environment in the state
+        # file under the applied instruction's name (instructions_mixin).
+        discard = getattr(self, "_editor_discard_env", None)
+        if discard is not None:
+            self._close_step(discard)
         self._close_step(self._save_last_state)
         # Release the instance-number lock the moment persistent state is on
         # disk — BEFORE the potentially slow browser/MCP cleanup and chat save.

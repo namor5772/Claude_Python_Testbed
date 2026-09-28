@@ -839,11 +839,14 @@ if IS_WINDOWS:
         r"\bStop-Computer\b",
         r"\bRestart-Computer\b",
         r"\bSet-ExecutionPolicy\b",
-        r"\breg\s+delete\b",
-        r"\bRemove-ItemProperty\b.*\\\\HKLM",
-        r"\bRemove-ItemProperty\b.*\\\\HKCU",
-        r"\bRemove-Item\b.*\\\\HKLM",
-        r"\bRemove-Item\b.*\\\\HKCU",
+        r"\breg(?:\.exe)?\s+delete\b",
+        # Registry deletes under HKLM / HKCU, in PowerShell's own path forms
+        # (HKLM:\…, Registry::HKEY_LOCAL_MACHINE\…) — MyAgent's patterns. The
+        # four these replaced wanted a literal "\\HKLM" that no real path has,
+        # so they never matched.
+        r"\bRemove-Item(?:Property)?\b.*\b(?:HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER)\b",
+        # shutdown.exe at command position with any switch but /a (abort).
+        r"(?:^|[\n;&|({])\s*shutdown(?:\.exe)?\s+[/-](?!a\b)",
         r"\bbcdedit\b",
         r"\bdiskpart\b",
         r"\bnet\s+user\b.*(/add|/delete)",
@@ -880,6 +883,20 @@ if IS_WINDOWS:
         # the flag must sit at a line start or after whitespace.
         r"(?<!\S)-Recurse\b",
         r"(?<!\S)-Force\b",
+        # Built-in aliases of the cmdlets above, matched only at command
+        # position — line start or after ; & | ( { — so the word in a string
+        # or a path doesn't trip them (MyAgent's list). APPENDED, never
+        # renamed: a saved bypass list names patterns by their text.
+        # (`start`, Start-Process's everyday alias, is deliberately not here.)
+        r"(?:^|[\n;&|({])\s*(?:ri|erase)(?:\s|$)",      # Remove-Item
+        r"(?:^|[\n;&|({])\s*(?:mi|move|mv)(?:\s|$)",    # Move-Item
+        r"(?:^|[\n;&|({])\s*(?:rni|ren)(?:\s|$)",       # Rename-Item
+        r"(?:^|[\n;&|({])\s*(?:sc|clc)(?:\s|$)",        # Set-Content / Clear-Content
+        r"(?:^|[\n;&|({])\s*spps(?:\s|$)",              # Stop-Process
+        r"(?:^|[\n;&|({])\s*saps(?:\s|$)",              # Start-Process
+        r"\b(?:iwr|curl|wget)\b.*-OutFile",         # Invoke-WebRequest to a file
+        r"\biex\s*\(",                              # Invoke-Expression with (…)
+        r"\bRemove-ItemProperty\b",                 # registry values (HKLM/HKCU: blocked)
     ]
 else:
     COMMAND_BLOCKED = [
@@ -920,6 +937,7 @@ else:
 
 FALLBACK_MODELS = [
     "claude-opus-5",
+    "claude-opus-5-5",
     "claude-opus-4-8",
     "claude-fable-5-1",
     "claude-fable-5",
@@ -962,7 +980,7 @@ DEPRECATED_MODEL_PREFIXES = (
 # _is_adaptive_model backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
 ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
-                            "claude-opus-5",
+                            "claude-opus-5-5", "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5", "claude-sonnet-4-6"}
 # Claude 5 Mythos-class (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is ALWAYS ON —
@@ -970,6 +988,11 @@ ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
 # and sampling params (temperature/top_p/top_k) are rejected unconditionally.
 # Prefix-matched, so claude-fable-5-1 (2026-08-28) needed no new entry.
 ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
+# Claude Opus 5.5 and every later Opus join the always-on class BY VERSION
+# (MyAgent's ANTHROPIC_ALWAYS_ON_OPUS_MIN): an explicit disable is HTTP 400
+# there too, and they take the preserved-thinking binding and the refusal
+# fallbacks (_fable_features).
+ALWAYS_ON_OPUS_MIN = (5, 5)
 # Budget-based ("manual") extended thinking — Opus/Sonnet 4.5 and Haiku 4.5.
 # claude-3-5-sonnet is deliberately excluded: extended thinking arrived with
 # 3.7 / 4, so a thinking block to a 3.5 model is HTTP 400.
@@ -1056,6 +1079,7 @@ try:
         resolve_costlog as _resolve_costlog,
         load_store as _load_store,
         save_store as _save_store,
+        store_unreadable as _store_unreadable,
         absorb_conflict_forks as _absorb_conflict_forks,
         resolve_skills_dir as _resolve_skills_dir,
         load_skills_tree as _load_skills_tree,
@@ -1084,6 +1108,16 @@ except ImportError:
     def _save_store(path, data):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _store_unreadable(path):
+        # datapaths.store_unreadable: the file EXISTS but is not a JSON object
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path, encoding="utf-8") as f:
+                return not isinstance(json.load(f), dict)
+        except (OSError, ValueError):
+            return True
 
     def _absorb_conflict_forks(path, data):
         return False
@@ -1322,6 +1356,15 @@ GEOMETRY_RE = r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)"   # Tk's "WxH+X+Y" (X / Y may be 
 MAIN_MIN_W, MAIN_MIN_H = 400, 300                # below this a saved main geometry is junk (an unmapped root reports 1x1)
 SKILLS_DIR = _resolve_skills_dir()  # per-skill SKILL.md tree; a legacy skills.json migrates in on first load
 STORES_SYNCED = os.path.dirname(PROMPTS_FILE) != os.path.dirname(os.path.abspath(__file__))
+
+
+class _UnreadableStore(dict):
+    """The session-only stand-in _load_saved_prompts serves while the prompt
+    store file exists but cannot be read or parsed. It reads like the store,
+    but _save_prompts_to_disk refuses to write it (MyAgent's twin guards
+    agent_instructions.json)."""
+
+
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lock")
 INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_inject.txt")
 AUTO_MSG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_auto_msg.json")
@@ -2085,11 +2128,22 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return None
 
     def _is_always_on_thinking(self, model_id=None):
-        """Fable 5 / 5.1 and Mythos 5 / 5.1: thinking is always on (disable /
+        """Fable 5 / 5.1 and Mythos 5 / 5.1 (by prefix, so new minors need no
+        entry), and Claude Opus 5.5 or any later Opus (by version — an Opus
+        minor of 5 or more, or a later major; a dated snapshot's date in the
+        minor slot does not count): thinking is always on (disable /
         budget_tokens are HTTP 400) and sampling params are rejected
-        unconditionally. Prefix-matched, so new minors need no entry."""
+        unconditionally. MyAgent's _is_anthropic_always_on_thinking twin."""
         mid = model_id or self.model or ""
-        return mid.startswith(ALWAYS_ON_THINKING_PREFIXES)
+        if mid.startswith(ALWAYS_ON_THINKING_PREFIXES):
+            return True
+        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
+        if version is None:
+            return False
+        major, minor = version
+        if minor >= 100:
+            minor = 0   # claude-opus-5-20260724: a date, not a minor
+        return (major, minor) >= ALWAYS_ON_OPUS_MIN
 
     def _is_adaptive_model(self, model_id=None):
         """Adaptive-thinking models — Opus/Sonnet 4.6+ and the always-on Mythos
@@ -2577,9 +2631,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 migrated = True
         if "Default" not in prompts:
             if not prompts and os.path.exists(PROMPTS_FILE):
-                # Exists but unreadable — serve a session-only Default rather
-                # than overwriting a possibly half-synced store; retry next launch.
-                return {"Default": {"text": DEFAULT_SYSTEM_PROMPT}}
+                # Exists but empty or unreadable — serve a session-only Default
+                # rather than overwriting a possibly half-synced store; retry
+                # next launch. An UNREADABLE one is marked, so nothing built on
+                # the stand-in is ever saved over the file (_save_prompts_to_disk).
+                default = {"Default": {"text": DEFAULT_SYSTEM_PROMPT}}
+                if _store_unreadable(PROMPTS_FILE):
+                    return _UnreadableStore(default)
+                return default
             prompts["Default"] = {"text": DEFAULT_SYSTEM_PROMPT}
             migrated = True
         if migrated:
@@ -2587,7 +2646,30 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return prompts
 
     def _save_prompts_to_disk(self, prompts):
+        """Save the prompt library — True, or False (after saying why) when
+        `prompts` is the stand-in served for an unreadable store file: every
+        caller modifies the dict it was handed and saves it, so saving the
+        stand-in would replace the whole library with Default plus one change
+        (and OneDrive would sync that to every machine). MyAgent's
+        _save_instructions_to_disk rule; a refusal is returned, not raised,
+        because manage_prompts runs on the streaming worker, where an
+        exception would end the turn."""
+        if isinstance(prompts, _UnreadableStore):
+            msg = ("The system prompt store could not be read, so this change was "
+                   "NOT saved — saving would have replaced the whole library with "
+                   "this session's stand-in. Fix or restore "
+                   f"{os.path.basename(PROMPTS_FILE)} (OneDrive keeps its earlier "
+                   "versions), then restart SelfBot.")
+            self.queue.put({"type": "warning", "content": f"⚠ {msg}\n"})
+            if threading.current_thread() is threading.main_thread():
+                try:   # an editor action: say so where the user is looking
+                    messagebox.showerror("System prompt store unreadable", msg,
+                                         parent=getattr(self, "prompt_editor_window", None))
+                except tk.TclError:
+                    pass
+            return False
         _save_store(PROMPTS_FILE, prompts)
+        return True
 
     @staticmethod
     def _prompt_entry_text(entry):
@@ -2810,7 +2892,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # Bundle the current main-screen environment with the prompt text so loading
         # this prompt later restores names, model params, skills, tools and safety.
         prompts[name] = {"text": text, **self._capture_prompt_settings()}
-        self._save_prompts_to_disk(prompts)
+        if self._save_prompts_to_disk(prompts) is False:
+            return
         self._refresh_prompt_list()
         self._prompt_combo_var.set(name)
 
@@ -2838,7 +2921,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 icon="warning", default="no", parent=self.prompt_editor_window):
             return
         prompts.pop(name)
-        self._save_prompts_to_disk(prompts)
+        if self._save_prompts_to_disk(prompts) is False:
+            return
         self._refresh_prompt_list()
         self._prompt_combo_var.set("")
         self._prompt_name_entry.delete(0, tk.END)
@@ -2879,13 +2963,49 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     def _load_skills(self):
         # Per-skill SKILL.md tree (frontmatter: name/description/mode). Runs
         # the one-shot skills.json→tree migration and heals OneDrive per-file
-        # conflict forks; every entry comes back with a valid mode.
-        return _load_skills_tree(SKILLS_DIR)
+        # conflict forks; every entry comes back with a valid mode. The modes
+        # read here are the GLOBAL ones, kept apart from the session modes a
+        # system prompt restores into self.skills (see _skills_for_tree).
+        skills = _load_skills_tree(SKILLS_DIR)
+        self._skill_global_modes = {n: e.get("mode", "disabled")
+                                    for n, e in skills.items() if isinstance(e, dict)}
+        return skills
 
     def _save_skills(self):
         # Diff-aware and WRITE-ONLY (never deletes folders) — deletion is an
         # explicit action via _delete_skill_tree_entry at the delete callsites.
-        _save_skills_tree(SKILLS_DIR, self.skills)
+        _save_skills_tree(SKILLS_DIR, self._skills_for_tree())
+
+    def _skills_for_tree(self):
+        """self.skills as the tree should record it: each skill with its GLOBAL
+        mode. A system prompt's skill modes are session-only
+        (_restore_skill_modes writes them into self.skills), so a save must
+        not carry them into the shared tree — it used to: any later skill save
+        wrote every skill's session mode as its global one. A mode reaches the
+        tree only through _set_skill_mode (Cycle Mode, manage_skills
+        create / update); a skill the map has not seen yet (a new one) is
+        recorded with its own mode. A host that never loaded the tree (a bare
+        test host) has no map and writes self.skills as it stands. An in-file
+        copy of SkillsMixin's."""
+        glob = getattr(self, "_skill_global_modes", None)
+        if glob is None:
+            return self.skills
+        out = {}
+        for name, entry in self.skills.items():
+            if isinstance(entry, dict):
+                mode = glob.setdefault(name, entry.get("mode", "disabled"))
+                if entry.get("mode") != mode:
+                    entry = dict(entry, mode=mode)
+            out[name] = entry
+        return out
+
+    def _set_skill_mode(self, name, mode):
+        """An explicit mode change (Cycle Mode, manage_skills): the session
+        AND the global mode, so the next save writes it to the tree."""
+        self.skills[name]["mode"] = mode
+        glob = getattr(self, "_skill_global_modes", None)
+        if glob is not None:
+            glob[name] = mode
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of the Skills button and the open Skills Manager listbox.
@@ -3242,6 +3362,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         icon="warning", default="no", parent=win):
                     return
                 del self.skills[name]
+                (getattr(self, "_skill_global_modes", None) or {}).pop(name, None)
                 _delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()
                 refresh_list()
@@ -3343,7 +3464,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name in self.skills:
                 cycle = {"disabled": "enabled", "enabled": "on_demand", "on_demand": "disabled"}
                 cur = self.skills[name].get("mode", "disabled")
-                self.skills[name]["mode"] = cycle.get(cur, "disabled")
+                self._set_skill_mode(name, cycle.get(cur, "disabled"))
                 self._save_skills()
                 idx = sel[0]
                 refresh_list()
@@ -3824,11 +3945,20 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if re.search(pattern, command, re.IGNORECASE):
                 return "blocked", f"BLOCKED: Command matches dangerous pattern ({pattern})"
 
+        # Every confirm pattern is checked, not only the first that matches:
+        # unticking a pattern in the Safety dialog bypasses THAT pattern, never
+        # a still-ticked one the same command also matches ("Remove-Item x
+        # -Recurse" with Remove-Item unticked still confirms on -Recurse).
+        # Skipped only when every matching pattern is unticked — MyAgent's rule.
+        bypassed = None
         for pattern in COMMAND_CONFIRM:
             if re.search(pattern, command, re.IGNORECASE):
-                if pattern in self._disabled_confirm_patterns:
-                    return "skipped", pattern  # bypassed via the Safety dialog
-                return "confirm", pattern
+                if pattern not in self._disabled_confirm_patterns:
+                    return "confirm", pattern
+                if bypassed is None:
+                    bypassed = pattern
+        if bypassed is not None:
+            return "skipped", bypassed  # bypassed via the Safety dialog
         return "safe", ""
 
     def _open_ps_safety_dialog(self):
@@ -6067,6 +6197,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if desc:
                 entry["description"] = desc
             self.skills[name] = entry
+            self._set_skill_mode(name, mode)
             self._save_skills()
             self._post_skill_ui_refresh()
             return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
@@ -6085,7 +6216,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if content is not None:
                 self.skills[name]["content"] = content
             if mode is not None:
-                self.skills[name]["mode"] = mode
+                self._set_skill_mode(name, mode)
             desc = ""
             if description is not None:
                 desc = description.strip()
@@ -6101,6 +6232,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found."
             del self.skills[name]
+            (getattr(self, "_skill_global_modes", None) or {}).pop(name, None)
             _delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
             self._save_skills()
             self._post_skill_ui_refresh()
@@ -6201,7 +6333,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 if k in params:
                     entry[k] = params[k]
             prompts[name] = entry
-            self._save_prompts_to_disk(prompts)
+            if self._save_prompts_to_disk(prompts) is False:
+                return self._PROMPTS_UNREADABLE_RESULT
             return f"Created system prompt '{name}' (bundled current environment)."
         if action == "update":
             if name not in prompts:
@@ -6223,7 +6356,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 merged.update(params["skill_modes"])
                 entry["skill_modes"] = merged
             prompts[name] = entry
-            self._save_prompts_to_disk(prompts)
+            if self._save_prompts_to_disk(prompts) is False:
+                return self._PROMPTS_UNREADABLE_RESULT
             return f"Updated system prompt '{name}'."
         if action == "delete":
             if name not in prompts:
@@ -6231,9 +6365,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if name == "Default":
                 return "Cannot delete the 'Default' prompt."
             del prompts[name]
-            self._save_prompts_to_disk(prompts)
+            if self._save_prompts_to_disk(prompts) is False:
+                return self._PROMPTS_UNREADABLE_RESULT
             return f"Deleted system prompt '{name}'."
         return f"Unknown action: {action}"
+
+    _PROMPTS_UNREADABLE_RESULT = (
+        "Error: the system prompt store could not be read, so nothing was saved "
+        "(saving would have replaced the whole library). The user must fix or "
+        "restore system_prompts.json and restart SelfBot.")
 
     @staticmethod
     def _estimate_content_tokens(content):
@@ -6469,6 +6609,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 self.temperature = max(0.0, min(1.0, self._temp_var.get()))
             except (tk.TclError, ValueError):
                 pass
+
+            # MCP servers connect in the background (the inherited MCPMixin):
+            # a message sent while they are still connecting waits here, on
+            # the worker, so its tool list includes them. The stub mixin used
+            # without the myagent package has no such method.
+            wait_mcp = getattr(self, "_mcp_wait_ready", None)
+            if wait_mcp is not None:
+                wait_mcp()
 
             # Only emit label upfront if thinking is disabled
             label_emitted = False

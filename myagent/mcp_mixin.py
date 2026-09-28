@@ -137,17 +137,25 @@ class MCPMixin:
 
     def _load_mcp_config(self):
         """Read MCP_SERVERS_PATH. Returns the ``servers`` dict or {} on any
-        problem. JSON shape mirrors Claude Desktop / Cursor:
+        problem. The per-server entries have the Claude Desktop / Cursor shape,
+        under a top-level ``servers`` key:
 
             {"servers": {"<name>": {"command": "...", "args": [...], "env": {...}}, ...}}
-        """
+
+        A server whose name starts with "_" is disabled and never connected —
+        the convention mcp_servers.example.json documents for its
+        "_example_with_secret_from_shell_env" entry ("delete the leading
+        underscore to activate"), which used to be connected regardless."""
         if not os.path.exists(MCP_SERVERS_PATH):
             return {}
         try:
             with open(MCP_SERVERS_PATH, encoding="utf-8") as f:
                 data = json.load(f)
             servers = data.get("servers", {})
-            return servers if isinstance(servers, dict) else {}
+            if not isinstance(servers, dict):
+                return {}
+            return {name: spec for name, spec in servers.items()
+                    if not str(name).startswith("_")}
         except Exception:
             return {}
 
@@ -209,21 +217,62 @@ class MCPMixin:
         loop_ready.wait()
         self._mcp_loop = loop_holder[0]
 
-        # Launch the runner — one long-lived task that owns every connection.
-        # Block this thread until the runner has finished connecting + listing
-        # tools (signalled via the threading.Event), so callers see a fully
-        # populated MCP_TOOLS list when this method returns. The 5-minute
-        # ceiling is generous on purpose: first-run cold-cache `npx -y`
-        # downloads of fat packages can take 30-90s on broadband and longer
-        # on slower links. Warm-cache launches complete in 1-3s, so the long
-        # ceiling costs nothing in practice and only fires when a server is
-        # genuinely stuck.
+        # Launch the runner — one long-lived task that owns every connection —
+        # and return at once. This method runs on the Tk thread (scheduled by
+        # root.after at startup), and it used to block there until every
+        # server had connected and listed its tools: a frozen window for 1-3 s
+        # warm and minutes on a cold `npx -y`. The wait moved to where the
+        # tools are needed: a run that offers MCP tools waits for the runner
+        # on its own worker thread (_mcp_wait_ready), so a -l / headless
+        # launch still gets its servers' tools. The 5-minute ceiling stays
+        # generous on purpose (cold-cache downloads of fat packages); a Tk
+        # timer reports a startup that outlives it.
         self._mcp_ready_event = threading.Event()
+        self._mcp_startup_began = time.monotonic()
         self._mcp_runner_future = asyncio.run_coroutine_threadsafe(
             self._mcp_runner(config), self._mcp_loop
         )
-        if not self._mcp_ready_event.wait(timeout=300):
+        self._mcp_watch_startup()
+
+    MCP_STARTUP_TIMEOUT = 300   # seconds the servers may take to connect + list tools
+
+    def _mcp_watch_startup(self):
+        """Tk-side watcher of the runner's startup: once a second until the
+        ready event is set, logging the timeout once past the ceiling. Never
+        blocks the Tk thread."""
+        ready = getattr(self, "_mcp_ready_event", None)
+        if ready is None or ready.is_set():
+            return
+        if time.monotonic() - self._mcp_startup_began >= self.MCP_STARTUP_TIMEOUT:
             self._mcp_log("⚠ MCP startup timed out after 5 minutes\n")
+            return
+        root = getattr(self, "root", None)
+        if root is not None:
+            try:
+                root.after(1000, self._mcp_watch_startup)
+            except Exception:
+                pass
+
+    def _mcp_wait_ready(self):
+        """Called by the streaming worker at run start: when the run offers MCP
+        tools and the servers are still connecting, wait for them — within
+        what is left of the startup ceiling, 0.25 s at a time so STOP ends
+        the wait — so the run's tool list includes them."""
+        ready = getattr(self, "_mcp_ready_event", None)
+        if not _HAS_MCP or ready is None or ready.is_set():
+            return
+        enabled = getattr(self, "mcp_enabled", None)
+        try:
+            if enabled is None or not enabled.get():
+                return
+        except Exception:
+            return
+        self._mcp_log("Waiting for the MCP servers to finish connecting…\n")
+        deadline = (getattr(self, "_mcp_startup_began", time.monotonic())
+                    + self.MCP_STARTUP_TIMEOUT)
+        while not ready.wait(0.25):
+            if getattr(self, "stop_requested", False) or time.monotonic() >= deadline:
+                return
 
     async def _mcp_runner(self, config):
         """Long-lived task owning all MCP connections for the app's lifetime.

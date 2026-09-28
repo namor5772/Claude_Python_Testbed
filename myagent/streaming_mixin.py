@@ -992,7 +992,7 @@ class StreamingMixin:
                 return (
                     f"{self.model} is a text-only model — it cannot see screenshots. "
                     "Desktop/browser tools will not work with this model. "
-                    "Switch to kimi-k2.6 / kimi-k2.5 / kimi-k3 (all vision-capable) "
+                    "Switch to kimi-k2.6 or kimi-k3 (both vision-capable) "
                     "for desktop work."
                 )
         elif self.provider == "Ollama":
@@ -1002,7 +1002,8 @@ class StreamingMixin:
                 return (
                     f"{self.model} is a text-only model — it cannot see screenshots. "
                     "Desktop/browser tools will not work with this model. "
-                    "Pull a vision variant (e.g. `ollama pull qwen2.5-vl:32b`) for desktop work."
+                    "Pull a vision model (e.g. `ollama pull muse-glimmer:30b-mlx` "
+                    "or `ollama pull qwen2.5vl:32b`) for desktop work."
                 )
         return None
 
@@ -1473,6 +1474,13 @@ class StreamingMixin:
             # model leaves no trace in the window or the saved transcript.
             for drift in getattr(self, "_model_drift_warnings", []):
                 self.queue.put({"type": "warning", "content": drift})
+
+            # MCP servers connect in the background (mcp_mixin): a run that
+            # offers their tools waits here, on the worker, until they are up —
+            # the getattr guard keeps bare test hosts without the mixin working.
+            wait_mcp = getattr(self, "_mcp_wait_ready", None)
+            if wait_mcp is not None:
+                wait_mcp()
 
             label_emitted = False
             if not self.thinking_enabled:

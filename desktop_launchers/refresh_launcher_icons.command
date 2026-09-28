@@ -32,6 +32,8 @@ My Agent|icon_myagent_master.png
 SelfBot|icon_selfbot_master.png
 Heartbeat Log|icon_heartbeat_master.png
 API Cost Log|icon_costlog_master.png
+TodoList|icon_todolist_master.png
+TodoList (Native)|icon_todolist_native_master.png
 Numc|icon_numc_master.png
 PAIRS
 killall Finder 2>/dev/null                  # force Finder to re-read the icons

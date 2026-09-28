@@ -24,13 +24,48 @@ class SkillsMixin:
     def _load_skills(self):
         # Per-skill SKILL.md tree (frontmatter: name/description/mode). Runs
         # the one-shot skills.json→tree migration and heals OneDrive per-file
-        # conflict forks; every entry comes back with a valid mode.
-        return load_skills_tree(SKILLS_DIR)
+        # conflict forks; every entry comes back with a valid mode. The modes
+        # read here are the GLOBAL ones, kept apart from the session modes an
+        # instruction restores into self.skills (see _skills_for_tree).
+        skills = load_skills_tree(SKILLS_DIR)
+        self._skill_global_modes = {n: e.get("mode", "disabled")
+                                    for n, e in skills.items() if isinstance(e, dict)}
+        return skills
 
     def _save_skills(self):
         # Diff-aware and WRITE-ONLY (never deletes folders) — deletion is an
         # explicit action via delete_skill_tree_entry at the delete callsites.
-        save_skills_tree(SKILLS_DIR, self.skills)
+        save_skills_tree(SKILLS_DIR, self._skills_for_tree())
+
+    def _skills_for_tree(self):
+        """self.skills as the tree should record it: each skill with its GLOBAL
+        mode. An instruction's skill modes are session-only
+        (_restore_skill_modes writes them into self.skills), so a save must
+        not carry them into the shared tree — it used to: any later skill save
+        wrote every skill's session mode as its global one. A mode reaches the
+        tree only through _set_skill_mode (Cycle Mode, manage_skills
+        create / update); a skill the map has not seen yet (a new one) is
+        recorded with its own mode. A host that never loaded the tree (a bare
+        test host) has no map and writes self.skills as it stands."""
+        glob = getattr(self, "_skill_global_modes", None)
+        if glob is None:
+            return self.skills
+        out = {}
+        for name, entry in self.skills.items():
+            if isinstance(entry, dict):
+                mode = glob.setdefault(name, entry.get("mode", "disabled"))
+                if entry.get("mode") != mode:
+                    entry = dict(entry, mode=mode)
+            out[name] = entry
+        return out
+
+    def _set_skill_mode(self, name, mode):
+        """An explicit mode change (Cycle Mode, manage_skills): the session
+        AND the global mode, so the next save writes it to the tree."""
+        self.skills[name]["mode"] = mode
+        glob = getattr(self, "_skill_global_modes", None)
+        if glob is not None:
+            glob[name] = mode
 
     @staticmethod
     def _desc_length_warning(desc):
@@ -213,6 +248,7 @@ class SkillsMixin:
             if desc:
                 entry["description"] = desc
             self.skills[name] = entry
+            self._set_skill_mode(name, mode)
             self._save_skills()
             self._post_skill_ui_refresh()
             return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
@@ -231,7 +267,7 @@ class SkillsMixin:
             if content is not None:
                 self.skills[name]["content"] = content
             if mode is not None:
-                self.skills[name]["mode"] = mode
+                self._set_skill_mode(name, mode)
             desc = ""
             if description is not None:
                 desc = description.strip()
@@ -247,6 +283,7 @@ class SkillsMixin:
             if name not in self.skills:
                 return f"Error: Skill '{name}' not found."
             del self.skills[name]
+            (getattr(self, "_skill_global_modes", None) or {}).pop(name, None)
             delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
             self._save_skills()
             self._post_skill_ui_refresh()
@@ -417,11 +454,11 @@ class SkillsMixin:
             self._model_drift_warnings.append(drift)
             self.queue.put({"type": "warning", "content": drift})
         # Session-only: applying an instruction's saved skill modes updates the
-        # live session (self.skills drives _build_system_prompt) but is NOT
-        # persisted to skills.json. skills.json is the sticky global store, changed
-        # only by explicit Skills Manager / manage_skills edits — otherwise loading
-        # an instruction (or restoring the last applied state on launch) would
-        # silently overwrite the user's global skill modes.
+        # live session (self.skills drives _build_system_prompt) but never the
+        # skills tree, the sticky global store — changed only by explicit
+        # Skills Manager / manage_skills edits (_set_skill_mode). Nothing here
+        # touches _skill_global_modes, so a later skill save still writes each
+        # skill's global mode (_skills_for_tree), not the one set here.
         self._update_skills_button()
         # Refresh Skills Manager listbox if open
         if (self.skills_editor_window and self.skills_editor_window.winfo_exists()
@@ -631,6 +668,7 @@ class SkillsMixin:
                         icon="warning", default="no", parent=win):
                     return
                 del self.skills[name]
+                (getattr(self, "_skill_global_modes", None) or {}).pop(name, None)
                 delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()
                 refresh_list()
@@ -735,7 +773,7 @@ class SkillsMixin:
             if name in self.skills:
                 cycle = {"disabled": "enabled", "enabled": "on_demand", "on_demand": "disabled"}
                 cur = self.skills[name].get("mode", "disabled")
-                self.skills[name]["mode"] = cycle.get(cur, "disabled")
+                self._set_skill_mode(name, cycle.get(cur, "disabled"))
                 self._save_skills()
                 idx = sel[0]
                 refresh_list()
