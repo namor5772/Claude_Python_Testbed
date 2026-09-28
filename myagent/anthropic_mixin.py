@@ -490,10 +490,14 @@ class AnthropicMixin:
                         full_text = ""
                         continue
                     # Only the last two rounds remain and they still overflow —
-                    # nothing left to trim, so end the turn gracefully with an
-                    # actionable message instead of crashing the agentic loop.
+                    # nothing left to trim: the actionable advice as a warning,
+                    # then the run ends through stream_worker's error path. (It
+                    # used to post an "error" — which check_queue takes as the
+                    # run's end, re-enabling START while the worker was still
+                    # finishing — and return end_turn, so a waited parent's
+                    # result file said "completed".)
                     detail = getattr(e, "message", "") or str(e)
-                    self.queue.put({"type": "error", "content":
+                    self.queue.put({"type": "warning", "content":
                         f"⚠ Context window exceeded on {self.model}:\n  {detail}\n"
                         "  Even the most recent exchanges alone are larger than this model "
                         "can hold. 200K-window models (Haiku 4.5, Opus 4.5) cannot run "
@@ -501,8 +505,8 @@ class AnthropicMixin:
                         "(claude-opus-5, claude-fable-5-1, claude-sonnet-5, claude-sonnet-4-6, or "
                         "claude-opus-4-8/4.7/4.6), or "
                         "split the task into smaller parts.\n"})
-                    return ("end_turn", [{"type": "text", "text": full_text}],
-                            full_text, had_thinking, label_emitted, None)
+                    raise RuntimeError(
+                        f"Context window exceeded on {self.model} — nothing left to trim") from None
                 raise
             except anthropic.APIStatusError as e:
                 if e.status_code == 529 and attempt < max_retries - 1:

@@ -255,8 +255,9 @@ class StreamingMixin:
                 _truncate_images(content)
 
         if self.provider in ("OpenAI", "xAI"):
-            # Both speak the Responses API format; xAI gets no server-side
-            # tools (see xai_mixin) while OpenAI appends its built-ins.
+            # Both speak the Responses API format and both append server-side
+            # built-ins below (xAI: web_search + x_search, code_interpreter
+            # gated off while Desktop is on — see xai_mixin).
             system_prompt = self._build_system_prompt()
             tools = self._get_tools()
             responses_tools = self._tools_to_responses(tools) if tools else []
@@ -576,10 +577,11 @@ class StreamingMixin:
     def _execute_tool(self, block):
         """Execute a single tool_use block and return the result.
 
-        Thread-safe for parallel-safe tools (web_search, fetch_webpage,
-        csv_search, get_skill, read_document, read_file, glob_files,
-        grep_files). Sequential tools (desktop, browser, run_powershell,
-        write_file/edit_file, user_prompt) must only be called from one thread.
+        Thread-safe for parallel-safe tools (PARALLEL_SAFE_TOOLS: web_search,
+        fetch_webpage, csv_search, get_skill, read_document, read_file,
+        glob_files, grep_files, run_instruction). Sequential tools (desktop,
+        browser, run_powershell, write_file/edit_file, user_prompt) must only
+        be called from one thread.
         """
         # Per-instruction hard blocklist — FIRST gate, before any routing, so
         # it covers native, MCP, and mail tools alike. This is the deterministic
@@ -1283,7 +1285,8 @@ class StreamingMixin:
             self._tool_info(f"Logged API cost to {APICOST_LOG_FILE}: {line}")
         except Exception as e:
             self.queue.put({"type": "warning",
-                            "content": f"⚠ Could not write APICostLog.txt: {e}\n"})
+                            "content": f"⚠ Could not write the API cost log "
+                                       f"({APICOST_LOG_FILE}): {e}\n"})
 
     @staticmethod
     def _filter_blocked_tools(tools, blocked):
@@ -1460,6 +1463,9 @@ class StreamingMixin:
 
             user_prompt_count = 0
             user_prompt_nudges = 0
+            # Set when a reply was cut off (stop_reason max_tokens / context
+            # window): the result file then says why the run ended early.
+            truncated_note = ""
             while True:
                 # Check stop request between API calls
                 if self.stop_requested:
@@ -1578,11 +1584,14 @@ class StreamingMixin:
                         # tokens still go to the window (call_cost None —
                         # check_queue's _cost_line prints them behind
                         # "unpriced"), so API usage is never silent; the
-                        # run-start ⚠ has said why there is no price.
+                        # run-start ⚠ has said why there is no price. Ollama
+                        # has no row because it is FREE, not unknown: "free"
+                        # makes the line say so.
                         self.queue.put({
                             "type": "cost_update",
                             "call_cost": None,
                             "total_cost": None,
+                            "free": self.provider == "Ollama",
                             "input_tokens": call_input,
                             "output_tokens": call_output,
                             "cache_write_tokens": call_cache_write,
@@ -1599,8 +1608,32 @@ class StreamingMixin:
                     self._tool_info("Agent stopped by user.\n")
                     break
 
+                if stop_reason == "pause_turn":
+                    # Anthropic paused a long server-tool turn (the 20260209
+                    # web search / fetch run code execution underneath, and the
+                    # server's iteration limit ends the sampling loop): the
+                    # partial turn goes back UNCHANGED and the next request
+                    # resumes it. It used to end the run with a partial answer.
+                    messages.append({"role": "assistant", "content": content_blocks})
+                    full_text = ""
+                    self._tool_info("Server-side tools paused the turn — resuming...\n")
+                    continue
+                truncated_note = ""   # describes the LAST call (Convo mode goes on)
+                if stop_reason in ("max_tokens", "model_context_window_exceeded"):
+                    unfinished_tool = any(
+                        (b.get("type") if isinstance(b, dict) else getattr(b, "type", None))
+                        == "tool_use" for b in content_blocks or ())
+                    truncated_note = (
+                        f"the model's reply was cut off (stop_reason={stop_reason})"
+                        + ("; its unfinished tool call was not run" if unfinished_tool else ""))
+                    self.queue.put({"type": "warning", "content":
+                                    f"⚠ {truncated_note[0].upper()}{truncated_note[1:]}. "
+                                    f"The turn ends here — ask for smaller steps, or use "
+                                    f"a larger output budget (Thinking on raises it).\n"})
+
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})
+                    full_text = ""   # it is inside content_blocks — never append it twice
 
                     # Wrap dict-based blocks (OpenAI/Gemini/xAI/Kimi/Ollama) in _ToolBlock for uniform attribute access
                     if self.provider in ("OpenAI", "Google", "xAI", "Moonshot", "Ollama"):
@@ -1652,7 +1685,14 @@ class StreamingMixin:
                     # Execute sequential tools one at a time, in order
                     had_user_prompt = False
                     for idx, block in sequential_items:
-                        result = self._run_tool(block)
+                        if self.stop_requested:
+                            # STOP mid-turn: the model's remaining actions (a
+                            # click, a keystroke, a command) must not run —
+                            # each still gets a result, so every tool_use
+                            # keeps its tool_result.
+                            result = "[Not run: the user pressed STOP]"
+                        else:
+                            result = self._run_tool(block)
                         tool_results_ordered[idx] = {
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -1712,6 +1752,7 @@ class StreamingMixin:
                     if user_prompt_count >= 2 and full_text and user_prompt_nudges < 3:
                         user_prompt_nudges += 1
                         messages.append({"role": "assistant", "content": full_text})
+                        full_text = ""   # appended — a STOP next must not add it again
                         messages.append({
                             "role": "user",
                             "content": "[System: You ended your turn without calling user_prompt. "
@@ -1725,8 +1766,12 @@ class StreamingMixin:
             if full_text:
                 messages.append({"role": "assistant", "content": full_text})
             _end_run()
-            self._write_result_file(
-                "stopped" if self.stop_requested else "completed", messages)
+            if self.stop_requested:
+                self._write_result_file("stopped", messages)
+            elif truncated_note:
+                self._write_result_file("error", messages, error=truncated_note)
+            else:
+                self._write_result_file("completed", messages)
             self.queue.put({"type": "complete"})
             # A result file means this run IS a subagent (run_instruction spawn):
             # auto-close even with a GUI (headless=false watch mode), so the

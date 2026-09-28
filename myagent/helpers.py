@@ -237,7 +237,7 @@ def responses_usage_dict(usage, cache_write_billed=False):
 
 def rotate_log_if_needed(log_path, max_bytes):
     """One-slot size-cap rotation for the append-only runtime logs
-    (heartbeat.log, APICostLog.txt): past max_bytes the log is atomically
+    (heartbeat.log, APICostLog_<machine>.txt): past max_bytes the log is atomically
     renamed to <name>.old — replacing the previous archive — and restarts
     with a timestamped marker line. Best-effort: any OSError (no log yet,
     or the archive locked open) skips rotation until the next call, so

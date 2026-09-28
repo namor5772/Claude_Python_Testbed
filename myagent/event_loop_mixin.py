@@ -1,4 +1,4 @@
-import os, io, time, queue, tkinter as tk
+import os, io, sys, time, queue, tkinter as tk
 
 try:
     from PIL import Image, ImageTk
@@ -72,6 +72,8 @@ class EventLoopMixin:
         call_cost = msg["call_cost"]
         total_cost = msg["total_cost"]
         if call_cost is None:
+            if msg.get("free"):   # Ollama: local inference, nothing to price
+                return f"  local model — no charge  ({token_str})\n"
             return f"  unpriced this call  |  no pricing row  ({token_str})\n"
         # Use appropriate precision based on cost magnitude
         if total_cost < 0.01:
@@ -265,7 +267,7 @@ class EventLoopMixin:
         if self.streaming:
             self.root.after(200, self._finish_close)
             return
-        self._save_last_state()
+        self._close_step(self._save_last_state)
         # Release the instance-number lock the moment persistent state is on
         # disk — BEFORE the potentially slow browser/MCP cleanup and chat save.
         # Otherwise a quick close-then-relaunch (common while a user is testing,
@@ -276,9 +278,28 @@ class EventLoopMixin:
         # slot; freeing it once agent_state.json is written lets the relaunch
         # reclaim THIS instance and its geometry. (Idempotent, so the belt-and-
         # braces call is harmless if a later close path runs.)
-        self._release_instance_lock()
-        self._auto_save_on_close()
-        self._cleanup_browser()
-        self._disconnect_mcp_servers()
-        self._release_instance_lock()
+        self._close_step(self._release_instance_lock)
+        self._close_step(self._auto_save_on_close)
+        self._close_step(self._cleanup_browser)
+        self._close_step(self._disconnect_mcp_servers)
+        self._close_step(self._release_instance_lock)
         self.root.destroy()
+
+    @staticmethod
+    def _close_step(step):
+        """One best-effort step of the close sequence. _closing is latched
+        before it starts, so an exception escaping a step (a state file or
+        chat save that can't be written) used to skip root.destroy(): a window
+        no [X] could close, a headless child that never exited, its instance
+        lock held. A failure is reported on stderr (when there is one —
+        pythonw has none) and the sequence goes on."""
+        try:
+            step()
+        except Exception as e:
+            if sys.stderr is None:   # print(file=None) would go to stdout instead
+                return
+            try:
+                print(f"MyAgent close: {getattr(step, '__name__', step)} failed: {e!r}",
+                      file=sys.stderr)
+            except Exception:
+                pass
