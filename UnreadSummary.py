@@ -33,9 +33,15 @@ Safety properties, by construction rather than by prompt:
   * Per-match actions are individually flag-gated: SAVE_MATCH_PDFS and
     MARK_MATCHES_READ (default True), TRASH_MATCHES (default False). The
     only default mailbox mutation is clearing the unread flag on matches.
+  * Mailbox mutations run only AFTER the digest that lists those matches
+    has been sent: a pass that fails before or during the send changes
+    nothing, so the next pass lists the same mail again. (Saving PDFs is
+    read-only and runs before the digest is built, so their names are in it.)
   * Even with all flags enabled, actions run only for emails matching a
     SPECIFYING entry, and Trash is recoverable from each provider's UI —
-    nothing is permanently deleted (same boundary as MyAgent's mail mixins).
+    nothing is permanently deleted (same boundary as MyAgent's mail mixins;
+    an IMAP move's fallback expunges only the moved message by UID, never
+    with a folder-wide EXPUNGE).
 
 Reuses MyAgent's stored credentials and never starts an interactive flow:
   Gmail   ~/.config/myagent-google/{account}_token.json   (silent refresh)
@@ -108,6 +114,10 @@ OUTLOOK_SCOPES = [
     "https://graph.microsoft.com/Mail.Send",
 ]
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+# MSAL's own HTTP calls (the token refresh every run makes) take no timeout by
+# default — it overrides socket.setdefaulttimeout — so a stalled connection
+# to login.microsoftonline.com would hang the unattended job for good.
+OUTLOOK_HTTP_TIMEOUT = 60
 
 SEND_FROM_OUTLOOK_ACCOUNT = "outlook"  # account key in msmail accounts.json
 SEND_TO = "namor5772@gmail.com"
@@ -378,7 +388,7 @@ def summarize(lines, subject):
 
 def _norm_subject(subject):
     s = re.sub(r"\s+", " ", subject or "").strip()
-    s = re.sub(r"^((fwd?|fw|re):\s*)+", "", s, flags=re.I)
+    s = re.sub(r"^((fwd?|re):\s*)+", "", s, flags=re.I)
     return s.rstrip(". ").lower()
 
 
@@ -402,13 +412,34 @@ def match_specifying(entry):
 
 # ── Shared entry helpers ─────────────────────────────────────────────────────
 
+def _decode_header_bytes(raw, charset):
+    """One decoded header chunk's bytes as text. A raw 8-bit header (RFC 6532
+    UTF-8 with no encoded-word) arrives labelled 'unknown-8bit' — a charset no
+    codec has — so it, and any charset Python doesn't know, is read as UTF-8,
+    else Latin-1. (Mirror of ProtonMailMixin._decode_header_bytes.)"""
+    if charset and charset.lower() not in ("unknown-8bit", "x-unknown"):
+        try:
+            return raw.decode(charset, "replace")
+        except LookupError:
+            pass
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
 def decode_header(value):
+    """A header as one line of plain text — ALWAYS a str. The email package
+    hands a header holding raw 8-bit bytes back as an email.header.Header
+    object, not a str, and one such Date header in any scanned folder crashed
+    the digest build (textwrap on a Header), failing every pass until that
+    message was gone."""
     if not value:
         return ""
     try:
         parts = []
         for t, cs in email.header.decode_header(value):
-            parts.append(t.decode(cs or "utf-8", "replace") if isinstance(t, bytes) else t)
+            parts.append(_decode_header_bytes(t, cs) if isinstance(t, bytes) else t)
         return re.sub(r"\s+", " ", "".join(parts)).strip()
     except Exception:
         return str(value)
@@ -475,13 +506,31 @@ def _gmail_walk(part):
         yield from _gmail_walk(p)
 
 
+def _gmail_part_charset(part):
+    """The charset a Gmail payload part declares in its Content-Type header,
+    else utf-8. (Mirror of GmailMixin._gmail_part_charset.)"""
+    for header in part.get("headers", []) or []:
+        if (header.get("name") or "").lower() == "content-type":
+            m = re.search(r'charset\s*=\s*"?([^";\s]+)', header.get("value") or "", re.I)
+            if m:
+                return m.group(1)
+    return "utf-8"
+
+
 def _gmail_body_text(payload):
     plain, html = None, None
     for part in _gmail_walk(payload):
         data = part.get("body", {}).get("data")
         if not data:
             continue
-        text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
+        # body.data is the part's bytes in its OWN charset (the API does not
+        # transcode): a windows-1252 / ISO-8859-1 body read as UTF-8 put a
+        # U+FFFD in the summary for every accented letter.
+        raw = base64.urlsafe_b64decode(data)
+        try:
+            text = raw.decode(_gmail_part_charset(part), errors="replace")
+        except LookupError:   # a charset name Python lacks
+            text = raw.decode("utf-8", errors="replace")
         mime = part.get("mimeType", "")
         if mime == "text/plain" and plain is None:
             plain = text
@@ -526,19 +575,27 @@ def gmail_collect(account, account_email):
     return entries
 
 
-def gmail_act(entry):
-    """Action phase for a SPECIFYING match, honouring the action flags.
-    Attachment download is itself read-only (messages.attachments.get)."""
+def gmail_save_pdfs(entry):
+    """The read-only half of a SPECIFYING match's actions: save its PDF
+    attachments (messages.attachments.get changes nothing). Returns the
+    saved file names."""
     service = entry["_service"]
-    pdfs, actions = [], []
-    if SAVE_MATCH_PDFS:
-        for part in _gmail_walk(entry["_payload"]):
-            fname = part.get("filename", "")
-            att_id = part.get("body", {}).get("attachmentId")
-            if att_id and _is_pdf(fname, part.get("mimeType")):
-                att = service.users().messages().attachments().get(
-                    userId="me", messageId=entry["id"], id=att_id).execute()
-                pdfs.append(save_pdf(fname, base64.urlsafe_b64decode(att["data"])))
+    pdfs = []
+    for part in _gmail_walk(entry["_payload"]):
+        fname = part.get("filename", "")
+        att_id = part.get("body", {}).get("attachmentId")
+        if att_id and _is_pdf(fname, part.get("mimeType")):
+            att = service.users().messages().attachments().get(
+                userId="me", messageId=entry["id"], id=att_id).execute()
+            pdfs.append(save_pdf(fname, base64.urlsafe_b64decode(att["data"])))
+    return pdfs
+
+
+def gmail_mark(entry):
+    """The mailbox half, run only after the digest was sent: mark read and/or
+    trash, as the flags say. Returns the actions taken."""
+    service = entry["_service"]
+    actions = []
     if MARK_MATCHES_READ:
         service.users().messages().modify(
             userId="me", id=entry["id"], body={"removeLabelIds": ["UNREAD"]}).execute()
@@ -548,10 +605,18 @@ def gmail_act(entry):
         actions.append("moved to Trash")
     if not actions:
         actions.append("left unread in place")
-    return pdfs, actions
+    return actions
 
 
 # ── IMAP (Proton Bridge / WebCentral) ────────────────────────────────────────
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
+
+
+def _is_loopback_host(host):
+    """True for this machine's own addresses (Proton Bridge's case)."""
+    return (host or "").strip().lower() in _LOOPBACK_HOSTS
+
 
 def _imap_ssl_context(cfg):
     """Mirror of ProtonMailMixin._build_ssl_context: pinned cert > explicit
@@ -559,8 +624,7 @@ def _imap_ssl_context(cfg):
     ca = cfg.get("ca_cert_path")
     if ca and os.path.isfile(ca):
         return ssl.create_default_context(cafile=ca)
-    if cfg.get("verify_tls") is False or \
-            (cfg.get("imap_host") or "").strip().lower() in ("127.0.0.1", "localhost", "::1", "0.0.0.0"):
+    if cfg.get("verify_tls") is False or _is_loopback_host(cfg.get("imap_host")):
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -578,8 +642,20 @@ def imap_connect(cfg):
         conn = imaplib.IMAP4(host, port)
         try:
             conn.starttls(ssl_context=ctx)
-        except imaplib.IMAP4.error:
-            pass  # Bridge quirk — login proceeds on the plain local socket
+        except imaplib.IMAP4.error as e:
+            # A Bridge quirk: Bridge on THIS machine gets the plain login,
+            # which never leaves it. Any other host would receive the
+            # password in clear — an attacker who strips STARTTLS reads it —
+            # so there the login is refused instead (as ProtonMailMixin does).
+            if not _is_loopback_host(host):
+                try:
+                    conn.shutdown()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"STARTTLS failed on {host}: {e} — refusing to send the password "
+                    f"unencrypted (set imap_ssl: true if the server speaks implicit TLS)"
+                ) from e
     conn.login(cfg.get("username") or cfg.get("email"), cfg["app_password"])
     return conn
 
@@ -663,45 +739,85 @@ def imap_collect(account, cfg, conn):
                 "from": decode_header(msg.get("From", "")),
                 "to": decode_header(msg.get("To", "")),
                 "subject": decode_header(msg.get("Subject", "")),
-                "date": msg.get("Date", ""),
+                "date": decode_header(msg.get("Date", "")),
                 "lines": body_lines(_imap_body_text(msg)),
                 "_conn": conn, "_msg": msg, "_trash": trash_folder,
             })
     return entries
 
 
-def imap_act(entry):
+def imap_save_pdfs(entry):
+    """The read-only half of a SPECIFYING match's actions. The PDFs come out
+    of the message already fetched with BODY.PEEK during collection — saving
+    them costs no IMAP traffic and cannot touch the \\Seen flag."""
+    pdfs = []
+    for part in entry["_msg"].walk():
+        fname = decode_header(part.get_filename() or "")
+        if fname and _is_pdf(fname, part.get_content_type()):
+            payload = part.get_payload(decode=True) or b""
+            if payload:
+                pdfs.append(save_pdf(fname, payload))
+    return pdfs
+
+
+def imap_move(conn, uid, destination):
+    """Move one message (by UID) out of the selected folder; returns the
+    action line for the log.
+
+    UID MOVE (RFC 6851) first. Only a server that does not KNOW the command —
+    it answers BAD, which imaplib raises — gets the fallback: a CHECKED COPY,
+    then \\Deleted and a UID EXPUNGE (RFC 4315) of this one message. Where UID
+    EXPUNGE is refused too, the original stays flagged \\Deleted beside its
+    copy: a plain EXPUNGE would also destroy every message another client had
+    flagged \\Deleted in that folder. (The old fallback chose it from the
+    PRE-login capability list — Dovecot names MOVE only after login — ran
+    even when the COPY had failed, and expunged the whole folder.) A MOVE the
+    server REFUSES (NO) is a failure, never a reason to fall back."""
+    dest = _quote_mailbox(destination)
+    try:
+        typ, _ = conn.uid("move", uid, dest)
+    except imaplib.IMAP4.abort:
+        raise                                  # the connection died
+    except imaplib.IMAP4.error:
+        typ = None                             # BAD: this server has no MOVE
+    if typ is not None:
+        return f"moved to {destination}" if typ == "OK" else f"move to {destination} FAILED"
+    typ, _ = conn.uid("copy", uid, dest)
+    if typ != "OK":
+        return f"move to {destination} FAILED (COPY refused)"
+    conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
+    try:
+        typ, _ = conn.uid("expunge", uid)
+    except imaplib.IMAP4.abort:
+        raise
+    except imaplib.IMAP4.error:
+        typ = None                             # BAD: no UIDPLUS
+    if typ == "OK":
+        return f"moved to {destination}"
+    return (f"copied to {destination}; the original is flagged \\Deleted but not "
+            f"expunged (this server cannot expunge a single message)")
+
+
+def imap_mark(entry):
+    """The mailbox half, run only after the digest was sent: a read-write
+    SELECT of the entry's folder, then \\Seen and/or the move to Trash, as
+    the flags say. Returns the actions taken."""
     conn, uid = entry["_conn"], entry["id"]
-    pdfs, actions = [], []
-    if SAVE_MATCH_PDFS:
-        # The PDFs come out of the message already fetched with BODY.PEEK
-        # during collection — saving them costs no IMAP traffic and cannot
-        # touch the \Seen flag.
-        for part in entry["_msg"].walk():
-            fname = decode_header(part.get_filename() or "")
-            if fname and _is_pdf(fname, part.get_content_type()):
-                payload = part.get_payload(decode=True) or b""
-                if payload:
-                    pdfs.append(save_pdf(fname, payload))
+    actions = []
     if MARK_MATCHES_READ or TRASH_MATCHES:
-        conn.select(_quote_mailbox(entry["folder"]))  # read-write select
+        typ, _ = conn.select(_quote_mailbox(entry["folder"]))  # read-write select
+        if typ != "OK":
+            # (imaplib is then back in AUTH state, so no later command can
+            # land on a UID of the previously selected folder.)
+            return [f"SELECT {entry['folder']} FAILED — left as it was"]
     if MARK_MATCHES_READ:
         typ, _ = conn.uid("store", uid, "+FLAGS", r"(\Seen)")
         actions.append("marked read" if typ == "OK" else "mark-read FAILED")
     if TRASH_MATCHES:
-        trash = _quote_mailbox(entry["_trash"])
-        if "MOVE" in conn.capabilities:
-            typ, _ = conn.uid("move", uid, trash)
-        else:
-            typ, _ = conn.uid("copy", uid, trash)
-            if typ == "OK":
-                conn.uid("store", uid, "+FLAGS", r"(\Deleted)")
-                conn.expunge()
-        actions.append(f"moved to {entry['_trash']}" if typ == "OK"
-                       else f"move to {entry['_trash']} FAILED")
+        actions.append(imap_move(conn, uid, entry["_trash"]))
     if not actions:
         actions.append("left unread in place")
-    return pdfs, actions
+    return actions
 
 
 # ── Outlook (Microsoft Graph) ────────────────────────────────────────────────
@@ -732,7 +848,8 @@ def outlook_token(account, account_email):
         cache = msal.SerializableTokenCache()
         if cache_path.exists():
             cache.deserialize(cache_path.read_text(encoding="utf-8"))
-        app = msal.PublicClientApplication(client_id, authority=authority, token_cache=cache)
+        app = msal.PublicClientApplication(client_id, authority=authority, token_cache=cache,
+                                           timeout=OUTLOOK_HTTP_TIMEOUT)
         _OUTLOOK_APPS[account] = (app, cache, cache_path)
     app, cache, cache_path = _OUTLOOK_APPS[account]
     accounts = app.get_accounts(username=account_email) or app.get_accounts()
@@ -747,9 +864,18 @@ def outlook_token(account, account_email):
 
 
 def graph(account, account_email, method, path, params=None, json_body=None):
+    """One Graph call. ``path`` is relative to GRAPH_BASE — or a complete
+    ``@odata.nextLink`` URL, which carries its own query and is accepted only
+    on GRAPH_BASE itself, so the bearer token is never sent anywhere else."""
+    if path.startswith(("https://", "http://")):
+        if not path.startswith(GRAPH_BASE + "/"):
+            raise RuntimeError(f"refusing a Graph link outside {GRAPH_BASE}: {path[:80]}")
+        url = path
+    else:
+        url = GRAPH_BASE + path
     token = outlook_token(account, account_email)
     headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.request(method, GRAPH_BASE + path, headers=headers,
+    resp = requests.request(method, url, headers=headers,
                             params=params, json=json_body, timeout=60)
     if resp.status_code >= 400:
         try:
@@ -773,14 +899,30 @@ def _graph_date_local(iso):
         return iso
 
 
+def _graph_pages(account, account_email, path, params):
+    """Every item of a Graph listing: the first page, then each
+    ``@odata.nextLink`` (which already carries the query) until there is
+    none. One page only cut each folder off at $top unread messages, the rest
+    silently missing from the digest and its TOTAL. A link seen twice ends
+    the walk rather than looping."""
+    resp = graph(account, account_email, "GET", path, params=params)
+    seen = set()
+    while True:
+        yield from resp.get("value", [])
+        link = resp.get("@odata.nextLink")
+        if not link or link in seen:
+            return
+        seen.add(link)
+        resp = graph(account, account_email, "GET", link)
+
+
 def outlook_collect(account, account_email):
     entries = []
     select = "id,subject,from,sender,toRecipients,receivedDateTime,body,hasAttachments"
     for folder, tag in (("inbox", ""), ("junkemail", "JUNK")):
         url = f"/me/mailFolders/{folder}/messages"
         params = {"$filter": "isRead eq false", "$top": 100, "$select": select}
-        resp = graph(account, account_email, "GET", url, params=params)
-        for m in resp.get("value", []):
+        for m in _graph_pages(account, account_email, url, params):
             addr = (m.get("from") or m.get("sender") or {}).get("emailAddress", {})
             frm = f"\"{addr.get('name', '')}\" <{addr.get('address', '')}>".strip()
             to = ", ".join(r.get("emailAddress", {}).get("address", "")
@@ -800,15 +942,24 @@ def outlook_collect(account, account_email):
     return entries
 
 
-def outlook_act(entry):
+def outlook_save_pdfs(entry):
+    """The read-only half of a SPECIFYING match's actions (a Graph GET)."""
     account, account_email = entry["account"], entry["account_email"]
-    pdfs, actions = [], []
-    if SAVE_MATCH_PDFS and entry["_has_atts"]:
+    pdfs = []
+    if entry["_has_atts"]:
         resp = graph(account, account_email, "GET",
                      f"/me/messages/{entry['id']}/attachments")
         for a in resp.get("value", []):
             if a.get("contentBytes") and _is_pdf(a.get("name"), a.get("contentType")):
                 pdfs.append(save_pdf(a.get("name"), base64.b64decode(a["contentBytes"])))
+    return pdfs
+
+
+def outlook_mark(entry):
+    """The mailbox half, run only after the digest was sent: mark read and/or
+    move to Deleted Items, as the flags say. Returns the actions taken."""
+    account, account_email = entry["account"], entry["account_email"]
+    actions = []
     if MARK_MATCHES_READ:
         graph(account, account_email, "PATCH", f"/me/messages/{entry['id']}",
               json_body={"isRead": True})
@@ -819,7 +970,7 @@ def outlook_act(entry):
         actions.append("moved to Deleted Items")
     if not actions:
         actions.append("left unread in place")
-    return pdfs, actions
+    return actions
 
 
 def outlook_send(account, account_email, subject, body):
@@ -930,123 +1081,197 @@ def build_body(account_order, entries_by_account, errors, dry_run, width=None,
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+class AccountsFileError(Exception):
+    """An accounts.json that exists but cannot be read or parsed."""
+
+
 def load_accounts(path):
+    """The ``accounts`` object of ``path``/accounts.json — {} when there is no
+    such file (that provider is simply not configured). A file that exists
+    but cannot be read or parsed raises AccountsFileError: returning {} for it
+    made every account of that provider vanish from the digest with no ERROR
+    line and nothing in the log (a hand edit's trailing comma did it)."""
     f = path / "accounts.json"
     if not f.exists():
         return {}
     try:
-        return json.loads(f.read_text(encoding="utf-8")).get("accounts", {})
-    except Exception:
+        accounts = json.loads(f.read_text(encoding="utf-8")).get("accounts", {})
+        if not isinstance(accounts, dict):
+            raise ValueError('"accounts" is not an object')
+        bad = [name for name, cfg in accounts.items() if not isinstance(cfg, dict)]
+        if bad:
+            raise ValueError(f"not an object: {', '.join(map(str, bad))}")
+        return accounts
+    except (OSError, ValueError, AttributeError) as e:
+        raise AccountsFileError(f"{type(e).__name__}: {e}") from e
+
+
+def _provider_accounts(provider, config_dir, account_order, errors):
+    """load_accounts for one provider. An unreadable accounts.json becomes a
+    digest block of its own, in the provider's place, carrying the ERROR line
+    (and so an ACCOUNT ERROR log line) — its slot's account key is None,
+    which no JSON key can be."""
+    try:
+        return load_accounts(config_dir)
+    except AccountsFileError as e:
+        slot = (provider, None)
+        account_order.append((slot, f"{config_dir / 'accounts.json'} ({provider})"))
+        errors[slot] = f"accounts.json unreadable, its accounts were skipped — {e}"
         return {}
 
 
-def main():
+def _console_print(text, stream=None):
+    """print() that cannot die on a character the console's code page lacks —
+    an emoji in a subject, printed to a cp1252 pipe under Windows (a
+    --dry-run from Git Bash): it prints as '?' instead of raising
+    UnicodeEncodeError, which ended the dry run before its log line."""
+    stream = stream if stream is not None else sys.stdout
+    if stream is None:        # pythonw: no console at all
+        return
+    try:
+        stream.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+    print(text, file=stream)
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--dry-run", action="store_true",
                         help="read-only pass: print the email body, change nothing")
     parser.add_argument("--no-view", action="store_true",
                         help="write the digest text file but don't open it in a viewer")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     socket.setdefaulttimeout(60)  # imaplib has no per-call timeout; a hung
     # Bridge socket must not wedge an unattended launchd run forever.
 
-    gmail_accounts = load_accounts(GOOGLE_CONFIG_DIR)
-    imap_accounts = load_accounts(PROTON_CONFIG_DIR)
-    outlook_accounts = load_accounts(OUTLOOK_CONFIG_DIR)
-
-    account_order = []          # [(account_key, display_label)]
+    # Every per-account map is keyed by a SLOT — (provider, account key) —
+    # because the three accounts.json files are separate namespaces: keyed by
+    # the bare key, an account named in two of them had the later provider's
+    # mail listed under both labels, the earlier one's lost, TOTAL doubled.
+    account_order = []          # [(slot, display_label)]
     entries_by_account = {}
     errors = {}
     imap_conns = {}
 
-    for account, cfg in gmail_accounts.items():
-        email_addr = cfg.get("email", account)
-        account_order.append((account, f"{email_addr} (Gmail)"))
-        try:
-            entries_by_account[account] = gmail_collect(account, email_addr)
-        except Exception as e:
-            errors[account] = f"{type(e).__name__}: {e}"
-
-    for account, cfg in imap_accounts.items():
-        host = cfg.get("imap_host", "")
-        kind = "Proton Bridge" if host in ("127.0.0.1", "localhost") else "IMAP"
-        account_order.append((account, f"{cfg.get('email', account)} ({kind})"))
-        try:
-            conn = imap_connect(cfg)
-            imap_conns[account] = conn
-            entries_by_account[account] = imap_collect(account, cfg, conn)
-        except Exception as e:
-            errors[account] = f"{type(e).__name__}: {e}"
-
-    for account, cfg in outlook_accounts.items():
-        email_addr = cfg.get("email", account)
-        account_order.append((account, f"{email_addr} (Outlook)"))
-        try:
-            entries_by_account[account] = outlook_collect(account, email_addr)
-        except Exception as e:
-            errors[account] = f"{type(e).__name__}: {e}"
-
-    # Match against SpecifyingList.csv — the emailed list only carries the
-    # "SPECIFYING LIST EMAIL" marker (and PDF names once downloaded).
-    matched = []
-    for entries in entries_by_account.values():
-        for entry in entries:
-            spec = match_specifying(entry)
-            if spec:
-                entry["spec"] = spec
-                log(f"SPECIFYING match ({spec['name']}) in {entry['account']}")
-                matched.append(entry)
-
-    # Action phase — only ever sees SPECIFYING matches, and each action is
-    # individually flag-gated (download PDFs / mark read; trash is off).
-    # Outcomes are logged, not emailed. Skipped wholesale on --dry-run.
-    if not args.dry_run and (SAVE_MATCH_PDFS or MARK_MATCHES_READ or TRASH_MATCHES):
-        for entry in matched:
+    try:
+        for account, cfg in _provider_accounts("Gmail", GOOGLE_CONFIG_DIR,
+                                               account_order, errors).items():
+            slot = ("Gmail", account)
+            email_addr = cfg.get("email", account)
+            account_order.append((slot, f"{email_addr} (Gmail)"))
             try:
-                act = {"Gmail": gmail_act, "IMAP": imap_act, "Outlook": outlook_act}[entry["provider"]]
-                entry["pdfs"], actions = act(entry)
-                log(f"acted on match in {entry['account']}: {'; '.join(actions)}"
-                    + (f"; pdfs: {', '.join(entry['pdfs'])}" if entry["pdfs"] else ""))
+                entries_by_account[slot] = gmail_collect(account, email_addr)
             except Exception as e:
-                log(f"action failed for {entry['account']} {entry['subject']!r}: {e}")
+                errors[slot] = f"{type(e).__name__}: {e}"
 
-    for conn in imap_conns.values():
-        try:
-            conn.logout()
-        except Exception:
-            pass
+        for account, cfg in _provider_accounts("IMAP", PROTON_CONFIG_DIR,
+                                               account_order, errors).items():
+            slot = ("IMAP", account)
+            host = cfg.get("imap_host", "")
+            kind = "Proton Bridge" if host in ("127.0.0.1", "localhost") else "IMAP"
+            account_order.append((slot, f"{cfg.get('email', account)} ({kind})"))
+            try:
+                conn = imap_connect(cfg)
+                imap_conns[slot] = conn
+                entries_by_account[slot] = imap_collect(account, cfg, conn)
+            except Exception as e:
+                errors[slot] = f"{type(e).__name__}: {e}"
 
-    # One line per failed account so heartbeat.log-style triage works from
-    # the log alone (e.g. "Proton Bridge not running" without opening the
-    # emailed summary). The summary line below still carries the count.
-    for account, reason in errors.items():
-        log(f"ACCOUNT ERROR {account}: {reason}")
+        outlook_accounts = _provider_accounts("Outlook", OUTLOOK_CONFIG_DIR,
+                                              account_order, errors)
+        for account, cfg in outlook_accounts.items():
+            slot = ("Outlook", account)
+            email_addr = cfg.get("email", account)
+            account_order.append((slot, f"{email_addr} (Outlook)"))
+            try:
+                entries_by_account[slot] = outlook_collect(account, email_addr)
+            except Exception as e:
+                errors[slot] = f"{type(e).__name__}: {e}"
 
-    now = datetime.now()
-    body = build_body(account_order, entries_by_account, errors, args.dry_run, now=now)
-    subject = f"{SUBJECT_PREFIX} - {now:%Y-%m-%d %H:%M:%S}"
-    total = sum(len(v) for v in entries_by_account.values())
+        # Match against SpecifyingList.csv — in the emailed list a match's
+        # entry gains the "SPECIFYING LIST EMAIL" marker, its Type / Index
+        # line and a Determine line (plus its PDFs' names once saved).
+        matched = []
+        for entries in entries_by_account.values():
+            for entry in entries:
+                spec = match_specifying(entry)
+                if spec:
+                    entry["spec"] = spec
+                    log(f"SPECIFYING match ({spec['name']}) in {entry['account']}")
+                    matched.append(entry)
 
-    # The local copy first — the same digest laid out at the file's wider
-    # line width — so it exists whether or not the send below succeeds.
-    log(show_digest(build_body(account_order, entries_by_account, errors,
-                               args.dry_run, width=DIGEST_FILE_WIDTH, now=now),
-                    view=not args.no_view))
+        # The action phase only ever sees SPECIFYING matches, each action is
+        # individually flag-gated, outcomes are logged (not emailed), and all
+        # of it is skipped on --dry-run. It runs in two halves: the READ-ONLY
+        # one — saving PDFs — here, so their names are in the digest built
+        # next; the mailbox changes only after the digest has been sent.
+        acting = not args.dry_run and (SAVE_MATCH_PDFS or MARK_MATCHES_READ
+                                       or TRASH_MATCHES)
+        if acting and SAVE_MATCH_PDFS:
+            for entry in matched:
+                save = {"Gmail": gmail_save_pdfs, "IMAP": imap_save_pdfs,
+                        "Outlook": outlook_save_pdfs}[entry["provider"]]
+                try:
+                    entry["pdfs"] = save(entry)
+                except Exception as e:
+                    log(f"PDF save failed for {entry['account']} {entry['subject']!r}: {e}")
 
-    if args.dry_run:
-        print(f"Subject: {subject}\n")
-        print(body)
-        log(f"DRY RUN — {total} unread, {len(matched)} specifying match(es), "
+        # One line per failed account so heartbeat.log-style triage works from
+        # the log alone (e.g. "Proton Bridge not running" without opening the
+        # emailed summary). The summary line below still carries the count.
+        for (provider, account), reason in errors.items():
+            log(f"ACCOUNT ERROR {account or provider + ' accounts.json'}: {reason}")
+
+        now = datetime.now()
+        body = build_body(account_order, entries_by_account, errors, args.dry_run, now=now)
+        subject = f"{SUBJECT_PREFIX} - {now:%Y-%m-%d %H:%M:%S}"
+        total = sum(len(v) for v in entries_by_account.values())
+
+        # The local copy first — the same digest laid out at the file's wider
+        # line width — so it exists whether or not the send below succeeds.
+        log(show_digest(build_body(account_order, entries_by_account, errors,
+                                   args.dry_run, width=DIGEST_FILE_WIDTH, now=now),
+                        view=not args.no_view))
+
+        if args.dry_run:
+            _console_print(f"Subject: {subject}\n")
+            _console_print(body)
+            log(f"DRY RUN — {total} unread, {len(matched)} specifying match(es), "
+                f"{len(errors)} account error(s)")
+            return
+
+        send_cfg = outlook_accounts.get(SEND_FROM_OUTLOOK_ACCOUNT, {})
+        outlook_send(SEND_FROM_OUTLOOK_ACCOUNT,
+                     send_cfg.get("email", SEND_FROM_OUTLOOK_ACCOUNT), subject, body)
+        log(f"sent summary to {SEND_TO}: {total} unread across "
+            f"{len(account_order)} accounts, {len(matched)} specifying match(es), "
             f"{len(errors)} account error(s)")
-        return
 
-    send_cfg = outlook_accounts.get(SEND_FROM_OUTLOOK_ACCOUNT, {})
-    outlook_send(SEND_FROM_OUTLOOK_ACCOUNT,
-                 send_cfg.get("email", SEND_FROM_OUTLOOK_ACCOUNT), subject, body)
-    log(f"sent summary to {SEND_TO}: {total} unread across "
-        f"{len(account_order)} accounts, {len(matched)} specifying match(es), "
-        f"{len(errors)} account error(s)")
+        # The mailbox half, now that the digest listing these matches is SENT.
+        # Matches used to be marked read before the build and the send, so a
+        # pass that died there — a bad header, the sender's expired token, a
+        # Graph 5xx — had already cleared their unread flag, and no later
+        # digest ever listed those bills. A mark that fails here leaves the
+        # message unread: the next digest lists it once more.
+        if acting:
+            for entry in matched:
+                mark = {"Gmail": gmail_mark, "IMAP": imap_mark,
+                        "Outlook": outlook_mark}[entry["provider"]]
+                try:
+                    actions = mark(entry)
+                    log(f"acted on match in {entry['account']}: {'; '.join(actions)}"
+                        + (f"; pdfs: {', '.join(entry['pdfs'])}" if entry.get("pdfs") else ""))
+                except Exception as e:
+                    log(f"action failed for {entry['account']} {entry['subject']!r}: {e}")
+    finally:
+        # IMAP connections stay open until the marks above have run.
+        for conn in imap_conns.values():
+            try:
+                conn.logout()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
@@ -1055,7 +1280,8 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         # Fatal (e.g. the summary send itself failed). Collected state is
-        # lost but nothing is half-mutated: per-entry actions either ran and
-        # were logged, or didn't run. The next scheduled pass retries.
+        # lost, but no mailbox was changed: matches are marked read (or
+        # trashed) only after a successful send, so the next scheduled pass
+        # lists them again. (PDFs already saved stay; saving is idempotent.)
         log(f"ERROR {type(e).__name__}: {e}")
         sys.exit(1)

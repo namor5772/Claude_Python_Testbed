@@ -3894,7 +3894,7 @@ _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS
 
 # _BASE_DIR points to the project root (parent of the myagent/ package)
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# The two authored-content stores live in <OneDrive>/MyAgent when a OneDrive
+# The two authored-content stores live in <OneDrive>/MyAppShare when a OneDrive
 # client is present (one copy follows the user across machines — OneDrive, not
 # git, is the sync channel; see myagent/datapaths.py), falling back to the
 # repo root on solo machines. State files below stay per-machine at the root.

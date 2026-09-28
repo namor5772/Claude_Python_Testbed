@@ -8,15 +8,17 @@ instead of racing for it.
 If found:
   line 1 of the body  -> {Instruction}  (name of a saved agent instruction)
   lines 3+ of the body -> {PromptCore}
-The named instruction's text is rewritten: it must contain TWO "*****" marker
-lines, and everything between them is replaced with {PromptCore} (the header
-above the first marker and the footer below the second are preserved). The
-instruction is then launched headless (python MyAgent.py -l "{Instruction}"
---headless) and the email is marked read.
+The named instruction's text is rewritten: it must contain at least TWO
+"*****" marker lines, and everything between the first and the LAST is
+replaced with {PromptCore} (the header above the first marker and the footer
+below the last are preserved — a PromptCore may hold ***** lines of its own).
+The email is then marked read and the instruction launched headless
+(python MyAgent.py -l "{Instruction}" --headless).
 
-No LLM is involved — every step is deterministic, so the 10-minute poll costs
-nothing but a Gmail API call. Designed to be run by launchd (StartInterval 600);
-exits silently when there is nothing to do.
+No LLM is involved — every step is deterministic, so each poll costs nothing
+but a Gmail API call. Designed to be run every few minutes by launchd
+(StartInterval) on the Mac and Task Scheduler on Windows (every 8 minutes on
+the desktop, 5 on the laptop); exits silently when there is nothing to do.
 
 Reuses MyAgent's Google config: token at ~/.config/myagent-google/
 {account}_token.json with the gmail.modify scope. Never starts the interactive
@@ -61,7 +63,7 @@ else:
 MARKER = "*****"
 GOOGLE_CONFIG_DIR = Path.home() / ".config" / "myagent-google"
 GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
-# Same resolution as MyAgent itself: <OneDrive>/MyAgent/agent_instructions.json
+# Same resolution as MyAgent itself: <OneDrive>/MyAppShare/agent_instructions.json
 # when a OneDrive client is present, repo root otherwise — the marker rewrite
 # below must edit the same store the spawned MyAgent will read.
 INSTRUCTIONS_FILE = Path(_resolve_store("agent_instructions.json"))
@@ -129,12 +131,16 @@ def extract_body(payload):
 
 
 def rewrite_instruction(name, prompt_core):
-    """Replace everything between the two ***** marker lines; atomic write.
+    """Replace everything between the first and the LAST ***** marker line;
+    atomic write.
 
     The text keeps its header (above the first marker) and footer (below the
-    second marker); only the middle is swapped for prompt_core. Fewer than two
-    markers is a LookupError so the trigger email gets poison-pilled instead of
-    silently mangling the instruction."""
+    last marker); only the middle is swapped for prompt_core. The LAST, not
+    the second: a PromptCore may contain a ***** line of its own, and with the
+    second marker the next trigger replaced only the part above it — the rest
+    of the old core survived under the new one, growing with every trigger.
+    Fewer than two markers is a LookupError so the trigger email gets
+    poison-pilled instead of silently mangling the instruction."""
     instructions = json.loads(INSTRUCTIONS_FILE.read_text(encoding="utf-8"))
     if name not in instructions:
         raise LookupError(f"instruction {name!r} not found")
@@ -145,9 +151,9 @@ def rewrite_instruction(name, prompt_core):
             f"instruction {name!r} needs two {MARKER!r} marker lines "
             f"(found {len(marker_idxs)})"
         )
-    first, second = marker_idxs[0], marker_idxs[1]
+    first, last = marker_idxs[0], marker_idxs[-1]
     instructions[name]["text"] = "\n".join(
-        lines[: first + 1] + [prompt_core] + lines[second:]
+        lines[: first + 1] + [prompt_core] + lines[last:]
     )
     # Temp file must live beside the store: os.replace across filesystems
     # (repo volume → OneDrive's File Provider volume) raises EXDEV.
@@ -163,13 +169,38 @@ def rewrite_instruction(name, prompt_core):
 # at most this much delay, while still preventing instance pile-up.
 WATCHDOG_SECONDS = 900
 
+# The Windows process query normally answers in 2-3 s; a wedged WMI must not
+# hang the pass (seen once: a single query stalled for minutes). On timeout
+# subprocess.run kills PowerShell and raises, so the pass fails BEFORE the
+# trigger is marked read — the email stays unread and the next tick retries,
+# rather than launching a run that may duplicate a live one.
+WATCHDOG_QUERY_TIMEOUT = 60
+
+
+def watchdog_pattern(name):
+    """The regex that finds a headless run of ``name`` in a Windows process
+    command line. There the name appears as subprocess.list2cmdline wrote it
+    for launch_instruction's Popen — QUOTED when it holds a space ("Balance
+    Westpac Mastercard account"), its own quotes backslash-escaped — so the
+    pattern is built from that form, with the surrounding quotes optional (a
+    run started by hand may quote a name that needs none). A bare
+    re.escape(name) matched only names without a space: for every other
+    instruction the watchdog saw nothing running, let a second run start
+    beside the first, and never reaped a hung one. (The same regex serves
+    Python's re and PowerShell's .NET -match.)"""
+    arg = subprocess.list2cmdline([name])
+    if len(arg) >= 2 and arg[0] == arg[-1] == '"':
+        arg = arg[1:-1]
+    return (re.escape("MyAgent.py -l ") + '"?' + re.escape(arg) + '"?'
+            + re.escape(" --headless"))
+
 
 def running_instances(name):
     """[(pid, age_seconds)] for live headless runs of this instruction."""
     if platform.system() == "Windows":
         # No pgrep/ps on Windows — query process command lines via CIM.
         # PowerShell single-quoted strings escape ' by doubling it.
-        pattern = re.escape(f"MyAgent.py -l {name} --headless").replace("'", "''")
+        pattern = watchdog_pattern(name).replace("'", "''")
         script = (
             "Get-CimInstance Win32_Process -Filter \"Name LIKE 'python%'\" | "
             f"Where-Object {{ $_.CommandLine -match '{pattern}' }} | "
@@ -178,7 +209,7 @@ def running_instances(name):
         )
         result = subprocess.run(
             ["powershell", "-NoProfile", "-Command", script],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=WATCHDOG_QUERY_TIMEOUT,
             # No console flash when run by Task Scheduler under pythonw.exe
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
@@ -268,13 +299,18 @@ def main():
             userId="me", id=msg["id"], body={"removeLabelIds": ["UNREAD"]}
         ).execute()
 
+    def mark_unread():
+        service.users().messages().modify(
+            userId="me", id=msg["id"], body={"addLabelIds": ["UNREAD"]}
+        ).execute()
+
     body = extract_body(msg["payload"])
     lines = body.splitlines()
     name = lines[0].strip() if lines else ""
     prompt_core = "\n".join(lines[2:])
 
     # Malformed emails are poison messages: mark them read so a permanently bad
-    # email can't retry every 10 minutes forever, log why, and skip the launch.
+    # email can't retry on every tick forever, log why, and skip the launch.
     if not name:
         log(f"POISON msg {msg['id']}: empty first line — marked read, no launch")
         mark_read()
@@ -304,8 +340,22 @@ def main():
         os.kill(pid, 15)
         log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
 
-    pid = launch_instruction(name)
+    # Mark the trigger read BEFORE the launch. A mark that fails then costs
+    # nothing — nothing ran, the email stays unread, the next tick retries —
+    # where after the launch it left the email unread beside a live run, and
+    # a later tick launched the same command AGAIN (killing the first as
+    # "hung" once it passed WATCHDOG_SECONDS). A launch that fails puts the
+    # UNREAD label back, so that trigger is retried too.
     mark_read()
+    try:
+        pid = launch_instruction(name)
+    except Exception:
+        try:
+            mark_unread()
+        except Exception as e:
+            log(f"msg {msg['id']} could not be marked unread again after the "
+                f"failed launch ({type(e).__name__}: {e}) — resend the trigger")
+        raise
     log(f"launched {name!r} headless (PID {pid}) from msg {msg['id']}")
 
 
@@ -315,6 +365,6 @@ if __name__ == "__main__":
         main()
     except Exception as e:
         # Transient failures (network, auth) leave the email unread — the next
-        # 10-minute tick retries naturally.
+        # tick retries naturally.
         log(f"ERROR {type(e).__name__}: {e}")
         sys.exit(1)
