@@ -8,7 +8,6 @@ The main residents:
 |---|---|
 | **SelfBot.py** | Full-featured Claude chatbot (Anthropic-only) that can also run as *two instances talking to each other* |
 | **MyAgent.py** + **myagent/** | Fire-and-forget autonomous task agent — Anthropic, OpenAI, Google (Gemini), xAI (Grok), Moonshot (Kimi), and Ollama (local) providers, ~97 built-in tools, MCP, native Gmail/IMAP/Outlook mail, live Excel automation |
-| **Account_Activity_WBC.py** | Browser-automation utility that extracts Westpac bank transactions to HTML + CSV |
 | **CSVEditor.py** | Spreadsheet-style CSV editor with filtering, date sort, and dialect preservation |
 | **TodoList.py** | Todo manager with priorities, categories, due dates, and overdue highlighting — one OneDrive-synced list across all machines. `TodoList.mm` (macOS/Cocoa) and `TodoList.cpp` (Windows/Win32) are functionality-identical native C++ ports (`./build_todolist_native.sh` / `.\build_todolist_native.ps1` → `TodoList.exe`); all three round-trip the same synced file |
 | **UnreadSummary.py** | Zero-token daily unread-email digest across Gmail / IMAP / Outlook accounts (production launchd job) |
@@ -24,7 +23,6 @@ The main residents:
   - [Agentic loop](#how-the-agentic-loop-works) · [Command line](#command-line-launch) · [Providers](#providers--model-controls) · [Ollama](#ollama-local-inference) · [Tools](#tool-catalog) · [Instructions](#agent-instructions) · [MCP](#mcp-integration) · [Gmail](#gmail-integration-native-google-tools) · [Proton / IMAP](#proton-mail--imap-integration) · [Outlook](#outlook--microsoft-365-integration) · [Excel](#excel-live-workbook-integration) · [Physical / camera](#physical-tools-the-camera) · [Voice input](#voice-input-agent-request-dialog) · [Model upgrade](#model-upgrade-agent-request-dialog) · [Cost tracking](#api-cost-tracking) · [Other niceties](#other-niceties) · [Keyboard](#keyboard-operation-no-mouse-needed) · [Architecture](#architecture-mixins)
 - [Zero-token automation](#zero-token-automation-unreadsummarypy--heartbeatpy)
 - [Scheduling background runs](#scheduling-background-runs-launchd--task-scheduler)
-- [Account_Activity_WBC.py](#account_activity_wbcpy--bank-transaction-extractor)
 - [CSVEditor.py](#csveditorpy--lightweight-csv-editor)
 - [TodoList.py](#todolistpy--todo-manager)
 - [Desktop launchers](#desktop-launchers)
@@ -99,7 +97,6 @@ python SelfBot.py
 python MyAgent.py
 python CSVEditor.py
 python TodoList.py
-python Account_Activity_WBC.py
 ```
 
 ---
@@ -695,17 +692,9 @@ Hard-won gotchas:
 
 ---
 
-## Account_Activity_WBC.py — Bank Transaction Extractor
-
-A single-file tkinter utility that connects to **Microsoft Edge via CDP** (port 9222), finds the Westpac account-activity tab, clicks **"Display more"** N times with a configurable delay, waits for the DOM row count to stabilise, then extracts the transactions `<tbody>` in 50-row JavaScript chunks (avoiding Playwright string truncation) and converts the Knockout.js-bound HTML to CSV with regex parsing (date, description, debit/credit via `IsDebit` blocks, running balance).
-
-Outputs `Account_Activity_WBC.txt` (raw HTML) and `Account_Activity_WBC.csv` (`Date, Description, Debit, Credit, Balance`) in the repo root — both gitignored. Start Edge yourself first: `& "msedge.exe" --remote-debugging-port=9222` (the app deliberately never launches the bank session for you). Requires `playwright` installed; no state file — set the three inputs each run. The CSV opens nicely in CSVEditor, whose date sort and filters were built for exactly this output.
-
----
-
 ## CSVEditor.py — Lightweight CSV Editor
 
-A single-file spreadsheet-style editor (~670 lines) used mostly on the bank CSV and `SpecifyingList.csv`:
+A single-file spreadsheet-style editor (~670 lines) used mostly on bank-statement CSV exports and `SpecifyingList.csv`:
 
 - **Dialect preservation** — on open, the delimiter (`,` `;` tab `|`) is sniffed and a quote-all heuristic detects "every field quoted" files; saves reproduce both, so a `;`-delimited fully-quoted file round-trips byte-faithfully.
 - **Three independent filters** (column + value comboboxes, values populated from the data), with a live "Showing X of Y rows" status.
@@ -749,7 +738,7 @@ Full details in [desktop_launchers/README.md](desktop_launchers/README.md).
 
 This repo is developed *with* Claude Code and configured *for* it:
 
-- **CLAUDE.md** — project conventions and commands. The four architecture files live in `.claude/rules/` (`CLAUDE_SELFBOT.md`, `CLAUDE_MYAGENT.md`, `CLAUDE_ACCOUNT.md`, and since 2026-09-10 `CLAUDE_CLOSE_CHROME.md` for the two browser-closing scripts) with `paths` frontmatter, so each loads only when a session touches its files instead of costing every session ~21k tokens of context; a nested `desktop_launchers/CLAUDE.md` (same day) loads only when a session works under that folder.
+- **CLAUDE.md** — project conventions and commands. The three architecture files live in `.claude/rules/` (`CLAUDE_SELFBOT.md`, `CLAUDE_MYAGENT.md`, and since 2026-09-10 `CLAUDE_CLOSE_CHROME.md` for the two browser-closing scripts) with `paths` frontmatter, so each loads only when a session touches its files instead of costing every session ~21k tokens of context; a nested `desktop_launchers/CLAUDE.md` (same day) loads only when a session works under that folder.
 - **Project-scoped slash commands** in `.claude/skills/` (plus one in `.claude/commands/`; all tracked — they work from any fresh clone):
 
 | Command | What it does |
@@ -793,7 +782,7 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 |---|---|
 | `SelfBot.py` | The chatbot (single file by convention) |
 | `MyAgent.py`, `myagent/` | The agent entry point + 24-mixin package |
-| `Account_Activity_WBC.py`, `CSVEditor.py`, `TodoList.py` | The three small single-file apps |
+| `CSVEditor.py`, `TodoList.py` | The two small single-file apps |
 | `TodoList.mm`, `build_todolist_native.sh` | Native C++/Cocoa port of TodoList for macOS — the script tests (incl. a Python↔native JSON interop round-trip) then compiles to the gitignored `TodoList.exe`; launched via `TodoList (Native).app` |
 | `TodoList.cpp`, `build_todolist_native.ps1`, `TodoList.rc`, `TodoList.exe.manifest` | Native C++/Win32 port of TodoList for Windows — same test-then-compile flow (its interop stage asserts a **byte-identical** rewrite of Python's JSON) to the same gitignored `TodoList.exe` name; the rc/manifest embed the icon, comctl32 v6, and Per-Monitor-V2 DPI awareness. Launched via `TodoListNative_Win.ps1` |
 | `BasicForm.asm`, `build_basicform.ps1`, `BasicForm.rc`, `BasicForm.manifest` | A basic Windows "form" written in **x64 MASM assembler** (Windows-only, 2026-09-13): a top-level window with a label and a button that pops a MessageBox — `RegisterClassEx` / `CreateWindowEx` / the `GetMessage` pump / a `WndProc`, with the x64 calling convention (32-byte shadow space, 16-byte alignment, the 8 stack arguments of `CreateWindowEx`) spelled out in comments. The rc/manifest embed the icon, comctl32 v6 theming and system-DPI awareness; the code applies the system message font (Segoe UI) to every control via `WM_SETFONT` and scales its layout by `GetDpiForSystem`, so it looks like a Windows 11 form rather than a Windows 3.1 one. `.\build_basicform.ps1` assembles + links it (ml64 / rc / link located via `vswhere`, no C runtime — ~7 KB) to the gitignored `BasicForm.exe`; `-Shortcut` also creates the `Basic Form` Desktop shortcut, `-Run` launches it. Verified 2026-09-13 by driving the exe with ctypes: `BM_CLICK` → MessageBox → `WM_CLOSE` → exit 0 |
@@ -821,7 +810,7 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 | `mcp_servers.example.json` | Tracked template for the gitignored `mcp_servers.json` |
 | `make_weather_pdf.py` / `make_weather_pdf_print.py`, `plot*.py` (+ their `plot.png` / `plot_negative.png` outputs), `create_chart.py`, `move_window.py`, `agent_demo.py` | One-off agent-written scripts kept as testbed artifacts (the `*.png` plots beside them — `plot.png`, `plot_negative.png`, `gaussian_plot.png`, `graph.png`, `population_chart.png` — are their outputs) |
 | `BirdFlying.html` | Self-contained browser animation: two Australian magpies (SMIL flap-and-glide wings with white covert patches, Web Audio synthesized warble — click the scene to enable sound) flying over a stylized black-clad homestead and gum grove. No dependencies; open directly in any browser |
-| `app_state*.json`, `agent_state*.json`, `todo_state.json`, `TodoList.exe`, `BasicForm.exe`, `*.lock`, `saved_chats/`, `APICostLog.txt*`, `heartbeat.log*`, `unread_summary.log*`, `Account_Activity_WBC.{txt,csv}` | Runtime state, build artifacts, and output — created automatically, mostly gitignored (TodoList's `todos.json` data and the live cost log `APICostLog_<machine>.txt` live in `<OneDrive>/MyAppShare/`, synced by OneDrive rather than git; `TodoList.exe` and `BasicForm.exe` are rebuilt per machine). See the privacy note below for the `saved_chats/` caveat |
+| `app_state*.json`, `agent_state*.json`, `todo_state.json`, `TodoList.exe`, `BasicForm.exe`, `*.lock`, `saved_chats/`, `APICostLog.txt*`, `heartbeat.log*`, `unread_summary.log*` | Runtime state, build artifacts, and output — created automatically, mostly gitignored (TodoList's `todos.json` data and the live cost log `APICostLog_<machine>.txt` live in `<OneDrive>/MyAppShare/`, synced by OneDrive rather than git; `TodoList.exe` and `BasicForm.exe` are rebuilt per machine). See the privacy note below for the `saved_chats/` caveat |
 
 **Privacy note — `.gitignore` is not retroactive.** A gitignore rule only suppresses *untracked* files; anything committed before the rule stays tracked and keeps being pushed. Two consequences in this repo, both from the era before the current rules:
 
@@ -830,4 +819,4 @@ A runtime `IS_WINDOWS` constant branches platform behaviour; Windows functionali
 
 No API keys were ever committed (keys live in environment variables and `~/.config/` token files, both outside the repo; `mcp_servers.json` is gitignored with only `.example` tracked). If you fork or clone this, audit with `git ls-files <path>` for what's tracked *now* and `git log --all -- <path>` for what was *ever* committed — the gitignore entry alone proves neither.
 
-**Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor, TodoList and the bank extractor stay single-file (the native TodoList ports keep the convention as one file per platform, `TodoList.mm` / `TodoList.cpp`); MyAgent changes go in the appropriate mixin. Tests exist where the logic is pure: the characterization suite under `tests/` (run `python -m unittest discover -s tests -t .`), with `ruff check MyAgent.py myagent/` for linting — no mypy, and no build step for the Python apps (the only compiles in the repo are the `build_todolist_native.sh` / `.ps1` pair for the native TodoList ports and `build_basicform.ps1` for the x64 MASM demo). After editing a `.py` file, re-run it (closing any running instance first) — for the GUI apps, the running app is still the real test suite.
+**Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor and TodoList stay single-file (the native TodoList ports keep the convention as one file per platform, `TodoList.mm` / `TodoList.cpp`); MyAgent changes go in the appropriate mixin. Tests exist where the logic is pure: the characterization suite under `tests/` (run `python -m unittest discover -s tests -t .`), with `ruff check MyAgent.py myagent/` for linting — no mypy, and no build step for the Python apps (the only compiles in the repo are the `build_todolist_native.sh` / `.ps1` pair for the native TodoList ports and `build_basicform.ps1` for the x64 MASM demo). After editing a `.py` file, re-run it (closing any running instance first) — for the GUI apps, the running app is still the real test suite.
