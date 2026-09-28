@@ -56,17 +56,8 @@ class OllamaMixin:
         `tool` role content is string-only.
         """
         out = []
-        # Build tool_use_id → tool_name lookup for tool-result linkage.
-        id_to_name = {}
-        for msg in messages:
-            if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
-                for block in msg["content"]:
-                    if _attr(block, "type") == "tool_use":
-                        bid = _attr(block, "id")
-                        bname = _attr(block, "name")
-                        if bid and bname:
-                            id_to_name[bid] = bname
-
+        # Tool results are linked to their calls by tool_call_id alone (Ollama
+        # never needs the tool's name on a tool message).
         for msg in messages:
             role = msg.get("role")
             content = msg.get("content")

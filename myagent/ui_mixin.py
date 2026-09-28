@@ -521,11 +521,11 @@ class UIMixin:
                         self._xai_nearest_effort(current).capitalize())
                 self._on_thinking_mode_changed()
             elif support == "extended" and self.provider == "Moonshot":
-                # kimi-k3: always-reasoning, sparse Low/High/Max ladder (no
-                # medium, no off — reasoning_effort's default is max). No
-                # temperature widgets: Kimi fixes sampling server-side, and
-                # _on_thinking_mode_changed leaves temp hidden for non-xAI
-                # extended providers.
+                # kimi-k3: sparse None/Low/High/Max ladder (no medium; None,
+                # a real off switch, since 2026-09-23; reasoning_effort's
+                # default is max). No temperature widgets: Kimi fixes sampling
+                # server-side, and _on_thinking_mode_changed's Moonshot branch
+                # keeps temp hidden — at None too.
                 self._thinking_mode_label.config(text="Reasoning")
                 self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 5))
                 self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
@@ -533,8 +533,12 @@ class UIMixin:
                 self._thinking_mode_combo["values"] = values
                 current = self._thinking_mode_var.get()
                 if current not in values:
-                    # A stale saved mode coerces to Max — the API's own default.
-                    self._thinking_mode_var.set("Max" if "Max" in values else values[-1])
+                    # A stale saved mode coerces exactly as the request builder
+                    # does (_kimi_reasoning_effort over _KIMI_EFFORT_COERCE), so
+                    # the editor shows — and SAVE keeps — what a headless run
+                    # sends: a Claude Off is None here too, not Max.
+                    self._thinking_mode_var.set(self._kimi_reasoning_effort(
+                        self._kimi_reasoning_values()).capitalize())
                 self._on_thinking_mode_changed()
             elif support is not None:
                 # Manual thinking model or OpenAI/Gemini reasoning: show checkbox + strength.
@@ -621,7 +625,7 @@ class UIMixin:
             # the id (the reasoning ones still stream their summaries).
             return "extended" if self._xai_reasoning_values(mid) else None
         if self.provider == "Moonshot":
-            # kimi-k3 has the reasoning_effort knob (low/high/max) → the
+            # kimi-k3 has the reasoning_effort knob (none/low/high/max) → the
             # extended mode combobox; k2.6/k2.5 take a plain enabled/disabled
             # thinking toggle → the checkbox (strength hidden, Ollama-style);
             # k2.7-code always thinks with no client knob at all → None.
@@ -1118,7 +1122,11 @@ class UIMixin:
             parts.append(f"temp={self.temperature:g}")
         elif support == "extended" and self.provider == "Moonshot":
             # kimi-k3: reasoning_effort only — Kimi never takes temperature.
-            parts.append(f"reasoning={mode.capitalize() or 'Max'}")
+            # The effort that goes on the wire (_kimi_reasoning_effort, the
+            # builder's own coercion), not the raw saved mode: a stale
+            # "adaptive" was logged as Adaptive while "high" was sent.
+            wire = self._kimi_reasoning_effort(self._kimi_reasoning_values() or ["max"])
+            parts.append(f"reasoning={wire.capitalize()}")
         elif support is not None:
             if self.thinking_enabled:
                 if self.provider in ("Ollama", "Moonshot"):

@@ -373,7 +373,17 @@ class XAIMixin:
     def _stream_xai_call(self, messages, max_retries, label_emitted):
         """Execute one xAI Responses API call with streaming and retry logic.
         Returns (stop_reason, content_blocks, full_text, had_thinking,
-        label_emitted, usage) — same 6-tuple as the other provider callers."""
+        label_emitted, usage) — same 6-tuple as the other provider callers.
+        The waiting ticker stops on EVERY exit (see _stream_responses_call)."""
+        try:
+            return self._stream_xai_attempts(messages, max_retries, label_emitted)
+        finally:
+            first_content = getattr(self, "_xai_first_content", None)
+            if first_content is not None:
+                first_content.set()
+
+    def _stream_xai_attempts(self, messages, max_retries, label_emitted):
+        """_stream_xai_call's body: the request and its retry ladder."""
         usage_dict = None
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
@@ -429,6 +439,9 @@ class XAIMixin:
         stop_reason = None
         full_text, content_blocks, had_thinking = "", [], False
         for attempt in range(max_retries):
+            # Each attempt's first-content timeout counts from its own start —
+            # a backoff sleep is not the model being silent.
+            self._xai_stream_start = time.time()
             try:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                     self._stream_xai_events(api_kwargs, label_emitted)
@@ -523,8 +536,7 @@ class XAIMixin:
                 else:
                     raise
 
-        # Stop the ticker thread
-        self._xai_first_content.set()
+        # (The ticker is stopped by _stream_xai_call, on every exit.)
         if stop_reason is None:
             raise RuntimeError("xAI call failed: retries exhausted without a successful response")
         if usage_dict and usage_dict.get("server_tool_calls"):

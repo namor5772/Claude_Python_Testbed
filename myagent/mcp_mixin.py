@@ -44,6 +44,7 @@ import os
 import re
 import socket
 import threading
+import time
 from contextlib import AsyncExitStack
 
 
@@ -129,7 +130,6 @@ class MCPMixin:
         self._mcp_exit_stack = None
         self._mcp_sessions = {}             # server_name -> ClientSession
         self._mcp_tools_by_name = {}        # full_name -> (server_name, real_tool_name)
-        self._mcp_connected = False         # True once at least one server is up
         self._mcp_runner_future = None      # concurrent.Future of the runner task
         self._mcp_shutdown_event = None     # asyncio.Event signalling runner exit
         self._mcp_ready_event = None        # threading.Event signalling startup done
@@ -222,9 +222,7 @@ class MCPMixin:
         self._mcp_runner_future = asyncio.run_coroutine_threadsafe(
             self._mcp_runner(config), self._mcp_loop
         )
-        if self._mcp_ready_event.wait(timeout=300):
-            self._mcp_connected = bool(self._mcp_sessions)
-        else:
+        if not self._mcp_ready_event.wait(timeout=300):
             self._mcp_log("⚠ MCP startup timed out after 5 minutes\n")
 
     async def _mcp_runner(self, config):
@@ -240,13 +238,12 @@ class MCPMixin:
         self._mcp_exit_stack = AsyncExitStack()
         try:
             async with self._mcp_exit_stack:
-                # _connect_all now lists tools inline per-server immediately
-                # after each successful initialize(), populating MCP_TOOLS
-                # within the same anyio scope as the connect. Calling
-                # _refresh_mcp_tools_async after the loop is no longer needed
-                # and was the source of the ClosedResourceError from listing
-                # against a session whose scope had been disturbed by later
-                # sessions' setup.
+                # _connect_all lists tools inline per-server immediately after
+                # each successful initialize(), populating MCP_TOOLS within the
+                # same anyio scope as the connect. (A separate refresh pass
+                # after the loop was the source of the ClosedResourceError from
+                # listing against a session whose scope had been disturbed by
+                # later sessions' setup — and was removed.)
                 await self._connect_all(config)
                 self._mcp_ready_event.set()
                 await self._mcp_shutdown_event.wait()
@@ -297,7 +294,8 @@ class MCPMixin:
             # still the most-recently-set-up resource, we capture them
             # before any interference window opens. Errors here don't
             # abort the connect loop — the server still gets added to
-            # ``_mcp_sessions`` and ``do_mcp_call`` can recover later.
+            # ``_mcp_sessions``, but a failed list registers none of its
+            # tools, so the model is never offered them this session.
             await self._list_tools_for_server(name, spec)
 
     async def _open_server_session(self, name, spec):
@@ -398,7 +396,6 @@ class MCPMixin:
         self._mcp_exit_stack = None
         self._mcp_runner_future = None
         self._mcp_shutdown_event = None
-        self._mcp_connected = False
         if self._mcp_errlog is not None:
             try:
                 self._mcp_errlog.close()
@@ -418,9 +415,8 @@ class MCPMixin:
 
         Errors are logged with exception type and message, but never raised —
         a list_tools failure for one server should not abort the connect loop
-        for the others, and ``do_mcp_call`` can still attempt to use the
-        session if the model invokes a tool that someone happens to know about
-        (e.g. cached schema from a previous session).
+        for the others. (Its tools are then unregistered, so ``do_mcp_call``
+        answers "Unknown MCP tool" for any of them this session.)
 
         Reconnect-on-close: if the session's stdio stream closed between
         ``initialize()`` and the first ``list_tools`` call (an intermittent
@@ -480,36 +476,10 @@ class MCPMixin:
             })
             self._mcp_tools_by_name[full_name] = (server_name, tool.name)
 
-    async def _refresh_mcp_tools_async(self):
-        """Re-fetch tools from every connected server and rebuild MCP_TOOLS.
-        Used by the sync ``_refresh_mcp_tools`` wrapper for callers that want
-        to refresh the catalog after startup (e.g., adding a server at
-        runtime). The startup path uses ``_list_tools_for_server`` inline
-        from ``_connect_all`` instead, to avoid the ``ClosedResourceError``
-        that hits when listing is deferred until after every server has set
-        up its anyio scope."""
-        MCP_TOOLS.clear()
-        self._mcp_tools_by_name.clear()
-        for server_name in list(self._mcp_sessions.keys()):
-            await self._list_tools_for_server(server_name)
-
-    def _refresh_mcp_tools(self):
-        """Sync wrapper around ``_refresh_mcp_tools_async``. Schedules onto
-        the MCP event loop. Safe to call from any thread once the runner is
-        up — ``list_tools`` reuses the existing session connection (no new
-        anyio task groups)."""
-        if not self._mcp_loop or not self._mcp_loop.is_running():
-            MCP_TOOLS.clear()
-            self._mcp_tools_by_name.clear()
-            return
-        try:
-            asyncio.run_coroutine_threadsafe(
-                self._refresh_mcp_tools_async(), self._mcp_loop
-            ).result(timeout=10)
-        except Exception as e:
-            self._mcp_log(f"⚠ MCP refresh failed: {e}\n")
-
     # ── Dispatch ─────────────────────────────────────────────────────────────
+
+    MCP_CALL_TIMEOUT = 120      # seconds a tool call may take
+    MCP_CALL_POLL = 0.25        # STOP is checked this often while it runs
 
     def do_mcp_call(self, tool_name, arguments):
         """Invoke an MCP tool by its namespaced name. Returns a string
@@ -529,9 +499,27 @@ class MCPMixin:
                 session.call_tool(real_tool, arguments or {}),
                 self._mcp_loop,
             )
-            result = future.result(timeout=120)
         except Exception as e:
-            return f"MCP call '{tool_name}' failed: {e}"
+            return f"MCP call '{tool_name}' failed: {e!r}"
+        # Waited for in short slices so STOP ends the wait (a slow server used
+        # to hold the run for the full two minutes), and a call that is given
+        # up is CANCELLED rather than left running on the MCP loop. repr(e):
+        # the bare TimeoutError of an expired wait has an empty str().
+        deadline = time.monotonic() + self.MCP_CALL_TIMEOUT
+        while True:
+            try:
+                result = future.result(timeout=self.MCP_CALL_POLL)
+                break
+            except Exception as e:
+                if future.done():   # the call itself failed (maybe with its own timeout)
+                    return f"MCP call '{tool_name}' failed: {e!r}"
+            if getattr(self, "stop_requested", False):
+                future.cancel()
+                return f"MCP call '{tool_name}' was cancelled: the user pressed STOP."
+            if time.monotonic() >= deadline:
+                future.cancel()
+                return (f"MCP call '{tool_name}' timed out after "
+                        f"{self.MCP_CALL_TIMEOUT} s and was cancelled.")
 
         # Result content is a list of TextContent / ImageContent / EmbeddedResource.
         # Concatenate the text parts; describe binaries inline.

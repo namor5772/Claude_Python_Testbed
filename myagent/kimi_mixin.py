@@ -17,8 +17,9 @@ harness at Kimi "works" but silently underperforms — several frameworks have
 shipped exactly that bug). The per-model contract, verified against
 platform.kimi.ai docs 2026-07-25:
 
-- ``kimi-k3`` — always reasons; Preserved Thinking always on; top-level
-  ``reasoning_effort`` (low/high/max, default max). ROUND-TRIP REQUIRED.
+- ``kimi-k3`` — reasons unless told "none"; Preserved Thinking always on;
+  top-level ``reasoning_effort`` (none/low/high/max, default max — "none",
+  a real off switch, since 2026-09-23). ROUND-TRIP REQUIRED.
 - ``kimi-k2.7-code`` (+ ``-highspeed``) — always thinks; the ``thinking``
   param is rejected (behaviour baked in); keep is fixed "all".
   ROUND-TRIP REQUIRED.
@@ -82,8 +83,10 @@ from myagent.helpers import camera_aware_hint, is_camera_result
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 # Stale saved efforts from other providers' UIs coerced onto kimi-k3's SPARSE
-# low/high/max ladder (there is no medium). Anything unmapped — "off",
-# "adaptive", junk — lands on "max", the API's own default.
+# none/low/high/max ladder (there is no medium). A Claude "off" becomes "none";
+# anything unmapped — "adaptive", junk — lands on "max", the API's own default.
+# The ONE coercion: the request builder, the Reasoning combobox and the
+# title / cost-log summary all go through _kimi_reasoning_effort.
 _KIMI_EFFORT_COERCE = {
     "minimal": "low",
     "none": "low",       # for a ladder WITHOUT a none rung; k3's has one since 2026-09-23
@@ -605,7 +608,18 @@ class KimiMixin:
     def _stream_kimi_call(self, messages, max_retries, label_emitted):
         """Execute one Kimi Chat Completions call with streaming and retry
         logic. Returns (stop_reason, content_blocks, full_text, had_thinking,
-        label_emitted, usage) — same 6-tuple as the other provider callers."""
+        label_emitted, usage) — same 6-tuple as the other provider callers.
+        The waiting ticker stops on EVERY exit (see OpenAIMixin's
+        _stream_responses_call)."""
+        try:
+            return self._stream_kimi_attempts(messages, max_retries, label_emitted)
+        finally:
+            first_content = getattr(self, "_kimi_first_content", None)
+            if first_content is not None:
+                first_content.set()
+
+    def _stream_kimi_attempts(self, messages, max_retries, label_emitted):
+        """_stream_kimi_call's body: the request and its retry ladder."""
         usage_dict = None
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
@@ -661,6 +675,9 @@ class KimiMixin:
         stop_reason = None
         full_text, content_blocks, had_thinking = "", [], False
         for attempt in range(max_retries):
+            # Each attempt's first-content timeout counts from its own start —
+            # a backoff sleep is not the model being silent.
+            self._kimi_stream_start = time.time()
             try:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                     self._stream_kimi_events(api_kwargs, label_emitted)
@@ -689,8 +706,12 @@ class KimiMixin:
                 # reasoning_content round-trip refused: learn once per model,
                 # strip reasoning from the history, retry. The backstop for a
                 # model whose Preserved Thinking support the static table
-                # mispredicts.
-                if "reasoning_content" in err_str and include_reasoning:
+                # mispredicts. NOT for a 400 saying reasoning_content is
+                # MISSING or required (history from a non-thinking model after
+                # a Model upgrade, say): stripping would make that worse and
+                # teach the session never to send reasoning to this model.
+                if ("reasoning_content" in err_str and include_reasoning
+                        and not re.search(r"\b(missing|required)\b", err_str, re.IGNORECASE)):
                     include_reasoning = False
                     rejected = getattr(self, "_kimi_reasoning_rejected", None)
                     if rejected is None:
@@ -765,8 +786,7 @@ class KimiMixin:
                 else:
                     raise
 
-        # Stop the ticker thread
-        self._kimi_first_content.set()
+        # (The ticker is stopped by _stream_kimi_call, on every exit.)
         if stop_reason is None:
             raise RuntimeError("Kimi call failed: retries exhausted without a successful response")
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict

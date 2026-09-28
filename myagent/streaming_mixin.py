@@ -267,6 +267,12 @@ class StreamingMixin:
                 # see _stream_responses_call for the rationale.
                 if not (self.desktop_enabled.get() and _HAS_DESKTOP):
                     responses_tools.append({"type": "code_interpreter", "container": {"type": "auto"}})
+                # ...minus the built-ins this model rejected earlier in the
+                # session, as _stream_responses_call strips them from the wire.
+                unsupported = getattr(self, "_openai_unsupported_tools", {}).get(self.model, set())
+                if unsupported:
+                    responses_tools = [t for t in responses_tools
+                                       if t.get("type") not in unsupported]
             else:
                 # xAI — mirror _stream_xai_call's server-side built-ins
                 responses_tools.append({"type": "web_search"})
@@ -402,6 +408,11 @@ class StreamingMixin:
                     payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             else:
                 payload["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
+                # Opus 5+ / Sonnet 5+ think when the param is omitted, so the
+                # real call sends an explicit disable for "Off" — show it.
+                if (self.provider == "Anthropic"
+                        and self._anthropic_thinking_on_by_default()):
+                    payload["thinking"] = {"type": "disabled"}
                 # Opus 4.7+ / Fable 5 reject temperature — mirror the real call's skip
                 if (self.provider != "Anthropic"
                         or (not self._anthropic_rejects_temperature()
@@ -484,7 +495,7 @@ class StreamingMixin:
                          if installed.get(t["name"], True))
         if self.meta_enabled.get():
             tools.extend(copy.deepcopy(META_TOOLS))
-        # MCP tools are populated by MCPMixin._refresh_mcp_tools at connect-time.
+        # MCP tools are populated by MCPMixin._list_tools_for_server at connect-time.
         # Empty when no servers configured or _HAS_MCP is False, so this is a
         # no-op for users who haven't set up MCP.
         if _HAS_MCP and getattr(self, "mcp_enabled", None) and self.mcp_enabled.get() and MCP_TOOLS:

@@ -497,7 +497,21 @@ class OpenAIMixin:
 
     def _stream_responses_call(self, messages, max_retries, label_emitted):
         """Execute one OpenAI Responses API call with streaming and retry logic.
-        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage)."""
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage).
+
+        The "Waiting for model response" ticker stops on EVERY exit: it was
+        stopped only after a successful attempt, so a raise (a 404 / 401, an
+        unhandled 400, the last 429) left it posting to the pane every 15 s
+        after the run had ended."""
+        try:
+            return self._stream_responses_attempts(messages, max_retries, label_emitted)
+        finally:
+            first_content = getattr(self, "_oai_first_content", None)
+            if first_content is not None:
+                first_content.set()
+
+    def _stream_responses_attempts(self, messages, max_retries, label_emitted):
+        """_stream_responses_call's body: the request and its retry ladder."""
         usage_dict = None
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
@@ -553,13 +567,24 @@ class OpenAIMixin:
         ticker = threading.Thread(target=_waiting_ticker, daemon=True)
         ticker.start()
 
+        last_bad_request = None
         for attempt in range(max_retries):
+            # Each attempt's first-content timeout counts from ITS own start:
+            # a rate-limit / 5xx backoff sleep is not the model being silent
+            # (six 429s used to trip the 180 s check on the 7th, healthy call).
+            self._oai_stream_start = time.time()
             try:
                 full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
                     self._stream_responses(api_kwargs, label_emitted)
                 break  # success
             except openai.BadRequestError as e:
                 err_str = str(e)
+                last_bad_request = e
+                # Each rung below fixes the request and CONTINUES: the retry
+                # runs as the next attempt, under the same handlers. (It used
+                # to be re-sent inside this except clause, where a second
+                # error — another 400, a 429, a timeout — escaped every
+                # sibling handler and ended the run.)
                 # Some models reject temperature — retry without it
                 if "temperature" in err_str and "temperature" in api_kwargs:
                     del api_kwargs["temperature"]
@@ -567,9 +592,7 @@ class OpenAIMixin:
                         "type": "tool_info",
                         "content": "Model does not support temperature — retrying without it...\n",
                     })
-                    full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
-                        self._stream_responses(api_kwargs, label_emitted)
-                    break  # success
+                    continue
                 # Some models reject specific server-side tools (e.g. gpt-5.2-pro
                 # rejects code_interpreter). Parse the rejected tool name out of the
                 # error, strip it from this request and cache it for future calls.
@@ -591,9 +614,7 @@ class OpenAIMixin:
                             "type": "tool_info",
                             "content": f"Model '{self.model}' does not support tool '{bad_tool}' — retrying without it (cached for this session)...\n",
                         })
-                        full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
-                            self._stream_responses(api_kwargs, label_emitted)
-                        break  # success
+                        continue
                 # A model the table doesn't know rejected the reasoning.effort
                 # value. Parse the supported values out of the error and retry
                 # with the NEAREST accepted rung (a Max above the ceiling steps
@@ -611,9 +632,7 @@ class OpenAIMixin:
                                 "type": "tool_info",
                                 "content": f"Model '{self.model}' rejected reasoning.effort='{old_effort}' — retrying with '{new_effort}' (supported: {', '.join(supported)})...\n",
                             })
-                            full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict = \
-                                self._stream_responses(api_kwargs, label_emitted)
-                            break  # success
+                            continue
                 # Unrecognised BadRequestError — propagate
                 raise
             except openai.APITimeoutError:
@@ -650,6 +669,10 @@ class OpenAIMixin:
                 else:
                     raise
 
-        # Stop the ticker thread
-        self._oai_first_content.set()
+        else:
+            # Every attempt went to a 400 rung and none succeeded: surface the
+            # last 400 rather than returning results no attempt produced.
+            raise last_bad_request
+
+        # (The ticker is stopped by _stream_responses_call, on every exit.)
         return stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict

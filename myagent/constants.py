@@ -2237,8 +2237,8 @@ PHYSICAL_TOOLS = [
 ]
 
 # ── MCP (Model Context Protocol) ─────────────────────────────────────────────
-# MCP_TOOLS is populated at runtime by MCPMixin._refresh_mcp_tools() once the
-# configured MCP servers have been connected. Tool names are namespaced with
+# MCP_TOOLS is populated at runtime by MCPMixin._list_tools_for_server(), per
+# server, as each configured MCP server connects. Tool names are namespaced with
 # the server name (e.g. "filesystem__read_file") so dispatch can route to the
 # right server in _execute_tool. Empty by default — appended to _get_tools()
 # output only when self.mcp_enabled.get() is True AND _HAS_MCP is True.

@@ -233,7 +233,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # would drift through stacked offsets.
         self._display_full_states = {}    # display_idx → (scale, (ox, oy), (w, h))
         self._display_full_images = {}    # display_idx → raw PNG bytes
-        self._last_screenshot_bytes = None  # raw resized image bytes (pre-PNG) — fallback for find_element when no display specified
+        self._last_screenshot_bytes = None  # the last resized screenshot, PNG bytes — fallback for find_element when no display specified
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
@@ -340,8 +340,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Connect MCP servers after the UI is up so a slow stdio handshake never
-        # blocks app launch. The mixin no-ops if no mcp_servers.json exists.
+        # Connect MCP servers once the UI is built. The connect WAITS on the Tk
+        # thread (up to 300 s) for every server's handshake — deliberately, so
+        # an -l auto-launch sees the MCP tools — so a slow server keeps the
+        # freshly drawn window unresponsive until it answers. The mixin
+        # no-ops if no mcp_servers.json exists.
         if _HAS_MCP:
             self.root.after(100, self._connect_mcp_servers)
 

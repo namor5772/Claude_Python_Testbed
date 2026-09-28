@@ -597,8 +597,8 @@ class GeminiMixin:
                             tool_calls.append(tc_entry)
                 if in_thinking:
                     self.queue.put({"type": "thinking_end"})
-                # Extract usage from last streaming chunk
-                # Try last chunk first, then fall back to iterating all chunks
+                # Usage comes from the last streaming chunk, where Gemini
+                # reports the call's cumulative usage_metadata.
                 for source in ([last_chunk] if last_chunk else []):
                     usage_dict = self._gemini_usage_dict(
                         getattr(source, "usage_metadata", None))
@@ -607,10 +607,22 @@ class GeminiMixin:
                 break  # success
             except Exception as e:
                 err_str = str(e)
+                err_low = err_str.lower()
                 status = getattr(e, "code", 0) or getattr(e, "status_code", 0)
-                is_timeout = "timed out" in err_str.lower() or "timeout" in err_str.lower() or isinstance(e, (TimeoutError, ConnectionError))
-                is_rate_limit = status == 429 or "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-                is_server_error = (isinstance(status, int) and status >= 500) or "500" in err_str or "503" in err_str
+                # The status code decides when the SDK reports one; the text
+                # is only a fallback for errors that carry none. Substrings
+                # alone misfiled real 400s: "input token count (1050034)"
+                # contains "500", so a context overflow was retried as a server
+                # error for ten minutes before failing anyway.
+                known = isinstance(status, int) and status > 0
+                is_timeout = (isinstance(e, (TimeoutError, ConnectionError))
+                              or (not known and ("timed out" in err_low or "timeout" in err_low)))
+                is_rate_limit = status == 429 or (
+                    not known and ("429" in err_str or "RESOURCE_EXHAUSTED" in err_str))
+                is_server_error = (known and status >= 500) or (
+                    not known and ("500" in err_str or "503" in err_str))
+                is_bad_request = status == 400 or (
+                    not known and ("400" in err_str or "invalid_argument" in err_low))
                 if is_timeout and attempt < max_retries - 1:
                     self.queue.put({
                         "type": "tool_info",
@@ -640,8 +652,12 @@ class GeminiMixin:
                     thinking_text = ""
                     tool_calls = []
                 elif (quiet_style is not None
-                      and (status == 400 or "400" in err_str
-                           or "invalid_argument" in err_str.lower())
+                      and is_bad_request
+                      # Only a 400 ABOUT the thinking config steps the ladder:
+                      # any other 400 (a bad image, an MCP schema, an overflow)
+                      # walked it to "none" and taught the session to send no
+                      # config — the silent thinking bill the ladder exists to stop.
+                      and ("thinking" in err_low or "budget" in err_low)
                       and quiet_style != GEMINI_QUIET_STYLES[-1]
                       and attempt < max_retries - 1):
                     # The Thinking checkbox is OFF and the model refused this
@@ -668,8 +684,8 @@ class GeminiMixin:
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []
-                elif ("thinking" in err_str.lower()
-                      and ("invalid_argument" in err_str.lower() or "400" in err_str)
+                elif ("thinking" in err_low
+                      and is_bad_request
                       and not thinking_style_swapped
                       and quiet_style is None
                       and "thinking_config" in config_kwargs
