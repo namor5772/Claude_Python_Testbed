@@ -515,6 +515,10 @@ META_TOOLS = [
                     "type": "boolean",
                     "description": "Enable native Google (Gmail) tools — gmail_search, gmail_send, gmail_trash, etc. Requires ~/.config/myagent-google/ setup. Default false on create.",
                 },
+                "proton": {
+                    "type": "boolean",
+                    "description": "Enable native IMAP / SMTP mail tools — proton_search, proton_send, proton_trash, etc. (Proton Bridge and any IMAP account). Requires ~/.config/myagent-protonmail/ setup. Default false on create.",
+                },
                 "outlook": {
                     "type": "boolean",
                     "description": "Enable native Outlook / Microsoft 365 tools — outlook_search, outlook_send, outlook_trash, etc. (via Microsoft Graph). Requires ~/.config/myagent-msmail/ setup. Default false on create.",
@@ -566,6 +570,11 @@ META_TOOLS = [
                         "ALWAYS-reasoning — low/medium/high/xhigh/max, 'none' is invalid "
                         "there. Lower-cased to match the stored value."
                     ),
+                },
+                "text_verbosity": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "OpenAI gpt-5 / gpt-6 text.verbosity (optional for update; create inherits current). Ignored by other providers.",
                 },
                 "fast_mode": {
                     "type": "boolean",

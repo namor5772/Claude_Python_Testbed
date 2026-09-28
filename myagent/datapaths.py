@@ -59,9 +59,10 @@ Design invariants:
   the UI/tool delete actions. The folder is the skill: bundled resource
   files ride along and are removed with it. Unknown frontmatter keys are
   tolerated on read but dropped if the entry is rewritten. The body
-  round-trips byte-exactly (writer appends exactly one trailing newline,
-  reader strips exactly one), so json-era and file-era entries compare
-  equal in union_stores.
+  round-trips exactly when it has no trailing newline (the writer ends it
+  with one, the reader strips one); a body ending in a newline is
+  normalized once and then stable — so a json-era entry whose content ends
+  in "\\n" compares UNequal to its file-era twin in union_stores.
 """
 
 import glob
@@ -227,8 +228,10 @@ def _migrate_costlog(local, shared_path):
     writes its label's file, but appending stays correct even if one exists
     (the viewers sort rows by timestamp, so in-file order is cosmetic). The
     rotation archive (.old) rides along by copy — os.replace into OneDrive's
-    File Provider volume on macOS would be EXDEV. Best-effort: on any
-    failure the history survives locally and the next launch retries."""
+    File Provider volume on macOS would be EXDEV. Best-effort: a read or
+    claim failure leaves the local log in place for the next launch to
+    retry; an append failing AFTER the claim is not retried — the history
+    is then only in the .migrated.bak, to fold in by hand."""
     if os.path.exists(local):
         try:
             with open(local, encoding="utf-8") as f:
@@ -314,9 +317,25 @@ def load_store(path):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):   # ValueError: bad JSON, or bytes that are not UTF-8
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def store_unreadable(path):
+    """True when the store file EXISTS but cannot be read or parsed as a JSON
+    object — a half-synced cloud write, a hand edit's typo, a sharing
+    violation, a cloud-only placeholder offline. load_store serves {} for such
+    a file, and a caller must never save anything built on that {} over it:
+    the whole library would be replaced by the stand-in (and synced to every
+    machine). A missing file, or a valid empty object, is NOT unreadable."""
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, encoding="utf-8") as f:
+            return not isinstance(json.load(f), dict)
+    except (OSError, ValueError):
+        return True
 
 
 def _migrate_local_into(path):
@@ -338,7 +357,7 @@ def _migrate_local_into(path):
     try:
         with open(local, encoding="utf-8") as f:
             local_data = json.load(f)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
         return  # unreadable local copy — leave it for the user to inspect
     if not isinstance(local_data, dict):
         return
@@ -346,7 +365,7 @@ def _migrate_local_into(path):
         try:
             with open(path, encoding="utf-8") as f:
                 shared_data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             return  # half-synced shared file — do NOT overwrite, retry next launch
         if not isinstance(shared_data, dict):
             return
@@ -376,7 +395,7 @@ def absorb_conflict_forks(path, data):
         try:
             with open(fork, encoding="utf-8") as f:
                 fork_data = json.load(f)
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
             continue  # half-synced — retry on the next absorb
         if isinstance(fork_data, dict):
             label = os.path.basename(fork)[len(stem) + 1:-len(ext)]
@@ -424,8 +443,10 @@ def _skill_dirname(name):
 def _serialize_skill_md(name, entry):
     """SKILL.md text for one skill entry. Frontmatter values are collapsed
     to single physical lines (the parser folds hand-wrapped continuations
-    back); the body is written verbatim plus exactly one trailing newline,
-    which _parse_skill_md strips again — the round-trip is byte-exact."""
+    back); the body is written verbatim, ending in one newline (added when
+    missing), which _parse_skill_md strips again — a body without a trailing
+    newline round-trips exactly; one WITH it loses it once and is then
+    stable (pinned by tests/test_skills_tree.py test_round_trip_exact)."""
     lines = ["---", "name: " + " ".join(name.split())]
     desc = " ".join((entry.get("description") or "").split())
     if desc:
@@ -488,8 +509,25 @@ def _entry_from_md(text, fallback_name):
 
 
 def _read_text(path):
-    with open(path, encoding="utf-8-sig") as f:  # tolerate a hand-added BOM
-        return f.read()
+    """A SKILL.md's text, newlines translated as text mode does. UTF-8 (a
+    hand-added BOM tolerated) is what every writer here produces; a file some
+    editor saved otherwise is read anyway instead of failing the whole tree —
+    UTF-16 by its BOM (PowerShell 5.1's Out-File / >), else Windows ANSI
+    (cp1252: 5.1's Set-Content). Before this, one such file's
+    UnicodeDecodeError — not an OSError, which every caller catches — crashed
+    MyAgent and SelfBot at startup on every machine sharing the tree. Still
+    raises UnicodeDecodeError (a ValueError) for bytes no candidate decodes;
+    the callers treat that like an unreadable file."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
+        text = data.decode("utf-16")
+    else:
+        try:
+            text = data.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = data.decode("cp1252")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _real_basename(dirpath, sub):
@@ -522,7 +560,7 @@ def _write_skill_file(dirpath, name, entry):
         if os.path.isfile(md):
             try:
                 existing_name, _ = _entry_from_md(_read_text(md), sub)
-            except OSError:
+            except (OSError, ValueError):
                 existing_name = None  # unreadable — claim a sibling, never clobber
             if existing_name == name:
                 break
@@ -536,7 +574,7 @@ def _write_skill_file(dirpath, name, entry):
     try:
         if os.path.isfile(md) and _read_text(md) == new_text:
             return
-    except OSError:
+    except (OSError, ValueError):
         pass
     os.makedirs(d, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=d, prefix=SKILL_BASENAME + ".", suffix=".tmp")
@@ -555,10 +593,11 @@ def _write_skill_file(dirpath, name, entry):
 def _absorb_skill_file_forks(d, dirpath):
     """Heal OneDrive conflict forks of one skill's SKILL.md (SKILL-<Computer>.md
     siblings). An identical fork is deleted; a different one is materialized
-    as its own '<name>__<label>' skill folder (the per-file analog of
-    union_stores' conflict preservation) and then deleted; a fork with no
-    surviving SKILL.md is promoted to be the main file. Returns the
-    materialized (name, entry) pairs so the running scan can include them."""
+    as its own '<name>__<label>' skill folder — numbered like union_stores'
+    variants when a DIFFERENT preserved variant already holds that name —
+    and then deleted; a fork with no surviving SKILL.md is promoted to be the
+    main file. Returns the newly materialized (name, entry) pairs so the
+    running scan can include them."""
     extras = []
     stem, ext = os.path.splitext(SKILL_BASENAME)
     forks = sorted(glob.glob(os.path.join(d, stem + "-*" + ext)))
@@ -569,12 +608,12 @@ def _absorb_skill_file_forks(d, dirpath):
     if os.path.isfile(md):
         try:
             main_text = _read_text(md)
-        except OSError:
+        except (OSError, ValueError):
             return extras  # can't compare this pass — retry at the next scan
     for fork in forks:
         try:
             fork_text = _read_text(fork)
-        except OSError:
+        except (OSError, ValueError):
             continue  # half-synced — retry at the next scan
         if main_text is None:
             fd, tmp = tempfile.mkstemp(dir=d, prefix=SKILL_BASENAME + ".", suffix=".tmp")
@@ -595,9 +634,14 @@ def _absorb_skill_file_forks(d, dirpath):
             if fork_entry != main_entry or fork_name != main_name:
                 label = os.path.basename(fork)[len(stem) + 1:-len(ext)]
                 label = re.sub(r"[^A-Za-z0-9._ -]+", "_", label).strip(" _.") or "fork"
-                variant = f"{main_name}__{label}"
-                _write_skill_file(dirpath, variant, fork_entry)
-                extras.append((variant, fork_entry))
+                variant, needs_write = _variant_slot(dirpath, f"{main_name}__{label}",
+                                                     fork_entry)
+                if needs_write:
+                    # A NEW folder, which this scan's listing never reaches:
+                    # hand it to the scan. (An identical variant already on
+                    # disk surfaces through the scan itself.)
+                    _write_skill_file(dirpath, variant, fork_entry)
+                    extras.append((variant, fork_entry))
         try:
             os.remove(fork)
         except OSError:
@@ -605,12 +649,83 @@ def _absorb_skill_file_forks(d, dirpath):
     return extras
 
 
+def _same_resources(a, b):
+    """True when skill folders `a` and `b` bundle the same resource files,
+    byte for byte (usually both none). False when either is unknown."""
+    if a is None or b is None:
+        return False
+    listed = list(_iter_skill_resources(a))
+    if listed != list(_iter_skill_resources(b)):
+        return False
+    try:
+        for rel in listed:
+            with open(os.path.join(a, rel), "rb") as fa, open(os.path.join(b, rel), "rb") as fb:
+                if fa.read() != fb.read():
+                    return False
+    except OSError:
+        return False
+    return True
+
+
+def _write_skill_md_in(folder, name, entry):
+    """Atomically (re)write `folder`/SKILL.md for skill `name`. False when the
+    write failed (the folder is left as it was)."""
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix=SKILL_BASENAME + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(_serialize_skill_md(name, entry))
+        os.replace(tmp, os.path.join(folder, SKILL_BASENAME))
+        return True
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _claim_duplicate(folder, variant, entry, taken):
+    """Give a folder whose frontmatter name another folder already holds a
+    name of its own: `variant` (numbered while `taken` has it), written into
+    its SKILL.md. Returns the name — kept in memory even if the write failed."""
+    base, n = variant, 2
+    while variant in taken:
+        variant, n = f"{base}_{n}", n + 1
+    _write_skill_md_in(folder, variant, entry)
+    return variant
+
+
+def _variant_slot(dirpath, base, entry):
+    """(name, needs_write) for preserving a differing conflict fork: the first
+    of `base`, `base_2`, … that no skill folder holds (write it there), or the
+    one that already holds exactly `entry` (nothing to write). A second fork
+    with the same label used to OVERWRITE the variant preserved from the
+    first, whose folder the scan then deleted as a duplicate."""
+    n = 1
+    while True:
+        name = base if n == 1 else f"{base}_{n}"
+        folder = _skill_dir_for(dirpath, name)
+        if folder is None:
+            return name, True
+        try:
+            _, held = _entry_from_md(_read_text(os.path.join(folder, SKILL_BASENAME)),
+                                     os.path.basename(folder))
+        except (OSError, ValueError):
+            held = None
+        if held == entry:
+            return name, False
+        n += 1
+
+
 def _scan_skills_tree(dirpath):
     """{name: entry} from every <dirpath>/<sub>/SKILL.md, healing file forks
     along the way. Unreadable files are skipped for this session (never
     deleted). Two folders claiming the same frontmatter name keep both —
-    the later one surfaces as '<name>__<folder>' for the user to reconcile."""
+    the later one becomes '<name>__<folder>', written into its SKILL.md, for
+    the user to reconcile — unless it is an identical copy with the same
+    bundled files, which is removed."""
     skills = {}
+    folders = {}   # name -> the folder it was read from
     if not os.path.isdir(dirpath):
         return skills
     try:
@@ -626,17 +741,26 @@ def _scan_skills_tree(dirpath):
         if os.path.isfile(md):
             try:
                 name, entry = _entry_from_md(_read_text(md), sub)
-            except OSError:
+            except (OSError, ValueError):
                 name = None
-            if name is not None and name in skills and skills[name] == entry:
-                # A second folder holding an IDENTICAL entry is junk — e.g.
-                # the numbered sibling a case-collision left behind (live
-                # 2026-08-07: Test-skill + test-skill_2 both said
-                # name: test-skill). Removed like an identical conflict fork.
+            if (name is not None and name in skills and skills[name] == entry
+                    and _same_resources(folders.get(name), d)):
+                # A second folder holding an IDENTICAL entry — and the same
+                # bundled files, usually none — is junk, e.g. the numbered
+                # sibling a case-collision left behind (live 2026-08-07:
+                # Test-skill + test-skill_2 both said name: test-skill).
+                # Removed like an identical conflict fork. Differing files
+                # keep it (below): resource files are part of the skill.
                 _rmtree_verified(d)
             elif name is not None:
                 if name in skills:
-                    name = f"{name}__{sub}"
+                    # A second folder claiming a taken name surfaces as its
+                    # own skill '<name>__<folder>', and that name is WRITTEN
+                    # into its SKILL.md: the folder then IS that skill, so its
+                    # delete, the resource tools and a rename act on it. (No
+                    # folder held the variant's name before: deleting it
+                    # removed nothing, deleting the original removed both.)
+                    name = _claim_duplicate(d, f"{name}__{sub}", entry, skills)
                 else:
                     # Heal folder naming: a case-only mismatch (folder
                     # Test-skill holding name test-skill) or a stranded
@@ -650,9 +774,11 @@ def _scan_skills_tree(dirpath):
                         if real is None or real == sub:
                             try:
                                 os.rename(d, os.path.join(dirpath, natural))
+                                d = os.path.join(dirpath, natural)
                             except OSError:
                                 pass
                 skills[name] = entry
+                folders[name] = d
         else:
             # SKILL.md-less folder: a husk from a blocked delete, or a folder
             # OneDrive is still materializing / a user is hand-authoring a
@@ -829,7 +955,7 @@ def delete_skill_tree_entry(dirpath, name):
         if os.path.isfile(md):
             try:
                 fname, _ = _entry_from_md(_read_text(md), sub)
-            except OSError:
+            except (OSError, ValueError):
                 continue
             if fname == name:
                 _rmtree_verified(d)
@@ -854,7 +980,7 @@ def _skill_dir_for(dirpath, name):
         if os.path.isfile(md):
             try:
                 fname, _ = _entry_from_md(_read_text(md), sub)
-            except OSError:
+            except (OSError, ValueError):
                 continue
             if fname == name:
                 return d
@@ -879,10 +1005,14 @@ def _iter_skill_resources(folder):
 def _is_skill_md_family(fname):
     """True for the root-level files that are the skill's OWN metadata rather
     than a bundled resource: SKILL.md itself, a `SKILL-<label>.md` OneDrive
-    conflict fork, or a `SKILL.md.*.tmp` writer leftover."""
-    return (fname == SKILL_BASENAME
-            or fname.startswith(SKILL_BASENAME + ".")
-            or (fname.startswith("SKILL-") and fname.lower().endswith(".md")))
+    conflict fork, or a `SKILL.md.*.tmp` writer leftover. Case-INsensitive,
+    like the filesystems: on Windows / macOS "skill.md" IS SKILL.md (a
+    resource write of that name replaced the skill's own file), and the
+    healer's SKILL-*.md glob matches "skill-notes.md" too."""
+    low, base = fname.lower(), SKILL_BASENAME.lower()
+    return (low == base
+            or low.startswith(base + ".")
+            or (low.startswith("skill-") and low.endswith(".md")))
 
 
 def skill_dir_for(dirpath, name):
@@ -923,6 +1053,10 @@ def skill_resource_path(dirpath, name, rel_path):
     parts = [p for p in rel.split("/") if p not in ("", ".")]
     if not parts or ".." in parts:
         return None, "file_path may not leave the skill's folder ('..')"
+    # A drive (or stream) colon in ANY component, not only the first: on
+    # Windows "sub/Z:evil.txt" joins to Z:evil.txt, outside the folder.
+    if any(":" in p for p in parts):
+        return None, "file_path must be RELATIVE to the skill's folder (no ':')"
     if len(parts) == 1 and _is_skill_md_family(parts[0]):
         return None, ("SKILL.md (and its conflict forks) are managed by the "
                       "create/update actions, not as resource files")

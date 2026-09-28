@@ -139,18 +139,32 @@ class SkillsMixin:
             file_content = params.get("file_content")
             if file_content is None:
                 return "Error: 'file_content' is required for write_file."
+            if not isinstance(file_content, str):
+                return ("Error: 'file_content' must be a string (the file's text) — "
+                        f"got {type(file_content).__name__}.")
             rel_arg = params.get("file_path", "")
             path, err = skill_resource_path(SKILLS_DIR, name, rel_arg)
             if err:
                 return f"Error: {err}."
+            if os.path.isdir(path):
+                return f"Error: '{rel_arg}' is a folder in skill '{name}' — name a file."
             existed = os.path.isfile(path)
+            tmp = None
             try:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
                 with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
                     f.write(file_content)
                 os.replace(tmp, path)
-            except OSError as e:
+            except (OSError, ValueError) as e:
+                # (ValueError: a surrogate the text cannot be encoded with.)
+                # The temp file goes too — it used to stay in the skill folder,
+                # where it counted as a bundled file, synced and was copied.
+                if tmp is not None:
+                    try:
+                        os.remove(tmp)
+                    except OSError:
+                        pass
                 return f"Error writing '{rel_arg}': {e}"
             verb = "Replaced" if existed else "Wrote"
             return (f"{verb} '{rel_arg}' in skill '{name}' "

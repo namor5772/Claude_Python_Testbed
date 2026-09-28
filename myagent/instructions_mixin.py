@@ -1,4 +1,4 @@
-import os, json, tkinter as tk
+import os, json, threading, tkinter as tk
 from tkinter import font as tkfont, messagebox, ttk
 
 from myagent.constants import (
@@ -8,13 +8,26 @@ from myagent.constants import (
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
-from myagent.datapaths import absorb_conflict_forks, load_store, save_store
+from myagent.datapaths import absorb_conflict_forks, load_store, save_store, store_unreadable
 from myagent.instruction_layout import (
     UNFILED, UNFILED_LABEL, drop, file_page, layout, move_page, move_section,
     normalize_section, rename_section, renumber, rows, section_of, sections,
 )
 from myagent.keyboard import bind_mnemonics
 from myagent.ui_mixin import list_title_band
+
+
+class _UnreadableStore(dict):
+    """The session-only stand-in _load_saved_instructions serves while the
+    store file exists but cannot be read or parsed. It behaves like the store
+    for reading, but _save_instructions_to_disk refuses to write it: every
+    caller modifies the dict it was handed and saves it, which replaced the
+    whole library with the stand-in plus one change (and OneDrive synced that
+    to every machine) — against the documented "never overwritten"."""
+
+
+class StoreUnreadableError(RuntimeError):
+    """A save refused because the instruction store could not be read."""
 
 
 class InstructionsMixin:
@@ -45,9 +58,29 @@ class InstructionsMixin:
         instructions = {"Default": {"text": DEFAULT_INSTRUCTION, "images": []}}
         if not os.path.exists(INSTRUCTIONS_FILE):
             self._save_instructions_to_disk(instructions)
+        elif store_unreadable(INSTRUCTIONS_FILE):
+            # Not a store that is empty — one that cannot be read: marked, so
+            # nothing built on this stand-in is ever saved over the file.
+            return _UnreadableStore(instructions)
         return instructions
 
     def _save_instructions_to_disk(self, instructions):
+        if isinstance(instructions, _UnreadableStore):
+            msg = ("The instruction store could not be read, so this change was "
+                   "NOT saved — saving would have replaced the whole library "
+                   "with this session's stand-in. Fix or restore "
+                   f"{os.path.basename(INSTRUCTIONS_FILE)} (OneDrive keeps its "
+                   "earlier versions), then restart MyAgent.")
+            queue_ = getattr(self, "queue", None)
+            if queue_ is not None:
+                queue_.put({"type": "warning", "content": f"⚠ {msg}\n"})
+            if threading.current_thread() is threading.main_thread():
+                try:   # an editor action: say so where the user is looking
+                    messagebox.showerror("Instruction store unreadable", msg,
+                                         parent=getattr(self, "instruction_editor_window", None))
+                except tk.TclError:
+                    pass
+            raise StoreUnreadableError(msg)
         save_store(INSTRUCTIONS_FILE, instructions)
 
     def _store_model_fields(self):
@@ -80,9 +113,11 @@ class InstructionsMixin:
                 meta = "meta" if entry.get("meta") else ""
                 mcp = "mcp" if entry.get("mcp") else ""
                 google = "google" if entry.get("google") else ""
+                proton = "proton" if entry.get("proton") else ""
                 outlook = "outlook" if entry.get("outlook") else ""
                 convo = "convo" if entry.get("conversational") else ""
-                flags = " ".join(f for f in [desktop, browser, excel, physical, meta, mcp, google, outlook, convo] if f)
+                flags = " ".join(f for f in [desktop, browser, excel, physical, meta, mcp, google,
+                                             proton, outlook, convo] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
                 lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
             return "\n".join(lines)
@@ -104,6 +139,7 @@ class InstructionsMixin:
                 "meta": entry.get("meta", False),
                 "mcp": entry.get("mcp", False),
                 "google": entry.get("google", False),
+                "proton": entry.get("proton", False),
                 "outlook": entry.get("outlook", False),
                 "conversational": entry.get("conversational", False),
                 "dictation_auto_send": entry.get("dictation_auto_send", False),
@@ -139,6 +175,7 @@ class InstructionsMixin:
                 "meta": params.get("meta", False),
                 "mcp": params.get("mcp", False),
                 "google": params.get("google", False),
+                "proton": params.get("proton", False),
                 "outlook": params.get("outlook", False),
                 "conversational": params.get("conversational", False),
                 "dictation_auto_send": params.get("dictation_auto_send", False),
@@ -166,27 +203,28 @@ class InstructionsMixin:
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
             updatable = ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
-                         "outlook", "conversational", "dictation_auto_send", "upgrade_target",
+                         "proton", "outlook", "conversational", "dictation_auto_send", "upgrade_target",
                          "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
                          "fast_mode", "blocked_tools")
             if all(params.get(k) is None for k in updatable):
-                return (
-                    "Error: At least one of 'text', 'desktop', 'browser', 'meta', "
-                    "'skill_modes', 'provider', 'model', 'temperature', "
-                    "'thinking_enabled', 'thinking_effort', 'thinking_budget', "
-                    "'thinking_mode', or 'text_verbosity' must be provided for update."
-                )
+                # Built from `updatable` itself, so it can never again name
+                # fewer fields than update accepts.
+                return ("Error: At least one of "
+                        + ", ".join(f"'{k}'" for k in updatable)
+                        + " must be provided for update.")
             entry = instructions[name]
             for key in ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
-                        "outlook", "conversational", "dictation_auto_send", "provider",
+                        "proton", "outlook", "conversational", "dictation_auto_send", "provider",
                         "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity",
                         "fast_mode", "blocked_tools"):
                 val = params.get(key)
                 if val is not None:
+                    if key == "thinking_mode" and isinstance(val, str):
+                        val = val.lower()   # the stored form ("Max" -> "max"), as the schema says
                     entry[key] = sorted(val) if key == "blocked_tools" else val
             skill_modes = params.get("skill_modes")
             if skill_modes is not None:
@@ -939,6 +977,18 @@ class InstructionsMixin:
         if not text:
             messagebox.showwarning("Empty", "The instruction text is empty.", parent=self.instruction_editor_window)
             return
+        # SAVE under the name of a DIFFERENT existing instruction replaces it
+        # wholesale — text, images, settings — so it asks first, as DELETE
+        # does (default No). Re-saving the page the editor shows asks nothing.
+        shown = getattr(self, "_instr_shown_name", "")
+        tree = getattr(self, "_instr_tree", None)
+        if name != shown and tree is not None and tree.exists(f"p:{name}"):
+            if not messagebox.askyesno(
+                    "Replace instruction?",
+                    f"An instruction named '{name}' already exists.\n\n"
+                    "Replace it with the text and settings shown here?",
+                    icon="warning", default="no", parent=self.instruction_editor_window):
+                return
         # Commit editor state to live
         self.pending_images = list(self._editor_images)
         self.desktop_enabled.set(self._editor_desktop.get())
