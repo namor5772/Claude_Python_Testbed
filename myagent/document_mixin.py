@@ -172,6 +172,25 @@ class DocumentMixin:
         and the rest continues. Metadata is read from the document
         information dictionary if present."""
         reader = pypdf.PdfReader(path)
+        # Encryption FIRST: a user-password PDF raises FileNotDecryptedError
+        # at the first page access, before any friendly message could say so.
+        # And decided by decrypt("")'s RESULT — pypdf's is_encrypted means only
+        # "the trailer has /Encrypt" and stays True after a successful decrypt,
+        # so every encrypted PDF was refused, owner-password-only statements
+        # and invoices included, which pypdf reads perfectly well.
+        if reader.is_encrypted:
+            try:
+                readable = bool(reader.decrypt(""))   # PasswordType: 0 = NOT_DECRYPTED
+            except Exception:
+                readable = False
+            if not readable:
+                result["text"] = (
+                    "error: PDF is encrypted with a user password — pypdf cannot "
+                    "decrypt it without the password. If you have it, use "
+                    "run_command with 'qpdf --password=<pw> --decrypt <input> "
+                    "<output>' then read_document the decrypted output."
+                )
+                return
         result["page_count"] = len(reader.pages)
 
         # Page range parsing — defaults to all pages if not specified.
@@ -204,28 +223,6 @@ class DocumentMixin:
             if meta:
                 result["metadata"] = meta
 
-        # Encryption check — if the PDF is password-protected, extract_text
-        # would return empty for each page. Surface this explicitly rather
-        # than silently returning a blank result.
-        try:
-            if reader.is_encrypted:
-                # Attempt empty-password decryption (common for "owner
-                # password only" PDFs that allow reading without auth).
-                try:
-                    reader.decrypt("")
-                except Exception:
-                    pass
-                if reader.is_encrypted:
-                    result["text"] = (
-                        f"error: PDF is encrypted ({len(reader.pages)} pages). "
-                        f"pypdf cannot decrypt without the password. If you have "
-                        f"it, use run_command with 'qpdf --password=<pw> --decrypt "
-                        f"<input> <output>' then read_document the decrypted output."
-                    )
-                    return
-        except Exception:
-            pass
-
         # Per-page extraction with per-page error isolation.
         parts = []
         for page_idx in pages:
@@ -242,9 +239,10 @@ class DocumentMixin:
         result["pages_extracted"] = len(pages)
 
     def _read_docx(self, path, result, max_chars):
-        """Extract text from a .docx file using python-docx. Captures
-        paragraphs AND table cells in document order. Tables are rendered as
-        pipe-separated rows so column structure is preserved in plain text."""
+        """Extract text from a .docx file using python-docx. Captures every
+        paragraph (in order), then every table's cells — not interleaved in
+        document order. Tables are rendered as pipe-separated rows so column
+        structure is preserved in plain text."""
         doc = docx.Document(path)
 
         # Capture paragraphs in document order, skipping empty ones.

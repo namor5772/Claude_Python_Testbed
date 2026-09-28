@@ -150,13 +150,18 @@ class ExcelMixin:
         value write is dropped, and .books.count still reports healthy).
 
         Deliberately conservative: it fires only when EVERY expected cell was
-        non-empty and EVERY cell read back empty, so a legitimately blank
-        result (a formula returning "") can't trip it."""
+        non-empty and EVERY cell read back empty — and never for a write that
+        holds a formula: its read-back is the formula's RESULT, which may be
+        legitimately blank (=IF(A1="","",A1), IFERROR(…,"")). Counting the
+        formula text as "expected non-empty" raised a false VERIFICATION
+        FAILED over a write that had landed."""
         exp = [c for row in expected for c in row]
         act = [c for row in actual for c in row]
         if not exp or not act:
             return False
         if any(c is None or c == "" for c in exp):
+            return False
+        if any(isinstance(c, str) and c.startswith("=") for c in exp):
             return False
         return all(c is None or c == "" for c in act)
 
@@ -253,6 +258,16 @@ class ExcelMixin:
         return None
 
     @staticmethod
+    def _excel_book_path(book):
+        """An open workbook's full path (a URL for a cloud-hosted one), or
+        None when it has none (a new, never-saved Book1) or none can be read."""
+        try:
+            full = str(book.fullname or "")
+        except Exception:
+            return None
+        return full if (os.path.dirname(full) or "://" in full) else None
+
+    @staticmethod
     def _excel_is_read_only(book):
         """True when the workbook opened read-only. Read-only is SILENT and
         only bites at the first save, so this is what turns it into an
@@ -314,11 +329,18 @@ class ExcelMixin:
                 book = books[0]
             return book
         want = os.path.basename(str(workbook).strip()).lower()
-        want_stem = os.path.splitext(want)[0]
+        want_stem, want_ext = os.path.splitext(want)
+        # An exact name first — a single pass matching name OR stem returned
+        # whichever came first, so "Accounts.xlsm" could act on an open
+        # Accounts.xlsx. The stem alone serves only a name given without an
+        # extension ("Accounts"); a DIFFERENT extension never matches.
         for b in books:
-            name = b.name.lower()
-            if name == want or os.path.splitext(name)[0] == want_stem:
+            if b.name.lower() == want:
                 return b
+        if not want_ext:
+            for b in books:
+                if os.path.splitext(b.name.lower())[0] == want_stem:
+                    return b
         names = ", ".join(b.name for b in books)
         raise RuntimeError(
             f"Workbook '{workbook}' is not open. Open workbooks: {names}. "
@@ -395,7 +417,23 @@ class ExcelMixin:
                 book = next(
                     (b for b in app.books if b.name.lower() == base), None)
                 if book is not None:
-                    note = f"Attached to already-open {book.name}. "
+                    # Excel holds ONE workbook per name, so this may be a
+                    # different file: a scratch copy in C:\Temp would attach
+                    # to the user's real Budget.xlsx, and every write — and
+                    # excel_close's default save — would land in it.
+                    open_path = self._excel_book_path(book)
+                    if (open_path and "://" not in open_path
+                            and os.path.normcase(os.path.abspath(open_path)) != os.path.normcase(ap)):
+                        return (f"excel_open error: a DIFFERENT workbook named {book.name} "
+                                f"is already open ({open_path}); Excel cannot hold two "
+                                f"workbooks with the same name. Close that one first "
+                                f"(excel_close), or save this file under another name.")
+                    note = f"Attached to already-open {book.name}"
+                    if open_path and "://" in open_path:
+                        # A cloud-hosted book's path is a URL that cannot be
+                        # compared with a local path: say where it lives.
+                        note += f" (open from {open_path} — the one workbook of that name)"
+                    note += ". "
                 elif os.path.exists(ap):
                     # These only apply to opening from disk; a wrong password
                     # errors immediately (no dialog). Kwargs are passed only
@@ -694,6 +732,13 @@ class ExcelMixin:
             quit_app = bool(params.get("quit_app"))
             app = self._excel_app(launch=False)
             closed = ""
+            if app.books.count > 1 and not params.get("workbook"):
+                # Without a name this closed the ACTIVE workbook — saved by
+                # default — which in the user's attached Excel may be their
+                # own: the hazard quit_app's guard exists for, one call early.
+                names = ", ".join(b.name for b in app.books)
+                return (f"excel_close error: {app.books.count} workbooks are open "
+                        f"({names}) — pass 'workbook' to say which one to close.")
             if app.books.count:
                 book = self._excel_book(params.get("workbook"))
                 name = book.name

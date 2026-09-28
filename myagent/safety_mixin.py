@@ -34,6 +34,10 @@ class SafetyMixin:
 
         # Reset for a new run
         self.messages = []
+        # The file tools' read-before-write gate belongs to the conversation:
+        # a new run's model must read a file itself before it may overwrite
+        # or edit it (the gate outlived the run in a GUI session).
+        self._file_read_paths = set()
         self.stop_requested = False
         self.chat_display.config(state="normal")
         self.chat_display.delete("1.0", tk.END)

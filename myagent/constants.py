@@ -2155,7 +2155,7 @@ EXCEL_TOOLS = [
             "properties": {
                 "workbook": {
                     "type": "string",
-                    "description": "Workbook to close. Default: the active workbook.",
+                    "description": "Workbook to close. Optional ONLY while one workbook is open (then that one); with several open it is required — the tool refuses rather than close whichever the user has active.",
                 },
                 "save": {
                     "type": "boolean",

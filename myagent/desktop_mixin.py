@@ -2,6 +2,7 @@ import os
 import io
 import csv
 import base64
+import shlex
 import time
 import subprocess
 import tkinter as tk
@@ -45,7 +46,16 @@ class DesktopMixin:
                 search_lower = search_value.lower()
                 matches = []
                 for row_num, row in enumerate(reader, start=2):
-                    cells_to_check = [row.get(column, "")] if column else row.values()
+                    if column:
+                        cells_to_check = [row.get(column, "")]
+                    else:
+                        # A row with MORE fields than the header (a trailing
+                        # comma — common in bank exports) gets its extras as a
+                        # LIST under key None: search them too, and never
+                        # .lower() a list (it failed the whole search).
+                        cells_to_check = []
+                        for cell in row.values():
+                            cells_to_check.extend(cell if isinstance(cell, list) else [cell])
                     for cell in cells_to_check:
                         cell_lower = (cell or "").lower()
                         matched = (
@@ -525,6 +535,13 @@ class DesktopMixin:
                     kwargs["x"] = round(round(float(x)) * scale) + ox
                 if y is not None:
                     kwargs["y"] = round(round(float(y)) * scale) + oy
+            if kwargs:
+                # A wheel event lands on whatever is under the CURSOR, and on
+                # Windows pyautogui sends it without moving there — the tool
+                # said "at (x, y)" while scrolling MyAgent's own pane. Move
+                # first (pyautogui's macOS backend already does).
+                cur_x, cur_y = pyautogui.position()
+                pyautogui.moveTo(kwargs.get("x", cur_x), kwargs.get("y", cur_y))
             pyautogui.scroll(clicks, **kwargs)
             direction = "up" if clicks > 0 else "down"
             pos = f" at ({x}, {y})" if x is not None else ""
@@ -532,12 +549,29 @@ class DesktopMixin:
         except Exception as e:
             return f"Scroll error: {e}"
 
+    @staticmethod
+    def _open_app_command(cmd, args, curated):
+        """What open_application runs for `cmd` + `args`: on Windows a cmd.exe
+        line — the argument ALWAYS double-quoted (any " inside dropped), so
+        cmd metacharacters in it (& | < >) stay literal and cannot chain a
+        second command; an uncurated name with spaces is quoted too — and
+        elsewhere an argv list (shlex splits "open -a 'Google Chrome'")."""
+        if IS_WINDOWS:
+            if not curated and " " in cmd and not cmd.startswith('"'):
+                cmd = f'"{cmd}"'
+            return f'{cmd} "{str(args).replace(chr(34), "")}"'
+        return shlex.split(cmd) + [str(args)]
+
     def do_open_application(self, name, args=None):
         try:
             key = name.lower().strip()
             cmd = self.KNOWN_APPS.get(key, name)
             if args:
-                subprocess.Popen([cmd, args], **_SUBPROCESS_NOWND)
+                # Popen([cmd, args]) could never run a curated entry: "start
+                # chrome" is a cmd.exe builtin, "code" a .cmd file, and "open -a
+                # 'Google Chrome'" a whole command line — "args" always failed.
+                subprocess.Popen(self._open_app_command(cmd, args, key in self.KNOWN_APPS),
+                                 shell=IS_WINDOWS, **_SUBPROCESS_NOWND)
             else:
                 subprocess.Popen(cmd, shell=True, **_SUBPROCESS_NOWND)
             return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"

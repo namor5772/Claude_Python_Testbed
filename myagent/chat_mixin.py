@@ -4,9 +4,9 @@ from tkinter import filedialog, messagebox
 from myagent.constants import CHATS_DIR, IS_WINDOWS
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
 except ImportError:
-    Image = None
+    Image = ImageOps = None
 
 _MEDIA_EXT = {
     "image/png": ".png",
@@ -143,7 +143,21 @@ class ChatMixin:
         """Downscale and/or compress an image until it fits under max_bytes.
         Returns (compressed_bytes, media_type)."""
         img = Image.open(io.BytesIO(raw_bytes))
-        if img.mode in ("RGBA", "P"):
+        # A phone photo's EXIF orientation must be APPLIED before the JPEG
+        # re-save drops the tag, or a portrait shot reaches the model sideways.
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        # JPEG stores only L / RGB / CMYK: an LA or a 16-bit ("I;16") PNG made
+        # the save raise "cannot write mode … as JPEG", failing the whole
+        # attach. Deep integer modes are scaled to 8 bits first — a plain
+        # convert clips them, turning the picture white.
+        if img.mode.startswith("I"):
+            img = img.convert("I").point(lambda v: v * (1 / 256)).convert("L")
+        elif img.mode == "F":
+            img = img.convert("L")
+        if img.mode not in ("RGB", "L", "CMYK"):
             img = img.convert("RGB")
 
         # Try JPEG at decreasing quality first
@@ -483,8 +497,10 @@ class ChatMixin:
         # Strip inline math delimiters
         text = text.replace("\\(", "")
         text = text.replace("\\)", "")
-        # Strip single $ delimiters (but not $$ which is already removed)
-        # Use regex to avoid stripping $ in non-math contexts like currency
+        # Strip single $ delimiters ($$ is already gone). EVERY lone $ goes,
+        # currency included ("$5" -> "5") — accepted for prose; text that
+        # must survive verbatim (the Agent Request) wears its own tag, which
+        # this pass never touches.
         text = re.sub(r'(?<!\$)\$(?!\$)', '', text)
 
         # Fractions: \frac{a}{b} → a/b
@@ -545,14 +561,23 @@ class ChatMixin:
             "\\lim": "lim", "\\max": "max", "\\min": "min",
             "\\det": "det", "\\dim": "dim",
         }
-        # Apply all replacements (longer keys first to avoid partial matches)
+        # Sizing delimiters go FIRST, and only as whole commands (\leftarrow is
+        # an arrow, not \left + "arrow"): stripped after the symbol table, as
+        # they were, "\le" had already turned "\left(" into "≤ft(".
+        text = re.sub(r'\\(?:left|right|big|Big|bigg|Bigg)(?![A-Za-z])', '', text)
+        # Apply all replacements (longer keys first to avoid partial matches),
+        # each a WHOLE command: "\in" is not the start of \infty, \int or \inf
+        # (which became "∈f"), nor "\le" of \leq. (A lambda replacement: the
+        # Unicode symbol must not be read as a regex template.)
         all_replacements = {**_greek, **_symbols}
         for latex, uni in sorted(all_replacements.items(), key=lambda x: -len(x[0])):
-            text = text.replace(latex, uni)
+            if latex[-1:].isalpha():
+                text = re.sub(re.escape(latex) + r'(?![A-Za-z])', lambda _m, u=uni: u, text)
+            else:
+                text = text.replace(latex, uni)
 
         # Clean up remaining LaTeX formatting commands
         text = re.sub(r'\\(?:text|mathrm|mathbf|mathit|mathbb|mathcal|operatorname)\{([^}]*)\}', r'\1', text)
-        text = re.sub(r'\\(?:left|right|big|Big|bigg|Bigg)', '', text)
         text = text.replace("\\,", " ")
         text = text.replace("\\;", " ")
         text = text.replace("\\!", "")

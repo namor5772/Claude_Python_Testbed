@@ -147,6 +147,18 @@ class BrowserMixin:
         except Exception as e:
             return f"Browser click error: {e}"
 
+    @staticmethod
+    def _browser_free_name(path):
+        """`path`, or "name (2).ext", "name (3).ext" … — the first that does
+        not exist yet."""
+        if not os.path.exists(path):
+            return path
+        root, ext = os.path.splitext(path)
+        n = 2
+        while os.path.exists(f"{root} ({n}){ext}"):
+            n += 1
+        return f"{root} ({n}){ext}"
+
     def do_browser_download(self, save_path, selector=None, text=None, timeout_s=60):
         """Click a download trigger inside page.expect_download() and persist
         the file. Required because Playwright's CDP attach sets the browser-wide
@@ -173,7 +185,10 @@ class BrowserMixin:
             suggested = download.suggested_filename or "download.bin"
             target = os.path.abspath(os.path.expanduser(save_path))
             if os.path.isdir(target):
-                target = os.path.join(target, suggested)
+                # Into a folder under the site's own file name — never over a
+                # file already there (a monthly "statement.pdf" replaced last
+                # month's): "statement (2).pdf" instead.
+                target = self._browser_free_name(os.path.join(target, suggested))
             parent = os.path.dirname(target)
             if parent:
                 os.makedirs(parent, exist_ok=True)
@@ -291,7 +306,7 @@ class BrowserMixin:
                     for (const a of el.attributes) attrs[a.name] = a.value;
                     results.push({{
                         tag: el.tagName.toLowerCase(),
-                        text: el.innerText.substring(0, 200),
+                        text: (el.innerText || el.textContent || '').substring(0, 200),
                         attrs: attrs,
                         visible: rect.width > 0 && rect.height > 0,
                         rect: {{top: Math.round(rect.top), left: Math.round(rect.left),

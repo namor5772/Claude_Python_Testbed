@@ -23,9 +23,12 @@ All helpers are prefixed _file_* or are unique to this mixin (no MRO
 shadowing risk); the pure cores (_file_apply_edit, _file_numbered) are
 static for direct unit testing in tests/test_file_mixin.py.
 """
+import fnmatch
 import glob
 import os
 import re
+import shutil
+import tempfile
 
 
 # Display / size caps. Line + read caps mirror Claude Code's Read tool scale;
@@ -53,14 +56,67 @@ class FileMixin:
         return os.path.normcase(os.path.abspath(path))
 
     def _file_reads(self):
-        # Lazy init so the mixin needs no App.__init__ wiring; process-lifetime
-        # scope matches MyAgent's fire-and-forget one-run-per-process pattern.
+        # Lazy init so the mixin needs no App.__init__ wiring. Per RUN, not per
+        # process: _start_agent clears it, since a GUI session runs several
+        # instructions and a later run's model must read a file itself.
         s = getattr(self, "_file_read_paths", None)
         if s is None:
             s = self._file_read_paths = set()
         return s
 
     # ── pure cores (unit-tested directly) ───────────────────────────────
+
+    @staticmethod
+    def _file_path(inp):
+        """The tool input's path with ~ expanded (write_file created a literal
+        "~" folder in the working directory; read / edit failed on it)."""
+        return os.path.expanduser((inp or {}).get("path") or "")
+
+    @staticmethod
+    def _file_write_atomic(path, text):
+        """Write `text` (UTF-8, newline='' so \r\n stays literal) to a temp
+        file beside `path`, then os.replace it into place: the existing file
+        is never truncated before the new text is safely on disk. (A plain
+        open("w") emptied it first, and a write that then failed — content
+        not a string, a lone surrogate — left the user's file at 0 bytes.)
+        Writes through a symlink to its target and keeps a POSIX file mode.
+        Returns None, or the error text."""
+        target = os.path.realpath(path)
+        directory = os.path.dirname(target)
+        try:
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp",
+                                       prefix=os.path.basename(target) + ".")
+        except OSError as e:
+            return str(e)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+                f.write(text)
+            if os.path.exists(target):
+                try:
+                    shutil.copymode(target, tmp)
+                except OSError:
+                    pass
+            os.replace(tmp, target)
+            return None
+        except (OSError, ValueError) as e:     # ValueError: a lone surrogate
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            return str(e)
+
+    @staticmethod
+    def _file_count(content, sub):
+        """Occurrences of `sub` in `content`, OVERLAPPING ones included —
+        "end\nend" occurs twice in "end\nend\nend", which str.count calls
+        once, so edit_file took the first and called it unique."""
+        count, start = 0, 0
+        while True:
+            i = content.find(sub, start)
+            if i < 0:
+                return count
+            count, start = count + 1, i + 1
 
     @staticmethod
     def _file_read_text(path, errors="strict"):
@@ -78,16 +134,21 @@ class FileMixin:
         offset = max(1, int(offset))
         limit = max(1, int(limit))
         window = lines[offset - 1:offset - 1 + limit]
-        out = []
+        out, used = [], 0
         for i, ln in enumerate(window, start=offset):
             if len(ln) > FILE_MAX_LINE_CHARS:
                 ln = ln[:FILE_MAX_LINE_CHARS] + " …[line truncated]"
-            out.append(f"{i:>6}\t{ln}")
+            entry = f"{i:>6}\t{ln}"
+            # The size cap ends the window at a WHOLE line, and `last` says
+            # which: the header claimed the full window after a cut, and the
+            # "re-read with offset=" note then skipped every line past it.
+            if out and used + len(entry) + 1 > FILE_MAX_READ_CHARS:
+                break
+            out.append(entry)
+            used += len(entry) + 1
         body = "\n".join(out)
-        if len(body) > FILE_MAX_READ_CHARS:
-            body = body[:FILE_MAX_READ_CHARS] + "\n…[output truncated — re-read with a smaller limit]"
-        last = offset + len(window) - 1 if window else 0
-        return body, total, (offset if window else 0), last
+        last = offset + len(out) - 1 if out else 0
+        return body, total, (offset if out else 0), last
 
     @staticmethod
     def _file_apply_edit(content, old, new, replace_all=False):
@@ -103,11 +164,16 @@ class FileMixin:
         if old == new:
             return content, 0, "old_string and new_string are identical — nothing to change."
         o, n = old, new
-        count = content.count(o)
+        count = FileMixin._file_count(content, o)
         if count == 0 and "\r\n" in content and "\r" not in o:
             o = old.replace("\n", "\r\n")
             n = new.replace("\n", "\r\n")
-            count = content.count(o)
+            count = FileMixin._file_count(content, o)
+        elif (count and "\r" not in new and "\n" in new and "\r\n" in content
+              and content.count("\n") == content.count("\r\n")):
+            # A literal match in a pure-CRLF file: new_string's own line
+            # breaks must be CRLF too, or one edit leaves mixed endings.
+            n = new.replace("\n", "\r\n")
         if count == 0:
             return content, 0, ("old_string not found in the file. It must match the "
                                 "current file content EXACTLY, including whitespace and "
@@ -117,7 +183,7 @@ class FileMixin:
                                 "more surrounding lines to make it unique, or set "
                                 "replace_all=true to replace every occurrence.")
         if replace_all:
-            return content.replace(o, n), count, None
+            return content.replace(o, n), content.count(o), None
         return content.replace(o, n, 1), 1, None
 
     @staticmethod
@@ -128,13 +194,16 @@ class FileMixin:
 
     def do_read_file(self, inp):
         inp = inp or {}
-        path = inp.get("path", "")
+        path = self._file_path(inp)
         if not path:
             return "read_file error: 'path' is required."
         if not os.path.isfile(path):
             return f"read_file error: file not found: {path}"
+        lossy = False
         try:
-            text = self._file_read_text(path, errors="replace")
+            text = self._file_read_text(path)
+        except UnicodeDecodeError:
+            text, lossy = self._file_read_text(path, errors="replace"), True
         except OSError as e:
             return f"read_file error: {e}"
         if "\x00" in text[:8192]:
@@ -146,33 +215,40 @@ class FileMixin:
         if not body:
             return f"{path}: {total} lines total — offset {inp.get('offset')} is past the end."
         note = "" if last >= total else f"\n…[{total - last} more lines — re-read with offset={last + 1}]"
+        if lossy:
+            # Say so: it read as ordinary text, edit_file then refused it, and
+            # a write_file of what was shown re-encoded every such byte.
+            note += ("\n⚠ This file is not valid UTF-8 (a legacy code page?) — undecodable "
+                     "bytes are shown as U+FFFD. edit_file refuses it, and write_file "
+                     "would re-encode the whole file as UTF-8, replacing those bytes.")
         return f"{path} (lines {first}-{last} of {total}):\n{body}{note}"
 
     def do_write_file(self, inp):
         inp = inp or {}
-        path = inp.get("path", "")
+        path = self._file_path(inp)
         content = inp.get("content", "")
         if not path:
             return "write_file error: 'path' is required."
+        if not isinstance(content, str):
+            # Refused BEFORE anything is touched (models send a JSON object
+            # for a .json file; it used to empty the file and then fail).
+            return (f"write_file error: 'content' must be a string (the file's text), "
+                    f"not {type(content).__name__} — to write JSON, pass it serialized.")
         existed = os.path.isfile(path)
         if existed and self._file_key(path) not in self._file_reads():
             return (f"write_file refused: {path} already exists and has not been read "
                     "this session. read_file it first (overwrites must be informed), "
                     "or use edit_file for a partial change.")
-        try:
-            parent = os.path.dirname(os.path.abspath(path))
-            os.makedirs(parent, exist_ok=True)
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(content)
-        except OSError as e:
-            return f"write_file error: {e}"
+        err = self._file_write_atomic(path, content)
+        if err:
+            return f"write_file error: {err}"
         self._file_reads().add(self._file_key(path))
         action = "Overwrote" if existed else "Created"
         return f"{action} {path} ({len(content)} chars, {len(content.splitlines())} lines)."
 
     def do_edit_file(self, inp):
         inp = inp or {}
-        path = inp.get("path", "")
+        path = self._file_path(inp)
         if not path:
             return "edit_file error: 'path' is required."
         if not os.path.isfile(path):
@@ -186,23 +262,23 @@ class FileMixin:
             return f"edit_file error: {path} is not valid UTF-8 text."
         except OSError as e:
             return f"edit_file error: {e}"
+        old, new = inp.get("old_string", ""), inp.get("new_string", "")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return "edit_file error: old_string and new_string must be strings."
         new_content, count, err = self._file_apply_edit(
-            content, inp.get("old_string", ""), inp.get("new_string", ""),
-            bool(inp.get("replace_all", False)))
+            content, old, new, bool(inp.get("replace_all", False)))
         if err:
             return f"edit_file error: {err}"
-        try:
-            with open(path, "w", encoding="utf-8", newline="") as f:
-                f.write(new_content)
-        except OSError as e:
-            return f"edit_file error: {e}"
+        err = self._file_write_atomic(path, new_content)
+        if err:
+            return f"edit_file error: {err}"
         plural = "s" if count != 1 else ""
         return f"Replaced {count} occurrence{plural} in {path}."
 
     def do_glob_files(self, inp):
         inp = inp or {}
         pattern = inp.get("pattern", "")
-        base = inp.get("path") or os.getcwd()
+        base = self._file_path(inp) or os.getcwd()
         if not pattern:
             return "glob_files error: 'pattern' is required."
         if not os.path.isdir(base):
@@ -211,7 +287,10 @@ class FileMixin:
         for p in glob.glob(os.path.join(base, pattern), recursive=True):
             if not os.path.isfile(p):
                 continue
-            rel = os.path.normpath(os.path.relpath(p, base)).split(os.sep)
+            try:
+                rel = os.path.normpath(os.path.relpath(p, base)).split(os.sep)
+            except ValueError:      # an absolute pattern on another drive
+                rel = []
             if self._file_walk_skipped(rel[:-1]):
                 continue
             matches.append(os.path.abspath(p))
@@ -232,7 +311,7 @@ class FileMixin:
     def do_grep_files(self, inp):
         inp = inp or {}
         pattern = inp.get("pattern", "")
-        base = inp.get("path") or os.getcwd()
+        base = self._file_path(inp) or os.getcwd()
         if not pattern:
             return "grep_files error: 'pattern' is required."
         mode = inp.get("output_mode") or "files_with_matches"
@@ -248,14 +327,13 @@ class FileMixin:
         if os.path.isfile(base):
             candidates = [base]
         elif os.path.isdir(base):
-            candidates = self._file_grep_candidates(base, name_glob)
+            candidates = self._file_grep_candidates(base)
         else:
             return f"grep_files error: path not found: {base}"
 
-        import fnmatch  # stdlib; local import keeps module top minimal
         out, hit_files, truncated = [], 0, False
         for fp in candidates:
-            if name_glob and not fnmatch.fnmatch(os.path.basename(fp), name_glob):
+            if name_glob and not self._file_glob_matches(fp, base, name_glob):
                 continue
             lines = self._file_grep_lines(fp, rx)
             if lines is None or not lines:
@@ -284,7 +362,26 @@ class FileMixin:
     # ── grep internals ──────────────────────────────────────────────────
 
     @staticmethod
-    def _file_grep_candidates(base, name_glob):
+    def _file_glob_matches(fp, base, pattern):
+        """grep_files' `glob` filter: the file NAME ("*.py"), or — for a
+        pattern with a slash — the path relative to the search root
+        ("src/**/*.py"); a leading "**/" also matches at the root. It matched
+        the basename only, so "**/*.py" silently found nothing."""
+        name = os.path.basename(fp)
+        if fnmatch.fnmatch(name, pattern):
+            return True
+        pattern = pattern.replace("\\", "/")
+        if "/" not in pattern:
+            return False
+        try:
+            rel = os.path.relpath(fp, base).replace(os.sep, "/")
+        except ValueError:
+            return False
+        return (fnmatch.fnmatch(rel, pattern)
+                or (pattern.startswith("**/") and fnmatch.fnmatch(rel, pattern[3:])))
+
+    @staticmethod
+    def _file_grep_candidates(base):
         for root, dirs, files in os.walk(base):
             dirs[:] = [d for d in dirs if d not in FILE_SKIP_DIRS]
             for fn in files:
