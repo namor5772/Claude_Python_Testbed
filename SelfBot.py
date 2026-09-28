@@ -1236,8 +1236,10 @@ except ImportError:
         return None
 
     def _sb_is_skill_md_family(fname):
-        return (fname == "SKILL.md" or fname.startswith("SKILL.md.")
-                or (fname.startswith("SKILL-") and fname.lower().endswith(".md")))
+        # Case-insensitive, like datapaths': on Windows / macOS "skill.md" IS SKILL.md.
+        low = fname.lower()
+        return (low == "skill.md" or low.startswith("skill.md.")
+                or (low.startswith("skill-") and low.endswith(".md")))
 
     def _list_skill_resources(dirpath, name):
         folder = _skill_dir_for(dirpath, name)
@@ -1262,11 +1264,13 @@ except ImportError:
         rel = (rel_path or "").replace("\\", "/").strip()
         if not rel or rel.endswith("/"):
             return None, "file_path must name a file, not a directory"
-        if os.path.isabs(rel) or re.match(r"[A-Za-z]:", rel):
+        if rel.startswith("/") or os.path.isabs(rel) or re.match(r"[A-Za-z]:", rel):
             return None, "file_path must be RELATIVE to the skill's folder"
         parts = [p for p in rel.split("/") if p not in ("", ".")]
         if not parts or ".." in parts:
             return None, "file_path may not leave the skill's folder ('..')"
+        if any(":" in p for p in parts):
+            return None, "file_path must be RELATIVE to the skill's folder (no ':')"
         if len(parts) == 1 and _sb_is_skill_md_family(parts[0]):
             return None, ("SKILL.md (and its conflict forks) are managed by the "
                           "create/update actions, not as resource files")

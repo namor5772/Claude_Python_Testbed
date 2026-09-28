@@ -1048,7 +1048,10 @@ def skill_resource_path(dirpath, name, rel_path):
     rel = (rel_path or "").replace("\\", "/").strip()
     if not rel or rel.endswith("/"):
         return None, "file_path must name a file, not a directory"
-    if os.path.isabs(rel) or re.match(r"[A-Za-z]:", rel):
+    # A leading "/" is refused explicitly: since Python 3.13, os.path.isabs on
+    # Windows no longer counts a rooted path without a drive ("/abs/x.txt",
+    # "\abs\x.txt") as absolute, so it alone would accept one there.
+    if rel.startswith("/") or os.path.isabs(rel) or re.match(r"[A-Za-z]:", rel):
         return None, "file_path must be RELATIVE to the skill's folder"
     parts = [p for p in rel.split("/") if p not in ("", ".")]
     if not parts or ".." in parts:
