@@ -82,6 +82,28 @@ class ChatMixin:
             return {"type": "redacted_thinking", "data": block.get("data", "")}
         return block
 
+    @staticmethod
+    def _clean_responses_items(block, strip_thinking):
+        """An OpenAI turn's `responses_items` block (the output items the next
+        call replays — openai_mixin) as a saved chat keeps it: web searches,
+        messages and function calls as the API returned them; reasoning items
+        only when Save Thinking is on, and even then without their
+        encrypted_content — kilobytes of ciphertext only OpenAI can read, and
+        nothing loads a saved chat back into a conversation."""
+        items = []
+        for item in block.get("items") or ():
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "reasoning":
+                if strip_thinking:
+                    continue
+                item = dict(item)
+                enc = item.pop("encrypted_content", None)
+                if enc:
+                    item["encrypted_content"] = f"[{len(enc)} chars, not saved]"
+            items.append(item)
+        return {"type": "responses_items", "items": items}
+
     def _serialize_messages(self):
         strip_thinking = not self.save_thinking.get()
         serialized = []
@@ -94,6 +116,9 @@ class ChatMixin:
                 for block in content:
                     if isinstance(block, dict):
                         if strip_thinking and block.get("type") in ("thinking", "redacted_thinking"):
+                            continue
+                        if block.get("type") == "responses_items":
+                            blocks.append(self._clean_responses_items(block, strip_thinking))
                             continue
                         blocks.append(self._clean_content_block(block))
                     elif hasattr(block, "model_dump"):

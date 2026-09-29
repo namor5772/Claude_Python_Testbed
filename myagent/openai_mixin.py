@@ -11,6 +11,7 @@ from myagent.constants import (
     OPENAI_DEPRECATED_MODEL_PREFIXES,
     OPENAI_PRICING,
     OPENAI_REASONING_PREFIXES,
+    OPENAI_RESPONSES_INCLUDE,
     OPENAI_RESPONSES_PREFIXES,
     OPENAI_FALLBACK_MODELS,
     _HAS_DESKTOP,
@@ -196,17 +197,78 @@ class OpenAIMixin:
                 "input": parsed_args,
             })
 
-        # Extract usage for cost tracking
+        # Extract usage for cost tracking, and this turn's output items for the
+        # next call to replay (_messages_to_responses)
         usage_dict = None
         try:
             final_resp = stream.get_final_response()
-            usage_dict = self._openai_usage_dict(
-                getattr(final_resp, "usage", None),
-                cache_write_billed=self._openai_bills_cache_writes())
         except Exception:
-            pass
+            final_resp = None
+        if final_resp is not None:
+            try:
+                usage_dict = self._openai_usage_dict(
+                    getattr(final_resp, "usage", None),
+                    cache_write_billed=self._openai_bills_cache_writes())
+            except Exception:
+                pass
+            items = self._openai_output_items(final_resp)
+            if items:
+                content_blocks.append({"type": "responses_items", "items": items})
 
         return full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict
+
+    @staticmethod
+    def _openai_output_items(response):
+        """A COMPLETED response's output items as plain dicts, in order — the
+        `responses_items` block `_messages_to_responses` replays verbatim on
+        the run's next call. [] (→ the turn is rebuilt from its text / tool_use
+        blocks, as before) for an incomplete or failed response and for any
+        item that will not dump to a typed dict.
+
+        Why (2026-09-30, saved chat "BAD _REPEAT"): MyAgent sends store=False,
+        so between two calls the server remembers NOTHING — the model's
+        reasoning, its web searches and each message's `phase` existed only in
+        this list, and only its text and function calls reached the history.
+        gpt-6-luna at Xhigh then met every tool result without the reasoning
+        that asked for it, re-derived the situation from scratch (inventing a
+        user who "asked if I'm sure", an on-screen clock nobody wanted) and
+        spoke the time five times in eight calls. Replaying the items —
+        encrypted reasoning included, OPENAI_RESPONSES_INCLUDE — is what
+        OpenAI documents for stateless tool loops."""
+        status = getattr(response, "status", None)
+        if status not in (None, "completed"):
+            return []
+        items = []
+        for item in getattr(response, "output", None) or []:
+            try:
+                d = (item.model_dump(mode="json", exclude_none=True)
+                     if hasattr(item, "model_dump") else dict(item))
+            except Exception:
+                return []
+            if not isinstance(d, dict) or not d.get("type"):
+                return []
+            items.append(d)
+        return items
+
+    @staticmethod
+    def _openai_replay_refused(error, input_items):
+        """True when a 400 is about the output items a request replayed:
+        OpenAI's `invalid_encrypted_content` (a reasoning item it cannot
+        verify — probed live 2026-09-30 with a corrupted one: "The encrypted
+        content for item rs_… could not be verified"), or an error whose
+        `param` points at a replayed input item. Replayed items carry the `id`
+        the API gave them; items rebuilt from text / tool_use blocks, user
+        messages and function_call_outputs never do — so an error about, say,
+        a bad image in a user message does not switch replay off."""
+        code = getattr(error, "code", None) or ""
+        if code == "invalid_encrypted_content" or "encrypted content" in str(error).lower():
+            return True
+        m = re.match(r"input\[(\d+)\]", str(getattr(error, "param", None) or ""))
+        if m:
+            idx = int(m.group(1))
+            items = input_items or []
+            return idx < len(items) and isinstance(items[idx], dict) and "id" in items[idx]
+        return False
 
     def _fetch_openai_models(self):
         """Fetch available OpenAI chat models suitable for agentic tool use."""
@@ -544,7 +606,7 @@ class OpenAIMixin:
             "instructions": system_prompt,
             "tools": responses_tools,
             "store": False,
-            "include": ["code_interpreter_call.outputs"],
+            "include": list(OPENAI_RESPONSES_INCLUDE),
         }
         # reasoning / temperature / text.verbosity — the shared per-family
         # builder (also feeds the Debug payload); commit=True writes a
@@ -639,6 +701,21 @@ class OpenAIMixin:
                                 "content": f"Model '{self.model}' rejected reasoning.effort='{old_effort}' — retrying with '{new_effort}' (supported: {', '.join(supported)})...\n",
                             })
                             continue
+                # The replayed output items were refused (see
+                # _openai_replay_refused): rebuild every assistant turn from
+                # its text / tool_use blocks — the pre-2026-09-30 wire shape —
+                # for the rest of the session, and retry.
+                if (not getattr(self, "_openai_replay_off", False)
+                        and self._openai_replay_refused(e, api_kwargs.get("input"))):
+                    self._openai_replay_off = True
+                    api_kwargs["input"] = self._messages_to_responses(messages)
+                    self.queue.put({
+                        "type": "warning",
+                        "content": "⚠ OpenAI refused the replayed reasoning / output items "
+                                   "— resending without them. For the rest of this session "
+                                   "the model's reasoning is not carried between calls.\n",
+                    })
+                    continue
                 # Unrecognised BadRequestError — propagate
                 raise
             except openai.APITimeoutError:

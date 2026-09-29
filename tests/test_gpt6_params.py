@@ -99,7 +99,8 @@ class RequestParams(unittest.TestCase):
                 self.assertEqual(kw["text"], {"verbosity": "high"})
                 self.assertEqual(kw["instructions"], "SYS")
                 self.assertIs(kw["store"], False)
-                self.assertEqual(kw["include"], ["code_interpreter_call.outputs"])
+                self.assertEqual(kw["include"], ["code_interpreter_call.outputs",
+                                                 "reasoning.encrypted_content"])
                 types = [t["type"] for t in kw["tools"]]
                 self.assertEqual(types, ["function", "web_search_preview", "code_interpreter"])
                 self.assertEqual(kw["tools"][0]["name"], "run_command")

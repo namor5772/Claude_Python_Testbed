@@ -1561,6 +1561,15 @@ OPENAI_ALWAYS_REASONING_PREFIXES = ("gpt-6-astra", "gpt-6.1-sol")
 OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
                           "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
+# The Responses API `include` every OpenAI request carries (the live call and
+# the Debug dump read this one tuple). reasoning.encrypted_content since
+# 2026-09-30: MyAgent sends store=False, so the server keeps nothing between
+# calls and a reasoning model's chain of thought survives a tool round trip
+# only if the client replays the encrypted reasoning items — without them
+# gpt-6-luna re-derived every call from scratch and spoke the same answer again
+# and again (saved chat "BAD _REPEAT"). Harmless where there is nothing to
+# encrypt: gpt-4.1 accepts it (probed live).
+OPENAI_RESPONSES_INCLUDE = ("code_interpreter_call.outputs", "reasoning.encrypted_content")
 # o-series prefixes stay HERE (params wiring) even though the picker no longer
 # lists them — a saved instruction pinning o3 etc. keeps correct reasoning
 # params until the actual API shutdowns (see OPENAI_RESPONSES_PREFIXES).

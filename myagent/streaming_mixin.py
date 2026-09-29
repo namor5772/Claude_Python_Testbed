@@ -16,7 +16,7 @@ from myagent.constants import (
     _HAS_PHYSICAL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
-    OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING,
+    OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING, OPENAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
     APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS,
@@ -55,6 +55,9 @@ class StreamingMixin:
         - User images use input_text/input_image content types
         - Assistant tool calls become top-level function_call items
         - Tool results become top-level function_call_output items
+        - An assistant turn carrying a `responses_items` block (an OpenAI turn,
+          since 2026-09-30) is replayed from it verbatim instead — reasoning
+          included; see _responses_replay_items
         """
         result = []
 
@@ -161,6 +164,13 @@ class StreamingMixin:
                 if isinstance(content, str):
                     result.append({"role": "assistant", "content": [{"type": "output_text", "text": content}]})
                 elif isinstance(content, list):
+                    replay = self._responses_replay_items(content)
+                    if replay:
+                        # The turn exactly as the API returned it: encrypted
+                        # reasoning, web_search_call records, each message's
+                        # phase, function_calls — see _openai_output_items.
+                        result.extend(replay)
+                        continue
                     # Collect text and tool_use blocks separately
                     text_parts = []
                     func_calls = []
@@ -189,6 +199,28 @@ class StreamingMixin:
                     result.extend(func_calls)
 
         return result
+
+    def _responses_replay_items(self, content):
+        """The output items an assistant turn's `responses_items` block holds
+        (written by OpenAIMixin._stream_responses), as fresh top-level copies —
+        the wire list never aliases the history — or None to rebuild the turn
+        from its text / tool_use blocks: a turn without the block (xAI, which
+        shares this translator; a STOPped or incomplete OpenAI stream), or
+        replay switched off for the session after the API refused it
+        (`_openai_replay_off`, set by _stream_responses_call's 400 rung).
+
+        Sending the items to a DIFFERENT OpenAI model is safe — the Model
+        upgrade does it: probed live 2026-09-30, gpt-6-luna's reasoning replayed
+        to gpt-6-astra and gpt-6-sol was consumed (input tokens rose by its
+        size), to gpt-5.6-terra and gpt-4.1 silently dropped; every call 200."""
+        if getattr(self, "_openai_replay_off", False):
+            return None
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "responses_items":
+                items = [dict(item) for item in block.get("items") or ()
+                         if isinstance(item, dict)]
+                return items or None
+        return None
 
     def _make_serializable(self, obj):
         if hasattr(obj, "model_dump"):
@@ -289,6 +321,11 @@ class StreamingMixin:
                             url = part.get("image_url", "")
                             if isinstance(url, str) and url.startswith("data:"):
                                 part["image_url"] = url[:60] + "...[truncated]"
+                # A replayed reasoning item's encrypted_content is kilobytes
+                # of opaque base64 — a stub, like the image data
+                enc = item.get("encrypted_content")
+                if isinstance(enc, str) and len(enc) > 60:
+                    item["encrypted_content"] = enc[:40] + f"...[{len(enc)} chars]"
                 # Also truncate images in function_call_output (legacy format)
                 if item.get("type") == "function_call_output" and isinstance(item.get("output"), list):
                     for part in item["output"]:
@@ -304,7 +341,7 @@ class StreamingMixin:
                 "store": False,
             }
             if self.provider == "OpenAI":
-                payload["include"] = ["code_interpreter_call.outputs"]
+                payload["include"] = list(OPENAI_RESPONSES_INCLUDE)
                 # The same per-family builder _stream_responses_call uses
                 # (reasoning / temperature / text.verbosity), read-only here —
                 # the dump shows exactly what the wire will carry.
