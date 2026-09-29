@@ -246,6 +246,9 @@ class Exposed(unittest.TestCase):
         h = _UIHost()
         self.assertEqual(h._openai_reasoning_values("gpt-6-astra"),
                          ["Low", "Medium", "High", "Xhigh", "Max"])
+        # gpt-6.1-sol (probed 2026-09-30) is always-reasoning like astra
+        self.assertEqual(h._openai_reasoning_values("gpt-6.1-sol"),
+                         ["Low", "Medium", "High", "Xhigh", "Max"])
         # Only astra is always-reasoning: sol / luna (probed 2026-09-23) and
         # an unknown future tier get the None rung
         for mid in ("gpt-6-sol", "gpt-6-luna", "gpt-6.1-nova"):

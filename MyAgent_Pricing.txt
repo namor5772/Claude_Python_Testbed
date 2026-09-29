@@ -139,7 +139,7 @@
   on GPT-4.1; the -pro tiers (gpt-5.5-pro / gpt-5.2-pro / gpt-5-pro) have NO
   cached tier. Cache WRITES are BILLED from GPT-5.6 on at 1.25x input
   (terra $2.50 / sol $5.00 / luna $0.25 / gpt-6-astra $12.50 / gpt-6-sol
-  $2.50 / gpt-6-luna $0.125 per M — pricing page re-read 2026-09-06 and
+  $2.50 / gpt-6.1-sol $2.50 / gpt-6-luna $0.125 per M — pricing page re-read 2026-09-06 and
   2026-09-23; the write premium arrived with GPT-5.6 GA on
   2026-07-09 together with a 1,024-token cache floor, 2,048 on older models),
   carried as the 4th element of those rows and moved out of the input bucket
@@ -173,6 +173,13 @@
   Model Prefix           Input    Output    Cached   Cache write
   ──────────────────────────────────────────────────────────────────────────
   gpt-6-astra            $10.00   $50.00    $1.00    $12.50
+  gpt-6.1-sol            $2.00    $10.00    $0.10    $2.50   ("near-Astra
+                                                              performance at a
+                                                              lower cost";
+                                                              created 2026-09-27,
+                                                              wired 2026-09-30;
+                                                              always-reasoning
+                                                              like astra)
   gpt-6-sol              $2.00    $10.00    $0.20    $2.50   ("built to power
                                                               complex coding and
                                                               agentic workflows")

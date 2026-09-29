@@ -566,9 +566,9 @@ META_TOOLS = [
                         "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 and Mythos 5 / 5.1 have "
                         "ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
                         "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh (max on 5.6+); "
-                        "gpt-6-sol / gpt-6-luna: none..max like 5.6; gpt-6-astra is "
-                        "ALWAYS-reasoning — low/medium/high/xhigh/max, 'none' is invalid "
-                        "there. Lower-cased to match the stored value."
+                        "gpt-6-sol / gpt-6-luna: none..max like 5.6; gpt-6-astra and "
+                        "gpt-6.1-sol are ALWAYS-reasoning — low/medium/high/xhigh/max, "
+                        "'none' is invalid there. Lower-cased to match the stored value."
                     ),
                 },
                 "text_verbosity": {
@@ -1550,8 +1550,15 @@ BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768
 # None rung and their temperature. An unknown future gpt-6 tier is deliberately
 # NOT listed here — it gets the None rung, and if it turns out always-reasoning
 # the reactive "Supported values are" 400 rung steps it to low with a notice.
-OPENAI_ALWAYS_REASONING_PREFIXES = ("gpt-6-astra",)
-OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+# GPT-6.1 Sol (gpt-6.1-sol, created 2026-09-27, announced at DevDay 2026-09-29:
+# $2/$10 like gpt-6-sol, cached $0.10, "near-Astra performance at a lower cost
+# for complex coding, computer use, and professional work") DID turn out
+# always-reasoning — probed live 2026-09-30: "none" is HTTP 400 "not supported
+# with the 'gpt-6.1-sol' model. Supported values are: 'low', 'medium', 'high',
+# 'xhigh', and 'max'", temperature 400 "Unsupported parameter" at low — so it
+# joins astra here, unlike the gpt-6-sol it succeeds.
+OPENAI_ALWAYS_REASONING_PREFIXES = ("gpt-6-astra", "gpt-6.1-sol")
+OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
                           "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
 # o-series prefixes stay HERE (params wiring) even though the picker no longer
@@ -3528,6 +3535,11 @@ OPENAI_PRICING = {
     # the 2026-09-23 report from the Mac; _unpriced_model_warning now says
     # so at run start and run end, and the per-call token line still shows.
     "gpt-6-sol":           (2.00, 10.00, 0.20, 2.50),
+    # GPT-6.1 Sol (created 2026-09-27; model page read 2026-09-30): the same
+    # $2/$10 and $2.50 write as gpt-6-sol, but cached input HALVED to $0.10.
+    # Without this row it matched nothing (gpt-6-sol is not its prefix), so
+    # a run on it would have been unpriced and unlogged.
+    "gpt-6.1-sol":         (2.00, 10.00, 0.10, 2.50),
     "gpt-6-luna":          (0.10, 0.50, 0.01, 0.125),
     # GPT-5.6 family — no bare "gpt-5.6" id exists (only the three tiers), so
     # there is deliberately no family fallback row: an unknown future 5.6 id

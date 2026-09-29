@@ -45,12 +45,15 @@ EXPECTED = {
 # xhigh/max ("minimal" is HTTP 400), temperature ONLY at effort=none — the
 # GPT-5.6 rule — so the always-reasoning contract is a per-tier list
 # (OPENAI_ALWAYS_REASONING_PREFIXES: astra alone), and an unknown future tier
-# (gpt-6.1-nova) gets the None rung. The columns are the same as above, plus
+# (gpt-6.1-nova) gets the None rung. GPT-6.1 Sol (2026-09-27), probed live
+# 2026-09-30, IS always-reasoning like astra (low..max, no temperature), so it
+# is listed. The columns are the same as above, plus
 # a trailing always-reasoning flag.
 EXPECTED_GPT6 = {
     "gpt-6-astra":         (0, False, True,  False, True,  True,  False, False, True,  True),
     "gpt-6-sol":           (0, False, True,  True,  True,  True,  True,  False, True,  False),
     "gpt-6-luna":          (0, False, True,  True,  True,  True,  True,  False, True,  False),
+    "gpt-6.1-sol":         (0, False, True,  False, True,  True,  False, False, True,  True),
     "gpt-6.1-nova":        (0, False, True,  True,  True,  True,  True,  False, True,  False),
 }
 
@@ -123,7 +126,7 @@ class TestOpenAIDetect(unittest.TestCase):
         # OpenAI bills cache writes from GPT-5.6 on (1.25x input): the 5.6
         # tiers and GPT-6 Astra carry a 4th pricing element; the older
         # families list no write price (pricing page re-read 2026-09-06).
-        for mid in ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna",
+        for mid in ("gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
                     "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna"):
             self.assertTrue(self.p._openai_bills_cache_writes(mid), mid)
         for mid in ("gpt-5.5", "gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-4.1",

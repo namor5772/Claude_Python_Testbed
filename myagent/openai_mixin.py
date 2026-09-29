@@ -304,7 +304,8 @@ class OpenAIMixin:
         """Models whose reasoning cannot be switched off: reasoning.effort is
         low/medium/high/xhigh/max ONLY ("none" and "minimal" are HTTP 400) and
         temperature is rejected unconditionally — gpt-6-astra, probed live
-        2026-09-06 and again 2026-09-23. A per-tier list
+        2026-09-06 and again 2026-09-23, and gpt-6.1-sol, probed live
+        2026-09-30. A per-tier list
         (OPENAI_ALWAYS_REASONING_PREFIXES), NOT the GPT-6 family: gpt-6-sol
         and gpt-6-luna take "none" and temperature at none like the 5.6
         tiers (probed 2026-09-23), and for nine days the family rule had

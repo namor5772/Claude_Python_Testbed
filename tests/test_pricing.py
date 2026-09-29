@@ -150,6 +150,10 @@ class TestGetPricing(unittest.TestCase):
                                   "cache_read": 0.20 / 1_000_000, "cache_write": 2.50 / 1_000_000},
         ("OpenAI", "gpt-6-luna"): {"input": 0.10 / 1_000_000, "output": 0.50 / 1_000_000,
                                    "cache_read": 0.01 / 1_000_000, "cache_write": 0.125 / 1_000_000},
+        # GPT-6.1 Sol (created 2026-09-27, row added 2026-09-30): gpt-6-sol's
+        # rates with cached input halved to $0.10 — gpt-6-sol is NOT its prefix
+        ("OpenAI", "gpt-6.1-sol"): {"input": 2.00 / 1_000_000, "output": 10.00 / 1_000_000,
+                                    "cache_read": 0.10 / 1_000_000, "cache_write": 2.50 / 1_000_000},
         # ...and an unknown future gpt-6 tier stays unpriced (no family row)
         ("OpenAI", "gpt-6-terra"): None,
         ("xAI", "grok-4.3"): {"input": 1.25e-06, "output": 2.5e-06},
