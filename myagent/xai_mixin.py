@@ -56,6 +56,19 @@ Deliberate differences from the OpenAI mixin:
    reasoning downgrades the request (drop temperature → drop reasoning
    summary → drop reasoning) and retries, so a future API tightening
    degrades gracefully instead of hard-failing.
+5. **Reasoning round trip (2026-09-30)** — requests go out with store=False,
+   so each asks for ``reasoning.encrypted_content`` (XAI_RESPONSES_INCLUDE)
+   and the ``response.completed`` event's output items ride in the history as
+   a ``responses_items`` block, replayed verbatim by the shared
+   ``_messages_to_responses`` — the OpenAI fix, same helpers. Probed live:
+   accepted by grok-4.3 / 4.7 / build-0.1 / both pinned 4.20 variants, the
+   replay consumed (input up, re-reasoning output down 2–6x), grok-4.3's
+   items consumed by 4.7 / 4.6 / build / 4.20-reasoning (the Model upgrade),
+   server-tool items (web_search_call with its sources, the x_search
+   custom_tool_call, code_interpreter_call with its outputs) accepted; a
+   corrupted ciphertext is a 400 "Could not decrypt the provided
+   encrypted_content", which the shared first rung (_responses_drop_replay)
+   turns into replay-off for the session.
 """
 import json
 import time
@@ -70,9 +83,10 @@ from myagent.constants import (
     XAI_NON_AGENTIC_SUBSTRINGS,
     XAI_NON_VISION_PREFIXES,
     XAI_REASONING_EFFORT,
+    XAI_RESPONSES_INCLUDE,
     _HAS_DESKTOP,
 )
-from myagent.helpers import note_served_models, responses_usage_dict
+from myagent.helpers import note_served_models, responses_output_items, responses_usage_dict
 from myagent.openai_mixin import OpenAIMixin
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
@@ -248,6 +262,7 @@ class XAIMixin:
         in_thinking = False
         tool_calls_acc = {}  # output_index -> {call_id, name, arguments}
         usage_dict = None
+        final_resp = None    # the response.completed event's response
         timed_out = False
         first_content_timeout = getattr(self, "_xai_first_content_timeout", 0)
 
@@ -331,7 +346,8 @@ class XAIMixin:
                         tool_calls_acc[idx]["arguments"] = event.arguments
 
                 elif etype == "response.completed":
-                    usage = getattr(getattr(event, "response", None), "usage", None)
+                    final_resp = getattr(event, "response", None)
+                    usage = getattr(final_resp, "usage", None)
                     if usage:
                         # Disjoint buckets + the xAI extras (cost_usd,
                         # server_tool_calls) — see _xai_usage_dict.
@@ -371,6 +387,14 @@ class XAIMixin:
                 "name": tc["name"],
                 "input": parsed_args,
             })
+        # The completed response's output items, replayed verbatim by
+        # _messages_to_responses on the next call — encrypted reasoning,
+        # web_search_call / custom_tool_call (x_search) / code_interpreter_call
+        # records and function calls (helpers.responses_output_items says why;
+        # none for a STOPped or timed-out stream, which never completed)
+        items = responses_output_items(final_resp) if final_resp is not None else []
+        if items:
+            content_blocks.append({"type": "responses_items", "items": items})
 
         return full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict
 
@@ -411,6 +435,10 @@ class XAIMixin:
             "instructions": system_prompt,
             "store": False,
         }
+        # the encrypted reasoning the next call replays (streaming_mixin)
+        include = self._responses_include(XAI_RESPONSES_INCLUDE)
+        if include:
+            api_kwargs["include"] = include
         # temperature + reasoning from the ONE builder the Debug dump also
         # uses (a stale saved effort → the nearest rung the model accepts;
         # the summary asked of every model); the BadRequest ladder below
@@ -461,6 +489,14 @@ class XAIMixin:
                 # 400s — e.g. temperature AND reasoning both refused — still
                 # converge on an accepted request instead of hard-failing.
                 err_str = str(e)
+                # FIRST: the replayed reasoning / output items refused ("Could
+                # not decrypt the provided encrypted_content", probed live) —
+                # resend the pre-2026-09-30 shape for the rest of the session.
+                # Ahead of the rungs below, which match loosely: a refused
+                # reasoning item would read as "drop reasoning", a refused
+                # web_search_call as "strip the web_search tool".
+                if self._responses_drop_replay(e, api_kwargs, messages):
+                    continue
                 if "temperature" in err_str and "temperature" in api_kwargs:
                     del api_kwargs["temperature"]
                     self.queue.put({

@@ -46,6 +46,7 @@ from openai.types.responses.response_reasoning_item import Summary
 
 from myagent.chat_mixin import ChatMixin
 from myagent.constants import OPENAI_RESPONSES_INCLUDE
+from myagent.helpers import responses_output_items, responses_replay_refused
 from myagent.openai_mixin import OpenAIMixin
 from myagent.streaming_mixin import StreamingMixin
 
@@ -168,7 +169,7 @@ class _Host(StreamingMixin, OpenAIMixin):
         self.text_verbosity = "medium"
         self.desktop_enabled = _Var(False)
         self._openai_unsupported_tools = {}
-        self._openai_replay_off = False
+        self._responses_replay_off = set()
         self.queue = queue.Queue()
         self.stop_requested = False
         self._headless = False
@@ -248,7 +249,7 @@ class CaptureTests(unittest.TestCase):
             dumped(function_call("fc_1", "call_1"))])
 
     def test_items_are_plain_json_dicts_without_none_fields(self):
-        items = OpenAIMixin._openai_output_items(
+        items = responses_output_items(
             final(reasoning("rs_1", "ENC1"), message("msg_1", "hi")))
         self.assertEqual(items[0], {"id": "rs_1", "type": "reasoning", "encrypted_content": "ENC1",
                                     "summary": [{"text": "plan", "type": "summary_text"}]})
@@ -258,16 +259,16 @@ class CaptureTests(unittest.TestCase):
     def test_incomplete_or_failed_response_keeps_no_items(self):
         for status in ("incomplete", "failed", "cancelled"):
             with self.subTest(status=status):
-                self.assertEqual(OpenAIMixin._openai_output_items(
+                self.assertEqual(responses_output_items(
                     final(reasoning("rs_1", "E"), status=status)), [])
 
     def test_an_item_that_will_not_dump_drops_the_whole_turn(self):
         class Broken:
             def model_dump(self, **kw):
                 raise ValueError("no")
-        self.assertEqual(OpenAIMixin._openai_output_items(
+        self.assertEqual(responses_output_items(
             final(reasoning("rs_1", "E"), Broken())), [])
-        self.assertEqual(OpenAIMixin._openai_output_items(
+        self.assertEqual(responses_output_items(
             final(reasoning("rs_1", "E"), {"no": "type"})), [])
 
     def test_stopped_stream_keeps_no_items(self):
@@ -318,11 +319,22 @@ class ReplayThroughStreamWorkerTests(unittest.TestCase):
         self.assertEqual(sum(1 for i in sent[1]["input"] if i.get("role") == "assistant"
                              or i.get("type") == "message"), 1)
 
-    def test_replay_off_sends_the_legacy_shape(self):
+    def test_replay_off_sends_the_legacy_shape_and_no_reasoning_include(self):
         h = _Host(two_call_script([reasoning("rs_1", "ENC1"), function_call("fc_1", "call_1")]))
-        h._openai_replay_off = True
+        h._responses_replay_off = {"OpenAI"}
         sent = self.run_worker(h)
         self.assertEqual(sent[1]["input"], [GO, LEGACY_FC1, OUT1])
+        for kw in sent:                                   # nothing to replay, nothing asked
+            self.assertEqual(kw["include"], ["code_interpreter_call.outputs"])
+
+    def test_another_providers_refusal_leaves_openai_replaying(self):
+        # The flag is per provider: xAI refusing its replay earlier in the
+        # session must not switch OpenAI's off.
+        h = _Host(two_call_script([reasoning("rs_1", "ENC1"), function_call("fc_1", "call_1")]))
+        h._responses_replay_off = {"xAI"}
+        sent = self.run_worker(h)
+        self.assertIn(dumped(reasoning("rs_1", "ENC1")), sent[1]["input"])
+        self.assertEqual(sent[1]["include"], list(OPENAI_RESPONSES_INCLUDE))
 
     def test_incomplete_first_response_falls_back_to_the_legacy_shape(self):
         h = _Host([(call_events(1, "call_1"),
@@ -348,10 +360,13 @@ class ReplayRefusedTests(unittest.TestCase):
     def test_refusal_matrix(self):
         replayed = [GO, {"id": "rs_1", "type": "reasoning", "encrypted_content": "E"},
                     {"role": "user", "content": [{"type": "input_image", "image_url": "x"}]}]
-        refused = OpenAIMixin._openai_replay_refused
+        refused = responses_replay_refused
         self.assertTrue(refused(bad_request("x", code="invalid_encrypted_content"), replayed))
         self.assertTrue(refused(bad_request(
             "The encrypted content for item rs_1 could not be verified."), replayed))
+        # xAI's wording, underscore and all (its body gives the SDK no code)
+        self.assertTrue(refused(bad_request(
+            "Could not decrypt the provided encrypted_content."), replayed))
         self.assertTrue(refused(bad_request("bad", param="input[1].summary"), replayed))
         # an item without an id is ours (a user message, a rebuilt turn):
         # an error about it is not about the replay
@@ -373,9 +388,11 @@ class ReplayRefusedTests(unittest.TestCase):
         self.assertEqual(len(h.sent), 3)                 # call 1, refused, retry
         self.assertIn(dumped(reasoning("rs_1", "ENC1")), h.sent[1]["input"])
         self.assertEqual(h.sent[2]["input"], [GO, LEGACY_FC1, OUT1])
-        self.assertTrue(h._openai_replay_off)
+        # the retry stops asking for ciphertext nothing will replay
+        self.assertEqual(h.sent[2]["include"], ["code_interpreter_call.outputs"])
+        self.assertEqual(h._responses_replay_off, {"OpenAI"})
         self.assertEqual(len([m for m in queued if m.get("type") == "warning"
-                              and "refused" in m.get("content", "")]), 1)
+                              and "OpenAI refused" in m.get("content", "")]), 1)
 
     def test_unrelated_400_is_raised_and_keeps_replay_on(self):
         script = two_call_script([reasoning("rs_1", "ENC1"), function_call("fc_1", "call_1")])
@@ -385,7 +402,7 @@ class ReplayRefusedTests(unittest.TestCase):
         errors = h.drain("error")
         self.assertEqual(len(errors), 1)
         self.assertIn("Invalid image", errors[0])
-        self.assertFalse(h._openai_replay_off)
+        self.assertEqual(h._responses_replay_off, set())
         self.assertEqual(len(h.sent), 2)
 
 

@@ -199,12 +199,14 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # code_interpreter; older models did. The first call learns, subsequent
         # calls in the same session skip the unsupported tool upfront.
         self._openai_unsupported_tools = {}  # model_id → set of unsupported "type" strings
-        # Set once the Responses API refused the verbatim output items a turn
-        # replays (an unverifiable reasoning item, an input[] shape it rejects):
-        # _messages_to_responses then rebuilds every assistant turn from its
-        # text / tool_use blocks for the rest of the session — the pre-2026-09-30
-        # wire shape, reasoning not carried.
-        self._openai_replay_off = False
+        # The Responses-API providers ("OpenAI", "xAI") that refused the verbatim
+        # output items a turn replays (an unverifiable reasoning item, an input[]
+        # shape they reject): for them _messages_to_responses rebuilds every
+        # assistant turn from its text / tool_use blocks for the rest of the
+        # session — the pre-2026-09-30 wire shape, reasoning not carried — and
+        # the encrypted reasoning is no longer asked for. Per provider, so one
+        # provider's refusal never switches the other's replay off.
+        self._responses_replay_off = set()
         # Anthropic models (Opus 4.7+) that removed temperature/top_p/top_k and 400
         # if sent. Same learn-once-skip-after pattern as the OpenAI cache above.
         self._anthropic_no_temperature = set()  # model_ids that rejected temperature

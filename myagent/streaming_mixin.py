@@ -17,12 +17,13 @@ from myagent.constants import (
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
     OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING, OPENAI_RESPONSES_INCLUDE,
+    RESPONSES_REASONING_INCLUDE, XAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
     APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
-                             rotate_log_if_needed)
+                             responses_replay_refused, rotate_log_if_needed)
 
 if _HAS_DESKTOP:
     import pyautogui
@@ -202,18 +203,21 @@ class StreamingMixin:
 
     def _responses_replay_items(self, content):
         """The output items an assistant turn's `responses_items` block holds
-        (written by OpenAIMixin._stream_responses), as fresh top-level copies —
-        the wire list never aliases the history — or None to rebuild the turn
-        from its text / tool_use blocks: a turn without the block (xAI, which
-        shares this translator; a STOPped or incomplete OpenAI stream), or
-        replay switched off for the session after the API refused it
-        (`_openai_replay_off`, set by _stream_responses_call's 400 rung).
+        (written by OpenAIMixin._stream_responses and XAIMixin.
+        _stream_xai_events), as fresh top-level copies — the wire list never
+        aliases the history — or None to rebuild the turn from its text /
+        tool_use blocks: a turn without the block (a STOPped or incomplete
+        stream), or replay switched off for this provider for the session
+        after its API refused it (`_responses_replay_off`, set by
+        _responses_drop_replay).
 
-        Sending the items to a DIFFERENT OpenAI model is safe — the Model
-        upgrade does it: probed live 2026-09-30, gpt-6-luna's reasoning replayed
-        to gpt-6-astra and gpt-6-sol was consumed (input tokens rose by its
-        size), to gpt-5.6-terra and gpt-4.1 silently dropped; every call 200."""
-        if getattr(self, "_openai_replay_off", False):
+        Sending the items to a DIFFERENT model of the same provider is safe —
+        the Model upgrade does it. Probed live 2026-09-30: gpt-6-luna's
+        reasoning replayed to gpt-6-astra and gpt-6-sol was consumed (input
+        tokens rose by its size), to gpt-5.6-terra and gpt-4.1 silently
+        dropped; grok-4.3's to grok-4.7, grok-4.6, grok-build-0.1 and the
+        pinned grok-4.20 reasoning variant consumed; every call 200."""
+        if self.provider in getattr(self, "_responses_replay_off", ()):
             return None
         for block in content:
             if isinstance(block, dict) and block.get("type") == "responses_items":
@@ -221,6 +225,51 @@ class StreamingMixin:
                          if isinstance(item, dict)]
                 return items or None
         return None
+
+    def _responses_include(self, base):
+        """The `include` list a Responses request carries — the provider's
+        tuple (OPENAI_RESPONSES_INCLUDE / XAI_RESPONSES_INCLUDE) minus the
+        encrypted reasoning once replay is off for this provider, since
+        nothing would replay it. The live calls and the Debug dump both call
+        this, so the dump shows what the wire carries."""
+        if self.provider in getattr(self, "_responses_replay_off", ()):
+            return [i for i in base if i != RESPONSES_REASONING_INCLUDE]
+        return list(base)
+
+    def _responses_drop_replay(self, error, api_kwargs, messages):
+        """The 400 rung both Responses callers run FIRST (_stream_responses_call,
+        _stream_xai_call): when `error` is about the replayed or requested
+        encrypted reasoning, or about a replayed input item
+        (helpers.responses_replay_refused), switch replay off for this
+        provider for the rest of the session, rebuild the request's input
+        the pre-2026-09-30 way, stop asking for the ciphertext, post an
+        always-shown ⚠ and return True — the caller retries. False (nothing
+        touched) for any other error, and once replay is already off.
+
+        First because the rungs after it match loosely: xAI's drops the
+        reasoning parameter on any error that says "reasoning" and strips a
+        server tool on any that names one — a refused replayed reasoning item
+        or web_search_call would have tripped them."""
+        off = getattr(self, "_responses_replay_off", None)
+        if off is None:
+            off = self._responses_replay_off = set()
+        if self.provider in off or not responses_replay_refused(error, api_kwargs.get("input")):
+            return False
+        off.add(self.provider)
+        api_kwargs["input"] = self._messages_to_responses(messages)
+        if "include" in api_kwargs:
+            kept = [i for i in api_kwargs["include"] if i != RESPONSES_REASONING_INCLUDE]
+            if kept:
+                api_kwargs["include"] = kept
+            else:
+                del api_kwargs["include"]
+        self.queue.put({
+            "type": "warning",
+            "content": f"⚠ {self.provider} refused the replayed reasoning / output items "
+                       "— resending without them. For the rest of this session the "
+                       "model's reasoning is not carried between calls.\n",
+        })
+        return True
 
     def _make_serializable(self, obj):
         if hasattr(obj, "model_dump"):
@@ -341,7 +390,7 @@ class StreamingMixin:
                 "store": False,
             }
             if self.provider == "OpenAI":
-                payload["include"] = list(OPENAI_RESPONSES_INCLUDE)
+                payload["include"] = self._responses_include(OPENAI_RESPONSES_INCLUDE)
                 # The same per-family builder _stream_responses_call uses
                 # (reasoning / temperature / text.verbosity), read-only here —
                 # the dump shows exactly what the wire will carry.
@@ -353,6 +402,9 @@ class StreamingMixin:
                 # a knob model), read-only here — the dump shows exactly
                 # what the wire will carry.
                 payload.update(self._xai_model_params())
+                include = self._responses_include(XAI_RESPONSES_INCLUDE)
+                if include:
+                    payload["include"] = include
         elif self.provider == "Moonshot":
             # Chat Completions format (Kimi has no Responses endpoint) — mirror
             # _stream_kimi_call: system message first, tool results as role:

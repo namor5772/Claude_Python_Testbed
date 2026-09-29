@@ -235,6 +235,66 @@ def responses_usage_dict(usage, cache_write_billed=False):
     return out
 
 
+def responses_output_items(response):
+    """A COMPLETED Responses-API response's output items as plain dicts, in
+    order — the `responses_items` block StreamingMixin._messages_to_responses
+    replays verbatim on the run's next call (OpenAI's and xAI's shape alike).
+    [] (→ the turn is rebuilt from its text / tool_use blocks, as before) for
+    an incomplete or failed response and for any item that will not dump to a
+    typed dict.
+
+    Why (2026-09-30, saved chat "BAD _REPEAT"): both providers are called with
+    store=False, so between two calls the server remembers NOTHING — the
+    model's reasoning, its server-side searches and each message's `phase`
+    existed only in this list, and only its text and function calls reached
+    the history. gpt-6-luna at Xhigh then met every tool result without the
+    reasoning that asked for it, re-derived the situation from scratch
+    (inventing a user who "asked if I'm sure", an on-screen clock nobody
+    wanted) and spoke the time five times in eight calls. Replaying the items
+    — encrypted reasoning included (RESPONSES_REASONING_INCLUDE) — is what
+    both providers document for stateless tool loops."""
+    status = getattr(response, "status", None)
+    if status not in (None, "completed"):
+        return []
+    items = []
+    for item in getattr(response, "output", None) or []:
+        try:
+            d = (item.model_dump(mode="json", exclude_none=True)
+                 if hasattr(item, "model_dump") else dict(item))
+        except Exception:
+            return []
+        if not isinstance(d, dict) or not d.get("type"):
+            return []
+        items.append(d)
+    return items
+
+
+def responses_replay_refused(error, input_items):
+    """True when a Responses-API 400 is about the encrypted reasoning a
+    request replayed or asked for, or about a replayed input item. Probed
+    live 2026-09-30 with a corrupted ciphertext: OpenAI answers
+    `code: invalid_encrypted_content` ("The encrypted content for item rs_…
+    could not be verified"); xAI answers {"code": "invalid-argument",
+    "error": "Could not decrypt the provided encrypted_content…"} — a body
+    the SDK takes no `code` / `param` from — so the text is read for either
+    spelling. Otherwise an error whose `param` points at an input item
+    carrying the `id` the API gave it: replayed items do, while items rebuilt
+    from text / tool_use blocks, user messages and function_call_outputs never
+    do — so an error about, say, a bad image in a user message does not
+    count."""
+    code = getattr(error, "code", None) or ""
+    text = str(error).lower()
+    if (code == "invalid_encrypted_content" or "encrypted content" in text
+            or "encrypted_content" in text):
+        return True
+    m = re.match(r"input\[(\d+)\]", str(getattr(error, "param", None) or ""))
+    if m:
+        idx = int(m.group(1))
+        items = input_items or []
+        return idx < len(items) and isinstance(items[idx], dict) and "id" in items[idx]
+    return False
+
+
 def rotate_log_if_needed(log_path, max_bytes):
     """One-slot size-cap rotation for the append-only runtime logs
     (heartbeat.log, APICostLog_<machine>.txt): past max_bytes the log is atomically
