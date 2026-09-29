@@ -1749,12 +1749,28 @@ OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
 XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1"
 XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7",
                        "grok-4.20-0309-reasoning",
-                       "grok-4.20-0309-non-reasoning",
-                       "grok-4.20-multi-agent-0309", "grok-build-0.1"]
+                       "grok-4.20-0309-non-reasoning", "grok-build-0.1"]
 XAI_DEFAULT_MODEL = XAI_FALLBACK_MODELS[0]
 # Listing entries that can't serve the agentic loop (image/video
 # generation, embeddings, TTS) — dropped by substring in _fetch_xai_models.
 XAI_NON_AGENTIC_SUBSTRINGS = ("-image", "imagine", "embed", "-video", "-tts")
+# Chat models the listing serves that still cannot run MyAgent's loop, by id
+# substring, with the reason — dropped from the picker AND from the served set
+# by _parse_xai_language_models (so a pinned instruction falls back to the
+# default model with a warning instead of failing every run). The listing
+# carries no field that tells them apart (grok-4.20-multi-agent-0309 looks
+# like grok-4.3 minus a capabilities block), so this is a verified list:
+# 2026-09-30, every listed model was run through the real _stream_xai_call —
+# a client-side function call, then an answer from its result — and the seven
+# others passed. MyAgent always declares client-side tools (run_command,
+# user_prompt, …), so a model that refuses them can do nothing here.
+# "multi-agent" is the class xAI's own error names, so a later multi-agent
+# tier is covered too. The knob (XAI_REASONING_EFFORT) and price (XAI_PRICING)
+# rows stay: should the account get the beta, deleting the entry re-enables it.
+XAI_UNRUNNABLE_SUBSTRINGS = {
+    "multi-agent": "HTTP 400 \"Client-side tools for multi-agent models require beta access\" "
+                   "(probed 2026-09-30) — every MyAgent request declares client-side tools",
+}
 # reasoning_effort support by model family (longest prefix wins; families
 # absent here have no client-side knob and are sent no effort) — the OFFLINE
 # fallback behind _xai_reasoning_values, consulted only for a model the live

@@ -39,7 +39,9 @@ Deliberate differences from the OpenAI mixin:
    grok-4.20 variants). Live 2026-09-23: grok-4.3 none..xhigh, grok-4.5 /
    4.6 / 4.7 low..xhigh (always-reasoning — "none" is HTTP 400),
    grok-4.20-multi-agent low..xhigh from the table (the knob is agent
-   collaboration count). ``_xai_effective_effort`` is the ONE coercion of a
+   collaboration count — kept for the day the model can run here; since
+   2026-09-30 it is out of the picker, XAI_UNRUNNABLE_SUBSTRINGS: it refuses
+   client-side tools without beta access). ``_xai_effective_effort`` is the ONE coercion of a
    stale saved effort onto the model's ladder (nearest rung, OpenAI's rule),
    shared by the request builder, the Debug dump, the Reasoning combobox and
    the title. Every request carries ``reasoning.summary: "auto"`` — with an
@@ -84,6 +86,7 @@ from myagent.constants import (
     XAI_NON_VISION_PREFIXES,
     XAI_REASONING_EFFORT,
     XAI_RESPONSES_INCLUDE,
+    XAI_UNRUNNABLE_SUBSTRINGS,
     _HAS_DESKTOP,
 )
 from myagent.helpers import note_served_models, responses_output_items, responses_usage_dict
@@ -104,11 +107,14 @@ class XAIMixin:
     @staticmethod
     def _parse_xai_language_models(payload):
         """(model_ids, caps) from a /v1/language-models body. Keeps the grok*
-        ids that can serve the agentic loop (XAI_NON_AGENTIC_SUBSTRINGS
-        dropped), sorted; caps maps each kept id and every alias it lists to
-        its record — a ladder ordered by XAI_EFFORT_LADDER when the entry
-        carries capabilities.reasoning_effort, else None (unadvertised: the
-        static table decides, see _xai_reasoning_values), and whether
+        ids that can serve the agentic loop — XAI_NON_AGENTIC_SUBSTRINGS
+        (image / video / embedding / TTS entries) and XAI_UNRUNNABLE_SUBSTRINGS
+        (chat models verified unable to run MyAgent's loop: the multi-agent
+        tier refuses client-side tools without beta access) dropped, their
+        aliases with them — sorted; caps maps each kept id and every alias it
+        lists to its record — a ladder ordered by XAI_EFFORT_LADDER when the
+        entry carries capabilities.reasoning_effort, else None (unadvertised:
+        the static table decides, see _xai_reasoning_values), and whether
         input_modalities includes image."""
         model_ids, caps = [], {}
         for entry in (payload or {}).get("models") or []:
@@ -116,6 +122,8 @@ class XAIMixin:
             if not mid.startswith("grok"):
                 continue
             if any(skip in mid for skip in XAI_NON_AGENTIC_SUBSTRINGS):
+                continue
+            if any(skip in mid for skip in XAI_UNRUNNABLE_SUBSTRINGS):
                 continue
             ladder = (entry.get("capabilities") or {}).get("reasoning_effort") or None
             if ladder:
@@ -137,8 +145,9 @@ class XAIMixin:
         model has no client-side knob. The live listing's ladder when it
         published one for this id (or for the model this id is an alias
         of); else XAI_REASONING_EFFORT by longest prefix — so
-        grok-4.20-multi-agent-0309 (listed without capabilities) keeps its
-        table entry and does not fall through to a shorter one."""
+        grok-4.20-multi-agent-0309 (listed without capabilities, and kept out
+        of the picker as unrunnable since 2026-09-30) keeps its table entry and
+        does not fall through to a shorter one."""
         mid = model_id or self.model or ""
         live = self._xai_model_caps().get(mid)
         if live and live.get("reasoning_effort"):

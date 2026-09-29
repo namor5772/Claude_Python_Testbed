@@ -523,7 +523,8 @@ class UIMixin:
                 # (grok-4.3: None..Xhigh; grok-4.5 / 4.6 / 4.7: Low..Xhigh,
                 # always-reasoning), else XAI_REASONING_EFFORT's
                 # (grok-4.20-multi-agent: Low..Xhigh, the knob being agent
-                # collaboration count). Unlike OpenAI, xAI accepts
+                # collaboration count — a table row only: the model is out of
+                # the picker, XAI_UNRUNNABLE_SUBSTRINGS). Unlike OpenAI, xAI accepts
                 # temperature alongside reasoning, so
                 # _on_thinking_mode_changed packs the temp widgets after the combo.
                 self._thinking_mode_label.config(text="Reasoning")

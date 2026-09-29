@@ -10,15 +10,19 @@ xhigh rung 2026-09-23): grok-4.3 takes none..xhigh, grok-4.5 / 4.6 / 4.7
 take low..xhigh (always-reasoning — "none" is HTTP 400 on all three),
 grok-4.20-multi-agent takes low..xhigh (the knob is agent collaboration
 count; the listing carries no capabilities block for it, so the table is
-what serves it), and everything else — the pinned -reasoning/-non-reasoning
+what serves it — a table row only since 2026-09-30, when the model left the
+picker: it refuses client-side tools without beta access, see
+TestUnrunnableModels), and everything else — the pinned -reasoning/-non-reasoning
 variants, grok-build, and the aliases (bare grok-4.20, grok-latest — which
 floats: grok-4.3 until 2026-08, grok-4.6 then, grok-4.7 since 2026-09) —
 has no client-side knob. LISTING is a trimmed copy of the real 2026-09-23
-/v1/language-models body plus two entries the filter must drop."""
+/v1/language-models body (the multi-agent entry included — the live listing
+still serves it) plus two entries the filter must drop."""
 import copy
 import unittest
 
-from myagent.constants import XAI_FALLBACK_MODELS, XAI_REASONING_EFFORT
+from myagent.constants import (XAI_FALLBACK_MODELS, XAI_REASONING_EFFORT,
+                               XAI_UNRUNNABLE_SUBSTRINGS)
 from myagent.ui_mixin import UIMixin
 from myagent.xai_mixin import XAIMixin
 from tests._util import stub
@@ -47,9 +51,10 @@ LISTING = {"models": [
     _entry("grok-tts-1", modalities=("text",)),
     {"id": "imagine-image-3", "input_modalities": ["text"], "aliases": []},
 ]}
+# What the picker offers: every served chat model that can run MyAgent's loop
+# (verified live 2026-09-30) — the multi-agent entry above is dropped.
 LIVE_IDS = ["grok-4.20-0309-non-reasoning", "grok-4.20-0309-reasoning",
-            "grok-4.20-multi-agent-0309", "grok-4.3", "grok-4.5", "grok-4.6",
-            "grok-4.7", "grok-build-0.1"]
+            "grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7", "grok-build-0.1"]
 
 
 def _live(**attrs):
@@ -79,7 +84,7 @@ class TestParseLanguageModels(unittest.TestCase):
                          ["none", "low", "medium", "high", "xhigh"])
         # Listed WITHOUT a capabilities block: None, never [] — the static
         # table decides for it (see TestXaiReasoningValuesLive)
-        self.assertEqual(caps["grok-4.20-multi-agent-0309"],
+        self.assertEqual(caps["grok-4.20-0309-reasoning"],
                          {"reasoning_effort": None, "vision": True})
         self.assertIsNone(caps["grok-build-0.1"]["reasoning_effort"])
 
@@ -91,9 +96,14 @@ class TestParseLanguageModels(unittest.TestCase):
         self.assertNotIn("grok-latest", caps)   # named under no model
 
     def test_dropped_entries(self):
-        _ids, caps = XAIMixin._parse_xai_language_models(LISTING)
+        ids, caps = XAIMixin._parse_xai_language_models(LISTING)
         self.assertNotIn("grok-tts-1", caps)        # XAI_NON_AGENTIC_SUBSTRINGS
         self.assertNotIn("imagine-image-3", caps)   # not a grok* id
+        # XAI_UNRUNNABLE_SUBSTRINGS — served, but cannot run MyAgent's loop;
+        # its alias goes with it
+        self.assertNotIn("grok-4.20-multi-agent-0309", ids)
+        self.assertNotIn("grok-4.20-multi-agent-0309", caps)
+        self.assertNotIn("grok-4.20-multi-agent", caps)
 
     def test_ladder_is_ordered_quietest_first(self):
         listing = {"models": [_entry("grok-9", ladder=["XHIGH", "low", "high", "none", "medium"])]}
@@ -199,7 +209,9 @@ class TestXaiReasoningValuesLive(unittest.TestCase):
 
     def test_listed_without_capabilities_falls_back_to_the_table(self):
         # multi-agent: the knob is real (xhigh billed 6x low's tokens live)
-        # but unadvertised
+        # but unadvertised — and since 2026-09-30 the parse drops the entry
+        # (unrunnable here), so only the table can answer for it, as for any
+        # id the listing does not describe; the row is what re-enabling needs
         self.assertEqual(_live(model="grok-4.20-multi-agent-0309")._xai_reasoning_values(),
                          LOW_XHIGH)
         # the pinned variants and grok-build: unadvertised AND untabled
@@ -377,6 +389,57 @@ class TestFetchXaiModels(unittest.TestCase):
         self.assertEqual(obj._xai_caps, {})
         # A fresh list each time — callers mutate it
         self.assertIsNot(obj._fetch_xai_models(), XAI_FALLBACK_MODELS)
+
+
+class TestUnrunnableModels(unittest.TestCase):
+    """The picker offers only Grok models that can run MyAgent's loop
+    (2026-09-30, the user's request). Every model the live listing served that
+    day was run through the real _stream_xai_call — a client-side function
+    call, then an answer from its result: seven passed; grok-4.20-multi-agent
+    -0309 answered HTTP 400 "Client-side tools for multi-agent models require
+    beta access", and MyAgent always declares client-side tools. The listing
+    carries no field telling such a model apart, hence the verified list."""
+
+    def test_every_entry_says_why(self):
+        self.assertIn("multi-agent", XAI_UNRUNNABLE_SUBSTRINGS)
+        for sub, why in XAI_UNRUNNABLE_SUBSTRINGS.items():
+            with self.subTest(sub=sub):
+                self.assertIsInstance(why, str)
+                self.assertTrue(why.strip())
+
+    def test_a_later_multi_agent_tier_is_dropped_with_its_aliases(self):
+        # xAI's error names the class ("multi-agent models"), so the rule is
+        # the substring, not today's dated id
+        listing = {"models": [
+            _entry("grok-5", ["grok-5-latest"], ladder=LOW_XHIGH),
+            _entry("grok-5-multi-agent-1101", ["grok-5-multi-agent", "grok-5-ma-latest"]),
+        ]}
+        ids, caps = XAIMixin._parse_xai_language_models(listing)
+        self.assertEqual(ids, ["grok-5"])
+        self.assertEqual(set(caps), {"grok-5", "grok-5-latest"})
+
+    def test_the_offline_fallback_offers_none(self):
+        for mid in XAI_FALLBACK_MODELS:
+            with self.subTest(model=mid):
+                self.assertFalse(any(s in mid for s in XAI_UNRUNNABLE_SUBSTRINGS))
+
+    def test_an_unrunnable_model_is_not_even_served(self):
+        # Out of the served set too, so _restore_model_params (ui_mixin) does
+        # not keep a pinned one "as hidden but served" — it falls back to the
+        # default model with a warning, where the model would 400 every run.
+        obj = stub(XAIMixin, xai_client=_Client(LISTING))
+        self.assertEqual(obj._fetch_xai_models(), LIVE_IDS)
+        served = obj._served_model_ids["xAI"]
+        self.assertNotIn("grok-4.20-multi-agent-0309", served)
+        self.assertNotIn("grok-4.20-multi-agent", served)
+        # ...while a runnable model's alias stays served (the retirement rule)
+        self.assertIn("grok-build-latest", served)
+        self.assertIn("grok-4.20", served)
+
+    def test_the_knob_row_stays_for_re_enabling(self):
+        # Deleting the XAI_UNRUNNABLE_SUBSTRINGS entry must be all it takes
+        # once the account has the beta: the ladder and the price are kept.
+        self.assertEqual(XAI_REASONING_EFFORT["grok-4.20-multi-agent"], LOW_XHIGH)
 
 
 class TestModelSupportsThinkingXai(unittest.TestCase):
