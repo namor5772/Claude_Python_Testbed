@@ -1419,12 +1419,16 @@ class StreamingMixin:
             # ENDED on, with an upgraded-from part — then an upgraded run
             # (model_upgrade_mixin: a stronger model from an Agent Request
             # reply on) goes back to the instruction's model for the next
-            # START. The getattr guard keeps bare test hosts without the
-            # mixin working.
+            # START, and the system prompt frozen for the run is let go
+            # (skills_mixin). The getattr guards keep bare test hosts without
+            # the mixins working.
             _log_run()
             end_upgrade = getattr(self, "_upgrade_end_run", None)
             if end_upgrade is not None:
                 end_upgrade()
+            thaw_prompt = getattr(self, "_thaw_system_prompt", None)
+            if thaw_prompt is not None:
+                thaw_prompt()
 
         try:
             # Sync temperature from spinbox
@@ -1481,6 +1485,13 @@ class StreamingMixin:
             wait_mcp = getattr(self, "_mcp_wait_ready", None)
             if wait_mcp is not None:
                 wait_mcp()
+
+            # Every call of the run sends the system prompt the first one does
+            # (skills_mixin._build_system_prompt says why): frozen here, let go
+            # by _end_run.
+            freeze_prompt = getattr(self, "_freeze_system_prompt", None)
+            if freeze_prompt is not None:
+                freeze_prompt()
 
             label_emitted = False
             if not self.thinking_enabled:

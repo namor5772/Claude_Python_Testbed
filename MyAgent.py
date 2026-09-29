@@ -276,6 +276,9 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._page = None
         self._edge_process = None
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
+        # The system prompt a run's calls send, frozen at START and let go at
+        # its end (skills_mixin._freeze_system_prompt); None between runs.
+        self._run_system_prompt = None
         if self.provider == "Anthropic":
             self.model = DEFAULT_MODEL
         elif self.provider == "OpenAI":

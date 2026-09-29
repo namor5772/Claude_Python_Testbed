@@ -1531,6 +1531,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._edge_process = None
         self.system_prompt = DEFAULT_SYSTEM_PROMPT
         self.system_prompt_name = ""
+        # The system prompt a reply's calls send, frozen when stream_worker
+        # starts and let go when it ends (_freeze_system_prompt); None between.
+        self._run_system_prompt = None
         self.model = DEFAULT_MODEL
         self.temperature = 1.0
         self.thinking_enabled = False
@@ -3238,6 +3241,22 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         )
 
     def _build_system_prompt(self):
+        """The system prompt a request sends. While a stream_worker runs (a
+        MyAgent run, a SelfBot reply) it is the text frozen at its start
+        (_freeze_system_prompt), so a change to what the prompt is built
+        from — the base prompt, a skill's text, description or mode, a skill
+        created or deleted — reaches the NEXT run, never the calls in between.
+        The system prompt heads the cached prefix, so a change mid-run made
+        the next call re-write the whole prompt cache and, on the models that
+        bind thinking blocks to that prefix (Fable 5.1, Mythos 5.1, Opus 5.5),
+        drop every earlier thinking block. get_skill reads the live skills,
+        so an edited skill's text is there at once."""
+        frozen = getattr(self, "_run_system_prompt", None)
+        if frozen is not None:
+            return frozen
+        return self._compose_system_prompt()
+
+    def _compose_system_prompt(self):
         parts = [self.system_prompt]
         for name, skill in self.skills.items():
             if skill.get("mode") == "enabled":
@@ -3246,6 +3265,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if od_block:
             parts.append(od_block)
         return "\n\n".join(parts)
+
+    def _freeze_system_prompt(self):
+        """Fix the system prompt for the stream_worker that is starting."""
+        self._run_system_prompt = self._compose_system_prompt()
+
+    def _thaw_system_prompt(self):
+        """Let it go when that stream_worker ends: the prompt is composed from
+        the live skills again."""
+        self._run_system_prompt = None
 
     def open_skills_editor(self):
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
@@ -6618,6 +6646,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if wait_mcp is not None:
                 wait_mcp()
 
+            # Every call of this reply sends the system prompt the first one
+            # does (_build_system_prompt says why) — a skill or prompt changed
+            # by a tool mid-reply reaches the next message. Let go in finally.
+            self._freeze_system_prompt()
+
             # Only emit label upfront if thinking is disabled
             label_emitted = False
             if not self.thinking_enabled:
@@ -6991,6 +7024,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
+        finally:
+            self._thaw_system_prompt()
 
     def _tool_info(self, message):
         """Post a tool_info activity line to the GUI queue.

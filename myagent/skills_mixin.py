@@ -527,6 +527,22 @@ class SkillsMixin:
         )
 
     def _build_system_prompt(self):
+        """The system prompt a request sends. While a stream_worker runs (a
+        MyAgent run, a SelfBot reply) it is the text frozen at its start
+        (_freeze_system_prompt), so a change to what the prompt is built
+        from — the base prompt, a skill's text, description or mode, a skill
+        created or deleted — reaches the NEXT run, never the calls in between.
+        The system prompt heads the cached prefix, so a change mid-run made
+        the next call re-write the whole prompt cache and, on the models that
+        bind thinking blocks to that prefix (Fable 5.1, Mythos 5.1, Opus 5.5),
+        drop every earlier thinking block. get_skill reads the live skills,
+        so an edited skill's text is there at once."""
+        frozen = getattr(self, "_run_system_prompt", None)
+        if frozen is not None:
+            return frozen
+        return self._compose_system_prompt()
+
+    def _compose_system_prompt(self):
         parts = [self.system_prompt]
         for name, skill in self.skills.items():
             if skill.get("mode") == "enabled":
@@ -535,6 +551,15 @@ class SkillsMixin:
         if od_block:
             parts.append(od_block)
         return "\n\n".join(parts)
+
+    def _freeze_system_prompt(self):
+        """Fix the system prompt for the stream_worker that is starting."""
+        self._run_system_prompt = self._compose_system_prompt()
+
+    def _thaw_system_prompt(self):
+        """Let it go when that stream_worker ends: the prompt is composed from
+        the live skills again."""
+        self._run_system_prompt = None
 
     def _get_display_name(self, model_id):
         """Get display name for a model, provider-aware."""
