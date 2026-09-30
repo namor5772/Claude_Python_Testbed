@@ -108,6 +108,30 @@ Per-app architecture deep-dives live in `.claude/rules/` and load automatically 
 - `.claude/rules/CLAUDE_CLOSE_CHROME.md` — close_chrome.ps1 / close_chrome.sh invariants and live-test notes (loads with either script)
 - `desktop_launchers/CLAUDE.md` — launcher conventions (a nested file: loads whenever work touches `desktop_launchers/`)
 
+## OneDrive shared folders
+Everything the apps share between machines lives in two OneDrive trees, both OUTSIDE the repository — nothing in them can reach GitHub (this repo is public), and a clone on a machine without OneDrive runs on the repo-root fallbacks in the tables below, every one of them gitignored. The root is located per platform (Windows: the `OneDrive*` environment variables; macOS: `~/Library/CloudStorage/OneDrive-*`, preferring `-Personal`, then the legacy `~/OneDrive`); `MYAGENT_DATA_DIR` overrides the shared folder for MyAgent, SelfBot, `Heartbeat.py` and the Cost Log viewers, `TODOLIST_DATA_DIR` for TodoList. Two pre-2026-07-19 names are folded in automatically on sight: `<OneDrive>/MyAgent/` (renamed in place to `MyAppShare`) and `<OneDrive>/TodoList/todos.json` (moved across). The same list, for users, is the README's **OneDrive shared folders** section — keep the two in step.
+
+**`<OneDrive>/MyAppShare/`** — the suite-wide shared folder, resolved by `myagent/datapaths.py` (SelfBot try-imports it, with an in-file stub for a standalone copy; TodoList, its native ports and the Cost Log viewers carry their own copy of the same discovery):
+
+| Path | What lives there | Read / written by | Repo-root fallback (gitignored) |
+|---|---|---|---|
+| `agent_instructions.json` | MyAgent's instruction library, reference images embedded as base64 | MyAgent; `Heartbeat.py` rewrites an instruction's `*****` core | `agent_instructions.json` |
+| `system_prompts.json` | SelfBot's saved system prompts, each with its full main-screen environment | SelfBot | `system_prompts.json` |
+| `skills/<name>/SKILL.md` | the skills tree — one folder per skill, bundled resource files beside the `SKILL.md` | MyAgent and SelfBot | `skills/` |
+| `APICostLog_<machine>.txt` | one API cost log PER MACHINE (an append-only log cannot be merged, so machines never share one file) | MyAgent and SelfBot append their own; both Cost Log viewers read every machine's | `APICostLog.txt` |
+| `todos.json` | the shared todo list | `TodoList.py` and the native `TodoList.mm` / `TodoList.cpp` ports | `todos.json` |
+| `general/` | files agent runs save when a skill directs them there (the `physical-interface`, `westpac-recon` and `westpac-transaction-export` skills name it) — no code in the repository does, so a path inventory of the code misses it | agent runs | none |
+| `*.bak`, `skills.json.migrated.bak` | leftovers of past store repoints and the 2026-08-07 `skills.json` → tree migration; nothing reads them | — | `*.bak` |
+
+**`<OneDrive>/MyImportant/DeathFinances/`** — `UnreadSummary.py`'s folder, and the only other OneDrive location any app touches:
+
+| Path | What lives there | Repo-root fallback (gitignored) |
+|---|---|---|
+| `SpecifyingList.csv` | the bill-matching rules, edited by hand and read at every pass | `SpecifyingList.csv` |
+| `Attachments/` | each matched bill's PDF, saved idempotently so the saved bills appear on every machine | `Attachments/` |
+
+**Deliberately per machine, outside OneDrive:** `agent_state*.json` (window geometry and the applied instruction, per instance), Voice Setup's `~/.config/myagent-voice/config.json`, the mail credentials under `~/.config/myagent-google/`, `~/.config/myagent-protonmail/` and `~/.config/myagent-msmail/`, CSVEditor's `~/.config/csveditor/state.json`, TodoList's `todo_state.json`, `mcp_servers.json`, `saved_chats/`, and the logs `heartbeat.log`, `unread_summary.log` and `unread_summary.txt` (repo root on Windows, `~/Library/Logs/myagent/` on macOS).
+
 ## Portability
 - No hardcoded paths — the project works when cloned to any directory on any Windows PC or Mac
 - `LaunchSelfBot.bat` uses `%~dp0` (resolves to its own directory at runtime)
