@@ -1339,6 +1339,13 @@ class WiringTests(unittest.TestCase):
         self.assertIn("dictation.shutdown()", close)
         # The voice row is built before the image row: Tab order is creation order.
         self.assertLess(src.index("self._voice_build_row("), src.index("attach_btn = tk.Button("))
+        # Initial focus (2026-09-30): Mike with Auto-send ticked, else the
+        # reply box — set once the dialog is shown (the real dialog is pinned
+        # in tests/test_agent_request_display.py).
+        prompt = src[src.index("def do_user_prompt("):]
+        focus = "(mike_btn if self.dictation_auto_send.get() else resp_text).focus_set()"
+        self.assertIn(focus, prompt)
+        self.assertLess(prompt.index("dlg.deiconify()"), prompt.index(focus))
 
     def test_the_main_window_carries_the_voice_setup_button(self):
         src = (REPO / "myagent" / "ui_mixin.py").read_text(encoding="utf-8")

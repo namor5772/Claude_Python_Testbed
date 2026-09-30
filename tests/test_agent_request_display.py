@@ -262,11 +262,13 @@ class DialogTests(unittest.TestCase):
         gc.collect()
         self.root.destroy()
 
-    def run_dialog(self, message, act):
+    def run_dialog(self, message, act, auto_send=False):
         """Run the real do_user_prompt(message) on a worker thread and hand
         the dialog, once it is on screen, to act(dialog). Returns the host and
-        {"reply": ...} (or {"error": ...})."""
+        {"reply": ...} (or {"error": ...}). `auto_send` is the applied
+        instruction's Auto-send tick as the dialog finds it."""
         host = self.host = _DialogHost(self.root)
+        host.dictation_auto_send.set(auto_send)
         outcome = {}
 
         def work():
@@ -353,6 +355,42 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(self.queued(host),
                          [{"type": "user_prompt_request", "content": asked},
                           {"type": "user_prompt_echo", "content": "yes, go ahead"}])
+
+    def test_the_dialog_opens_in_the_reply_box_or_on_mike_when_auto_send_is_ticked(self):
+        # The initial focus (2026-09-30): the reply box, ready for typing —
+        # unless the applied instruction's Auto-send box is ticked, when it
+        # is the Mike button, so a hands-free reply needs no mouse and no
+        # Alt+M (Return presses the focused button). `focus -lastfor` is what
+        # focus_set records for the toplevel whether or not the display has
+        # given this process the keyboard focus, so the check is exact
+        # without one — but the dialog calls focus_set right after
+        # deiconify, while the toplevel is not yet mapped, and Tk then
+        # defers the whole thing to the window's VisibilityNotify (tkFocus.c,
+        # focusOnMapPtr): until that event -lastfor still names the toplevel,
+        # so the reader polls.
+        for ticked, expected in ((False, "reply"), (True, "Mike")):
+            with self.subTest(auto_send=ticked):
+                seen = {}
+
+                def act(dialog):
+                    reply = [w for w in _walk(dialog)
+                             if isinstance(w, tk.Text) and str(w.cget("state")) == "normal"][0]
+                    mike = [w for w in _walk(dialog)
+                            if isinstance(w, tk.Button) and w.cget("text") == "Mike"][0]
+                    names = {str(reply): "reply", str(mike): "Mike"}
+
+                    def read(tries=0):
+                        focused = str(dialog.tk.call("focus", "-lastfor", str(dialog)))
+                        if focused in names or tries >= 100:     # 2 s at most
+                            seen["focus"] = names.get(focused, focused)
+                            self.dismiss(dialog)
+                        else:
+                            self.root.after(20, read, tries + 1)
+
+                    read()
+
+                self.run_dialog("Which account?", act, auto_send=ticked)
+                self.assertEqual(seen["focus"], expected)
 
     def test_a_transcript_sent_by_auto_send_answers_the_dialog_like_enter(self):
         # The dialog hands the voice row its own send path (on_inject, which

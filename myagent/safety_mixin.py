@@ -629,7 +629,14 @@ class SafetyMixin:
                                                max(dlg.winfo_reqheight(), 400)))
             dlg.deiconify()  # Show with correct geometry
 
-            resp_text.focus_set()
+            # Initial focus: the reply box, ready for typing — or, with the
+            # Auto-send box ticked (the applied instruction's setting), the
+            # Mike button (2026-09-30, the user's request): Return presses
+            # the focused button, so a hands-free reply is Enter → speak →
+            # Enter, the second one ending the recording through Mike's own
+            # toggle and the transcript sent as it lands. Shift+Tab is the
+            # reply box, for typing instead.
+            (mike_btn if self.dictation_auto_send.get() else resp_text).focus_set()
 
         failure = []
 
