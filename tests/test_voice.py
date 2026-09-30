@@ -1094,6 +1094,40 @@ class AutoSendTests(unittest.TestCase):
         self.dictate(mike, d)
         self.assertEqual((self.box.get("1.0", "end-1c"), self.sent), ("quit", []))
 
+    def test_a_tick_moves_the_focus_to_mike_and_an_untick_moves_nothing(self):
+        # The user's request (2026-09-30): a box ticked mid-dialog means "I
+        # will dictate this one", so the focus goes to Mike, where Enter or
+        # Space starts the recording. `focus -lastfor` is what focus_set
+        # records for the toplevel — once the widget is mapped (an unmapped
+        # widget's focus_set is deferred to its VisibilityNotify), hence the
+        # row gridded on a shown, transparent window.
+        host = _RowHost(self.root)
+        row, mike, auto, _ = self.build(host)
+        row.grid()
+        self.dlg.attributes("-alpha", 0.0)
+        self.dlg.deiconify()
+        end = time.monotonic() + 5.0
+        while not mike.winfo_ismapped() and time.monotonic() < end:
+            self.root.update()
+            time.sleep(0.01)
+        self.assertTrue(mike.winfo_ismapped())
+
+        def focused():
+            return str(self.dlg.tk.call("focus", "-lastfor", str(self.dlg)))
+
+        self.assertNotEqual(focused(), str(mike))
+        auto.invoke()                                   # tick
+        self.root.update()
+        self.assertTrue(host.dictation_auto_send.get())
+        self.assertEqual(focused(), str(mike))
+        auto.focus_set()                                # where Space on the box leaves it
+        self.root.update()
+        self.assertEqual(focused(), str(auto))
+        auto.invoke()                                   # untick: the focus stays put
+        self.root.update()
+        self.assertFalse(host.dictation_auto_send.get())
+        self.assertEqual(focused(), str(auto))
+
     def test_the_tick_is_kept_with_the_applied_instruction(self):
         host = _RowHost(self.root, name="Pay_bills",
                         disk={"Pay_bills": {"text": "t", "desktop": True}, "Other": {"text": "o"}})
@@ -1340,12 +1374,21 @@ class WiringTests(unittest.TestCase):
         # The voice row is built before the image row: Tab order is creation order.
         self.assertLess(src.index("self._voice_build_row("), src.index("attach_btn = tk.Button("))
         # Initial focus (2026-09-30): Mike with Auto-send ticked, else the
-        # reply box — set once the dialog is shown (the real dialog is pinned
-        # in tests/test_agent_request_display.py).
+        # reply box — and the bell with it ticked — once the dialog is shown
+        # (the real dialog is pinned in tests/test_agent_request_display.py).
         prompt = src[src.index("def do_user_prompt("):]
-        focus = "(mike_btn if self.dictation_auto_send.get() else resp_text).focus_set()"
+        focus = "(mike_btn if hands_free else resp_text).focus_set()"
+        self.assertIn("hands_free = self.dictation_auto_send.get()", prompt)
         self.assertIn(focus, prompt)
         self.assertLess(prompt.index("dlg.deiconify()"), prompt.index(focus))
+        self.assertLess(prompt.index(focus), prompt.index("dlg.bell()"))
+        # A tick mid-dialog moves the focus to Mike: the box's command is the
+        # write-through, then the focus (the real row, AutoSendTests).
+        voice = (REPO / "myagent" / "voice_mixin.py").read_text(encoding="utf-8")
+        toggled = voice[voice.index("def toggled():"):voice.index("auto_btn = tk.Checkbutton(")]
+        self.assertLess(toggled.index("self._voice_auto_send_changed()"),
+                        toggled.index("mike_btn.focus_set()"))
+        self.assertIn("command=toggled)", voice)
 
     def test_the_main_window_carries_the_voice_setup_button(self):
         src = (REPO / "myagent" / "ui_mixin.py").read_text(encoding="utf-8")

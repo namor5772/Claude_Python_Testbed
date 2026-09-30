@@ -930,9 +930,19 @@ class VoiceMixin:
         mike_btn.grid(row=0, column=0, padx=(0, 8), sticky="nw")
         # Right of Mike, where the user asked for it, and created after it so
         # Tab reaches it next. Tk flips the variable BEFORE running the
-        # command, which then keeps the new value with the instruction.
+        # command, which then keeps the new value with the instruction — and,
+        # on a tick, moves the focus to Mike (2026-09-30, the user's
+        # request): a box ticked mid-dialog means "I will dictate this one",
+        # and Mike is where Enter or Space then starts the recording. Every
+        # way of ticking runs the command (a click, Space on the box, Alt+A
+        # through keyboard.py's press); unticking moves nothing.
+        def toggled():
+            self._voice_auto_send_changed()
+            if auto_send.get():
+                mike_btn.focus_set()
+
         auto_btn = tk.Checkbutton(row, text="Auto-send", variable=auto_send,
-                                  command=self._voice_auto_send_changed)
+                                  command=toggled)
         auto_btn.grid(row=0, column=1, padx=(0, 8), sticky="nw")
         # Beside the pair. (While Voice Setup sat here too the status went
         # UNDER the buttons: the dialog's size is the user's — 567 px wide on

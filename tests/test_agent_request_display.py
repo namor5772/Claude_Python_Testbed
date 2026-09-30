@@ -33,9 +33,11 @@ import queue
 import threading
 import tkinter as tk
 import unittest
+from unittest import mock
 
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
+from myagent.keyboard import install_class_bindings
 from myagent.safety_mixin import SafetyMixin
 from myagent.ui_mixin import UIMixin
 from tests._util import stub
@@ -356,18 +358,19 @@ class DialogTests(unittest.TestCase):
                          [{"type": "user_prompt_request", "content": asked},
                           {"type": "user_prompt_echo", "content": "yes, go ahead"}])
 
-    def test_the_dialog_opens_in_the_reply_box_or_on_mike_when_auto_send_is_ticked(self):
+    def test_the_dialog_opens_in_the_reply_box_or_on_mike_with_a_bell_when_auto_send_is_ticked(self):
         # The initial focus (2026-09-30): the reply box, ready for typing —
         # unless the applied instruction's Auto-send box is ticked, when it
         # is the Mike button, so a hands-free reply needs no mouse and no
-        # Alt+M (Return presses the focused button). `focus -lastfor` is what
-        # focus_set records for the toplevel whether or not the display has
-        # given this process the keyboard focus, so the check is exact
-        # without one — but the dialog calls focus_set right after
-        # deiconify, while the toplevel is not yet mapped, and Tk then
-        # defers the whole thing to the window's VisibilityNotify (tkFocus.c,
-        # focusOnMapPtr): until that event -lastfor still names the toplevel,
-        # so the reader polls.
+        # Alt+M (Return presses the focused button), and the bell rings: the
+        # cue to start speaking. `focus -lastfor` is what focus_set records
+        # for the toplevel whether or not the display has given this process
+        # the keyboard focus, so the check is exact without one — but the
+        # dialog calls focus_set right after deiconify, while the toplevel is
+        # not yet mapped, and Tk then defers the whole thing to the window's
+        # VisibilityNotify (tkFocus.c, focusOnMapPtr): until that event
+        # -lastfor still names the toplevel, so the reader polls. The bell is
+        # patched out: counted, and the suite stays quiet.
         for ticked, expected in ((False, "reply"), (True, "Mike")):
             with self.subTest(auto_send=ticked):
                 seen = {}
@@ -378,6 +381,7 @@ class DialogTests(unittest.TestCase):
                     mike = [w for w in _walk(dialog)
                             if isinstance(w, tk.Button) and w.cget("text") == "Mike"][0]
                     names = {str(reply): "reply", str(mike): "Mike"}
+                    seen["dialog"] = str(dialog)
 
                     def read(tries=0):
                         focused = str(dialog.tk.call("focus", "-lastfor", str(dialog)))
@@ -389,8 +393,43 @@ class DialogTests(unittest.TestCase):
 
                     read()
 
-                self.run_dialog("Which account?", act, auto_send=ticked)
+                with mock.patch.object(tk.Misc, "bell", autospec=True) as bell:
+                    self.run_dialog("Which account?", act, auto_send=ticked)
                 self.assertEqual(seen["focus"], expected)
+                # Once, on the dialog, with the box ticked; never without.
+                self.assertEqual([str(c.args[0]) for c in bell.call_args_list],
+                                 [seen["dialog"]] if ticked else [])
+
+    def test_space_and_enter_on_the_focused_mike_button_both_press_it(self):
+        # The user's request (2026-09-30): Space on Mike should do what Enter
+        # does. It already did — Tk's own <Key-space> Button binding and
+        # keyboard.py's Return binding (install_class_bindings, once per Tk
+        # instance) run the same tk::ButtonInvoke — so this pins it, with
+        # real key events, which need the keyboard focus.
+        install_class_bindings(self.root)
+        presses, state = [], {}
+
+        def act(dialog):
+            mike = [w for w in _walk(dialog)
+                    if isinstance(w, tk.Button) and w.cget("text") == "Mike"][0]
+            mike.config(command=lambda: presses.append(len(presses) + 1))
+            mike.focus_force()
+            self.root.after(150, lambda: press(dialog, mike, "<space>",
+                            lambda: press(dialog, mike, "<Return>",
+                            lambda: self.dismiss(dialog))))
+
+        def press(dialog, mike, key, then):
+            if self.root.focus_get() is not mike:
+                state["no_focus"] = True
+                self.dismiss(dialog)
+                return
+            mike.event_generate(key)
+            self.root.after(250, then)
+
+        self.run_dialog("Which account?", act, auto_send=True)
+        if state.get("no_focus"):
+            self.skipTest("the display will not give this process the keyboard focus")
+        self.assertEqual(presses, [1, 2])
 
     def test_a_transcript_sent_by_auto_send_answers_the_dialog_like_enter(self):
         # The dialog hands the voice row its own send path (on_inject, which

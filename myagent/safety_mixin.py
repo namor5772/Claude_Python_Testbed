@@ -631,12 +631,18 @@ class SafetyMixin:
 
             # Initial focus: the reply box, ready for typing — or, with the
             # Auto-send box ticked (the applied instruction's setting), the
-            # Mike button (2026-09-30, the user's request): Return presses
-            # the focused button, so a hands-free reply is Enter → speak →
-            # Enter, the second one ending the recording through Mike's own
-            # toggle and the transcript sent as it lands. Shift+Tab is the
-            # reply box, for typing instead.
-            (mike_btn if self.dictation_auto_send.get() else resp_text).focus_set()
+            # Mike button (2026-09-30, the user's request): Return or Space
+            # presses the focused button, so a hands-free reply is Enter →
+            # speak → Enter, the second one ending the recording through
+            # Mike's own toggle and the transcript sent as it lands.
+            # Shift+Tab is the reply box, for typing instead. And the bell
+            # (the display's: Windows' Default Beep, the Mac's alert sound),
+            # the cue to start speaking — a request can arrive while the
+            # user is looking elsewhere.
+            hands_free = self.dictation_auto_send.get()
+            (mike_btn if hands_free else resp_text).focus_set()
+            if hands_free:
+                dlg.bell()
 
         failure = []
 
