@@ -317,7 +317,8 @@ class DialogTests(unittest.TestCase):
         return items
 
     def test_the_dialogs_message_is_queued_for_the_pane_even_when_nobody_answers(self):
-        asked = "Reply, or type empty / 'quit' / 'exit' / 'stop' to end."   # Convo mode's
+        asked = ("Reply, or type empty / 'quit' / 'stop' to end, "
+                 "or 'exit' to end and close MyAgent.")   # Convo mode's stock prompt
         shown = []
 
         def act(dialog):

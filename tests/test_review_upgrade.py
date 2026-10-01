@@ -5,7 +5,8 @@
 - a write to the instruction store made while a run is upgraded — the
   editor's SAVE, manage_instructions create — records the instruction's own
   model, never the upgrade's;
-- a Convo-mode end word ends the run without applying a ticked Upgrade;
+- a Convo-mode end word ends the run without applying a ticked Upgrade — as
+  does "exit" from either caller, which also closes MyAgent (2026-10-01);
 - a run whose upgrade model served no priced call is not credited to it in
   the cost log (the 13th field names the model that did serve).
 """
@@ -155,8 +156,17 @@ class ConvoEndWordTests(unittest.TestCase):
 
     def test_outside_convo_quit_is_just_a_reply_and_upgrades(self):
         # The user_prompt tool: "quit" goes to the model as text; only an empty
-        # reply stops that run.
+        # reply — or "exit", below — stops that run.
         self.assertEqual(self.reply_ticked("quit", convo=False).applied, [self.TARGET])
+
+    def test_exit_ends_the_run_without_upgrading_in_convo_mode(self):
+        self.assertEqual(self.reply_ticked("exit", convo=True).applied, [])
+
+    def test_exit_outside_convo_ends_the_run_too_and_upgrades_nothing(self):
+        # Unlike "quit", "exit" (CONVO_EXIT_WORD, 2026-10-01) is an end word for
+        # the user_prompt tool as well — it stops the run and closes MyAgent —
+        # so there is no call left for an upgrade to serve.
+        self.assertEqual(self.reply_ticked("exit", convo=False).applied, [])
 
 
 class CostSplitTests(unittest.TestCase):

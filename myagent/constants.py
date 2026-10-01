@@ -3906,8 +3906,16 @@ VOICE_PRICING_PER_MIN = {
 # so voice_mixin lands such a transcript as the bare word instead
 # (`_voice_end_word`, 2026-09-23). One tuple, so the two cannot drift.
 CONVO_END_WORDS = ("quit", "exit", "stop")
+# The one end word that also CLOSES MyAgent (2026-10-01, the user's request):
+# typed or dictated into ANY Agent Request dialog — Convo mode's own prompt or
+# the model's user_prompt tool — "exit" ends the run and then runs what the
+# main window's [X] runs (`_on_close`: the state file, the chat autosave, the
+# browser / MCP teardown, the instance lock released), once the loop has ended
+# and the cost-log line is written. "quit" / "stop" end a Convo-mode
+# conversation and leave the window open, as before.
+CONVO_EXIT_WORD = "exit"
 
-PROVIDERS = ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
+PROVIDERS =["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 # Model upgrade for the rest of a run (model_upgrade_mixin, 2026-09-27): the
 # Agent Request dialog's Upgrade box moves the run to a stronger model of the
 # SAME provider from that reply on. Which model is a setting of the

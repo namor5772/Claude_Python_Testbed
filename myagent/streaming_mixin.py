@@ -20,7 +20,7 @@ from myagent.constants import (
     RESPONSES_REASONING_INCLUDE, XAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
-    APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS,
+    APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS, CONVO_EXIT_WORD,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
                              responses_replay_refused, rotate_log_if_needed)
@@ -829,6 +829,13 @@ class StreamingMixin:
             if not response.strip():
                 self.stop_requested = True
                 return "[User submitted empty response — stopping agent]"
+            if response.strip().lower() == CONVO_EXIT_WORD:
+                # "exit" ends the run like an empty reply AND closes MyAgent
+                # (constants.CONVO_EXIT_WORD): the flag is read where the
+                # loop ends, beside the headless auto-close (stream_worker).
+                self.stop_requested = True
+                self._close_after_run = True
+                return "[User typed 'exit' — stopping the agent and closing MyAgent]"
             if images:
                 # Ship attached images inside the tool_result — the same
                 # list-of-blocks shape screenshots use, so every provider
@@ -1490,6 +1497,12 @@ class StreamingMixin:
         instr_name = getattr(self, "agent_instruction_name", "")
         run_started = time.monotonic()
         self._input_wait_secs = 0.0
+        # Set by an "exit" reply to an Agent Request (CONVO_EXIT_WORD — the
+        # Convo branch below, or the user_prompt tool in _execute_tool): the
+        # run ends as on "quit", then _close_if_due closes MyAgent as the
+        # main window's [X] would. Per run, so a GUI session's next START
+        # starts clean.
+        self._close_after_run = False
 
         def _log_run():
             # The one cost-log call for both loop-end paths, so the fields
@@ -1518,6 +1531,21 @@ class StreamingMixin:
             thaw_prompt = getattr(self, "_thaw_system_prompt", None)
             if thaw_prompt is not None:
                 thaw_prompt()
+
+        def _close_if_due():
+            # The one close decision for both loop-end paths. A result file
+            # means this run IS a subagent (run_instruction spawn): auto-close
+            # even with a GUI (headless=false watch mode), so the waiting
+            # parent gets the report at loop end instead of only after the
+            # user closes the child window (or the wait times out). And an
+            # "exit" typed into an Agent Request dialog (CONVO_EXIT_WORD)
+            # closes MyAgent the way the main window's [X] does — the same
+            # _on_close, which waits for `streaming` to clear (check_queue's
+            # `complete`) before _finish_close saves the state file and the
+            # chat, tears down browser / MCP and releases the instance lock.
+            if (self._headless or self._result_file
+                    or getattr(self, "_close_after_run", False)):
+                self.root.after(500, self._on_close)
 
         try:
             # Sync temperature from spinbox
@@ -1848,13 +1876,20 @@ class StreamingMixin:
                     if convo_mode and full_text:
                         messages.append({"role": "assistant", "content": full_text})
                         next_msg = self.do_user_prompt(
-                            "Reply, or type empty / 'quit' / 'exit' / 'stop' to end.",
+                            "Reply, or type empty / 'quit' / 'stop' to end, "
+                            "or 'exit' to end and close MyAgent.",
                             convo=True,   # an end word here ends the run: no upgrade
                         )
                         prompt_images = self._take_prompt_images()
                         if (not next_msg
                                 or next_msg.strip().lower() in CONVO_END_WORDS):
-                            self._tool_info("Conversation ended.\n")
+                            if next_msg.strip().lower() == CONVO_EXIT_WORD:
+                                # Ends like "quit", then closes MyAgent (the
+                                # flag is read by _close_if_due at loop end).
+                                self._close_after_run = True
+                                self._tool_info("Conversation ended — 'exit' closes MyAgent.\n")
+                            else:
+                                self._tool_info("Conversation ended.\n")
                             full_text = ""  # already appended above; don't double-add
                             break
                         # do_user_prompt already emits user_prompt_echo from
@@ -1900,12 +1935,7 @@ class StreamingMixin:
             else:
                 self._write_result_file("completed", messages)
             self.queue.put({"type": "complete"})
-            # A result file means this run IS a subagent (run_instruction spawn):
-            # auto-close even with a GUI (headless=false watch mode), so the
-            # waiting parent gets the report at loop end instead of only after
-            # the user closes the child window (or the wait times out).
-            if self._headless or self._result_file:
-                self.root.after(500, self._on_close)
+            _close_if_due()
 
         except Exception as e:
             self.queue.put({"type": "error", "content": str(e)})
@@ -1914,5 +1944,4 @@ class StreamingMixin:
             # unattended error should exit (the auto-saved transcript records it).
             _end_run()
             self._write_result_file("error", messages, error=str(e))
-            if self._headless or self._result_file:
-                self.root.after(500, self._on_close)
+            _close_if_due()

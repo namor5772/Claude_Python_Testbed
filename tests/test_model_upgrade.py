@@ -937,12 +937,15 @@ class WiringTests(unittest.TestCase):
         self.assertIn('"u": upgrade_btn', src)
         # Read when the reply is sent; applied after the wait, on the worker,
         # only for a sent, non-empty reply that is not a Convo end word (the
-        # run ends on it; 2026-09-28) — to the target the label named.
+        # run ends on it; 2026-09-28) nor "exit" from either caller (which
+        # ends the run and closes MyAgent; 2026-10-01) — to the target the
+        # label named.
         inject = src[src.index("def on_inject("):src.index("def on_close(")]
         self.assertIn("result_holder[2] = upgrade_target if upgrade_var.get() else None", inject)
         tail = src[src.index("def do_user_prompt("):src.index("def _take_prompt_images(")]
         tail = tail[tail.index("event.wait()"):]
-        self.assertIn("if result_holder[2] and response.strip() and not ends_convo:", tail)
+        self.assertIn("ends_run = (convo and word in CONVO_END_WORDS) or word == CONVO_EXIT_WORD", tail)
+        self.assertIn("if result_holder[2] and response.strip() and not ends_run:", tail)
         self.assertIn("self._upgrade_apply(result_holder[2])", tail)
         self.assertLess(tail.index('"user_prompt_echo"'), tail.index("self._upgrade_apply("))
 
@@ -952,12 +955,13 @@ class WiringTests(unittest.TestCase):
         self.assertIn("self._run_call_num = call_num", worker)
         # Both loop-end tails go through _end_run: the cost log line first
         # (the run under the model it ended on), then the restore, then the
-        # result file.
-        end_run = worker[worker.index("def _end_run("):worker.index("try:")]
+        # result file, then the one close decision (_close_if_due, which owns
+        # the root.after(_on_close) since 2026-10-01).
+        end_run = worker[worker.index("def _end_run("):worker.index("def _close_if_due(")]
         self.assertLess(end_run.index("_log_run()"), end_run.index("_upgrade_end_run"))
         self.assertEqual(worker.count("            _end_run()\n"), 2)
         for tail in worker.split("            _end_run()\n")[1:]:
-            self.assertLess(tail.index("_write_result_file("), tail.index("_on_close"))
+            self.assertLess(tail.index("_write_result_file("), tail.index("_close_if_due()"))
         # Never logged without the restore: _end_run is the only caller.
         self.assertEqual(worker.replace(end_run, "").count("_log_run()"), 1)   # its def alone
 
