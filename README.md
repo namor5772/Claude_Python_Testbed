@@ -12,6 +12,7 @@ The main residents:
 | **Heartbeat.py** | Zero-token email-triggered agent dispatcher — email yourself `APD` / `APL` / `APM` and that machine launches MyAgent (launchd + Task Scheduler jobs) |
 | **CSVEditor.py** | Spreadsheet-style CSV editor with filtering, sorting and dialect preservation |
 | **TodoList.py** | Todo manager with priorities, categories, due dates and overdue highlighting — one OneDrive-synced list across all machines. `TodoList.mm` (macOS / Cocoa) and `TodoList.cpp` (Windows / Win32) are functionality-identical native C++ ports that round-trip the same synced file |
+| **MyBackup.py** | Directory mirror backup — a FROM / TO table of directories, one **BACKUP** button that makes every TO an exact copy of its FROM (new and changed files copied, extras deleted), and a `--headless` mode for a scheduled run |
 
 ---
 
@@ -25,6 +26,7 @@ The main residents:
 - [Scheduling background runs](#scheduling-background-runs-launchd--task-scheduler)
 - [CSVEditor.py](#csveditorpy--lightweight-csv-editor)
 - [TodoList.py](#todolistpy--todo-manager)
+- [MyBackup.py](#mybackuppy--directory-mirror-backup)
 - [Desktop launchers](#desktop-launchers)
 - [Claude Code integration](#claude-code-integration)
 - [Cross-platform notes](#cross-platform-notes)
@@ -97,6 +99,8 @@ python SelfBot.py
 python MyAgent.py
 python CSVEditor.py
 python TodoList.py
+python MyBackup.py
+python MyBackup.py --headless              # mirror the saved FROM / TO table with no window — the scheduled form
 python UnreadSummary.py --dry-run          # the would-be digest: no mailbox changes, no email sent
 python -m unittest discover -s tests -t .  # the test suite
 ```
@@ -791,6 +795,20 @@ A single-file tkinter todo app (~660 lines): tasks have a **priority** (High / M
 
 ---
 
+## MyBackup.py — Directory Mirror Backup
+
+A single-file tkinter app (~1,220 lines) that keeps backup copies of whole directory trees — the OneDrive `MyAppShare` folder onto the desktop's HDD, a photo library onto a USB disk. The setup is a **table of two columns, FROM and TO**: each row names a directory to back up (its whole subtree) and the directory that must end up as an exact copy of it. The GUI follows CSVEditor — a toolbar, a Treeview with inline editing (double-click a cell; Enter commits, Esc cancels), Insert Row Above / Below, Copy Row, Delete Row — plus **Browse FROM… / Browse TO…** directory choosers for the selected row (with nothing selected they append a row first).
+
+- **BACKUP** mirrors every row: missing directories are created, new and changed files are copied (a file is unchanged when its size matches and its modification time agrees within 2 s — the FAT32 resolution — so a repeat run copies only what changed), and anything in TO that is no longer in FROM is **deleted**, so afterwards each TO is identical to its FROM. The copy runs on a worker thread with a progress bar and a per-file status line; **Cancel** stops after the current file. Before a run that would delete anything the app asks once (default **No**) and lists the doomed items per row; a run that deletes nothing just goes. **Preview** plans the same run and reports it without touching a byte.
+- **The log pane** shows, for each run, one line per row (what was found, what will be copied / created / deleted), a `Row N done` line with the counts and any per-item errors, and a green or red summary. The same lines go to `~/.config/mybackup/mybackup.log` (one-slot rotation at 1 MB).
+- **Setup files and persistence** — the table is a plain CSV with the header `FROM,TO` (CSVEditor opens it too). **Open… / Save / Save As…** work as in CSVEditor; a table that was never saved lands in the default file, `~/.config/mybackup/backup_setup.csv`, and **BACKUP always saves the table first**, so the layout last backed up is the one a headless run mirrors. `state.json` beside it remembers the window geometry, the column widths and which setup file is current. All of it is **per machine** on purpose: the paths are machine-specific (`D:\` on the desktop, `/Volumes/…` on the Mac), so nothing of MyBackup's lives in OneDrive.
+- **Safety rules**, checked for every row before anything is touched (a failing row is reported and the other rows still run — one unplugged backup drive should not stop the others): FROM must exist; TO may not be FROM, inside FROM, or contain FROM; TO may not be a drive / filesystem root or the home directory (a mirror deletes everything else there); **TO's parent folder must exist** — MyBackup creates only the last path component, so an unplugged `D:` or an unmounted `/Volumes/Backup` is an error rather than a copy onto the system disk; and no two rows may share a TO or nest one TO inside another (the second mirror would delete the first's copy). Symlinks and junctions are never followed or copied (a stray one in TO is removed as a link, never its target), and if the FROM scan was incomplete (a folder it could not list) that row is copied but **nothing is deleted** from its TO — a transient permission problem must not erase the backup copy. Read-only files in TO are overwritten and deleted as needed (Windows refuses both until the attribute is cleared).
+- **Headless** — `python MyBackup.py --headless` mirrors the saved setup with no window and no questions, printing the same lines as the log pane; `--dry-run` prints the plan and changes nothing; `--setup FILE` picks another setup file (the default is the one last open in the GUI, else `backup_setup.csv`). Exit code 0 means every row mirrored cleanly, 1 that a row was refused or an item failed, 2 that there is no usable setup — so a Task Scheduler / launchd job can run `pythonw.exe MyBackup.py --headless` (or `python3 MyBackup.py --headless`) on a schedule, as the [zero-token jobs](#scheduling-background-runs-launchd--task-scheduler) do.
+
+Known limits: files are compared by size and modification time, not content, so a file rewritten to the same size with its old timestamp preserved is not recopied (rare; `robocopy /MIR` makes the same choice); OneDrive Files On-Demand placeholders are downloaded when copied, so the first backup of a cloud-only folder is slow; and very long Windows paths need the system's long-path setting, as with any Python copy. The mirror engine is pure Python with no Tk in it and is pinned by `tests/test_mybackup.py`.
+
+---
+
 ## Desktop launchers
 
 **macOS** — `desktop_launchers/` holds the AppleScript sources of the double-clickable apps:
@@ -887,7 +905,7 @@ Everything the apps share between machines lives in two OneDrive trees, both **o
 | `SpecifyingList.csv` | the bill-matching rules, edited by hand and read at every pass | `SpecifyingList.csv` |
 | `Attachments/` | each matched bill's PDF, saved idempotently so the saved bills appear on every machine | `Attachments/` |
 
-**Deliberately per machine, outside OneDrive:** `agent_state*.json` (window geometry and the applied instruction, per instance), Voice Setup's `~/.config/myagent-voice/config.json`, the mail credentials under `~/.config/myagent-google/`, `~/.config/myagent-protonmail/` and `~/.config/myagent-msmail/`, CSVEditor's `~/.config/csveditor/state.json`, TodoList's `todo_state.json`, `mcp_servers.json`, `saved_chats/`, and the logs `heartbeat.log`, `unread_summary.log` and `unread_summary.txt` (repo root on Windows, `~/Library/Logs/myagent/` on macOS).
+**Deliberately per machine, outside OneDrive:** `agent_state*.json` (window geometry and the applied instruction, per instance), Voice Setup's `~/.config/myagent-voice/config.json`, the mail credentials under `~/.config/myagent-google/`, `~/.config/myagent-protonmail/` and `~/.config/myagent-msmail/`, CSVEditor's `~/.config/csveditor/state.json`, MyBackup's `~/.config/mybackup/` (its FROM / TO setup, state and log — the paths it holds are this machine's drive letters and mount points), TodoList's `todo_state.json`, `mcp_servers.json`, `saved_chats/`, and the logs `heartbeat.log`, `unread_summary.log` and `unread_summary.txt` (repo root on Windows, `~/Library/Logs/myagent/` on macOS).
 
 ---
 
@@ -897,11 +915,11 @@ Everything the apps share between machines lives in two OneDrive trees, both **o
 |---|---|
 | `SelfBot.py` | The chatbot (single file by convention) |
 | `MyAgent.py`, `myagent/` | The agent entry point + the 26-mixin package |
-| `CSVEditor.py`, `TodoList.py` | The two small single-file apps |
+| `CSVEditor.py`, `TodoList.py`, `MyBackup.py` | The three small single-file apps |
 | `TodoList.mm`, `build_todolist_native.sh` | The native macOS port of TodoList — the script tests (including a Python ↔ native JSON interop round-trip) and then compiles to the gitignored `TodoList.exe` |
 | `TodoList.cpp`, `build_todolist_native.ps1`, `TodoList.rc`, `TodoList.exe.manifest` | The native Windows port — the same test-then-compile flow (its interop stage asserts a byte-identical rewrite of Python's JSON); the rc / manifest embed the icon, comctl32 v6 and Per-Monitor-V2 DPI awareness |
 | `UnreadSummary.py`, `Heartbeat.py` | The zero-token scheduled jobs (their bill-matching rules, `SpecifyingList.csv`, live in OneDrive `MyImportant/DeathFinances`, not in git) |
-| `tests/` | The characterization suite (stdlib `unittest`, no extra dependencies; 84 modules, 1,368 tests) — pure and model-detection helpers, the pricing and cost-log layer, the provider parameter builders, the geometry and state layer, the OneDrive store sync and skills tree, keyboard operation, the Instructions list, voice input (a fake `sounddevice`), the Physical tools (a fake `cv2`), the Model upgrade, the `exit` reply that ends a run and closes the app, Heartbeat and UnreadSummary, and the real Cost Log viewer against synthetic logs. The GUI tests build real widgets on transparent or withdrawn Tk roots and skip themselves where no display (or no focus) is available. Run it with `python -m unittest discover -s tests -t .`. Also here: the native TodoList ports' compiled suites (`test_todolist_native.mm` / `.cpp`, ~90 / ~113 checks, run by the build scripts) and two hand-run live checks outside the `test*.py` pattern — `check_excel_live.py` (drives a real Excel) and `check_voice_models_live.py` (the paid speech-to-text audit) |
+| `tests/` | The characterization suite (stdlib `unittest`, no extra dependencies; 85 modules, 1,417 tests) — pure and model-detection helpers, the pricing and cost-log layer, the provider parameter builders, the geometry and state layer, the OneDrive store sync and skills tree, keyboard operation, the Instructions list, voice input (a fake `sounddevice`), the Physical tools (a fake `cv2`), the Model upgrade, the `exit` reply that ends a run and closes the app, MyBackup's mirror engine on real temp trees, Heartbeat and UnreadSummary, and the real Cost Log viewer against synthetic logs. The GUI tests build real widgets on transparent or withdrawn Tk roots and skip themselves where no display (or no focus) is available. Run it with `python -m unittest discover -s tests -t .`. Also here: the native TodoList ports' compiled suites (`test_todolist_native.mm` / `.cpp`, ~90 / ~113 checks, run by the build scripts) and two hand-run live checks outside the `test*.py` pattern — `check_excel_live.py` (drives a real Excel) and `check_voice_models_live.py` (the paid speech-to-text audit) |
 | `desktop_launchers/` | The macOS AppleScript sources + `rebuild.sh` + `refresh_launcher_icons.command`, the Windows `*_Win.ps1` twins, the two log-viewer scripts, the icon masters, `.ico` files and icon generators (built `.app`s and `.lnk`s are per machine, not in git) |
 | `close_chrome.ps1`, `close_chrome.sh` | Clean shutdown of the automation browser at the end of a browser instruction (called via `run_command`) — PowerShell for Windows, a bash twin for macOS. They match processes by the automation profile path in their command line, so a personal browser window open at the same time is never touched: graceful close → poll → force-kill only the matched leftovers → reset the profile's `exit_type`, so a force-killed run never leaves a "restore pages?" bar over the next run's page |
 | `requirements.txt` | Core dependencies |
@@ -927,4 +945,4 @@ Everything the apps share between machines lives in two OneDrive trees, both **o
 
 **Privacy note — `.gitignore` is not retroactive.** A gitignore rule only suppresses *untracked* files; anything committed before a rule stays in the repository's history. `saved_chats/` is gitignored, and only 39 early files remain tracked, by choice (mostly the SelfBot duo conversations) — but older commits still contain other chats and agent-run screenshots. `agent_instructions.json`, `skills.json` and `system_prompts.json` are gitignored and live in OneDrive, but older commits contain earlier versions of them, whose instruction text included personal email addresses. No API key has ever been committed (keys live in environment variables and `~/.config/` token files, and `mcp_servers.json` is gitignored with only the `.example` tracked). If you fork or clone this, audit with `git ls-files <path>` for what is tracked *now* and `git log --all -- <path>` for what was *ever* committed — a gitignore entry alone proves neither.
 
-**Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor and TodoList stay single-file (the native TodoList ports keep the convention as one file per platform); MyAgent changes go in the appropriate mixin. Tests exist where the logic is pure: the characterization suite under `tests/` (`python -m unittest discover -s tests -t .`), with `ruff check MyAgent.py myagent/` for linting — no mypy, and no build step for the Python apps (the only compiles are `build_todolist_native.sh` / `.ps1` for the native TodoList ports). After editing a `.py` file, re-run it (closing any running instance first) — for the GUI apps, the running app is still the real test.
+**Conventions:** this is a testbed — keep code simple and focused. SelfBot, CSVEditor, TodoList and MyBackup stay single-file (the native TodoList ports keep the convention as one file per platform); MyAgent changes go in the appropriate mixin. Tests exist where the logic is pure: the characterization suite under `tests/` (`python -m unittest discover -s tests -t .`), with `ruff check MyAgent.py myagent/` for linting — no mypy, and no build step for the Python apps (the only compiles are `build_todolist_native.sh` / `.ps1` for the native TodoList ports). After editing a `.py` file, re-run it (closing any running instance first) — for the GUI apps, the running app is still the real test.
