@@ -807,6 +807,8 @@ A single-file tkinter app (~1,220 lines) that keeps backup copies of whole direc
 
 Known limits: files are compared by size and modification time, not content, so a file rewritten to the same size with its old timestamp preserved is not recopied (rare; `robocopy /MIR` makes the same choice); OneDrive Files On-Demand placeholders are downloaded when copied, so the first backup of a cloud-only folder is slow; and very long Windows paths need the system's long-path setting, as with any Python copy. The mirror engine is pure Python with no Tk in it and is pinned by `tests/test_mybackup.py`.
 
+On macOS, `MyBackup.app` (built by `desktop_launchers/rebuild.sh`) gives it a double-click launch that focuses the existing window instead of starting a second copy; on Windows a Desktop shortcut runs `desktop_launchers/MyBackup_Win.ps1` for the same launch-or-focus behaviour, which matters here because two instances could mirror into the same TO at once. Its icon — two drive slabs with a down-arrow between them, the lower drive's light green — is the family's one deliberately sober design.
+
 ---
 
 ## Desktop launchers
@@ -816,7 +818,7 @@ Known limits: files are compared by size and modification time, not content, so 
 | App | What it does |
 |---|---|
 | `UnreadSummary.app` | Runs the digest on demand, with a success chime and a self-dismissing dialog showing the run's log line |
-| `CSVEditor.app`, `TodoList.app` | Launch-or-focus |
+| `CSVEditor.app`, `TodoList.app`, `MyBackup.app` | Launch-or-focus |
 | `TodoList (Native).app` | Runs the compiled `TodoList.exe`, focusing a running instance of either TodoList implementation |
 | `My Agent.app`, `SelfBot.app` | Always launch a fresh instance — both apps are multi-instance by design (press SelfBot twice for the self-chat pair) |
 | `Heartbeat Log.app`, `API Cost Log.app` | Viewers: page `heartbeat.log` (meaningful events first, idle ticks hidden) or the cost-log report in a Terminal `less` (`view_heartbeat.command` / `view_costlog.command`) |
@@ -828,7 +830,7 @@ Rebuild them per machine with `./desktop_launchers/rebuild.sh`, which patches in
 | Script | What it does |
 |---|---|
 | `UnreadSummary_Win.ps1` | Runs the digest with the venv Python; a chime and a self-dismissing success dialog with the run's log line, or a blocking error dialog with the log tail; `-DryRun` passes `--dry-run` through |
-| `CSVEditor_Win.ps1` | Launch-or-focus with the venv `pythonw` |
+| `CSVEditor_Win.ps1`, `MyBackup_Win.ps1` | Launch-or-focus with the venv `pythonw` |
 | `TodoListNative_Win.ps1` | Launch-or-focus across both TodoList implementations, with a "build it first" dialog when `TodoList.exe` hasn't been compiled here |
 | `MyAgent_Win.ps1`, `SelfBot_Win.ps1` | Always launch a fresh instance with the venv `pythonw` (SelfBot's second press opens the self-chatting peer, cascaded off the first) |
 | `HeartbeatLog_Win.ps1`, `CostLog_Win.ps1` | The two viewers — a *visible* console paging `heartbeat.log` or the cost-log report, reading the logs as explicit UTF-8 so Windows PowerShell 5.1 doesn't garble them |

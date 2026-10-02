@@ -91,6 +91,7 @@ build HeartbeatLog.applescript       icon_heartbeat_master.png "Heartbeat Log"
 build CostLog.applescript            icon_costlog_master.png   "API Cost Log"
 build TodoList_launcher.applescript  icon_todolist_master.png  TodoList
 build TodoListNative_launcher.applescript icon_todolist_native_master.png "TodoList (Native)"
+build MyBackup_launcher.applescript  icon_mybackup_master.png  MyBackup
 
 # Desktop aliases (only for the real ~/Applications install, not test builds)
 if [ "$DEST" = "$HOME/Applications" ]; then
@@ -136,5 +137,6 @@ Heartbeat Log|icon_heartbeat_master.png
 API Cost Log|icon_costlog_master.png
 TodoList|icon_todolist_master.png
 TodoList (Native)|icon_todolist_native_master.png
+MyBackup|icon_mybackup_master.png
 PAIRS
 fi
