@@ -829,6 +829,7 @@ class SetupDialogTests(unittest.TestCase):
                  _upgrade_setup_dialog=None, **attrs)
         h._place_window = lambda win, kind, size, parent=None: "+0+0"
         h._parse_geometry = lambda geo: None
+        h._set_geometry = lambda win, geo: win.geometry(geo)   # the dialog gives its size back through it
         seen = {}
 
         def when_up():

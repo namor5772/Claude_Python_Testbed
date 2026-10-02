@@ -1353,6 +1353,14 @@ DIALOG_LEGACY_KEYS = {
     "ps_safety": "ps_safety_dialog_geometry",
 }
 GEOMETRY_RE = r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)"   # Tk's "WxH+X+Y" (X / Y may be negative)
+
+# Windows only (Tk 8.6's Windows port): once a window is on screen its SIZE is
+# compared with the one asked for and corrected by the residual, at most
+# GEOMETRY_SETTLE_PASSES times — see _set_geometry. A residual beyond
+# GEOMETRY_SETTLE_MAX_DELTA px on either axis is no frame difference (a
+# minsize, a monitor edge) and is left alone rather than chased.
+GEOMETRY_SETTLE_PASSES = 3
+GEOMETRY_SETTLE_MAX_DELTA = 100
 MAIN_MIN_W, MAIN_MIN_H = 400, 300                # below this a saved main geometry is junk (an unmapped root reports 1x1)
 SKILLS_DIR = _resolve_skills_dir()  # per-skill SKILL.md tree; a legacy skills.json migrates in on first load
 STORES_SYNCED = os.path.dirname(PROMPTS_FILE) != os.path.dirname(os.path.abspath(__file__))
@@ -1467,7 +1475,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     def __init__(self, root):
         self.root = root
         self.root.title("Claude SelfBot")
-        self.root.geometry(DEFAULT_GEOMETRY)
+        self._set_geometry(self.root, DEFAULT_GEOMETRY)
 
         # Check for API key
         if not os.environ.get("ANTHROPIC_API_KEY"):
@@ -2442,7 +2450,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             # Launched from LaunchSelfBot.bat — restore saved duo geometry or default side-by-side
             duo_geo = self._main_geometry_from_state(state, layout_key, "duo")
             if self._usable_main_geometry(duo_geo):
-                self.root.geometry(duo_geo)
+                self._set_geometry(self.root, duo_geo)
                 return
             # No saved duo geometry — calculate side-by-side from work area
             if IS_WINDOWS:
@@ -2456,9 +2464,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 wa_h = self.root.winfo_screenheight()
             half_w = wa_w // 2
             if self._is_second_instance:
-                self.root.geometry(f"{half_w}x{wa_h}+{wa_x + half_w}+{wa_y}")
+                self._set_geometry(self.root, f"{half_w}x{wa_h}+{wa_x + half_w}+{wa_y}")
             else:
-                self.root.geometry(f"{half_w}x{wa_h}+{wa_x}+{wa_y}")
+                self._set_geometry(self.root, f"{half_w}x{wa_h}+{wa_x}+{wa_y}")
         else:
             # Manual launch — restore the solo geometry saved for THIS monitor layout
             # (another layout's entry is never used; with none, the WM places the
@@ -2491,12 +2499,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         x, y = x + CASCADE_OFFSET, y + CASCADE_OFFSET
                         geometry = f"{w}x{h}+{x}+{y}"
                 self.root.update_idletasks()
-                self.root.geometry(geometry)
+                self._set_geometry(self.root, geometry)
             elif self._is_second_instance:
                 # No usable saved solo geometry — still offset instance 2 off the default
                 # top-left position so it doesn't stack on instance 1.
                 self.root.update_idletasks()
-                self.root.geometry(f"+{CASCADE_OFFSET}+{CASCADE_OFFSET}")
+                self._set_geometry(self.root, f"+{CASCADE_OFFSET}+{CASCADE_OFFSET}")
 
     def _retry_load_names(self):
         """Instance 2: retry reading names from instance 1's state if they were empty."""
@@ -3114,6 +3122,104 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         y = max(top, min(ry + (rh - h) // 2, bottom - h))
         return f"{w}x{h}+{x}+{y}"
 
+    # ── Setting a geometry: the one way, every platform ────────────────
+
+    def _set_geometry(self, win, geo):
+        """The ONE way a persisted window's geometry is set — `_place_window`,
+        the main-window restore, the monitor reclaim and PS Safety's re-apply
+        all come through here — because on Windows a plain `win.geometry(geo)`
+        does not give the size it names on a monitor whose scale differs from
+        the primary's.
+
+        Tk 8.6's Windows port sizes the frame around a window from the PRIMARY
+        monitor's border metrics, while Windows (the process is per-monitor
+        DPI aware) draws the frame at the monitor's own scale. Measured
+        2026-10-02 on the laptop — a 150 % panel with a 100 % screen beside
+        it: a window asked to be 613x946 on the 100 % screen maps as 619x963,
+        the two frames' difference (6 px of width, 17 of height); Tk then
+        re-measures the frame's HEIGHT from the mapped window but never its
+        WIDTH, so every later width request on that screen comes out 6 px
+        wide for the window's life. The app saves what Tk reports, so each
+        launch grew the main window and every dialog by one frame difference
+        — the "moves right a little each time it is reopened" report.
+
+        So: the geometry is applied, and once the window is shown in the
+        normal state (at once if it already is; else at its first <Map>, or
+        for a maximized start at the first <Configure> after it returns to
+        normal) `_settle_geometry` re-applies it and corrects the residual.
+        A size-less `geo` ('' or '+x+y') is applied as is and cancels a
+        pending correction — Model Setup gives its size back to Tk that way.
+        Positions are exact on every platform and are never adjusted; off
+        Windows this is `win.geometry(geo)`."""
+        if not IS_WINDOWS or self._parse_geometry(geo) is None:
+            win.geometry(geo)
+            win._geometry_intent = None
+            return
+        if not getattr(win, "_geometry_settle_bound", False):
+            win._geometry_settle_bound = True
+            for seq in ("<Map>", "<Configure>"):
+                win.bind(seq, lambda e, w=win: self._settle_when_shown(w, e), add="+")
+        if self._shown_normal(win):
+            win._geometry_intent = None
+            self._settle_geometry(win, geo)
+        else:
+            win.geometry(geo)
+            win._geometry_intent = geo
+
+    @staticmethod
+    def _shown_normal(win):
+        """True while `win` is mapped in the normal state — the only state in
+        which a size request takes effect at once (Tk parks one made while
+        zoomed or iconic until the window is normal again)."""
+        try:
+            return bool(win.winfo_exists() and win.winfo_ismapped() and win.state() == "normal")
+        except tk.TclError:
+            return False
+
+    def _settle_when_shown(self, win, event=None):
+        """The <Map> / <Configure> handler: run the pending correction once the
+        window is shown normal. Both bindings fire for every descendant too (a
+        toplevel's path is in its children's bindtags), hence the identity
+        check; the intent is cleared BEFORE the settle, whose own <Configure>s
+        then find nothing to do — and a later move or resize by the user is
+        never undone, because nothing is pending any more."""
+        if event is not None and str(event.widget) != str(win):
+            return
+        geo = getattr(win, "_geometry_intent", None)
+        if not geo or not self._shown_normal(win):
+            return
+        win._geometry_intent = None
+        self._settle_geometry(win, geo)
+
+    def _settle_geometry(self, win, geo):
+        """Apply `geo` to a SHOWN window and make its size come out as asked:
+        read the size Tk reports after each request and ask again with the
+        residual taken off, at most GEOMETRY_SETTLE_PASSES times (two on the
+        mixed-scale laptop, one wherever Tk gets it right). Pure Tk — no
+        Win32 metrics — so it corrects whatever the frame difference is, in
+        either direction, and an idle flush is enough for the read-back
+        because Windows applies the request synchronously. A residual beyond
+        GEOMETRY_SETTLE_MAX_DELTA is no frame difference (a minsize, a
+        monitor edge) and is left alone rather than chased."""
+        target = self._parse_geometry(geo)
+        if target is None:
+            return
+        w, h, x, y = target
+        ask_w, ask_h = w, h
+        for _ in range(GEOMETRY_SETTLE_PASSES):
+            try:
+                win.geometry(f"{ask_w}x{ask_h}+{x}+{y}")
+                win.update_idletasks()
+                got = self._parse_geometry(win.geometry())
+            except tk.TclError:
+                return
+            if got is None:
+                return
+            dw, dh = got[0] - w, got[1] - h
+            if (dw, dh) == (0, 0) or max(abs(dw), abs(dh)) > GEOMETRY_SETTLE_MAX_DELTA:
+                return
+            ask_w, ask_h = max(1, ask_w - dw), max(1, ask_h - dh)
+
     def _place_dialog(self, win, kind, default_size, min_size=(400, 300)):
         """Apply a dialog's geometry before it is shown and return it: the position
         saved for this monitor layout when some monitor still shows it, else that
@@ -3125,7 +3231,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             m = re.match(r"(\d+)x(\d+)", geo or "")
             w, h = (int(m.group(1)), int(m.group(2))) if m else default_size
             geo = self._default_dialog_geometry(w, h)
-        win.geometry(geo)
+        self._set_geometry(win, geo)
         return geo
 
     def _dialog_geometry_visible(self, x, y, w, h):
@@ -4067,7 +4173,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         dlg.update_idletasks()
         geo = self._place_dialog(dlg, "ps_safety", (560, 760))
         dlg.deiconify()
-        dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
+        dlg.after(100, lambda: self._set_geometry(dlg, geo) if dlg.winfo_exists() else None)
 
     def _toggle_confirm_pattern(self, pattern, var):
         if var.get():
@@ -4164,7 +4270,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             h = min(dlg.winfo_reqheight(), 400)
             x = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
             y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
-            dlg.geometry(f"{w}x{h}+{x}+{y}")
+            self._set_geometry(dlg, f"{w}x{h}+{x}+{y}")
 
         # Schedule the dialog on the main thread
         self.root.after(0, ask)

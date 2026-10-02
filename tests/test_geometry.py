@@ -7,10 +7,17 @@ and dialog placement.
 
 Display rects are stubbed so every check is layout-deterministic on any machine.
 """
+import glob
+import inspect
+import os
+import re
+import tkinter as tk
 import unittest
 from unittest import mock
 
-from myagent.state_mixin import StateMixin, GEOMETRY_KINDS
+from myagent import state_mixin
+from myagent.state_mixin import (StateMixin, GEOMETRY_KINDS, GEOMETRY_SETTLE_PASSES,
+                                 GEOMETRY_SETTLE_MAX_DELTA)
 from myagent.constants import DEFAULT_GEOMETRY
 from tests._util import stub
 
@@ -35,6 +42,7 @@ class FakeWin:
         self._geometry, self._state = geometry, state
         self._mapped, self._exists = mapped, exists
         self.calls = []
+        self.bindings = []
 
     def winfo_exists(self):
         return self._exists
@@ -68,6 +76,12 @@ class FakeWin:
 
     def winfo_height(self):
         return self._parsed()[1]
+
+    def bind(self, seq, fn, add=None):
+        self.bindings.append((seq, fn, add))
+
+    def update_idletasks(self):
+        pass
 
 
 def host(**attrs):
@@ -462,6 +476,205 @@ class ReclaimMonitor(unittest.TestCase):
         with rects(DUAL):
             h._maybe_reclaim_monitor()
         self.assertEqual(root.calls, [])
+
+
+class DriftWin(FakeWin):
+    """A Tk 8.6 toplevel on the laptop's 100 % second screen (Windows): the
+    pre-map request comes back W+6 x H+17 once the window maps — the two
+    frames' difference — and a request made to the mapped window comes back
+    W+6 x H, because Tk re-measures only the frame's height from the real
+    window. `drift` is that pair; `map()` is the window appearing."""
+
+    def __init__(self, geometry="600x400+100+100", drift=(6, 17), **kwargs):
+        super().__init__(geometry, **kwargs)
+        self.drift = drift
+        self.flushes = 0
+        self._requested = geometry
+
+    def _served(self, value, drift):
+        parsed = StateMixin._parse_geometry(value)
+        if parsed is None:
+            return value
+        w, h, x, y = parsed
+        return f"{w + drift[0]}x{h + drift[1]}+{x}+{y}"
+
+    def geometry(self, value=None):
+        if value is None:
+            return self._geometry
+        self.calls.append(("geometry", value))
+        self._requested = value
+        self._geometry = self._served(value, (self.drift[0], 0)) if self._mapped else value
+
+    def update_idletasks(self):
+        self.flushes += 1
+
+    def fire(self, seq, widget=None):
+        for bound_seq, fn, _add in self.bindings:
+            if bound_seq == seq:
+                fn(mock.Mock(widget=self if widget is None else widget))
+
+    def map(self):
+        self._mapped = True
+        self._geometry = self._served(self._requested, self.drift)
+        self.fire("<Map>")
+
+
+class SettleOnWindows(unittest.TestCase):
+    """_set_geometry on Windows: the size a window is asked for is the size it
+    ends up with, whatever frame Tk assumed (2026-10-02)."""
+
+    GEO = "613x946+3813+7"
+
+    def setUp(self):
+        patcher = mock.patch("myagent.state_mixin.IS_WINDOWS", True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.h = host()
+
+    def test_a_shown_window_is_corrected_at_once(self):
+        win = DriftWin()
+        self.h._set_geometry(win, self.GEO)
+        # asked 613 → got 619 → asked 607 → got 613: two passes, one idle flush each
+        self.assertEqual(win.calls, [("geometry", "613x946+3813+7"), ("geometry", "607x946+3813+7")])
+        self.assertEqual(win.geometry(), self.GEO)
+        self.assertEqual(win.flushes, 2)
+        self.assertIsNone(win._geometry_intent)
+        self.assertEqual([seq for seq, _f, _a in win.bindings], ["<Map>", "<Configure>"])
+
+    def test_an_unmapped_window_is_corrected_at_its_first_map(self):
+        win = DriftWin(mapped=False)
+        self.h._set_geometry(win, self.GEO)
+        self.assertEqual(win.calls, [("geometry", self.GEO)])   # the pre-map request only
+        self.assertEqual(win._geometry_intent, self.GEO)
+        win.map()                                                # lands 619x963, then settles
+        self.assertEqual(win.geometry(), self.GEO)
+        self.assertIsNone(win._geometry_intent)
+        n = len(win.calls)
+        # one-shot: a later <Map> or <Configure> re-applies nothing, and a resize
+        # by the user is never undone
+        win.fire("<Map>")
+        win.geometry("700x500+3813+7")
+        win.fire("<Configure>")
+        self.assertEqual(win.calls[n:], [("geometry", "700x500+3813+7")])
+
+    def test_a_descendants_event_is_ignored(self):
+        win = DriftWin(mapped=False)
+        self.h._set_geometry(win, self.GEO)
+        win._mapped = True
+        win.fire("<Map>", widget=FakeWin("100x20+5+5"))   # a child's <Map> arrives first
+        self.assertEqual(win._geometry_intent, self.GEO)    # still pending
+        win.fire("<Map>")
+        self.assertIsNone(win._geometry_intent)
+
+    def test_a_maximized_start_waits_for_the_return_to_normal(self):
+        win = DriftWin(mapped=False)
+        self.h._set_geometry(win, self.GEO)
+        win.state("zoomed")
+        win.map()
+        self.assertEqual(win._geometry_intent, self.GEO)    # parked while zoomed
+        self.assertEqual([c for c in win.calls if c[0] == "geometry"], [("geometry", self.GEO)])
+        win.state("normal")
+        win.fire("<Configure>")
+        self.assertIsNone(win._geometry_intent)
+        self.assertEqual(win.geometry(), self.GEO)
+
+    def test_a_size_less_request_cancels_the_pending_correction(self):
+        for later in ("", "+10+20"):
+            win = DriftWin(mapped=False)
+            self.h._set_geometry(win, self.GEO)
+            self.h._set_geometry(win, later)                 # Model Setup gives its size back
+            self.assertIsNone(win._geometry_intent)
+            win.map()
+            self.assertEqual(win.calls, [("geometry", self.GEO), ("geometry", later)], later)
+
+    def test_a_residual_beyond_the_cap_is_left_alone(self):
+        win = DriftWin(drift=(GEOMETRY_SETTLE_MAX_DELTA + 1, 0))
+        self.h._set_geometry(win, self.GEO)
+        self.assertEqual(len(win.calls), 1)                  # not chased
+
+    def test_the_passes_are_bounded(self):
+        class Stuck(DriftWin):
+            def _served(self, value, drift):
+                return "600x600+3813+7"                       # whatever is asked (a minsize)
+        win = Stuck()
+        self.h._set_geometry(win, "650x650+3813+7")
+        self.assertEqual(len(win.calls), GEOMETRY_SETTLE_PASSES)
+
+    def test_a_destroyed_window_is_left_alone(self):
+        win = DriftWin(exists=False)
+        self.h._set_geometry(win, self.GEO)
+        self.assertEqual(win.calls, [("geometry", self.GEO)])   # applied, parked, never settled
+        self.assertEqual(win._geometry_intent, self.GEO)
+
+    def test_off_windows_it_is_a_plain_geometry_call(self):
+        with mock.patch("myagent.state_mixin.IS_WINDOWS", False):
+            win = DriftWin()
+            self.h._set_geometry(win, self.GEO)
+        self.assertEqual(win.calls, [("geometry", self.GEO)])
+        self.assertEqual(win.bindings, [])
+        self.assertEqual(win.flushes, 0)
+
+
+class SetGeometryWiring(unittest.TestCase):
+    """Every size a persisted window is given goes through _set_geometry."""
+
+    def test_place_restore_and_reclaim_go_through_it(self):
+        import time
+        root = FakeWin("1050x930+0+0", mapped=False)
+        dlg = FakeWin()
+        h = host(root=root, _geometry_cache={"confirm": "611x304+-1500+467"})
+        with mock.patch.object(StateMixin, "_set_geometry") as set_geo, rects(DUAL):
+            h._place_window(dlg, "confirm", (500, 400))
+            h._apply_geometry_entry({"geometry": "679x930+-723+73", "main_zoomed": False})
+            h._reassert_geo, h._main_zoomed = "750x930+-2000+220", False
+            h._reassert_until = time.monotonic() + 100
+            root._geometry, root._mapped = "750x930+1300+300", True
+            h._maybe_reclaim_monitor()
+        self.assertEqual(set_geo.call_args_list, [
+            mock.call(dlg, "611x304+-1500+467"),
+            mock.call(root, "679x930+-723+73"),
+            mock.call(root, "750x930+-2000+220")])
+        self.assertEqual(dlg.calls + root.calls, [])            # nothing sized behind its back
+
+    def test_no_window_is_sized_behind_its_back(self):
+        # The only `.geometry(<something>)` writes in MyAgent.py and the package
+        # are _set_geometry's own and _settle_geometry's.
+        pkg = os.path.dirname(state_mixin.__file__)
+        files = sorted(glob.glob(os.path.join(pkg, "*.py"))) + [os.path.join(os.path.dirname(pkg), "MyAgent.py")]
+        writes = re.compile(r"\.geometry\(\s*[^)\s]")
+        found = {}
+        for path in files:
+            with open(path, encoding="utf-8") as fh:
+                n = len(writes.findall(fh.read()))
+            if n:
+                found[os.path.basename(path)] = n
+        allowed = inspect.getsource(StateMixin._set_geometry) + inspect.getsource(StateMixin._settle_geometry)
+        self.assertEqual(found, {"state_mixin.py": len(writes.findall(allowed))})
+
+
+class SettleOnRealTk(unittest.TestCase):
+    """The <Map> arming on a real root — skips without a display."""
+
+    def test_the_main_window_settles_at_its_first_map(self):
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        try:
+            root.attributes("-alpha", 0.0)
+            h = host(root=root)
+            left, top, _right, _bottom = StateMixin._primary_rect()
+            geo = f"320x240+{left + 60}+{top + 60}"
+            h._set_geometry(root, geo)
+            if state_mixin.IS_WINDOWS:
+                self.assertEqual(root._geometry_intent, geo)      # armed, not yet shown
+            for _ in range(6):
+                root.update()
+            if state_mixin.IS_WINDOWS:
+                self.assertIsNone(root._geometry_intent)          # settled at <Map>
+            self.assertEqual(root.geometry(), geo)
+        finally:
+            root.destroy()
 
 
 if __name__ == "__main__":

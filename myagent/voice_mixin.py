@@ -1245,7 +1245,7 @@ class VoiceMixin:
         # out of a fixed one (the user cannot resize this dialog).
         position = self._parse_geometry(placed)
         if position:
-            dlg.geometry(f"+{position[2]}+{position[3]}")
+            self._set_geometry(dlg, f"+{position[2]}+{position[3]}")
         dlg.deiconify()
         provider_combo.focus_set()
         dlg.wait_visibility()

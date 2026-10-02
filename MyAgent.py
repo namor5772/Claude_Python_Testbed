@@ -101,7 +101,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             except OSError:
                 pass  # missing/unreadable → run the instruction unmodified
         self.root.title("My Agent")
-        self.root.geometry(DEFAULT_GEOMETRY)
+        self._set_geometry(self.root, DEFAULT_GEOMETRY)
 
         # Check for at least one API key
         self._has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))

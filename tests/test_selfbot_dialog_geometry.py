@@ -31,11 +31,13 @@ SelfBot is importable in-process (module import builds no Tk root); the bare
 import inspect
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
 from unittest import mock
 
+from myagent import state_mixin
 from tests._util import stub
 
 _saved_argv = sys.argv
@@ -81,6 +83,15 @@ class _Root:
     def winfo_ismapped(self):
         return self._mapped
 
+    def winfo_exists(self):
+        return True
+
+    def state(self):
+        return "normal"
+
+    def bind(self, seq, fn, add=None):
+        pass
+
     def update_idletasks(self):
         pass
 
@@ -112,6 +123,18 @@ class _Dialog:
 
     def winfo_exists(self):
         return True
+
+    def winfo_ismapped(self):
+        return True
+
+    def state(self):
+        return "normal"
+
+    def bind(self, seq, fn, add=None):
+        pass
+
+    def update_idletasks(self):
+        pass
 
     def geometry(self, geo=None):
         if geo is None:
@@ -467,6 +490,34 @@ class DialogWiringTests(unittest.TestCase):
         capture = src.index("self._last_prompt_editor_geometry = self.prompt_editor_window.geometry()")
         destroy = src.index("self.prompt_editor_window.destroy()")
         self.assertLess(capture, destroy)
+
+
+@_needs_selfbot
+class SizeSettleCopyTests(unittest.TestCase):
+    """SelfBot carries byte-identical in-file copies of state_mixin's Windows
+    mixed-scale size correction (2026-10-02) and routes every geometry write
+    — _place_dialog, the main-window restore, PS Safety's re-apply, the
+    confirm dialog — through _set_geometry."""
+
+    def test_the_four_methods_and_two_constants_are_identical(self):
+        for name in ("_set_geometry", "_shown_normal", "_settle_when_shown", "_settle_geometry"):
+            self.assertEqual(inspect.getsource(getattr(SelfBot.App, name)),
+                             inspect.getsource(getattr(state_mixin.StateMixin, name)), name)
+        self.assertEqual(SelfBot.GEOMETRY_SETTLE_PASSES, state_mixin.GEOMETRY_SETTLE_PASSES)
+        self.assertEqual(SelfBot.GEOMETRY_SETTLE_MAX_DELTA, state_mixin.GEOMETRY_SETTLE_MAX_DELTA)
+
+    def test_every_geometry_write_goes_through_set_geometry(self):
+        writes = re.compile(r"\.geometry\(\s*[^)\s]")
+        allowed = inspect.getsource(SelfBot.App._set_geometry) + inspect.getsource(SelfBot.App._settle_geometry)
+        self.assertEqual(len(writes.findall(inspect.getsource(SelfBot))), len(writes.findall(allowed)))
+
+    def test_place_dialog_sizes_through_it(self):
+        app = _app(_last_skills_dialog_geometry="900x500+-1800+300")
+        win = _Dialog()
+        with mock.patch.object(SelfBot.App, "_set_geometry") as set_geo, _rects(TWO_MONITORS):
+            app._place_dialog(win, "skills_dialog", (900, 500))
+        set_geo.assert_called_once_with(win, "900x500+-1800+300")
+        self.assertIsNone(win.set_to)
 
 
 if __name__ == "__main__":

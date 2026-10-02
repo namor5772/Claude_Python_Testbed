@@ -508,9 +508,9 @@ class ModelUpgradeMixin:
         # (a position-only geometry does not cancel a size already set;
         # the empty one does).
         position = self._parse_geometry(placed)
-        dlg.geometry("")
+        self._set_geometry(dlg, "")
         if position:
-            dlg.geometry(f"+{position[2]}+{position[3]}")
+            self._set_geometry(dlg, f"+{position[2]}+{position[3]}")
         dlg.deiconify()
         model_combo.focus_set()
         dlg.wait_visibility()

@@ -253,7 +253,7 @@ class SafetyMixin:
         # transient windows asynchronously after deiconify, so after_idle fires
         # too early and gets overridden.
         dlg.deiconify()
-        dlg.after(100, lambda: dlg.geometry(geo) if dlg.winfo_exists() else None)
+        dlg.after(100, lambda: self._set_geometry(dlg, geo) if dlg.winfo_exists() else None)
         if cbs:
             cbs[0].focus_set()  # initial focus: the first checkbox
 

@@ -32,6 +32,14 @@ GEOMETRY_VISIBLE_W = 50
 GEOMETRY_TITLE_STRIP = 30
 GEOMETRY_TITLE_VISIBLE_H = 10
 
+# Windows only (Tk 8.6's Windows port): once a window is on screen its SIZE is
+# compared with the one asked for and corrected by the residual, at most
+# GEOMETRY_SETTLE_PASSES times — see _set_geometry. A residual beyond
+# GEOMETRY_SETTLE_MAX_DELTA px on either axis is no frame difference (a
+# minsize, a monitor edge) and is left alone rather than chased.
+GEOMETRY_SETTLE_PASSES = 3
+GEOMETRY_SETTLE_MAX_DELTA = 100
+
 # When this module was imported — the process's start, near enough: an
 # instance lock naming our own pid that is older than this can only be a
 # crashed predecessor's (see _claim_instance_number).
@@ -470,8 +478,10 @@ class StateMixin:
     # One mechanism for all six persisted windows: `_remember_geometry`
     # captures a window's REAL geometry into a per-process cache,
     # `_place_window` positions a dialog from that cache (or its default),
-    # and `_save_last_state` / `_load_last_state` move the cache to and
-    # from this instance's state file under the current monitor-layout key.
+    # `_set_geometry` is the one way any of them is sized (the Windows
+    # mixed-scale size correction lives there), and `_save_last_state` /
+    # `_load_last_state` move the cache to and from this instance's state
+    # file under the current monitor-layout key.
 
     def _geo_cache(self):
         """kind → last known NORMAL-state geometry (current layout)."""
@@ -522,6 +532,104 @@ class StateMixin:
         geo = self._geo_cache().get(kind)
         return self._sanitize_geometry(geo, min_w, min_h) if geo else None
 
+    # ── Setting a geometry: the one way, every platform ────────────────
+
+    def _set_geometry(self, win, geo):
+        """The ONE way a persisted window's geometry is set — `_place_window`,
+        the main-window restore, the monitor reclaim and PS Safety's re-apply
+        all come through here — because on Windows a plain `win.geometry(geo)`
+        does not give the size it names on a monitor whose scale differs from
+        the primary's.
+
+        Tk 8.6's Windows port sizes the frame around a window from the PRIMARY
+        monitor's border metrics, while Windows (the process is per-monitor
+        DPI aware) draws the frame at the monitor's own scale. Measured
+        2026-10-02 on the laptop — a 150 % panel with a 100 % screen beside
+        it: a window asked to be 613x946 on the 100 % screen maps as 619x963,
+        the two frames' difference (6 px of width, 17 of height); Tk then
+        re-measures the frame's HEIGHT from the mapped window but never its
+        WIDTH, so every later width request on that screen comes out 6 px
+        wide for the window's life. The app saves what Tk reports, so each
+        launch grew the main window and every dialog by one frame difference
+        — the "moves right a little each time it is reopened" report.
+
+        So: the geometry is applied, and once the window is shown in the
+        normal state (at once if it already is; else at its first <Map>, or
+        for a maximized start at the first <Configure> after it returns to
+        normal) `_settle_geometry` re-applies it and corrects the residual.
+        A size-less `geo` ('' or '+x+y') is applied as is and cancels a
+        pending correction — Model Setup gives its size back to Tk that way.
+        Positions are exact on every platform and are never adjusted; off
+        Windows this is `win.geometry(geo)`."""
+        if not IS_WINDOWS or self._parse_geometry(geo) is None:
+            win.geometry(geo)
+            win._geometry_intent = None
+            return
+        if not getattr(win, "_geometry_settle_bound", False):
+            win._geometry_settle_bound = True
+            for seq in ("<Map>", "<Configure>"):
+                win.bind(seq, lambda e, w=win: self._settle_when_shown(w, e), add="+")
+        if self._shown_normal(win):
+            win._geometry_intent = None
+            self._settle_geometry(win, geo)
+        else:
+            win.geometry(geo)
+            win._geometry_intent = geo
+
+    @staticmethod
+    def _shown_normal(win):
+        """True while `win` is mapped in the normal state — the only state in
+        which a size request takes effect at once (Tk parks one made while
+        zoomed or iconic until the window is normal again)."""
+        try:
+            return bool(win.winfo_exists() and win.winfo_ismapped() and win.state() == "normal")
+        except tk.TclError:
+            return False
+
+    def _settle_when_shown(self, win, event=None):
+        """The <Map> / <Configure> handler: run the pending correction once the
+        window is shown normal. Both bindings fire for every descendant too (a
+        toplevel's path is in its children's bindtags), hence the identity
+        check; the intent is cleared BEFORE the settle, whose own <Configure>s
+        then find nothing to do — and a later move or resize by the user is
+        never undone, because nothing is pending any more."""
+        if event is not None and str(event.widget) != str(win):
+            return
+        geo = getattr(win, "_geometry_intent", None)
+        if not geo or not self._shown_normal(win):
+            return
+        win._geometry_intent = None
+        self._settle_geometry(win, geo)
+
+    def _settle_geometry(self, win, geo):
+        """Apply `geo` to a SHOWN window and make its size come out as asked:
+        read the size Tk reports after each request and ask again with the
+        residual taken off, at most GEOMETRY_SETTLE_PASSES times (two on the
+        mixed-scale laptop, one wherever Tk gets it right). Pure Tk — no
+        Win32 metrics — so it corrects whatever the frame difference is, in
+        either direction, and an idle flush is enough for the read-back
+        because Windows applies the request synchronously. A residual beyond
+        GEOMETRY_SETTLE_MAX_DELTA is no frame difference (a minsize, a
+        monitor edge) and is left alone rather than chased."""
+        target = self._parse_geometry(geo)
+        if target is None:
+            return
+        w, h, x, y = target
+        ask_w, ask_h = w, h
+        for _ in range(GEOMETRY_SETTLE_PASSES):
+            try:
+                win.geometry(f"{ask_w}x{ask_h}+{x}+{y}")
+                win.update_idletasks()
+                got = self._parse_geometry(win.geometry())
+            except tk.TclError:
+                return
+            if got is None:
+                return
+            dw, dh = got[0] - w, got[1] - h
+            if (dw, dh) == (0, 0) or max(abs(dw), abs(dh)) > GEOMETRY_SETTLE_MAX_DELTA:
+                return
+            ask_w, ask_h = max(1, ask_w - dw), max(1, ask_h - dh)
+
     def _place_window(self, win, kind, default_size, parent=None, min_size=(200, 150)):
         """Position a dialog before it is shown: the saved geometry for `kind`
         when still visible on this layout; else the saved SIZE — the user's
@@ -557,7 +665,7 @@ class StateMixin:
             w, h = min(w, right - left), min(h, bottom - top)
             x, y = self._clamp_to_monitor(cx - w // 2, cy - h // 2, w, h)
             geo = f"{w}x{h}+{x}+{y}"
-        win.geometry(geo)
+        self._set_geometry(win, geo)
         return geo
 
     def _open_geometry_windows(self):
@@ -675,11 +783,11 @@ class StateMixin:
         geo = self._sanitize_geometry(main) if main else None
         if geo:
             cache["main"] = geo
-            self.root.geometry(geo)
+            self._set_geometry(self.root, geo)
         else:
             cache.pop("main", None)
             geo = self._default_main_geometry()
-            self.root.geometry(geo)
+            self._set_geometry(self.root, geo)
             self._geo_log("restore-default", applied=geo, rejected=main)
         self._main_zoomed = bool(zoomed)
         if self._main_zoomed:
@@ -743,7 +851,7 @@ class StateMixin:
             if not (cur and tgt):
                 return
             if self._monitor_index_of_center(*cur) != self._monitor_index_of_center(*tgt):
-                self.root.geometry(geo)
+                self._set_geometry(self.root, geo)
                 self._geo_log("reassert", target=geo, drifted_from=f"{cur[2]}+{cur[3]}")
         except tk.TclError:
             pass
