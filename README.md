@@ -109,7 +109,7 @@ python -m unittest discover -s tests -t .  # the test suite
 
 ## SelfBot.py — Claude Chatbot & Dual-Instance Self-Chat
 
-A single-file (~7,100-line) tkinter chatbot for the Anthropic API — Anthropic-only by design — that works in two modes: a normal solo chatbot, or **two instances chatting with each other** via file-based message passing.
+A single-file (~7,400-line) tkinter chatbot for the Anthropic API — Anthropic-only by design — that works in two modes: a normal solo chatbot, or **two instances chatting with each other** via file-based message passing.
 
 **Core features**
 
@@ -686,11 +686,11 @@ The remaining questions MyAgent asks — the Yes / No confirmations for destruct
 
 ### Architecture (mixins)
 
-`MyAgent.py` (~380 lines) holds only `__init__` and the entry point; the `App` class inherits from **26 mixins** in `myagent/` (~27,000 lines in all), which share state through `self.*`:
+`MyAgent.py` (~390 lines) holds only `__init__` and the entry point; the `App` class inherits from **26 mixins** in `myagent/` (~27,500 lines in all), which share state through `self.*`:
 
 | Module | Concern |
 |---|---|
-| `constants.py` (~3,900 lines) | Tool schemas for all ten families, safety patterns, model constants and capability tables, pricing tables, the voice tables, the UI colours, the upgrade defaults, file paths |
+| `constants.py` (~4,000 lines) | Tool schemas for all ten families, safety patterns, model constants and capability tables, pricing tables, the voice tables, the UI colours, the upgrade defaults, file paths |
 | `helpers.py` | `HTMLTextExtractor` / `extract_text_from_html`, `_ToolBlock` (gives OpenAI / Gemini / xAI / Moonshot / Ollama dict tool calls the same `.name` / `.id` / `.input` face as Anthropic's blocks), the Responses-API usage normaliser, the one-slot log rotation every runtime log uses, `normalize_save_path`, the camera-aware image hint, the context-overflow trim and the Fable thinking-block helpers — stdlib-only, because the zero-token jobs import it |
 | `retry_util.py` / `mail_common.py` / `keyboard.py` / `instruction_layout.py` / `datapaths.py` | The five shared non-mixin modules: the 429 / 5xx backoff schedule of the five cloud providers' callers (Ollama keeps its own); the one destructive-action confirmation dialog of the three mail mixins (honours the per-instruction bypass list, posts the ⚠ audit line, pauses the run clock) and their per-id batch runner; the keyboard-operation helpers every window uses; the pure sections-and-order model behind the Instructions list; and the shared-store paths and IO both apps and Heartbeat use (OneDrive resolution, atomic saves, conflict-fork healing, the skills tree, the per-machine cost log) |
 | `ui_mixin` / `state_mixin` / `event_loop_mixin` | Widget construction and model-parameter handlers; instance locks, geometry and state persistence; the queue polling that turns worker messages into output-pane text |
@@ -932,6 +932,7 @@ Everything the apps share between machines lives in two OneDrive trees, both **o
 | `docs/voice-stt-audit.md` | The speech-to-text suitability audit behind Voice Setup's model list (re-runnable with `tests/check_voice_models_live.py`) |
 | `LaunchSelfBot.bat`, `selfbot_position.ps1`, `LaunchMyAgent.bat`, `LaunchMyAgent.sh`, `My Agent.command`, `LaunchTodoList.bat` | Per-platform command-line launchers (`LaunchSelfBot.bat` force-kills every running Python process, then opens and positions the SelfBot duo) |
 | `CLAUDE.md`, `.claude/rules/`, `.claude/skills/`, `.claude/commands/` | Claude Code project instructions, per-app architecture docs and the slash commands above |
+| `.gitattributes` | The line-ending policy: LF in the repo; CRLF on checkout only for `.bat` / `.ps1`; `.sh` / `.command` forced LF even on Windows, since a CRLF shebang is a macOS "bad interpreter" |
 | `WHATIS_AI.md` | The tool-use essay |
 | `comparison_*.json` ×5 | Final-report JSONs (the `--result-file` shape) from one run of the same `Weather_Agent_Skill_based` instruction on Anthropic, Google, Moonshot, OpenAI and xAI — a side-by-side sample of how each provider narrates the identical task |
 | `miscSavedStuff/` | Artifacts the SelfBot duo produced outside the chat transcripts — the Shaun & Nigel essays, season finales and letters, *The Mirror Problem*, a SelfBot tools report, and a colophon |
