@@ -216,11 +216,13 @@ class UIMixin:
             bottom_row.grid_columnconfigure(column, weight=1)
 
         # The speech-to-text settings behind the Agent Request dialog's Mike
-        # button (voice_mixin), and — since 2026-09-27, right of it — the
-        # upgrade model behind the same dialog's Upgrade box
-        # (model_upgrade_mixin). Here, not in that dialog, so they can be
-        # set up before a run ever asks anything. Both sit in one frame in
-        # the edge column, so the mirror column matches the pair's width.
+        # button (voice_mixin); since 2026-09-27, right of it, the upgrade
+        # model behind the same dialog's Upgrade box (model_upgrade_mixin);
+        # and since 2026-10-04, right of that, Other Setup — the settings
+        # that belong to no other button: the window background colour
+        # (other_setup_mixin). Here, not in a dialog, so they can be set up
+        # before a run ever asks anything. All three sit in one frame in
+        # the edge column, so the mirror column matches the row's width.
         # Created before the checkboxes: Tab order is creation order, and
         # they sit to their left.
         self.setup_buttons = tk.Frame(bottom_row)
@@ -235,6 +237,11 @@ class UIMixin:
             command=self._upgrade_setup_from_main,
         )
         self.model_setup_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.other_setup_button = tk.Button(
+            self.setup_buttons, text="Other Setup", font=("Arial", 9),
+            command=self._other_setup_from_main,
+        )
+        self.other_setup_button.pack(side=tk.LEFT, padx=(5, 0))
 
         checkbox_frame = tk.Frame(bottom_row)
         checkbox_frame.grid(row=0, column=2)
@@ -311,15 +318,16 @@ class UIMixin:
             "c": self.chat_name_entry,
             "v": self.voice_setup_button,
             "m": self.model_setup_button,
+            "o": self.other_setup_button,
         })
         self.instruction_button.focus_set()
 
     @staticmethod
     def _bottom_row_stacked(available, button_width, checkbox_width):
-        """Must the checkbox row go under the Voice Setup / Model Setup
-        buttons? Yes when the two do not fit side by side in `available`
-        pixels. A width of 1 is a window that has not been laid out yet, not
-        a narrow one."""
+        """Must the checkbox row go under the Voice Setup / Model Setup /
+        Other Setup buttons? Yes when the button row and the checkbox row do
+        not fit side by side in `available` pixels. A width of 1 is a window
+        that has not been laid out yet, not a narrow one."""
         return 1 < available < button_width + checkbox_width
 
     # ── Toolbar "last pressed" highlight ────────────────────────────────

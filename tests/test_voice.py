@@ -1210,6 +1210,7 @@ class MainWindowButtonTests(unittest.TestCase):
         app.open_instruction_editor = app._start_agent = app._stop_agent = lambda: None
         app._voice_setup_from_main = lambda: self.opened.append("setup")
         app._upgrade_setup_from_main = lambda: self.opened.append("model setup")
+        app._other_setup_from_main = lambda: self.opened.append("other setup")
         app.setup_ui()
         self.app = app
         self.button, self.debug, self.diag = (app.voice_setup_button, app.debug_toggle,
@@ -1272,12 +1273,15 @@ class MainWindowButtonTests(unittest.TestCase):
         self.lay_out(self.need + 400)
         after_pane = self.app.chat_display.tk_focusNext()
         self.assertIs(after_pane, self.button)
-        # Model Setup (2026-09-27) is the next stop, then the checkboxes.
+        # Model Setup (2026-09-27) is the next stop, Other Setup (2026-10-04)
+        # the one after, then the checkboxes.
         self.assertIs(after_pane.tk_focusNext(), self.app.model_setup_button)
-        self.assertIs(self.app.model_setup_button.tk_focusNext(), self.debug)
+        self.assertIs(self.app.model_setup_button.tk_focusNext(), self.app.other_setup_button)
+        self.assertIs(self.app.other_setup_button.tk_focusNext(), self.debug)
         self.button.invoke()
         self.app.model_setup_button.invoke()
-        self.assertEqual(self.opened, ["setup", "model setup"])
+        self.app.other_setup_button.invoke()
+        self.assertEqual(self.opened, ["setup", "model setup", "other setup"])
 
 
 class IndependenceTests(unittest.TestCase):

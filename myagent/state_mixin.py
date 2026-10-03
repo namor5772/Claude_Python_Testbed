@@ -984,6 +984,10 @@ class StateMixin:
         state["debug_enabled"] = self.debug_enabled.get()
         state["tool_calls_enabled"] = self.tool_calls_enabled.get()
         state["diag_enabled"] = self.diag_enabled.get()
+        # The window background (other_setup_mixin, 2026-10-04): only a
+        # chosen colour is written — no key means the platform default.
+        if getattr(self, "theme_bg", None):
+            state["background_color"] = self.theme_bg
         # The Instruction Editor's Instructions list (2026-09-11): which
         # sections are collapsed, and the list pane's width (its sash position)
         state["collapsed_sections"] = sorted(getattr(self, "_collapsed_sections", None) or ())
@@ -1063,6 +1067,11 @@ class StateMixin:
             s for s in (state.get("collapsed_sections") or []) if isinstance(s, str)}
         width = state.get("instruction_list_width")
         self._instr_list_width = width if isinstance(width, int) and width > 0 else None
+        # The window background (other_setup_mixin, 2026-10-04): the saved
+        # colour, or the platform default when the file has none. Guarded
+        # for the bare test hosts that predate the mixin.
+        if hasattr(self, "_theme_apply"):
+            self._theme_apply(state.get("background_color"))
 
     def _periodic_save(self):
         try:

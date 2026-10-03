@@ -65,6 +65,7 @@ from myagent.physical_mixin import PhysicalMixin
 from myagent.safety_mixin import SafetyMixin
 from myagent.voice_mixin import VoiceMixin
 from myagent.model_upgrade_mixin import ModelUpgradeMixin
+from myagent.other_setup_mixin import OtherSetupMixin
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
 
@@ -79,7 +80,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           XAIMixin, KimiMixin, OllamaMixin, MCPMixin, GmailMixin,
           ProtonMailMixin, OutlookMixin, DocumentMixin, FileMixin,
           DesktopMixin, BrowserMixin, ExcelMixin, PhysicalMixin, SafetyMixin,
-          VoiceMixin, ModelUpgradeMixin, ChatMixin, EventLoopMixin):
+          VoiceMixin, ModelUpgradeMixin, OtherSetupMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
                  extra_file=None):
@@ -319,6 +320,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # default), per instruction like the Auto-send tick and written
         # through from Model Setup.
         self.upgrade_target = None
+        # The window background colour (other_setup_mixin): the chosen
+        # #rrggbb, or None for the platform default — kept in the state file
+        # like the window positions, applied by _load_last_state.
+        self.theme_bg = None
         self.instruction_editor_window = None
         # The editor's Instructions list (2026-09-11): the width of its
         # pane and the sections the user collapsed, both kept in agent_state.json

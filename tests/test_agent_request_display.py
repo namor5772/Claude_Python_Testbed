@@ -67,6 +67,7 @@ class PaneTests(unittest.TestCase):
         app.open_instruction_editor = app._start_agent = app._stop_agent = lambda: None
         app._voice_setup_from_main = lambda: None
         app._upgrade_setup_from_main = lambda: None
+        app._other_setup_from_main = lambda: None
         app.setup_ui()
         self.app = app
         self.pane = app.chat_display
