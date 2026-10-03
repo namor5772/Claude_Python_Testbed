@@ -20,6 +20,13 @@ widgets on a withdrawn or transparent root and skip where no display exists):
   the platform colour back by name; an unknown colour is the default; the
   toolbar group's recorded resting highlight follows, so the next press
   paints the new colour back, not the old — on the REAL group too;
+* the title bar (Windows 11, the DWM call recorded and never made): the
+  COLORREF and the black / white title text by brightness, a window shown
+  before the colour coloured at once and reset by Default, a window shown
+  after it coloured as it maps (the root through the Tk class hook, a
+  dialog through the Toplevel one — no frame window exists before the first
+  map), the hooks installed once, every toplevel found, and nothing asked
+  off Windows;
 * the state file (test_state_skill_modes's host): the key written only for a
   chosen colour, read back at load, absent = the default, a host without
   the mixin loading as before, a headless run writing nothing;
@@ -49,8 +56,11 @@ from tests._util import stub
 from tests.test_agent_request_display import _walk
 from tests.test_state_skill_modes import _Host as _StateHost
 from myagent import other_setup_mixin
-from myagent.constants import LIST_TITLE_BG, TOOLBAR_ACTIVE_BG
-from myagent.other_setup_mixin import OtherSetupMixin, THEME_DB_PATTERNS, THEME_OPTIONS
+from myagent.constants import IS_WINDOWS, LIST_TITLE_BG, TOOLBAR_ACTIVE_BG
+from myagent.other_setup_mixin import (
+    DWM_COLOR_DEFAULT, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, OtherSetupMixin,
+    THEME_DB_PATTERNS, THEME_OPTIONS,
+)
 from myagent.ui_mixin import UIMixin, list_title_band
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -308,6 +318,109 @@ class ApplyTests(unittest.TestCase):
         self.assertNotEqual(self.wears(start), self.rgb(BLUE))        # the face: a button's
 
 
+# ── The title bar (Windows 11) ─────────────────────────────────────────
+
+def record_dwm(test):
+    """Record every DwmSetWindowAttribute call the mixin would make."""
+    test.calls = []
+    patcher = mock.patch.object(
+        OtherSetupMixin, "_theme_dwm_set",
+        staticmethod(lambda hwnd, attribute, value: test.calls.append((hwnd, attribute, value))))
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
+class CaptionTests(unittest.TestCase):
+    """The DWM calls recorded, never made. The root starts withdrawn and
+    transparent, so a test decides when the frame window that owns the
+    title bar comes into being."""
+
+    def setUp(self):
+        self.root = tk_root(self)
+        self.root.attributes("-alpha", 0.0)
+        self.h = host(self.root)
+        record_dwm(self)
+
+    def tearDown(self):
+        free_tk_garbage_then_destroy(self)
+
+    def show(self, win):
+        win.deiconify()
+        win.wait_visibility()
+        self.root.update()
+
+    def test_colorref_and_the_title_text_by_brightness(self):
+        ref = OtherSetupMixin._theme_colorref
+        self.assertEqual(ref(PEACH), 0x00B2E0FF)
+        self.assertEqual(ref("#000000"), 0)
+        self.assertEqual(ref("#ffffff"), 0x00FFFFFF)
+        text = OtherSetupMixin._theme_caption_text
+        self.assertEqual(text(BLUE), "#000000")
+        self.assertEqual(text("#1a237e"), "#ffffff")       # a dark blue: white text
+        self.assertEqual(text("#808080"), "#000000")       # the midpoint reads black
+
+    def test_every_toplevel_is_found(self):
+        dlg = tk.Toplevel(self.root)
+        dlg.withdraw()
+        tk.Frame(dlg)
+        nested = tk.Toplevel(dlg)
+        nested.withdraw()
+        tk.Label(self.root)
+        self.assertEqual(self.h._theme_toplevels(), [self.root, dlg, nested])
+
+    @unittest.skipUnless(IS_WINDOWS, "the title bar is coloured on Windows only")
+    def test_a_window_shown_before_the_colour_takes_it_at_once_and_default_resets(self):
+        self.show(self.root)
+        hwnd = OtherSetupMixin._theme_hwnd(self.root)
+        self.assertTrue(hwnd)
+        self.h._theme_apply(BLUE)
+        blue = OtherSetupMixin._theme_colorref(BLUE)
+        self.assertIn((hwnd, DWMWA_CAPTION_COLOR, blue), self.calls)
+        self.assertIn((hwnd, DWMWA_TEXT_COLOR, 0x000000), self.calls)
+        self.calls.clear()
+        self.h._theme_apply("#1a237e")
+        self.assertIn((hwnd, DWMWA_TEXT_COLOR, 0x00FFFFFF), self.calls)     # white on dark
+        self.calls.clear()
+        self.h._theme_apply(None)
+        self.assertIn((hwnd, DWMWA_CAPTION_COLOR, DWM_COLOR_DEFAULT), self.calls)
+        self.assertIn((hwnd, DWMWA_TEXT_COLOR, DWM_COLOR_DEFAULT), self.calls)
+
+    @unittest.skipUnless(IS_WINDOWS, "the title bar is coloured on Windows only")
+    def test_a_window_shown_after_the_colour_is_coloured_as_it_maps(self):
+        self.assertEqual(OtherSetupMixin._theme_hwnd(self.root), 0)    # no frame before the first map
+        self.h._theme_apply(BLUE)
+        self.show(self.root)                                             # the root: the Tk class hook
+        root_hwnd = OtherSetupMixin._theme_hwnd(self.root)
+        self.assertTrue(root_hwnd)
+        blue = OtherSetupMixin._theme_colorref(BLUE)
+        self.assertIn((root_hwnd, DWMWA_CAPTION_COLOR, blue), self.calls)
+        dlg = tk.Toplevel(self.root)                                      # a dialog, built withdrawn
+        dlg.withdraw()
+        dlg.attributes("-alpha", 0.0)
+        self.calls.clear()
+        self.show(dlg)                                                   # the Toplevel class hook
+        dlg_hwnd = OtherSetupMixin._theme_hwnd(dlg)
+        self.assertTrue(dlg_hwnd)
+        self.assertIn((dlg_hwnd, DWMWA_CAPTION_COLOR, blue), self.calls)
+        self.assertIn((dlg_hwnd, DWMWA_TEXT_COLOR, 0x000000), self.calls)
+
+    @unittest.skipUnless(IS_WINDOWS, "the title bar is coloured on Windows only")
+    def test_the_hooks_are_installed_once(self):
+        self.h._theme_apply(BLUE)
+        self.h._theme_apply(PEACH)
+        for cls in ("Tk", "Toplevel"):
+            self.assertEqual(self.root.bind_class(cls, "<Map>").count("_theme_on_map"), 1, cls)
+
+    def test_off_windows_nothing_is_asked(self):
+        with mock.patch.object(other_setup_mixin, "IS_WINDOWS", False):
+            self.show(self.root)
+            self.h._theme_apply(BLUE)
+            self.h._theme_caption(self.root)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.root.bind_class("Toplevel", "<Map>"), "")
+        self.assertEqual(self.root.cget("background"), BLUE)            # the chrome still took it
+
+
 # ── The state file ──────────────────────────────────────────────────────
 
 class _Recorder(_StateHost):
@@ -513,6 +626,29 @@ class DialogTests(unittest.TestCase):
         self.assertTrue(seen["same"])
         self.assertEqual(seen["dialogs"], 1)
 
+    @unittest.skipUnless(IS_WINDOWS, "the title bar is coloured on Windows only")
+    def test_the_dialogs_own_title_bar_follows_the_preview(self):
+        record_dwm(self)
+
+        def act(dlg, seen):
+            seen["hwnd"] = OtherSetupMixin._theme_hwnd(dlg)
+            buttons, _labels, _swatch = self.widgets(dlg)
+            buttons["Choose…"].invoke()
+            seen["after_pick"] = len(self.calls)
+            buttons["Cancel"].invoke()
+
+        _h, seen = self.open(act, picks=[((255, 224, 178), PEACH)])
+        hwnd, root_hwnd = seen["hwnd"], OtherSetupMixin._theme_hwnd(self.root)
+        self.assertTrue(hwnd)
+        peach = OtherSetupMixin._theme_colorref(PEACH)
+        picked, cancelled = self.calls[:seen["after_pick"]], self.calls[seen["after_pick"]:]
+        # The pick previewed on the main window's title bar and the dialog's own...
+        self.assertIn((root_hwnd, DWMWA_CAPTION_COLOR, peach), picked)
+        self.assertIn((hwnd, DWMWA_CAPTION_COLOR, peach), picked)
+        # ... and Cancel handed both their system title bar back.
+        self.assertIn((root_hwnd, DWMWA_CAPTION_COLOR, DWM_COLOR_DEFAULT), cancelled)
+        self.assertIn((hwnd, DWMWA_CAPTION_COLOR, DWM_COLOR_DEFAULT), cancelled)
+
 
 # ── The main window ─────────────────────────────────────────────────────
 
@@ -615,6 +751,20 @@ class WiringTests(unittest.TestCase):
         self.assertIn("dlg.grab_set()", src)
         self.assertNotIn("_save_instructions_to_disk", src)    # the colour is no instruction setting
         self.assertNotIn("upgrade_target", src)
+
+    def test_the_title_bar_follows_the_colour_from_apply(self):
+        src = self.src("myagent", "other_setup_mixin.py")
+        body = src[src.index("    def _theme_apply("):src.index("    def _theme_recolor(")]
+        self.assertIn("self._theme_install_hooks()", body)
+        self.assertIn("self._theme_caption(win)", body)
+        self.assertEqual((DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWM_COLOR_DEFAULT),
+                         (35, 36, 0xFFFFFFFF))
+        self.assertIn('self.root.bind_class(cls, "<Map>", self._theme_on_map, add="+")', src)
+        # Windows only: every DWM / user32 reach is behind the one flag.
+        caption = src[src.index("    def _theme_caption("):src.index("    def _theme_toplevels(")]
+        self.assertIn("if not IS_WINDOWS:", caption)
+        hooks = src[src.index("    def _theme_install_hooks("):src.index("    # ── UI: Other Setup")]
+        self.assertIn("if not IS_WINDOWS:", hooks)
 
 
 if __name__ == "__main__":
