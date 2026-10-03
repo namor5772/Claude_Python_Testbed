@@ -320,11 +320,12 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # default), per instruction like the Auto-send tick and written
         # through from Model Setup.
         self.upgrade_target = None
-        # The window colour and the field colour (other_setup_mixin): each
+        # The window, field and button colours (other_setup_mixin): each
         # the chosen #rrggbb, or None for the platform default — kept in the
         # state file like the window positions, applied by _load_last_state.
         self.theme_bg = None
         self.theme_field = None
+        self.theme_button = None
         self.instruction_editor_window = None
         # The editor's Instructions list (2026-09-11): the width of its
         # pane and the sections the user collapsed, both kept in agent_state.json

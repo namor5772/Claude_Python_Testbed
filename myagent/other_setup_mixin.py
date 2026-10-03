@@ -66,6 +66,17 @@ keep their contrast (`_theme_zebra` / `_theme_band`; LIST_ZEBRA_BG /
 LIST_BAND_BG at the default); the list is known by its style name,
 INSTR_TREE_STYLE, so no other list is touched.
 
+A third colour (the user's request, the same evening) is the **Button
+colour**: a tk.Button's face (`background`) and its pressed / hovered face
+(`activebackground`) — exactly the two options the window colour leaves
+alone, so the three colours never touch one another's options even though
+the window and button defaults share Tk's name, SystemButtonFace. Kept as
+`button_color`, applied by `_theme_apply_button` with the same walk + option
+database; the toolbar group's recorded resting faces follow as its highlight
+frame does for the window colour. macOS Aqua draws a button's face natively
+and ignores both options, so there buttons keep their native look. Text
+stays black: no colour manages a foreground.
+
 The title bar follows, on Windows 11: the Desktop Window Manager colours a
 window's caption per window (`DwmSetWindowAttribute`, DWMWA_CAPTION_COLOR,
 with DWMWA_TEXT_COLOR black or white by the colour's brightness), and
@@ -139,6 +150,13 @@ FIELD_COMBOBOX_STYLE = "Field.TCombobox"
 FIELD_COMBOBOX_FILL = "Field.Combobox.fill"
 FIELD_COMBOBOX_NATIVE_FILL = "Combobox.background"
 
+# The button colour: a tk.Button's face and its pressed / hovered face — the
+# two options the window colour leaves alone (it takes the highlight frame
+# around the button, THEME_OPTIONS). macOS Aqua draws the face natively and
+# ignores both, so there buttons keep their native look.
+BUTTON_OPTIONS = ("background", "activebackground")
+BUTTON_DB_PATTERNS = ("*Button.background", "*Button.activeBackground")
+
 # Windows 11 (build 22000+) colours a window's title bar per window through
 # the Desktop Window Manager: DwmSetWindowAttribute with these attributes and
 # a COLORREF (0x00BBGGRR); DWM_COLOR_DEFAULT puts the system colour back.
@@ -152,8 +170,9 @@ THEME_NOTE = ("Window colour: the main window and every dialog — the Instructi
               "the Skills Manager, Safety, Agent Request, Confirm Command, Voice Setup, "
               "Model Setup and this one — and, on Windows 11, their title bars. Field "
               "colour: the text boxes, entries, lists, dropdowns and the Instructions "
-              "list — everything that is white by default. Both take effect at once and "
-              "are kept with this instance's window positions in agent_state.json.")
+              "list — everything that is white by default. Button colour: the face of "
+              "every button (macOS keeps its native buttons). All three take effect at "
+              "once and are kept with this instance's window positions in agent_state.json.")
 
 
 class OtherSetupMixin:
@@ -206,19 +225,27 @@ class OtherSetupMixin:
         self._theme_recolor(root, before, target)
         # The toolbar group's recorded resting looks (ui_mixin), or the next
         # press would paint the old highlight frame back around a button.
-        for looks in (getattr(self, "_toolbar_styles", None) or {}).values():
-            rest = looks.get("rest") or {}
-            try:
-                if root.winfo_rgb(rest["highlightbackground"]) == before:
-                    rest["highlightbackground"] = target
-            except (KeyError, tk.TclError):
-                pass
+        self._theme_patch_toolbar(before, target, ("highlightbackground",))
         # The title bars (Windows 11): the windows shown now, and — through
         # the <Map> hooks — every window shown from here on, since the frame
         # a title bar belongs to exists only once its window has been shown.
         self._theme_install_hooks()
         for win in self._theme_toplevels():
             self._theme_caption(win)
+
+    def _theme_patch_toolbar(self, old_rgb, color, keys):
+        """The toolbar group's recorded resting looks (ui_mixin's
+        _track_toolbar_presses): each of `keys` still wearing `old_rgb`
+        takes `color`, or the next press would paint the old look back on
+        the button it releases."""
+        for looks in (getattr(self, "_toolbar_styles", None) or {}).values():
+            rest = looks.get("rest") or {}
+            for key in keys:
+                try:
+                    if self.root.winfo_rgb(rest[key]) == old_rgb:
+                        rest[key] = color
+                except (KeyError, tk.TclError):
+                    pass
 
     @classmethod
     def _theme_recolor(cls, widget, old_rgb, color):
@@ -402,6 +429,61 @@ class OtherSetupMixin:
         for child in children:
             self._theme_recolor_fields(child, old_rgb, color, combo_style)
 
+    # ── The button colour ──────────────────────────────────────────────
+
+    def _theme_button_default(self):
+        """The platform's own button face by Tk's name for it
+        (SystemButtonFace on Windows), read once from a throwaway button
+        BEFORE the option database is touched, so Default can put it back
+        by name."""
+        name = getattr(self, "_theme_button_default_name", None)
+        if name is None:
+            probe = tk.Button(self.root)
+            name = self._theme_button_default_name = probe.cget("background")
+            probe.destroy()
+        return name
+
+    def _theme_button_current(self):
+        """#rrggbb of what the buttons wear now."""
+        return self._theme_hex(self.root, getattr(self, "theme_button", None)
+                               or self._theme_button_default())
+
+    def _theme_apply_button(self, color):
+        """Give every button — open now, or opened later — the face
+        `color` (#rrggbb or any Tk colour name; None, "" or a colour Tk does
+        not know = the platform default) and keep it as `theme_button`
+        (#rrggbb or None), the one field `_save_last_state` writes under
+        `button_color`. Independent of the other two colours."""
+        root = self.root
+        before = root.winfo_rgb(self._theme_button_current())   # reads the default first
+        chosen = self._theme_hex(root, color) if color else None
+        self.theme_button = chosen
+        target = chosen or self._theme_button_default()
+        for pattern in BUTTON_DB_PATTERNS:
+            root.option_add(pattern, target)
+        self._theme_recolor_buttons(root, before, target)
+        # The toolbar group's recorded resting faces (ui_mixin), or the next
+        # press would paint the old face back on the button it releases.
+        self._theme_patch_toolbar(before, target, ("bg", "activebackground"))
+
+    def _theme_recolor_buttons(self, widget, old_rgb, color):
+        """Recolour every button under `widget` (itself included) whose
+        face still wears `old_rgb`; a button coloured on purpose — the
+        pressed toolbar button, a recording Mike — is left alone."""
+        try:
+            if widget.winfo_class() == "Button":
+                for opt in BUTTON_OPTIONS:
+                    try:
+                        if widget.winfo_rgb(widget.cget(opt)) == old_rgb:
+                            widget.configure({opt: color})
+                    except tk.TclError:
+                        pass
+            children = widget.winfo_children()
+        except tk.TclError:
+            return                  # a window mid-destruction
+        for child in children:
+            self._theme_recolor_buttons(child, old_rgb, color)
+
     # ── The title bar (Windows 11) ─────────────────────────────────────
 
     @staticmethod
@@ -519,10 +601,10 @@ class OtherSetupMixin:
 
     def _open_other_setup(self, parent):
         """The modal dialog over `parent` for the settings that belong to no
-        other setup button — the window colour and the field colour, so
-        far, a row each. Choose… and Default preview a colour on every open
-        window at once; Save keeps both and writes the state file; Cancel
-        (Escape, [X]) puts back the colours the dialog opened on."""
+        other setup button — the window, field and button colours, so far,
+        a row each. Choose… and Default preview a colour on every open
+        window at once; Save keeps them all and writes the state file;
+        Cancel (Escape, [X]) puts back the colours the dialog opened on."""
         existing = getattr(self, "_other_setup_dialog", None)
         try:
             if existing is not None and existing.winfo_exists():
@@ -531,7 +613,8 @@ class OtherSetupMixin:
                 return
         except tk.TclError:
             pass
-        opened_on = (getattr(self, "theme_bg", None), getattr(self, "theme_field", None))
+        opened_on = (getattr(self, "theme_bg", None), getattr(self, "theme_field", None),
+                     getattr(self, "theme_button", None))
 
         dlg = tk.Toplevel(parent)
         self._other_setup_dialog = dlg
@@ -593,6 +676,9 @@ class OtherSetupMixin:
         field_choose, field_default = colour_row(
             1, "Field colour:", self._theme_field_current,
             lambda: getattr(self, "theme_field", None), self._theme_apply_field)
+        button_choose, button_default = colour_row(
+            2, "Button colour:", self._theme_button_current,
+            lambda: getattr(self, "theme_button", None), self._theme_apply_button)
 
         def wrapping(text, fg):
             # The Model Setup pattern: a modest starting wraplength keeps the
@@ -604,9 +690,9 @@ class OtherSetupMixin:
             return lbl
 
         note = wrapping(THEME_NOTE, THEME_MUTED_FG)
-        note.grid(row=2, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
+        note.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
         status = wrapping("", THEME_ERROR_FG)
-        status.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15)
+        status.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15)
 
         def close(event=None):
             self._other_setup_dialog = None
@@ -618,6 +704,8 @@ class OtherSetupMixin:
                 self._theme_apply(opened_on[0])
             if getattr(self, "theme_field", None) != opened_on[1]:
                 self._theme_apply_field(opened_on[1])
+            if getattr(self, "theme_button", None) != opened_on[2]:
+                self._theme_apply_button(opened_on[2])
             return close()
 
         def save():
@@ -629,16 +717,17 @@ class OtherSetupMixin:
             close()
 
         btn_row = tk.Frame(dlg)
-        btn_row.grid(row=4, column=0, columnspan=2, pady=(8, 12))
+        btn_row.grid(row=5, column=0, columnspan=2, pady=(8, 12))
         save_btn = tk.Button(btn_row, text="Save", width=10, command=save)
         save_btn.pack(side=tk.LEFT, padx=8)
         cancel_btn = tk.Button(btn_row, text="Cancel", width=10, command=cancel)
         cancel_btn.pack(side=tk.LEFT, padx=8)
 
         dlg.protocol("WM_DELETE_WINDOW", cancel)
-        dlg.bind("<Escape>", cancel)    # two small settings: no draft worth protecting
+        dlg.bind("<Escape>", cancel)    # three small settings: no draft worth protecting
         bind_mnemonics(dlg, {"b": bg_choose, "d": bg_default,
                              "t": field_choose, "e": field_default,
+                             "u": button_choose, "r": button_default,
                              "s": save_btn, "c": cancel_btn})
 
         dlg.update_idletasks()

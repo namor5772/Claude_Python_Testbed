@@ -29,6 +29,12 @@ widgets on a withdrawn or transparent root and skip where no display exists):
   alone, a dropdown list recoloured whether built before or after — the
   zebra shade, Default by name, and the two colours independent of each
   other;
+* the button colour (`_theme_apply_button` on real widgets): every button's
+  face and active face recoloured while its highlight frame, the chrome and
+  the fields keep theirs, a pressed toolbar button left alone and the real
+  group's resting face following, later buttons born with it (an explicit
+  bg= still winning), Default by name, an unknown colour the default, and
+  the three colours independent of one another;
 * the title bar (Windows 11, the DWM call recorded and never made): the
   COLORREF and the black / white title text by brightness, a window shown
   before the colour coloured at once and reset by Default, a window shown
@@ -78,6 +84,7 @@ from myagent.ui_mixin import UIMixin, list_title_band
 REPO = pathlib.Path(__file__).resolve().parents[1]
 BLUE = "#c8e6f5"
 PEACH = "#ffe0b2"
+GREEN = "#dcedc8"
 
 
 def tk_root(test, withdrawn=True):
@@ -111,7 +118,8 @@ class _ThemeHost(OtherSetupMixin):
         win.geometry(geo)
 
     def _save_last_state(self):
-        self.saves.append((self.theme_bg, getattr(self, "theme_field", None)))
+        self.saves.append((self.theme_bg, getattr(self, "theme_field", None),
+                           getattr(self, "theme_button", None)))
 
 
 class _GroupHost(OtherSetupMixin, UIMixin):
@@ -119,7 +127,8 @@ class _GroupHost(OtherSetupMixin, UIMixin):
 
 
 def host(root, cls=_ThemeHost, **attrs):
-    base = dict(root=root, theme_bg=None, theme_field=None, _other_setup_dialog=None, saves=[])
+    base = dict(root=root, theme_bg=None, theme_field=None, theme_button=None,
+                _other_setup_dialog=None, saves=[])
     base.update(attrs)
     return stub(cls, **base)
 
@@ -521,6 +530,113 @@ class FieldTests(unittest.TestCase):
         self.assertEqual(w["text"].cget("background"), self.h._theme_field_default())
 
 
+# ── The button colour ──────────────────────────────────────────────────
+
+class ButtonTests(unittest.TestCase):
+    """_theme_apply_button on real widgets (a withdrawn root)."""
+
+    def setUp(self):
+        self.root = tk_root(self)
+        self.h = host(self.root)
+
+    def tearDown(self):
+        free_tk_garbage_then_destroy(self)
+
+    def rgb(self, color):
+        return self.root.winfo_rgb(color)
+
+    def wears(self, widget, opt="background"):
+        return self.rgb(widget.cget(opt))
+
+    def build(self, parent):
+        frame = tk.Frame(parent)
+        return {
+            "frame": frame,
+            "label": tk.Label(frame, text="Save Chat as"),
+            "check": tk.Checkbutton(frame, text="Debug"),
+            "button": tk.Button(frame, text="START"),
+            "pressed": tk.Button(frame, text="STOP", bg=TOOLBAR_ACTIVE_BG,
+                                 activebackground=TOOLBAR_ACTIVE_BG),
+            "text": tk.Text(frame),
+            "entry": tk.Entry(frame),
+        }
+
+    def test_the_buttons_take_the_colour_and_everything_else_keeps_its_own(self):
+        w = self.build(self.root)
+        before = {k: self.wears(v) for k, v in w.items()}
+        frame_before = self.wears(w["button"], "highlightbackground")
+        self.h._theme_apply_button(GREEN)
+        green = self.rgb(GREEN)
+        self.assertEqual(self.h.theme_button, GREEN)
+        self.assertEqual(self.wears(w["button"]), green)
+        self.assertEqual(self.wears(w["button"], "activebackground"), green)
+        self.assertEqual(self.wears(w["button"], "highlightbackground"), frame_before)  # the window's
+        for name in ("frame", "label", "check", "text", "entry"):
+            self.assertEqual(self.wears(w[name]), before[name], name)
+        self.assertEqual(self.wears(w["pressed"]), self.rgb(TOOLBAR_ACTIVE_BG))   # coloured on purpose
+        self.assertEqual((self.h.theme_bg, self.h.theme_field), (None, None))
+
+    def test_later_buttons_are_born_with_it_and_an_explicit_colour_wins(self):
+        self.h._theme_apply_button(GREEN)
+        dlg = tk.Toplevel(self.root)
+        dlg.withdraw()
+        later = tk.Button(dlg, text="Save")
+        self.assertEqual(self.wears(later), self.rgb(GREEN))
+        self.assertEqual(self.wears(later, "activebackground"), self.rgb(GREEN))
+        self.assertEqual(self.wears(tk.Button(dlg, bg="white")), self.rgb("white"))
+        self.assertNotEqual(self.wears(tk.Label(dlg)), self.rgb(GREEN))
+
+    def test_the_real_toolbar_group_releases_to_the_new_face(self):
+        self.h = host(self.root, cls=_GroupHost)
+        start, stop = tk.Button(self.root, text="START"), tk.Button(self.root, text="STOP")
+        self.h._track_toolbar_presses((start, lambda: None), (stop, lambda: None))
+        self.h._theme_apply_button(GREEN)
+        start.invoke()                  # START pressed: light blue
+        stop.invoke()                   # ... and released by STOP's press
+        self.assertEqual(self.wears(start), self.rgb(GREEN))
+        self.assertEqual(self.wears(start, "activebackground"), self.rgb(GREEN))
+        self.assertEqual(self.wears(stop), self.rgb(TOOLBAR_ACTIVE_BG))
+        self.h._theme_apply_button(None)
+        start.invoke()
+        self.assertEqual(stop.cget("background"), self.h._theme_button_default())   # by name
+
+    def test_default_puts_the_platform_face_back_by_name(self):
+        w = self.build(self.root)
+        name = self.h._theme_button_default()
+        self.h._theme_apply_button(GREEN)
+        self.h._theme_apply_button(None)
+        self.assertIsNone(self.h.theme_button)
+        self.assertEqual(w["button"].cget("background"), name)
+        self.assertEqual(w["button"].cget("activebackground"), name)
+        self.assertEqual(tk.Button(self.root).cget("background"), name)
+        self.assertEqual(w["pressed"].cget("background"), TOOLBAR_ACTIVE_BG)
+
+    def test_an_unknown_colour_is_the_default(self):
+        w = self.build(self.root)
+        self.h._theme_apply_button(GREEN)
+        self.h._theme_apply_button("not-a-colour")
+        self.assertIsNone(self.h.theme_button)
+        self.assertEqual(w["button"].cget("background"), self.h._theme_button_default())
+
+    def test_the_three_colours_are_independent(self):
+        w = self.build(self.root)
+        self.h._theme_apply(BLUE)
+        self.h._theme_apply_field(PEACH)
+        self.h._theme_apply_button(GREEN)
+        looks = lambda: (self.wears(w["label"]), self.wears(w["text"]), self.wears(w["button"]))  # noqa: E731
+        self.assertEqual(looks(), (self.rgb(BLUE), self.rgb(PEACH), self.rgb(GREEN)))
+        self.h._theme_apply_button(None)                    # the buttons back: the rest stays
+        self.assertEqual(looks()[:2], (self.rgb(BLUE), self.rgb(PEACH)))
+        self.assertEqual(w["button"].cget("background"), self.h._theme_button_default())
+        self.h._theme_apply_button(GREEN)
+        self.h._theme_apply(None)                           # the window back: the buttons stay
+        self.assertEqual(looks()[1:], (self.rgb(PEACH), self.rgb(GREEN)))
+        self.assertEqual(w["label"].cget("background"), self.h._theme_default_bg())
+        self.assertEqual(w["button"].cget("highlightbackground"), self.h._theme_default_bg())
+        self.assertEqual((self.h.theme_bg, self.h.theme_field, self.h.theme_button),
+                         (None, PEACH, GREEN))
+
+
 # ── The title bar (Windows 11) ─────────────────────────────────────────
 
 def record_dwm(test):
@@ -633,14 +749,19 @@ class _Recorder(_StateHost):
         super().__init__(*args, **kw)
         self.theme_bg = None
         self.theme_field = None
+        self.theme_button = None
         self.applied = []
         self.applied_field = []
+        self.applied_button = []
 
     def _theme_apply(self, color):
         self.applied.append(color)
 
     def _theme_apply_field(self, color):
         self.applied_field.append(color)
+
+    def _theme_apply_button(self, color):
+        self.applied_button.append(color)
 
 
 class StateFileTests(unittest.TestCase):
@@ -680,9 +801,24 @@ class StateFileTests(unittest.TestCase):
         self.assertNotIn("background_color", state)
         again = _Recorder({}, self.state_file)
         again._load_last_state()
-        self.assertEqual((again.applied, again.applied_field), ([None], [PEACH]))
+        self.assertEqual((again.applied, again.applied_field, again.applied_button),
+                         ([None], [PEACH], [None]))
         h.theme_field = None
         self.assertNotIn("field_color", self.saved(h))
+
+    def test_the_button_colour_has_its_own_key(self):
+        h = _Recorder({}, self.state_file)
+        h.theme_button = GREEN
+        state = self.saved(h)
+        self.assertEqual(state["button_color"], GREEN)
+        self.assertNotIn("background_color", state)
+        self.assertNotIn("field_color", state)
+        again = _Recorder({}, self.state_file)
+        again._load_last_state()
+        self.assertEqual((again.applied, again.applied_field, again.applied_button),
+                         ([None], [None], [GREEN]))
+        h.theme_button = None
+        self.assertNotIn("button_color", self.saved(h))
 
     def test_a_host_without_the_mixin_loads_as_before(self):
         h = _Recorder({}, self.state_file)
@@ -741,24 +877,29 @@ class DialogTests(unittest.TestCase):
 
     @staticmethod
     def widgets(dlg):
-        """(buttons, label texts, the window row's swatch). The window row
-        comes first, so its Choose… / Default keep the plain keys and the
-        field row's are "Field Choose…" / "Field Default"."""
-        buttons = {}
+        """(buttons, label texts, the window row's swatch). The rows come
+        in order, so the window row's Choose… / Default keep the plain keys,
+        the field row's are "Field Choose…" / "Field Default" and the button
+        row's "Button Choose…" / "Button Default"."""
+        buttons, seen = {}, {}
         for w in _walk(dlg):
             if isinstance(w, tk.Button):
-                key = w.cget("text")
-                if key in buttons:
-                    key = "Field " + key
-                buttons[key] = w
+                text = w.cget("text")
+                nth = seen.get(text, 0)
+                seen[text] = nth + 1
+                buttons[("", "Field ", "Button ")[nth] + text] = w
         labels = [w for w in _walk(dlg) if isinstance(w, tk.Label)]
         swatch = next(w for w in labels if str(w.cget("relief")) == "sunken")
         return buttons, [w.cget("text") for w in labels], swatch
 
     @staticmethod
-    def field_swatch(dlg):
+    def swatches(dlg):
+        """The three rows' swatches, in row order."""
         return [w for w in _walk(dlg)
-                if isinstance(w, tk.Label) and str(w.cget("relief")) == "sunken"][1]
+                if isinstance(w, tk.Label) and str(w.cget("relief")) == "sunken"]
+
+    def field_swatch(self, dlg):
+        return self.swatches(dlg)[1]
 
     def rgb(self, color):
         return self.root.winfo_rgb(color)
@@ -799,7 +940,7 @@ class DialogTests(unittest.TestCase):
 
         h, _seen = self.open(act, picks=[((255, 224, 178), PEACH)])
         self.assertEqual(h.theme_bg, PEACH)
-        self.assertEqual(h.saves, [(PEACH, None)])
+        self.assertEqual(h.saves, [(PEACH, None, None)])
         self.assertEqual(self.rgb(self.root.cget("background")), self.rgb(PEACH))
         self.assertEqual(self.rgb(tk.Label(self.root).cget("background")), self.rgb(PEACH))
         self.assertIsNone(h._other_setup_dialog)
@@ -828,13 +969,13 @@ class DialogTests(unittest.TestCase):
 
         h, seen = self.open(act, before=lambda h: h._theme_apply(PEACH))
         self.assertIn(PEACH, seen["labels"])                   # opened on the chosen colour
-        # One "(the system default)": the field row's; the window row shows its colour.
-        self.assertEqual(sum("(the system default)" in t for t in seen["labels"]), 1)
+        # Two "(the system default)": the field and button rows; the window row shows its colour.
+        self.assertEqual(sum("(the system default)" in t for t in seen["labels"]), 2)
         self.assertEqual(seen["swatch"], self.rgb(PEACH))
         self.assertEqual(seen["bg"], h._theme_default_bg())    # Default: back by name
-        self.assertEqual(sum("(the system default)" in t for t in seen["after_labels"]), 2)
+        self.assertEqual(sum("(the system default)" in t for t in seen["after_labels"]), 3)
         self.assertIsNone(h.theme_bg)
-        self.assertEqual(h.saves, [(None, None)])
+        self.assertEqual(h.saves, [(None, None, None)])
 
     def test_x_is_cancel(self):
         def act(dlg, seen):
@@ -876,9 +1017,9 @@ class DialogTests(unittest.TestCase):
             buttons["Cancel"].invoke()
 
         h, seen = self.open(act, picks=[((255, 224, 178), PEACH), ((200, 230, 245), BLUE)])
-        self.assertEqual(sum("(the system default)" in t for t in seen["labels"]), 2)
+        self.assertEqual(sum("(the system default)" in t for t in seen["labels"]), 3)
         self.assertEqual(seen["field"], (h._theme_default_bg(), self.rgb(PEACH), self.rgb(PEACH)))
-        self.assertEqual(sum("(the system default)" in t for t in seen["after_labels"]), 1)
+        self.assertEqual(sum("(the system default)" in t for t in seen["after_labels"]), 2)
         self.assertIn(PEACH, seen["after_labels"])
         self.assertEqual(seen["both"], (self.rgb(BLUE), self.rgb(PEACH)))
         self.assertEqual(seen["picker_calls"][0].kwargs["title"], "Field colour")
@@ -889,29 +1030,59 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(tk.Entry(self.root).cget("background"), h._theme_field_default())
         self.assertEqual(h.saves, [])
 
-    def test_save_keeps_both_colours(self):
+    def test_save_keeps_all_three_colours(self):
         def act(dlg, seen):
             buttons, _labels, _swatch = self.widgets(dlg)
             buttons["Field Choose…"].invoke()
             buttons["Choose…"].invoke()
+            buttons["Button Choose…"].invoke()
+            seen["swatches"] = [self.rgb(s.cget("background")) for s in self.swatches(dlg)]
+            seen["save_face"] = self.rgb(buttons["Save"].cget("background"))   # the dialog's own
             buttons["Save"].invoke()
 
-        h, _seen = self.open(act, picks=[((255, 224, 178), PEACH), ((200, 230, 245), BLUE)])
-        self.assertEqual((h.theme_bg, h.theme_field), (BLUE, PEACH))
-        self.assertEqual(h.saves, [(BLUE, PEACH)])
+        h, seen = self.open(act, picks=[((255, 224, 178), PEACH), ((200, 230, 245), BLUE),
+                                        ((220, 237, 200), GREEN)])
+        self.assertEqual((h.theme_bg, h.theme_field, h.theme_button), (BLUE, PEACH, GREEN))
+        self.assertEqual(h.saves, [(BLUE, PEACH, GREEN)])
+        self.assertEqual(seen["swatches"], [self.rgb(BLUE), self.rgb(PEACH), self.rgb(GREEN)])
+        self.assertEqual(seen["save_face"], self.rgb(GREEN))
+        self.assertEqual(seen["picker_calls"][2].kwargs["title"], "Button colour")
         self.assertEqual(self.rgb(tk.Text(self.root).cget("background")), self.rgb(PEACH))
+        self.assertEqual(self.rgb(tk.Button(self.root).cget("background")), self.rgb(GREEN))
 
     def test_the_field_default_button_resets_only_the_fields(self):
         def act(dlg, seen):
             buttons, _labels, _swatch = self.widgets(dlg)
             buttons["Field Default"].invoke()
             seen["after"] = (self.root.cget("background"),
-                             tk.Entry(self.root).cget("background"))
+                             tk.Entry(self.root).cget("background"),
+                             self.rgb(tk.Button(self.root).cget("background")))
             buttons["Save"].invoke()
 
-        h, seen = self.open(act, before=lambda h: (h._theme_apply(BLUE), h._theme_apply_field(PEACH)))
-        self.assertEqual(seen["after"], (BLUE, h._theme_field_default()))
-        self.assertEqual(h.saves, [(BLUE, None)])
+        h, seen = self.open(act, before=lambda h: (h._theme_apply(BLUE), h._theme_apply_field(PEACH),
+                                                  h._theme_apply_button(GREEN)))
+        self.assertEqual(seen["after"], (BLUE, h._theme_field_default(), self.rgb(GREEN)))
+        self.assertEqual(h.saves, [(BLUE, None, GREEN)])
+
+    def test_the_button_row_previews_and_cancel_puts_it_back(self):
+        def act(dlg, seen):
+            buttons, labels, _swatch = self.widgets(dlg)
+            buttons["Button Choose…"].invoke()
+            seen["previewed"] = (self.rgb(buttons["Cancel"].cget("background")),
+                                 self.root.cget("background"),
+                                 tk.Entry(self.root).cget("background"))
+            buttons["Button Default"].invoke()
+            seen["reset"] = buttons["Cancel"].cget("background")
+            buttons["Button Choose…"].invoke()
+            buttons["Cancel"].invoke()
+
+        h, seen = self.open(act, picks=[((220, 237, 200), GREEN), ((220, 237, 200), GREEN)])
+        self.assertEqual(seen["previewed"], (self.rgb(GREEN), h._theme_default_bg(),
+                                             h._theme_field_default()))
+        self.assertEqual(seen["reset"], h._theme_button_default())
+        self.assertIsNone(h.theme_button)
+        self.assertEqual(tk.Button(self.root).cget("background"), h._theme_button_default())
+        self.assertEqual(h.saves, [])
 
     @unittest.skipUnless(IS_WINDOWS, "the title bar is coloured on Windows only")
     def test_the_dialogs_own_title_bar_follows_the_preview(self):
@@ -1001,6 +1172,7 @@ class WiringTests(unittest.TestCase):
         init = src[src.index("def __init__"):]
         self.assertIn("self.theme_bg = None", init)
         self.assertIn("self.theme_field = None", init)
+        self.assertIn("self.theme_button = None", init)
         self.assertLess(init.index("self.theme_bg = None"), init.index("self.setup_ui()"))
 
     def test_the_main_window_carries_the_button_right_of_model_setup(self):
@@ -1019,7 +1191,8 @@ class WiringTests(unittest.TestCase):
         save = src[src.index("def _save_last_state("):src.index("def _load_last_state(")]
         load = src[src.index("def _load_last_state("):src.index("def _periodic_save(")]
         for key, attr, apply in (("background_color", "theme_bg", "_theme_apply"),
-                                 ("field_color", "theme_field", "_theme_apply_field")):
+                                 ("field_color", "theme_field", "_theme_apply_field"),
+                                 ("button_color", "theme_button", "_theme_apply_button")):
             self.assertEqual(src.count(f'"{key}"'), 2, key)
             self.assertIn(f'state["{key}"] = self.{attr}', save)
             self.assertIn(f'if getattr(self, "{attr}", None):', save)
@@ -1043,6 +1216,11 @@ class WiringTests(unittest.TestCase):
         src = self.src("myagent", "other_setup_mixin.py")
         self.assertIn("bind_mnemonics(dlg, {", src)
         self.assertIn('"t": field_choose, "e": field_default,', src)
+        self.assertIn('"u": button_choose, "r": button_default,', src)
+        # The three walks never share an option: the window colour takes a
+        # button's highlight frame only, the button colour its two faces.
+        self.assertEqual(THEME_OPTIONS["Button"], ("highlightbackground",))
+        self.assertEqual(other_setup_mixin.BUTTON_OPTIONS, ("background", "activebackground"))
         self.assertIn('dlg.bind("<Escape>", cancel)', src)
         self.assertIn('dlg.protocol("WM_DELETE_WINDOW", cancel)', src)
         self.assertIn('self._place_window(dlg, "other_setup",', src)
