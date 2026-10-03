@@ -20,6 +20,15 @@ widgets on a withdrawn or transparent root and skip where no display exists):
   the platform colour back by name; an unknown colour is the default; the
   toolbar group's recorded resting highlight follows, so the next press
   paints the new colour back, not the old — on the REAL group too;
+* the field colour (`_theme_apply_field` on real widgets): the content
+  classes recoloured while the chrome keeps its own, a checkbutton embedded
+  in a text box following the field and skipped by the chrome walk, later
+  fields born with it (an explicit bg= still winning), the ttk side — the
+  Treeview style's two colours, every combobox switched to the custom style
+  and back, a later combobox born with it, one with a style of its own left
+  alone, a dropdown list recoloured whether built before or after — the
+  zebra shade, Default by name, and the two colours independent of each
+  other;
 * the title bar (Windows 11, the DWM call recorded and never made): the
   COLORREF and the black / white title text by brightness, a window shown
   before the colour coloured at once and reset by Default, a window shown
@@ -50,16 +59,17 @@ import pathlib
 import tempfile
 import tkinter as tk
 import unittest
+from tkinter import ttk
 from unittest import mock
 
 from tests._util import stub
 from tests.test_agent_request_display import _walk
 from tests.test_state_skill_modes import _Host as _StateHost
 from myagent import other_setup_mixin
-from myagent.constants import IS_WINDOWS, LIST_TITLE_BG, TOOLBAR_ACTIVE_BG
+from myagent.constants import IS_WINDOWS, LIST_TITLE_BG, LIST_ZEBRA_BG, TOOLBAR_ACTIVE_BG
 from myagent.other_setup_mixin import (
-    DWM_COLOR_DEFAULT, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, OtherSetupMixin,
-    THEME_DB_PATTERNS, THEME_OPTIONS,
+    DWM_COLOR_DEFAULT, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, FIELD_COMBOBOX_STYLE,
+    OtherSetupMixin, THEME_DB_PATTERNS, THEME_OPTIONS,
 )
 from myagent.ui_mixin import UIMixin, list_title_band
 
@@ -99,7 +109,7 @@ class _ThemeHost(OtherSetupMixin):
         win.geometry(geo)
 
     def _save_last_state(self):
-        self.saves.append(self.theme_bg)
+        self.saves.append((self.theme_bg, getattr(self, "theme_field", None)))
 
 
 class _GroupHost(OtherSetupMixin, UIMixin):
@@ -107,7 +117,7 @@ class _GroupHost(OtherSetupMixin, UIMixin):
 
 
 def host(root, cls=_ThemeHost, **attrs):
-    base = dict(root=root, theme_bg=None, _other_setup_dialog=None, saves=[])
+    base = dict(root=root, theme_bg=None, theme_field=None, _other_setup_dialog=None, saves=[])
     base.update(attrs)
     return stub(cls, **base)
 
@@ -318,6 +328,178 @@ class ApplyTests(unittest.TestCase):
         self.assertNotEqual(self.wears(start), self.rgb(BLUE))        # the face: a button's
 
 
+# ── The field colour ───────────────────────────────────────────────────
+
+class FieldTests(unittest.TestCase):
+    """_theme_apply_field on real widgets (a withdrawn root): the content
+    classes, a widget embedded in a text box, the ttk styles, the zebra."""
+
+    def setUp(self):
+        self.root = tk_root(self)
+        self.h = host(self.root)
+        self.style = ttk.Style(self.root)
+
+    def tearDown(self):
+        free_tk_garbage_then_destroy(self)
+
+    def rgb(self, color):
+        return self.root.winfo_rgb(color)
+
+    def wears(self, widget, opt="background"):
+        return self.rgb(widget.cget(opt))
+
+    def build(self, parent):
+        """A slice of a MyAgent window: chrome, every field class, a
+        combobox, an Instructions-style list with zebra rows, and a
+        checkbutton embedded in a text box."""
+        frame = tk.Frame(parent)
+        w = {
+            "frame": frame,
+            "label": tk.Label(frame, text="Save Chat as"),
+            "check": tk.Checkbutton(frame, text="Debug"),
+            "button": tk.Button(frame, text="START"),
+            "text": tk.Text(frame),
+            "entry": tk.Entry(frame),
+            "listbox": tk.Listbox(frame),
+            "spinbox": tk.Spinbox(frame, from_=0, to=1),
+            "combo": ttk.Combobox(frame, state="readonly", values=["a", "b"]),
+            "tree": ttk.Treeview(frame, show="tree"),
+        }
+        w["white"] = tk.Checkbutton(w["text"], text="pattern", bg="white", activebackground="white")
+        w["tree"].tag_configure("odd", background=LIST_ZEBRA_BG)
+        w["tree"].insert("", "end", text="page", tags=("odd",))
+        return w
+
+    def popdown_bg(self, combo):
+        """The colour of the combobox's dropdown list — built by Tk on the
+        Tcl side at the first drop (here: now), invisible to tkinter's
+        winfo_children, so read by name."""
+        combo.tk.call("ttk::combobox::PopdownWindow", combo)
+        return self.rgb(combo.tk.call(f"{combo}.popdown.f.l", "cget", "-background"))
+
+    def test_the_fields_take_the_colour_and_the_chrome_keeps_its_own(self):
+        w = self.build(self.root)
+        chrome_before = self.wears(self.root)
+        before = {k: self.wears(v) for k, v in w.items() if k not in ("combo", "tree")}
+        self.h._theme_apply_field(PEACH)
+        peach = self.rgb(PEACH)
+        self.assertEqual(self.h.theme_field, PEACH)
+        for name in ("text", "entry", "listbox", "spinbox"):
+            self.assertEqual(self.wears(w[name]), peach, name)
+        for name in ("frame", "label", "check", "button"):
+            self.assertEqual(self.wears(w[name]), before[name], name)
+        self.assertEqual(self.wears(self.root), chrome_before)
+        self.assertIsNone(self.h.theme_bg)
+
+    def test_a_widget_embedded_in_a_text_box_follows_the_field(self):
+        w = self.build(self.root)
+        self.h._theme_apply_field(PEACH)
+        peach = self.rgb(PEACH)
+        self.assertEqual(self.wears(w["white"]), peach)
+        self.assertEqual(self.wears(w["white"], "activebackground"), peach)
+        self.assertNotEqual(self.wears(w["check"]), peach)          # on a frame: chrome
+
+    def test_the_chrome_walk_skips_an_embedded_widget(self):
+        w = self.build(self.root)
+        self.h._theme_apply("#ffffff")           # a white window: the embedded box wears it too
+        self.h._theme_apply(BLUE)
+        self.assertEqual(self.wears(w["check"]), self.rgb(BLUE))
+        self.assertEqual(self.wears(w["white"]), self.rgb("white"))  # the text box's, not the window's
+
+    def test_later_fields_are_born_with_it_and_an_explicit_colour_wins(self):
+        self.h._theme_apply_field(PEACH)
+        dlg = tk.Toplevel(self.root)
+        dlg.withdraw()
+        w = self.build(dlg)
+        peach = self.rgb(PEACH)
+        for name in ("text", "entry", "listbox", "spinbox"):
+            self.assertEqual(self.wears(w[name]), peach, name)
+        self.assertEqual(self.wears(tk.Entry(dlg, bg="white")), self.rgb("white"))
+        self.assertEqual(self.wears(w["white"]), self.rgb("white"))   # explicit on purpose
+        self.assertNotEqual(self.wears(w["label"]), peach)
+        self.assertEqual(self.popdown_bg(w["combo"]), peach)         # a list built after: born with it
+
+    def test_the_ttk_side_follows_and_default_puts_everything_back(self):
+        w = self.build(self.root)
+        own = ttk.Combobox(self.root, style="Own.TCombobox")
+        tree_before = {opt: self.style.lookup("Treeview", opt)
+                       for opt in ("background", "fieldbackground")}
+        self.popdown_bg(w["combo"])                 # the dropdown list exists before the colour
+        default_field = self.h._theme_field_default()
+        self.h._theme_apply_field(PEACH)
+        self.assertEqual(self.style.lookup("Treeview", "background"), PEACH)
+        self.assertEqual(self.style.lookup("Treeview", "fieldbackground"), PEACH)
+        self.assertEqual(self.popdown_bg(w["combo"]), self.rgb(PEACH))   # built before: walked
+        expected = FIELD_COMBOBOX_STYLE if self.h._theme_combo_built else ""
+        self.assertEqual(str(w["combo"].cget("style")), expected)
+        self.assertEqual(str(ttk.Combobox(self.root).cget("style")), expected)   # born with it
+        self.assertEqual(str(own.cget("style")), "Own.TCombobox")                # its own: untouched
+        if self.h._theme_combo_built:
+            self.assertEqual(self.style.lookup(FIELD_COMBOBOX_STYLE, "fieldbackground"), PEACH)
+        zebra = self.h._theme_zebra()
+        self.assertNotEqual(zebra, LIST_ZEBRA_BG)
+        self.assertEqual(self.rgb(w["tree"].tag_configure("odd", "background")), self.rgb(zebra))
+        # Default: by name, styles back to what the theme had, the zebra too.
+        self.h._theme_apply_field(None)
+        self.assertIsNone(self.h.theme_field)
+        for name in ("text", "entry", "listbox", "spinbox"):
+            self.assertEqual(w[name].cget("background"), default_field, name)
+        self.assertEqual(tk.Text(self.root).cget("background"), default_field)
+        for opt, value in tree_before.items():
+            self.assertEqual(self.style.lookup("Treeview", opt), value, opt)
+        self.assertEqual(str(w["combo"].cget("style")), "")
+        self.assertEqual(str(ttk.Combobox(self.root).cget("style")), "")
+        self.assertEqual(self.rgb(w["tree"].tag_configure("odd", "background")),
+                         self.rgb(LIST_ZEBRA_BG))
+        self.assertEqual(self.popdown_bg(w["combo"]), self.rgb(default_field))
+
+    @unittest.skipUnless(IS_WINDOWS, "the custom combobox style is built on the vista layout")
+    def test_the_combobox_style_keeps_the_native_border_and_arrow(self):
+        self.h._theme_apply_field(PEACH)
+        layout = str(self.style.layout(FIELD_COMBOBOX_STYLE))
+        self.assertIn("Combobox.border", layout)
+        self.assertIn("Combobox.rightdownarrow", layout)
+        self.assertIn("Field.Combobox.fill", layout)
+        self.assertNotIn("Combobox.background", layout)
+        self.assertEqual(str(self.style.lookup(FIELD_COMBOBOX_STYLE, "borderwidth")), "0")
+        # A combobox is the same size in either style.
+        plain, themed = ttk.Combobox(self.root, style="TCombobox"), ttk.Combobox(self.root)
+        self.assertEqual((plain.winfo_reqwidth(), plain.winfo_reqheight()),
+                         (themed.winfo_reqwidth(), themed.winfo_reqheight()))
+
+    def test_the_two_colours_are_independent(self):
+        w = self.build(self.root)
+        self.h._theme_apply(BLUE)
+        self.h._theme_apply_field(PEACH)
+        self.assertEqual((self.wears(w["label"]), self.wears(w["text"])),
+                         (self.rgb(BLUE), self.rgb(PEACH)))
+        self.h._theme_apply(None)                   # the window back: the fields stay
+        self.assertEqual(self.wears(w["text"]), self.rgb(PEACH))
+        self.assertEqual(w["label"].cget("background"), self.h._theme_default_bg())
+        self.h._theme_apply(BLUE)
+        self.h._theme_apply_field(None)             # the fields back: the window stays
+        self.assertEqual(self.wears(w["label"]), self.rgb(BLUE))
+        self.assertEqual(w["text"].cget("background"), self.h._theme_field_default())
+        self.assertEqual((self.h.theme_bg, self.h.theme_field), (BLUE, None))
+
+    def test_shade_and_zebra(self):
+        shade = OtherSetupMixin._theme_shade
+        self.assertEqual(shade(PEACH, 0.5), "#807059")
+        self.assertEqual(shade("#f0f0f0", 1.5), "#ffffff")           # clamped
+        self.assertEqual(self.h._theme_zebra(), LIST_ZEBRA_BG)
+        self.h.theme_field = PEACH
+        self.assertEqual(self.h._theme_zebra(), shade(PEACH, 0.94))  # light: a little darker
+        self.h.theme_field = "#1a237e"
+        self.assertEqual(self.h._theme_zebra(), shade("#1a237e", 1.18))   # dark: lighter
+
+    def test_an_unknown_colour_is_the_default(self):
+        w = self.build(self.root)
+        self.h._theme_apply_field(PEACH)
+        self.h._theme_apply_field("not-a-colour")
+        self.assertIsNone(self.h.theme_field)
+        self.assertEqual(w["text"].cget("background"), self.h._theme_field_default())
+
+
 # ── The title bar (Windows 11) ─────────────────────────────────────────
 
 def record_dwm(test):
@@ -429,10 +611,15 @@ class _Recorder(_StateHost):
     def __init__(self, *args, **kw):
         super().__init__(*args, **kw)
         self.theme_bg = None
+        self.theme_field = None
         self.applied = []
+        self.applied_field = []
 
     def _theme_apply(self, color):
         self.applied.append(color)
+
+    def _theme_apply_field(self, color):
+        self.applied_field.append(color)
 
 
 class StateFileTests(unittest.TestCase):
@@ -463,6 +650,18 @@ class StateFileTests(unittest.TestCase):
         again = _Recorder({}, self.state_file)
         again._load_last_state()
         self.assertEqual(again.applied, [None])
+
+    def test_the_field_colour_has_its_own_key(self):
+        h = _Recorder({}, self.state_file)
+        h.theme_field = PEACH
+        state = self.saved(h)
+        self.assertEqual(state["field_color"], PEACH)
+        self.assertNotIn("background_color", state)
+        again = _Recorder({}, self.state_file)
+        again._load_last_state()
+        self.assertEqual((again.applied, again.applied_field), ([None], [PEACH]))
+        h.theme_field = None
+        self.assertNotIn("field_color", self.saved(h))
 
     def test_a_host_without_the_mixin_loads_as_before(self):
         h = _Recorder({}, self.state_file)
@@ -521,10 +720,24 @@ class DialogTests(unittest.TestCase):
 
     @staticmethod
     def widgets(dlg):
-        buttons = {w.cget("text"): w for w in _walk(dlg) if isinstance(w, tk.Button)}
+        """(buttons, label texts, the window row's swatch). The window row
+        comes first, so its Choose… / Default keep the plain keys and the
+        field row's are "Field Choose…" / "Field Default"."""
+        buttons = {}
+        for w in _walk(dlg):
+            if isinstance(w, tk.Button):
+                key = w.cget("text")
+                if key in buttons:
+                    key = "Field " + key
+                buttons[key] = w
         labels = [w for w in _walk(dlg) if isinstance(w, tk.Label)]
         swatch = next(w for w in labels if str(w.cget("relief")) == "sunken")
         return buttons, [w.cget("text") for w in labels], swatch
+
+    @staticmethod
+    def field_swatch(dlg):
+        return [w for w in _walk(dlg)
+                if isinstance(w, tk.Label) and str(w.cget("relief")) == "sunken"][1]
 
     def rgb(self, color):
         return self.root.winfo_rgb(color)
@@ -565,7 +778,7 @@ class DialogTests(unittest.TestCase):
 
         h, _seen = self.open(act, picks=[((255, 224, 178), PEACH)])
         self.assertEqual(h.theme_bg, PEACH)
-        self.assertEqual(h.saves, [PEACH])
+        self.assertEqual(h.saves, [(PEACH, None)])
         self.assertEqual(self.rgb(self.root.cget("background")), self.rgb(PEACH))
         self.assertEqual(self.rgb(tk.Label(self.root).cget("background")), self.rgb(PEACH))
         self.assertIsNone(h._other_setup_dialog)
@@ -594,12 +807,13 @@ class DialogTests(unittest.TestCase):
 
         h, seen = self.open(act, before=lambda h: h._theme_apply(PEACH))
         self.assertIn(PEACH, seen["labels"])                   # opened on the chosen colour
-        self.assertFalse(any("(the system default)" in t for t in seen["labels"]))
+        # One "(the system default)": the field row's; the window row shows its colour.
+        self.assertEqual(sum("(the system default)" in t for t in seen["labels"]), 1)
         self.assertEqual(seen["swatch"], self.rgb(PEACH))
         self.assertEqual(seen["bg"], h._theme_default_bg())    # Default: back by name
-        self.assertTrue(any("(the system default)" in t for t in seen["after_labels"]))
+        self.assertEqual(sum("(the system default)" in t for t in seen["after_labels"]), 2)
         self.assertIsNone(h.theme_bg)
-        self.assertEqual(h.saves, [None])
+        self.assertEqual(h.saves, [(None, None)])
 
     def test_x_is_cancel(self):
         def act(dlg, seen):
@@ -625,6 +839,58 @@ class DialogTests(unittest.TestCase):
         _h, seen = self.open(act)
         self.assertTrue(seen["same"])
         self.assertEqual(seen["dialogs"], 1)
+
+    def test_the_field_row_is_independent_and_cancel_puts_both_back(self):
+        def act(dlg, seen):
+            buttons, labels, _swatch = self.widgets(dlg)
+            seen["labels"] = labels
+            buttons["Field Choose…"].invoke()
+            seen["field"] = (self.root.cget("background"),             # the window: untouched
+                             self.rgb(tk.Entry(self.root).cget("background")),   # a field: born peach
+                             self.rgb(self.field_swatch(dlg).cget("background")))
+            seen["after_labels"] = self.widgets(dlg)[1]
+            buttons["Choose…"].invoke()                                 # the window row
+            seen["both"] = (self.rgb(self.root.cget("background")),
+                            self.rgb(tk.Entry(self.root).cget("background")))
+            buttons["Cancel"].invoke()
+
+        h, seen = self.open(act, picks=[((255, 224, 178), PEACH), ((200, 230, 245), BLUE)])
+        self.assertEqual(sum("(the system default)" in t for t in seen["labels"]), 2)
+        self.assertEqual(seen["field"], (h._theme_default_bg(), self.rgb(PEACH), self.rgb(PEACH)))
+        self.assertEqual(sum("(the system default)" in t for t in seen["after_labels"]), 1)
+        self.assertIn(PEACH, seen["after_labels"])
+        self.assertEqual(seen["both"], (self.rgb(BLUE), self.rgb(PEACH)))
+        self.assertEqual(seen["picker_calls"][0].kwargs["title"], "Field colour")
+        self.assertEqual(seen["picker_calls"][1].kwargs["title"], "Window colour")
+        # Cancel put both back.
+        self.assertEqual((h.theme_bg, h.theme_field), (None, None))
+        self.assertEqual(self.root.cget("background"), h._theme_default_bg())
+        self.assertEqual(tk.Entry(self.root).cget("background"), h._theme_field_default())
+        self.assertEqual(h.saves, [])
+
+    def test_save_keeps_both_colours(self):
+        def act(dlg, seen):
+            buttons, _labels, _swatch = self.widgets(dlg)
+            buttons["Field Choose…"].invoke()
+            buttons["Choose…"].invoke()
+            buttons["Save"].invoke()
+
+        h, _seen = self.open(act, picks=[((255, 224, 178), PEACH), ((200, 230, 245), BLUE)])
+        self.assertEqual((h.theme_bg, h.theme_field), (BLUE, PEACH))
+        self.assertEqual(h.saves, [(BLUE, PEACH)])
+        self.assertEqual(self.rgb(tk.Text(self.root).cget("background")), self.rgb(PEACH))
+
+    def test_the_field_default_button_resets_only_the_fields(self):
+        def act(dlg, seen):
+            buttons, _labels, _swatch = self.widgets(dlg)
+            buttons["Field Default"].invoke()
+            seen["after"] = (self.root.cget("background"),
+                             tk.Entry(self.root).cget("background"))
+            buttons["Save"].invoke()
+
+        h, seen = self.open(act, before=lambda h: (h._theme_apply(BLUE), h._theme_apply_field(PEACH)))
+        self.assertEqual(seen["after"], (BLUE, h._theme_field_default()))
+        self.assertEqual(h.saves, [(BLUE, None)])
 
     @unittest.skipUnless(IS_WINDOWS, "the title bar is coloured on Windows only")
     def test_the_dialogs_own_title_bar_follows_the_preview(self):
@@ -713,6 +979,7 @@ class WiringTests(unittest.TestCase):
         self.assertIn("OtherSetupMixin", bases)
         init = src[src.index("def __init__"):]
         self.assertIn("self.theme_bg = None", init)
+        self.assertIn("self.theme_field = None", init)
         self.assertLess(init.index("self.theme_bg = None"), init.index("self.setup_ui()"))
 
     def test_the_main_window_carries_the_button_right_of_model_setup(self):
@@ -728,20 +995,29 @@ class WiringTests(unittest.TestCase):
 
     def test_the_state_file_has_one_writer_and_one_reader(self):
         src = self.src("myagent", "state_mixin.py")
-        self.assertEqual(src.count('"background_color"'), 2)
         save = src[src.index("def _save_last_state("):src.index("def _load_last_state(")]
-        self.assertIn('state["background_color"] = self.theme_bg', save)
-        self.assertIn('if getattr(self, "theme_bg", None):', save)
         load = src[src.index("def _load_last_state("):src.index("def _periodic_save(")]
-        self.assertIn('self._theme_apply(state.get("background_color"))', load)
+        for key, attr, apply in (("background_color", "theme_bg", "_theme_apply"),
+                                 ("field_color", "theme_field", "_theme_apply_field")):
+            self.assertEqual(src.count(f'"{key}"'), 2, key)
+            self.assertIn(f'state["{key}"] = self.{attr}', save)
+            self.assertIn(f'if getattr(self, "{attr}", None):', save)
+            self.assertIn(f'self.{apply}(state.get("{key}"))', load)
+            for name in sorted(os.listdir(REPO / "myagent")):      # nobody else touches the key
+                if name.endswith(".py") and name != "state_mixin.py":
+                    self.assertNotIn(f'"{key}"', self.src("myagent", name), name)
         self.assertIn('hasattr(self, "_theme_apply")', load)
-        for name in sorted(os.listdir(REPO / "myagent")):      # nobody else touches the key
-            if name.endswith(".py") and name != "state_mixin.py":
-                self.assertNotIn('"background_color"', self.src("myagent", name), name)
+
+    def test_the_instructions_list_takes_its_zebra_from_the_theme(self):
+        src = self.src("myagent", "instructions_mixin.py")
+        self.assertIn('self._theme_zebra() if hasattr(self, "_theme_zebra") else LIST_ZEBRA_BG', src)
+        self.assertNotIn('"#f3f3f3"', src)
+        self.assertEqual(LIST_ZEBRA_BG, "#f3f3f3")
 
     def test_the_dialog_is_wired_like_the_other_setup_dialogs(self):
         src = self.src("myagent", "other_setup_mixin.py")
         self.assertIn("bind_mnemonics(dlg, {", src)
+        self.assertIn('"t": field_choose, "e": field_default,', src)
         self.assertIn('dlg.bind("<Escape>", cancel)', src)
         self.assertIn('dlg.protocol("WM_DELETE_WINDOW", cancel)', src)
         self.assertIn('self._place_window(dlg, "other_setup",', src)

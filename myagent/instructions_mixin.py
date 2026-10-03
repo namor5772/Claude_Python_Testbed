@@ -3,7 +3,7 @@ from tkinter import font as tkfont, messagebox, ttk
 
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
-    ADAPTIVE_MODE_VALUES, MONO_FONT, _HAS_DESKTOP, _HAS_MCP,
+    ADAPTIVE_MODE_VALUES, MONO_FONT, LIST_ZEBRA_BG, _HAS_DESKTOP, _HAS_MCP,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_PHYSICAL,
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
@@ -765,7 +765,10 @@ class InstructionsMixin:
         tree.tag_configure("section", font=("Arial", 10, "bold"), background="#e4e4e4")
         tree.tag_configure("unfiled", font=("Arial", 10, "italic"),
                            foreground="#555555", background="#e4e4e4")
-        tree.tag_configure("odd", background="#f3f3f3")
+        # The alternate-row fill follows Other Setup's field colour
+        # (other_setup_mixin._theme_zebra; the constant on a bare host).
+        zebra = self._theme_zebra() if hasattr(self, "_theme_zebra") else LIST_ZEBRA_BG
+        tree.tag_configure("odd", background=zebra)
         self._instr_tree = tree
 
         btn_row = tk.Frame(pane)

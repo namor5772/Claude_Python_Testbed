@@ -40,6 +40,29 @@ remembers each button's resting look from creation
 in those records too, or the next press would paint the old halo back
 around the button it releases.
 
+A second, independent colour (the user's request, later the same day) is the
+**Field colour**: the background of everything that is white by default —
+text boxes, entries, listboxes, the temperature spinbox, every combobox's
+dropdown list and field, and the Instructions list (a ttk Treeview). Kept as
+`field_color` beside `background_color` and applied by `_theme_apply_field`
+with the same two mechanisms — the walk over what still wears the previous
+field colour, the option database for later windows — plus ttk's styles,
+which the option database does not reach: the Treeview style's background
+and fieldbackground, and for comboboxes a style of our own
+(FIELD_COMBOBOX_STYLE) whose layout is the native one with the inner fill
+element — `Combobox.background`, drawn by the Windows theme engine, which
+ignores every colour — replaced by Tk's default-theme `field` element, which
+honours `fieldbackground`; the native border and arrow stay (probed
+2026-10-04: identical at the default, the readonly focus highlight still
+drawn). The style is built once; every combobox is switched to it while a
+field colour is chosen and back to the default style for the system default,
+later comboboxes through the option database's `*TCombobox.style`; where the
+native layout has no such element (aqua) comboboxes keep their look. A
+widget embedded in a text box (the Safety dialog's checkbuttons) wears the
+text box's colour, so it belongs to the field walk and the chrome walk skips
+it. The Instructions list's zebra stripes become a shade of the field colour
+(`_theme_zebra`; LIST_ZEBRA_BG at the default).
+
 The title bar follows, on Windows 11: the Desktop Window Manager colours a
 window's caption per window (`DwmSetWindowAttribute`, DWMWA_CAPTION_COLOR,
 with DWMWA_TEXT_COLOR black or white by the colour's brightness), and
@@ -59,9 +82,9 @@ dialog opened on. Pinned in tests/test_other_setup.py.
 
 import ctypes
 import tkinter as tk
-from tkinter import colorchooser
+from tkinter import colorchooser, ttk
 
-from myagent.constants import IS_WINDOWS
+from myagent.constants import IS_WINDOWS, LIST_ZEBRA_BG
 from myagent.keyboard import bind_mnemonics
 
 # Widget class → the colour options that are "the window's background" on it.
@@ -89,6 +112,30 @@ THEME_DB_PATTERNS = tuple(
     f"*{cls}.{_DB_OPTION[opt]}"
     for cls, opts in THEME_OPTIONS.items() if cls != "Tk" for opt in opts)
 
+# The field colour: the classes whose background is white by default — the
+# content, not the chrome — and the option-database patterns for their
+# later-born twins (a combobox's dropdown list is a plain Listbox, so the
+# Listbox pattern reaches it too).
+FIELD_OPTIONS = {
+    "Text": ("background",),
+    "Entry": ("background",),
+    "Listbox": ("background",),
+    "Spinbox": ("background",),
+}
+FIELD_DB_PATTERNS = tuple(f"*{cls}.background" for cls in FIELD_OPTIONS)
+# A widget placed inside a text box (the Safety dialog's checkbuttons) wears
+# the text box's colour: these classes follow the field colour there, and
+# the chrome walk leaves them alone.
+EMBEDDED_CLASSES = ("Checkbutton", "Radiobutton", "Label", "Frame")
+# ttk draws its fields from styles, which the option database does not
+# reach: the Treeview style's two colours, and for comboboxes a style of our
+# own — the native layout with its inner fill element replaced by the
+# default theme's `field`, which honours -fieldbackground where the Windows
+# theme engine's element ignores every colour.
+FIELD_COMBOBOX_STYLE = "Field.TCombobox"
+FIELD_COMBOBOX_FILL = "Field.Combobox.fill"
+FIELD_COMBOBOX_NATIVE_FILL = "Combobox.background"
+
 # Windows 11 (build 22000+) colours a window's title bar per window through
 # the Desktop Window Manager: DwmSetWindowAttribute with these attributes and
 # a COLORREF (0x00BBGGRR); DWM_COLOR_DEFAULT puts the system colour back.
@@ -98,11 +145,12 @@ DWM_COLOR_DEFAULT = 0xFFFFFFFF
 
 THEME_MUTED_FG = "#555555"
 THEME_ERROR_FG = "#b00020"
-THEME_NOTE = ("The main window and every dialog — the Instruction Editor, the Skills "
-              "Manager, Safety, Agent Request, Confirm Command, Voice Setup, Model Setup "
-              "and this one — take this colour at once; text boxes, lists and buttons "
-              "keep their own. Kept with this instance's window positions in "
-              "agent_state.json.")
+THEME_NOTE = ("Window colour: the main window and every dialog — the Instruction Editor, "
+              "the Skills Manager, Safety, Agent Request, Confirm Command, Voice Setup, "
+              "Model Setup and this one — and, on Windows 11, their title bars. Field "
+              "colour: the text boxes, entries, lists, dropdowns and the Instructions "
+              "list — everything that is white by default. Both take effect at once and "
+              "are kept with this instance's window positions in agent_state.json.")
 
 
 class OtherSetupMixin:
@@ -174,9 +222,11 @@ class OtherSetupMixin:
         """Recolour `widget` and every descendant: each THEME_OPTIONS option
         still wearing `old_rgb` — the colour the windows wore before — is
         set to `color`; one wearing anything else was coloured on purpose
-        and is left alone."""
+        and is left alone. A widget embedded in a text box is the field
+        colour's (see _theme_recolor_fields) and is skipped here."""
         try:
-            for opt in THEME_OPTIONS.get(widget.winfo_class(), ()):
+            embedded = widget.master is not None and widget.master.winfo_class() == "Text"
+            for opt in () if embedded else THEME_OPTIONS.get(widget.winfo_class(), ()):
                 try:
                     if widget.winfo_rgb(widget.cget(opt)) == old_rgb:
                         widget.configure({opt: color})
@@ -187,6 +237,153 @@ class OtherSetupMixin:
             return                  # a window mid-destruction
         for child in children:
             cls._theme_recolor(child, old_rgb, color)
+
+    # ── The field colour ───────────────────────────────────────────────
+
+    def _theme_field_default(self):
+        """The platform's own field background by Tk's name for it
+        (SystemWindow on Windows), read once from a throwaway entry BEFORE
+        the option database is touched, so Default can put it back by name."""
+        name = getattr(self, "_theme_field_default_name", None)
+        if name is None:
+            probe = tk.Entry(self.root)
+            name = self._theme_field_default_name = probe.cget("background")
+            probe.destroy()
+        return name
+
+    def _theme_field_current(self):
+        """#rrggbb of what the fields wear now."""
+        return self._theme_hex(self.root, getattr(self, "theme_field", None)
+                               or self._theme_field_default())
+
+    @staticmethod
+    def _theme_shade(hex_color, factor):
+        """`hex_color` with every channel scaled by `factor`, clamped."""
+        r, g, b = (min(255, max(0, round(int(hex_color[i:i + 2], 16) * factor)))
+                   for i in (1, 3, 5))
+        return "#%02x%02x%02x" % (r, g, b)
+
+    def _theme_zebra(self):
+        """The Instructions list's alternate-row colour: LIST_ZEBRA_BG on
+        the default field colour, else a shade of the chosen one — a little
+        darker on a light colour, lighter on a dark one."""
+        chosen = getattr(self, "theme_field", None)
+        if not chosen:
+            return LIST_ZEBRA_BG
+        light = self._theme_caption_text(chosen) == "#000000"
+        return self._theme_shade(chosen, 0.94 if light else 1.18)
+
+    def _theme_apply_field(self, color):
+        """Give every field — open now, or opened later — the background
+        `color` (#rrggbb or any Tk colour name; None, "" or a colour Tk does
+        not know = the platform default) and keep it as `theme_field`
+        (#rrggbb or None), the one field `_save_last_state` writes under
+        `field_color`. Independent of the window colour."""
+        root = self.root
+        before = root.winfo_rgb(self._theme_field_current())   # reads the default first
+        chosen = self._theme_hex(root, color) if color else None
+        self.theme_field = chosen
+        target = chosen or self._theme_field_default()
+        for pattern in FIELD_DB_PATTERNS:
+            root.option_add(pattern, target)
+        combo_style = self._theme_style_fields(chosen)
+        self._theme_recolor_fields(root, before, target, combo_style)
+
+    def _theme_style_fields(self, chosen):
+        """The ttk side: the Treeview style's colours and the combobox style
+        (built at first need). Returns the style every combobox should
+        wear — FIELD_COMBOBOX_STYLE while a colour is chosen and the style
+        could be built, else "" (the default style) — and tells the option
+        database, for the comboboxes to come."""
+        style = ttk.Style(self.root)
+        defaults = getattr(self, "_theme_tree_defaults", None)
+        if defaults is None:
+            defaults = self._theme_tree_defaults = {
+                opt: style.lookup("Treeview", opt) for opt in ("background", "fieldbackground")}
+        combo_style = ""
+        if chosen:
+            style.configure("Treeview", background=chosen, fieldbackground=chosen)
+            if self._theme_combobox_style(style):
+                style.configure(FIELD_COMBOBOX_STYLE, fieldbackground=chosen)
+                style.map(FIELD_COMBOBOX_STYLE, fieldbackground=[("readonly", chosen)])
+                combo_style = FIELD_COMBOBOX_STYLE
+        else:
+            style.configure("Treeview", **defaults)
+        self.root.option_add("*TCombobox.style", combo_style)
+        return combo_style
+
+    def _theme_combobox_style(self, style):
+        """Build FIELD_COMBOBOX_STYLE once: the native TCombobox layout with
+        its inner fill element swapped for the default theme's `field`
+        (zero border and focus width, so the size stays the native one).
+        False where the layout has no such element — another theme, aqua —
+        and comboboxes then keep their native look."""
+        built = getattr(self, "_theme_combo_built", None)
+        if built is not None:
+            return built
+        try:
+            style.element_create(FIELD_COMBOBOX_FILL, "from", "default", "field")
+        except tk.TclError:
+            pass                                    # already there: one per interpreter
+
+        def swap(layout):
+            out, found = [], False
+            for name, spec in layout:
+                spec = dict(spec)
+                if "children" in spec:
+                    spec["children"], inner = swap(spec["children"])
+                    found = found or inner
+                if name == FIELD_COMBOBOX_NATIVE_FILL:
+                    name, found = FIELD_COMBOBOX_FILL, True
+                out.append((name, spec))
+            return out, found
+
+        try:
+            layout, found = swap(style.layout("TCombobox"))
+            if found:
+                style.layout(FIELD_COMBOBOX_STYLE, layout)
+                style.configure(FIELD_COMBOBOX_STYLE, borderwidth=0, focuswidth=0)
+        except tk.TclError:
+            found = False
+        self._theme_combo_built = found
+        return found
+
+    def _theme_recolor_fields(self, widget, old_rgb, color, combo_style):
+        """Recolour every field under `widget` (itself included) that still
+        wears `old_rgb`: the FIELD_OPTIONS classes, a widget embedded in a
+        text box, a combobox's dropdown list (a Listbox under it); switch
+        every combobox wearing a default style to `combo_style`; and give a
+        list with zebra stripes its new shade."""
+        try:
+            cls_name = widget.winfo_class()
+            options = FIELD_OPTIONS.get(cls_name, ())
+            if (not options and cls_name in EMBEDDED_CLASSES and widget.master is not None
+                    and widget.master.winfo_class() == "Text"):
+                options = ("background", "activebackground")
+            for opt in options:
+                try:
+                    if widget.winfo_rgb(widget.cget(opt)) == old_rgb:
+                        widget.configure({opt: color})
+                except tk.TclError:
+                    pass
+            if cls_name == "TCombobox":
+                if str(widget.cget("style")) in ("", "TCombobox", FIELD_COMBOBOX_STYLE):
+                    widget.configure(style=combo_style)
+                # Its dropdown list, built by Tk on the Tcl side at the first
+                # drop: tkinter's winfo_children skips it, so it is reached
+                # by name.
+                popdown = f"{widget}.popdown.f.l"
+                if int(widget.tk.call("winfo", "exists", popdown)):
+                    current = widget.tk.call(popdown, "cget", "-background")
+                    if widget.winfo_rgb(current) == old_rgb:
+                        widget.tk.call(popdown, "configure", "-background", color)
+            if cls_name == "Treeview" and widget.tag_has("odd"):
+                widget.tag_configure("odd", background=self._theme_zebra())
+            children = widget.winfo_children()
+        except tk.TclError:
+            return                  # a window mid-destruction
+        for child in children:
+            self._theme_recolor_fields(child, old_rgb, color, combo_style)
 
     # ── The title bar (Windows 11) ─────────────────────────────────────
 
@@ -305,10 +502,10 @@ class OtherSetupMixin:
 
     def _open_other_setup(self, parent):
         """The modal dialog over `parent` for the settings that belong to no
-        other setup button — the window background colour, so far. Choose…
-        and Default preview a colour on every open window at once; Save
-        keeps it and writes the state file; Cancel (Escape, [X]) puts back
-        the colour the dialog opened on."""
+        other setup button — the window colour and the field colour, so
+        far, a row each. Choose… and Default preview a colour on every open
+        window at once; Save keeps both and writes the state file; Cancel
+        (Escape, [X]) puts back the colours the dialog opened on."""
         existing = getattr(self, "_other_setup_dialog", None)
         try:
             if existing is not None and existing.winfo_exists():
@@ -317,7 +514,7 @@ class OtherSetupMixin:
                 return
         except tk.TclError:
             pass
-        opened_on = getattr(self, "theme_bg", None)
+        opened_on = (getattr(self, "theme_bg", None), getattr(self, "theme_field", None))
 
         dlg = tk.Toplevel(parent)
         self._other_setup_dialog = dlg
@@ -328,53 +525,71 @@ class OtherSetupMixin:
         dlg.grid_columnconfigure(1, weight=1)
         font = ("Arial", 10)
         small = ("Arial", 9)
+        shows = []
 
-        tk.Label(dlg, text="Background colour:", font=font, anchor="w").grid(
-            row=0, column=0, sticky="w", padx=(15, 8), pady=(14, 4))
-        row = tk.Frame(dlg)
-        row.grid(row=0, column=1, sticky="w", padx=(0, 15), pady=(14, 4))
-        # The swatch wears the colour the windows wear. It is set outright at
-        # each change — a Label, it would be caught by the preview's own walk
-        # as well, but it should not depend on that.
-        swatch = tk.Label(row, width=4, relief="sunken", bd=1)
-        swatch.pack(side=tk.LEFT, padx=(0, 8), ipady=2)
-        value = tk.Label(row, font=font, anchor="w", width=24)
-        value.pack(side=tk.LEFT, padx=(0, 10))
-        choose_btn = tk.Button(row, text="Choose…", width=10, command=lambda: choose())
-        choose_btn.pack(side=tk.LEFT)
-        default_btn = tk.Button(row, text="Default", width=10, command=lambda: use_default())
-        default_btn.pack(side=tk.LEFT, padx=(6, 0))
+        def refresh():
+            for show in shows:
+                show()
+
+        def colour_row(index, label, current, chosen, apply):
+            """One colour: a swatch, the hex (or the system default), Choose…
+            and Default. The swatch is set outright at each change — a
+            Label, it would be caught by the preview's own walk as well,
+            but it should not depend on that."""
+            pady = (14, 4) if index == 0 else 4
+            tk.Label(dlg, text=label, font=font, anchor="w").grid(
+                row=index, column=0, sticky="w", padx=(15, 8), pady=pady)
+            frame = tk.Frame(dlg)
+            frame.grid(row=index, column=1, sticky="w", padx=(0, 15), pady=pady)
+            swatch = tk.Label(frame, width=4, relief="sunken", bd=1)
+            swatch.pack(side=tk.LEFT, padx=(0, 8), ipady=2)
+            value = tk.Label(frame, font=font, anchor="w", width=24)
+            value.pack(side=tk.LEFT, padx=(0, 10))
+
+            def show():
+                now = current()
+                swatch.config(bg=now)
+                value.config(text=now if chosen() else f"{now}  (the system default)")
+
+            def choose():
+                picked = colorchooser.askcolor(initialcolor=current(), parent=dlg,
+                                               title=label.rstrip(":"))
+                if picked and picked[1]:
+                    apply(picked[1])
+                    refresh()
+
+            def use_default():
+                apply(None)
+                refresh()
+
+            choose_btn = tk.Button(frame, text="Choose…", width=10, command=choose)
+            choose_btn.pack(side=tk.LEFT)
+            default_btn = tk.Button(frame, text="Default", width=10, command=use_default)
+            default_btn.pack(side=tk.LEFT, padx=(6, 0))
+            shows.append(show)
+            show()
+            return choose_btn, default_btn
+
+        bg_choose, bg_default = colour_row(
+            0, "Window colour:", self._theme_current,
+            lambda: getattr(self, "theme_bg", None), self._theme_apply)
+        field_choose, field_default = colour_row(
+            1, "Field colour:", self._theme_field_current,
+            lambda: getattr(self, "theme_field", None), self._theme_apply_field)
 
         def wrapping(text, fg):
             # The Model Setup pattern: a modest starting wraplength keeps the
             # text from widening the dialog; once laid out, it wraps at the
-            # width the row above gives the dialog.
+            # width the rows above give the dialog.
             lbl = tk.Label(dlg, text=text, font=small, fg=fg, anchor="w", justify="left",
                            wraplength=440)
             lbl.bind("<Configure>", lambda e: lbl.config(wraplength=max(e.width - 4, 200)))
             return lbl
 
         note = wrapping(THEME_NOTE, THEME_MUTED_FG)
-        note.grid(row=1, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
+        note.grid(row=2, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
         status = wrapping("", THEME_ERROR_FG)
-        status.grid(row=2, column=0, columnspan=2, sticky="ew", padx=15)
-
-        def show():
-            current = self._theme_current()
-            swatch.config(bg=current)
-            value.config(text=current if getattr(self, "theme_bg", None)
-                         else f"{current}  (the system default)")
-
-        def choose():
-            picked = colorchooser.askcolor(initialcolor=self._theme_current(), parent=dlg,
-                                           title="Background colour")
-            if picked and picked[1]:
-                self._theme_apply(picked[1])
-                show()
-
-        def use_default():
-            self._theme_apply(None)
-            show()
+        status.grid(row=3, column=0, columnspan=2, sticky="ew", padx=15)
 
         def close(event=None):
             self._other_setup_dialog = None
@@ -382,29 +597,31 @@ class OtherSetupMixin:
             return "break"
 
         def cancel(event=None):
-            if getattr(self, "theme_bg", None) != opened_on:
-                self._theme_apply(opened_on)
+            if getattr(self, "theme_bg", None) != opened_on[0]:
+                self._theme_apply(opened_on[0])
+            if getattr(self, "theme_field", None) != opened_on[1]:
+                self._theme_apply_field(opened_on[1])
             return close()
 
         def save():
             try:
                 self._save_last_state()
             except OSError as exc:
-                status.config(text=f"Could not save the setting: {exc}")
+                status.config(text=f"Could not save the settings: {exc}")
                 return
             close()
 
         btn_row = tk.Frame(dlg)
-        btn_row.grid(row=3, column=0, columnspan=2, pady=(8, 12))
+        btn_row.grid(row=4, column=0, columnspan=2, pady=(8, 12))
         save_btn = tk.Button(btn_row, text="Save", width=10, command=save)
         save_btn.pack(side=tk.LEFT, padx=8)
         cancel_btn = tk.Button(btn_row, text="Cancel", width=10, command=cancel)
         cancel_btn.pack(side=tk.LEFT, padx=8)
-        show()
 
         dlg.protocol("WM_DELETE_WINDOW", cancel)
-        dlg.bind("<Escape>", cancel)    # one small setting: no draft worth protecting
-        bind_mnemonics(dlg, {"b": choose_btn, "d": default_btn,
+        dlg.bind("<Escape>", cancel)    # two small settings: no draft worth protecting
+        bind_mnemonics(dlg, {"b": bg_choose, "d": bg_default,
+                             "t": field_choose, "e": field_default,
                              "s": save_btn, "c": cancel_btn})
 
         dlg.update_idletasks()
@@ -417,7 +634,7 @@ class OtherSetupMixin:
         if position:
             self._set_geometry(dlg, f"+{position[2]}+{position[3]}")
         dlg.deiconify()
-        choose_btn.focus_set()
+        bg_choose.focus_set()
         dlg.wait_visibility()
         dlg.grab_set()
         dlg.wait_window()
