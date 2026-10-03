@@ -3,7 +3,8 @@ from tkinter import font as tkfont, messagebox, ttk
 
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
-    ADAPTIVE_MODE_VALUES, MONO_FONT, LIST_ZEBRA_BG, _HAS_DESKTOP, _HAS_MCP,
+    ADAPTIVE_MODE_VALUES, MONO_FONT, INSTR_TREE_STYLE, LIST_BAND_BG, LIST_ZEBRA_BG,
+    _HAS_DESKTOP, _HAS_MCP,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_PHYSICAL,
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
@@ -750,10 +751,10 @@ class InstructionsMixin:
         self._instr_heading = list_title_band(pane, "INSTRUCTIONS")
         self._instr_heading.grid(row=0, column=0, sticky="ew")
         # A shallow indent (Tk's default is 20 px) leaves long names more room
-        style.configure("Instr.Treeview", font=("Arial", 10), indent=10,
+        style.configure(INSTR_TREE_STYLE, font=("Arial", 10), indent=10,
                         rowheight=row_font.metrics("linespace") + 6)
         tree = ttk.Treeview(pane, show="tree", selectmode="browse",
-                            style="Instr.Treeview")
+                            style=INSTR_TREE_STYLE)
         tree.column("#0", stretch=True, minwidth=80)
         tree.grid(row=1, column=0, sticky="nsew")
         list_scrollbar = tk.Scrollbar(pane, command=tree.yview)
@@ -762,12 +763,14 @@ class InstructionsMixin:
         # Section headers are bold on a grey band, the Unfiled header italic
         # on the same band, and pages alternate white / off-white — the row
         # separation a Tk 8.6 Treeview has no rule lines for.
-        tree.tag_configure("section", font=("Arial", 10, "bold"), background="#e4e4e4")
-        tree.tag_configure("unfiled", font=("Arial", 10, "italic"),
-                           foreground="#555555", background="#e4e4e4")
-        # The alternate-row fill follows Other Setup's field colour
-        # (other_setup_mixin._theme_zebra; the constant on a bare host).
+        # The bands and the alternate-row fill follow Other Setup's field
+        # colour (other_setup_mixin._theme_band / _theme_zebra; the
+        # constants on a bare host).
+        band = self._theme_band() if hasattr(self, "_theme_band") else LIST_BAND_BG
         zebra = self._theme_zebra() if hasattr(self, "_theme_zebra") else LIST_ZEBRA_BG
+        tree.tag_configure("section", font=("Arial", 10, "bold"), background=band)
+        tree.tag_configure("unfiled", font=("Arial", 10, "italic"),
+                           foreground="#555555", background=band)
         tree.tag_configure("odd", background=zebra)
         self._instr_tree = tree
 

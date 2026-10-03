@@ -66,7 +66,9 @@ from tests._util import stub
 from tests.test_agent_request_display import _walk
 from tests.test_state_skill_modes import _Host as _StateHost
 from myagent import other_setup_mixin
-from myagent.constants import IS_WINDOWS, LIST_TITLE_BG, LIST_ZEBRA_BG, TOOLBAR_ACTIVE_BG
+from myagent.constants import (
+    INSTR_TREE_STYLE, IS_WINDOWS, LIST_BAND_BG, LIST_TITLE_BG, LIST_ZEBRA_BG, TOOLBAR_ACTIVE_BG,
+)
 from myagent.other_setup_mixin import (
     DWM_COLOR_DEFAULT, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, FIELD_COMBOBOX_STYLE,
     OtherSetupMixin, THEME_DB_PATTERNS, THEME_OPTIONS,
@@ -363,12 +365,21 @@ class FieldTests(unittest.TestCase):
             "listbox": tk.Listbox(frame),
             "spinbox": tk.Spinbox(frame, from_=0, to=1),
             "combo": ttk.Combobox(frame, state="readonly", values=["a", "b"]),
-            "tree": ttk.Treeview(frame, show="tree"),
+            "tree": ttk.Treeview(frame, show="tree", style=INSTR_TREE_STYLE),
+            "other_tree": ttk.Treeview(frame, show="tree"),
         }
         w["white"] = tk.Checkbutton(w["text"], text="pattern", bg="white", activebackground="white")
-        w["tree"].tag_configure("odd", background=LIST_ZEBRA_BG)
-        w["tree"].insert("", "end", text="page", tags=("odd",))
+        for tree in (w["tree"], w["other_tree"]):      # the Instructions list's tags, as it configures them
+            tree.tag_configure("section", background=LIST_BAND_BG)
+            tree.tag_configure("unfiled", background=LIST_BAND_BG)
+            tree.tag_configure("odd", background=LIST_ZEBRA_BG)
+            section = tree.insert("", "end", text="SECTION", tags=("section",))
+            tree.insert(section, "end", text="page", tags=("odd",))
         return w
+
+    def tags(self, tree):
+        return {tag: self.rgb(tree.tag_configure(tag, "background"))
+                for tag in ("section", "unfiled", "odd")}
 
     def popdown_bg(self, combo):
         """The colour of the combobox's dropdown list — built by Tk on the
@@ -380,7 +391,8 @@ class FieldTests(unittest.TestCase):
     def test_the_fields_take_the_colour_and_the_chrome_keeps_its_own(self):
         w = self.build(self.root)
         chrome_before = self.wears(self.root)
-        before = {k: self.wears(v) for k, v in w.items() if k not in ("combo", "tree")}
+        before = {k: self.wears(v) for k, v in w.items()
+                  if k not in ("combo", "tree", "other_tree")}
         self.h._theme_apply_field(PEACH)
         peach = self.rgb(PEACH)
         self.assertEqual(self.h.theme_field, PEACH)
@@ -436,9 +448,15 @@ class FieldTests(unittest.TestCase):
         self.assertEqual(str(own.cget("style")), "Own.TCombobox")                # its own: untouched
         if self.h._theme_combo_built:
             self.assertEqual(self.style.lookup(FIELD_COMBOBOX_STYLE, "fieldbackground"), PEACH)
-        zebra = self.h._theme_zebra()
+        zebra, band = self.h._theme_zebra(), self.h._theme_band()
         self.assertNotEqual(zebra, LIST_ZEBRA_BG)
-        self.assertEqual(self.rgb(w["tree"].tag_configure("odd", "background")), self.rgb(zebra))
+        self.assertNotEqual(band, LIST_BAND_BG)
+        self.assertEqual(self.tags(w["tree"]),
+                         {"section": self.rgb(band), "unfiled": self.rgb(band), "odd": self.rgb(zebra)})
+        # Another list, not the Instructions list: its tags are its own.
+        self.assertEqual(self.tags(w["other_tree"]),
+                         {"section": self.rgb(LIST_BAND_BG), "unfiled": self.rgb(LIST_BAND_BG),
+                          "odd": self.rgb(LIST_ZEBRA_BG)})
         # Default: by name, styles back to what the theme had, the zebra too.
         self.h._theme_apply_field(None)
         self.assertIsNone(self.h.theme_field)
@@ -449,8 +467,9 @@ class FieldTests(unittest.TestCase):
             self.assertEqual(self.style.lookup("Treeview", opt), value, opt)
         self.assertEqual(str(w["combo"].cget("style")), "")
         self.assertEqual(str(ttk.Combobox(self.root).cget("style")), "")
-        self.assertEqual(self.rgb(w["tree"].tag_configure("odd", "background")),
-                         self.rgb(LIST_ZEBRA_BG))
+        self.assertEqual(self.tags(w["tree"]),
+                         {"section": self.rgb(LIST_BAND_BG), "unfiled": self.rgb(LIST_BAND_BG),
+                          "odd": self.rgb(LIST_ZEBRA_BG)})
         self.assertEqual(self.popdown_bg(w["combo"]), self.rgb(default_field))
 
     @unittest.skipUnless(IS_WINDOWS, "the custom combobox style is built on the vista layout")
@@ -482,15 +501,17 @@ class FieldTests(unittest.TestCase):
         self.assertEqual(w["text"].cget("background"), self.h._theme_field_default())
         self.assertEqual((self.h.theme_bg, self.h.theme_field), (BLUE, None))
 
-    def test_shade_and_zebra(self):
+    def test_shade_zebra_and_band(self):
         shade = OtherSetupMixin._theme_shade
         self.assertEqual(shade(PEACH, 0.5), "#807059")
         self.assertEqual(shade("#f0f0f0", 1.5), "#ffffff")           # clamped
-        self.assertEqual(self.h._theme_zebra(), LIST_ZEBRA_BG)
-        self.h.theme_field = PEACH
-        self.assertEqual(self.h._theme_zebra(), shade(PEACH, 0.94))  # light: a little darker
-        self.h.theme_field = "#1a237e"
-        self.assertEqual(self.h._theme_zebra(), shade("#1a237e", 1.18))   # dark: lighter
+        self.assertEqual((self.h._theme_zebra(), self.h._theme_band()), (LIST_ZEBRA_BG, LIST_BAND_BG))
+        self.h.theme_field = PEACH                                   # light: darker, the band more so
+        self.assertEqual((self.h._theme_zebra(), self.h._theme_band()),
+                         (shade(PEACH, 0.94), shade(PEACH, 0.88)))
+        self.h.theme_field = "#1a237e"                               # dark: lighter, the band more so
+        self.assertEqual((self.h._theme_zebra(), self.h._theme_band()),
+                         (shade("#1a237e", 1.18), shade("#1a237e", 1.36)))
 
     def test_an_unknown_colour_is_the_default(self):
         w = self.build(self.root)
@@ -1008,11 +1029,15 @@ class WiringTests(unittest.TestCase):
                     self.assertNotIn(f'"{key}"', self.src("myagent", name), name)
         self.assertIn('hasattr(self, "_theme_apply")', load)
 
-    def test_the_instructions_list_takes_its_zebra_from_the_theme(self):
+    def test_the_instructions_list_takes_its_zebra_and_bands_from_the_theme(self):
         src = self.src("myagent", "instructions_mixin.py")
         self.assertIn('self._theme_zebra() if hasattr(self, "_theme_zebra") else LIST_ZEBRA_BG', src)
-        self.assertNotIn('"#f3f3f3"', src)
-        self.assertEqual(LIST_ZEBRA_BG, "#f3f3f3")
+        self.assertIn('self._theme_band() if hasattr(self, "_theme_band") else LIST_BAND_BG', src)
+        for literal in ('"#f3f3f3"', '"#e4e4e4"', '"Instr.Treeview"'):
+            self.assertNotIn(literal, src, literal)
+        self.assertEqual(src.count("INSTR_TREE_STYLE"), 3)         # the import, the style, the tree
+        self.assertEqual((LIST_ZEBRA_BG, LIST_BAND_BG, INSTR_TREE_STYLE),
+                         ("#f3f3f3", "#e4e4e4", "Instr.Treeview"))
 
     def test_the_dialog_is_wired_like_the_other_setup_dialogs(self):
         src = self.src("myagent", "other_setup_mixin.py")

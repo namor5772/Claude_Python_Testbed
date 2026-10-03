@@ -3937,10 +3937,14 @@ TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
 # header-item fill, sampled 2026-09-12 (hover is #d9ebf9) — the blue a clicked
 # ttk heading showed, held permanently on every OS.
 LIST_TITLE_BG = "#bcdcf4"
-# The Instructions list's alternate-row fill (a Tk 8.6 Treeview has no rule
-# lines) on the default field colour; Other Setup's field colour shades its
-# own (other_setup_mixin._theme_zebra).
+# The Instructions list (its ttk style name, by which Other Setup's field
+# walk knows it): the alternate-row fill (a Tk 8.6 Treeview has no rule
+# lines) and the section header bands, both on the default field colour —
+# a chosen field colour shades its own (other_setup_mixin._theme_zebra /
+# _theme_band).
+INSTR_TREE_STYLE = "Instr.Treeview"
 LIST_ZEBRA_BG = "#f3f3f3"
+LIST_BAND_BG = "#e4e4e4"
 # The Agent Request dialog's Mike button while the microphone is live (white
 # text on it) — the one state in MyAgent a user must never miss.
 VOICE_RECORDING_BG = "#c62828"

@@ -60,8 +60,11 @@ later comboboxes through the option database's `*TCombobox.style`; where the
 native layout has no such element (aqua) comboboxes keep their look. A
 widget embedded in a text box (the Safety dialog's checkbuttons) wears the
 text box's colour, so it belongs to the field walk and the chrome walk skips
-it. The Instructions list's zebra stripes become a shade of the field colour
-(`_theme_zebra`; LIST_ZEBRA_BG at the default).
+it. The Instructions list's zebra stripes and section header bands become
+shades of the field colour — the bands the deeper shade, so the three levels
+keep their contrast (`_theme_zebra` / `_theme_band`; LIST_ZEBRA_BG /
+LIST_BAND_BG at the default); the list is known by its style name,
+INSTR_TREE_STYLE, so no other list is touched.
 
 The title bar follows, on Windows 11: the Desktop Window Manager colours a
 window's caption per window (`DwmSetWindowAttribute`, DWMWA_CAPTION_COLOR,
@@ -84,7 +87,7 @@ import ctypes
 import tkinter as tk
 from tkinter import colorchooser, ttk
 
-from myagent.constants import IS_WINDOWS, LIST_ZEBRA_BG
+from myagent.constants import INSTR_TREE_STYLE, IS_WINDOWS, LIST_BAND_BG, LIST_ZEBRA_BG
 from myagent.keyboard import bind_mnemonics
 
 # Widget class → the colour options that are "the window's background" on it.
@@ -273,6 +276,16 @@ class OtherSetupMixin:
         light = self._theme_caption_text(chosen) == "#000000"
         return self._theme_shade(chosen, 0.94 if light else 1.18)
 
+    def _theme_band(self):
+        """The Instructions list's section header bands: LIST_BAND_BG on the
+        default field colour, else a deeper shade of the chosen one than the
+        zebra rows — darker on a light colour, lighter on a dark one."""
+        chosen = getattr(self, "theme_field", None)
+        if not chosen:
+            return LIST_BAND_BG
+        light = self._theme_caption_text(chosen) == "#000000"
+        return self._theme_shade(chosen, 0.88 if light else 1.36)
+
     def _theme_apply_field(self, color):
         """Give every field — open now, or opened later — the background
         `color` (#rrggbb or any Tk colour name; None, "" or a colour Tk does
@@ -352,8 +365,9 @@ class OtherSetupMixin:
         """Recolour every field under `widget` (itself included) that still
         wears `old_rgb`: the FIELD_OPTIONS classes, a widget embedded in a
         text box, a combobox's dropdown list (a Listbox under it); switch
-        every combobox wearing a default style to `combo_style`; and give a
-        list with zebra stripes its new shade."""
+        every combobox wearing a default style to `combo_style`; and give
+        the Instructions list — known by its style — its new zebra and band
+        shades."""
         try:
             cls_name = widget.winfo_class()
             options = FIELD_OPTIONS.get(cls_name, ())
@@ -377,8 +391,11 @@ class OtherSetupMixin:
                     current = widget.tk.call(popdown, "cget", "-background")
                     if widget.winfo_rgb(current) == old_rgb:
                         widget.tk.call(popdown, "configure", "-background", color)
-            if cls_name == "Treeview" and widget.tag_has("odd"):
+            if cls_name == "Treeview" and str(widget.cget("style")) == INSTR_TREE_STYLE:
+                band = self._theme_band()
                 widget.tag_configure("odd", background=self._theme_zebra())
+                widget.tag_configure("section", background=band)
+                widget.tag_configure("unfiled", background=band)
             children = widget.winfo_children()
         except tk.TclError:
             return                  # a window mid-destruction
