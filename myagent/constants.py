@@ -398,8 +398,11 @@ FILE_TOOLS = [
             "Find files by glob pattern, newest first. Examples: '*.py', "
             "'src/**/*.ts', '**/test_*.py'. Pass 'path' to set the base "
             "directory (default: current working directory). Skips .git, "
-            ".venv, node_modules, __pycache__ and similar. Returns absolute "
-            "paths ready for read_file."
+            ".venv, node_modules, __pycache__ and similar, and never wanders "
+            "from outside into a cloud-synced or network tree (OneDrive, "
+            "iCloud, mounted volumes) — pass one as 'path' to search it. A "
+            "walk longer than 60 s returns what it has, marked PARTIAL. "
+            "Returns absolute paths ready for read_file."
         ),
         "input_schema": {
             "type": "object",
@@ -425,7 +428,10 @@ FILE_TOOLS = [
             "counts. Filter candidate files by filename with 'glob' (e.g. "
             "'*.py'). Searches recursively under 'path' (default: cwd; may also "
             "be a single file), skipping .git/.venv/node_modules and binary "
-            "files. Prefer this over run_command findstr/Select-String."
+            "files and never wandering from outside into a cloud-synced or "
+            "network tree (pass one as 'path' to search it); a walk longer "
+            "than 60 s returns what it has, marked PARTIAL. Prefer this over "
+            "run_command findstr/Select-String."
         ),
         "input_schema": {
             "type": "object",

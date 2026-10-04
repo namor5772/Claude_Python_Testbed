@@ -1,14 +1,21 @@
 """Characterization tests for myagent/file_mixin.py — the native file tools'
 safety contracts: exact-unique-match editing that fails loudly, read-before-
 edit/overwrite tracking, CRLF and BOM byte-exact round-trips, numbered reads,
-and glob/grep pruning of .git/.venv-style directories.
+and glob/grep pruning — DURING the walk — of .git/.venv-style directories
+and of the cloud-synced / network roots a wildcard must never wander into,
+plus the walk's STOP and time-ceiling exits (2026-10-04).
 
 FileMixin needs no Tk/App host — a bare subclass instance exercises the do_*
 methods directly, with all IO under a TemporaryDirectory."""
 
+import glob
+import os
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from myagent.file_mixin import FileMixin, FILE_SKIP_DIRS
 
@@ -198,6 +205,201 @@ class FileMixinCase(unittest.TestCase):
     def test_skip_dirs_include_the_heavy_hitters(self):
         for d in (".git", ".venv", "node_modules", "__pycache__", ".claude"):
             self.assertIn(d, FILE_SKIP_DIRS)
+
+
+class WalkPruningCase(unittest.TestCase):
+    """The 2026-10-04 contract: glob_files / grep_files prune WHILE they walk,
+    never enter a remote root from outside, and stop at STOP / the ceiling —
+    after a ** glob from ~ crawled the whole OneDrive through the macOS File
+    Provider for 50 minutes and looked hung. The walker is hand-rolled, so
+    its glob semantics are pinned against glob.glob itself."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.host = _Host()
+
+    def _write(self, rel, data="x"):
+        p = self.dir / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(data, encoding="utf-8")
+        return p
+
+    @staticmethod
+    def _paths(result):
+        """The absolute paths a glob_files / grep_files result lists."""
+        return {ln for ln in result.splitlines()[1:] if ln and not ln.startswith(("⚠", "…"))}
+
+    def _glob(self, pattern, base=None, host=None):
+        return (host or self.host).do_glob_files({"pattern": pattern, "path": str(base or self.dir)})
+
+    # ── glob semantics ──────────────────────────────────────────────────
+
+    def test_walker_matches_glob_glob_on_a_plain_tree(self):
+        for rel in ("a.py", "b.txt", "src/c.py", "src/d.ts", "src/deep/e.ts",
+                    "src/deep/test_f.py", "tests/test_g.py", ".hidden/h.py", ".env",
+                    "src/.secret.py", "data/x/y.csv", "data/z/y.csv", "data/z/w.csv"):
+            self._write(rel)
+        base = str(self.dir)
+        for pat in ("*.py", "**/*.py", "src/**/*.ts", "**/test_*.py", "**", "*",
+                    "data/*/y.csv", "**/.env", "src/c.py", ".hidden/*.py", "**/.secret.py",
+                    "nothing/*.py", "src/**", "**/deep/*.ts", "s*/**/*.py", "data/?/*.csv",
+                    "**/*.[ct]s?", "src/./deep/*.py", "a.py"):
+            expected = {os.path.abspath(p) for p in glob.glob(os.path.join(base, pat), recursive=True)
+                        if os.path.isfile(p)}
+            self.assertEqual(self._paths(self._glob(pat)), expected, pat)
+
+    def test_absolute_pattern_overrides_base_and_duplicates_collapse(self):
+        self._write("a/a/b.py")
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        res = self._glob(os.path.join(str(self.dir), "**", "b.py"), base=elsewhere.name)
+        self.assertTrue(res.startswith("1 file(s)"), res)
+        # a/a/b.py is reachable through two splits of `**/a/**/b.py`; listed once
+        res = self._glob("**/a/**/b.py")
+        self.assertTrue(res.startswith("1 file(s)"), res)
+
+    def test_newest_first(self):
+        old = self._write("old.py")
+        new = self._write("new.py")
+        os.utime(old, (1_000_000_000, 1_000_000_000))
+        os.utime(new, (1_600_000_000, 1_600_000_000))
+        lines = self._glob("*.py").splitlines()
+        self.assertTrue(lines[1].endswith("new.py") and lines[2].endswith("old.py"), lines)
+
+    # ── pruning while walking ───────────────────────────────────────────
+
+    def _listing(self, run):
+        """Every directory os.scandir was asked to list while `run()` ran
+        (os.walk lists through scandir too)."""
+        listed, real = [], os.scandir
+
+        def recording(path=".", *a, **k):
+            listed.append(os.fspath(path))
+            return real(path, *a, **k)
+
+        with mock.patch("myagent.file_mixin.os.scandir", recording):
+            result = run()
+        return result, listed
+
+    def test_skip_dirs_are_never_listed(self):
+        self._write("node_modules/pkg/deep/x.py", "beta")
+        self._write("build/out.py", "beta")
+        self._write("src/ok.py", "beta")
+        res, listed = self._listing(lambda: self._glob("**/*.py"))
+        self.assertIn("ok.py", res)
+        self.assertNotIn("x.py", res)
+        self.assertNotIn("out.py", res)
+        self.assertFalse([d for d in listed if "node_modules" in d or d.endswith("build")], listed)
+        res, listed = self._listing(
+            lambda: self.host.do_grep_files({"pattern": "beta", "path": str(self.dir)}))
+        self.assertIn("ok.py", res)
+        self.assertNotIn("node_modules", res)
+        self.assertFalse([d for d in listed if "node_modules" in d or d.endswith("build")], listed)
+
+    def test_naming_a_skip_dir_searches_it(self):
+        # The pattern's literal lead-in — or `path` itself — is the walk's
+        # root and is never pruned: the rule is about wandering in.
+        self._write("node_modules/pkg/x.py")
+        self.assertIn("x.py", self._glob("node_modules/pkg/*.py"))
+        self.assertIn("x.py", self._glob("*.py", base=self.dir / "node_modules" / "pkg"))
+
+    def test_remote_roots_are_not_entered_from_outside(self):
+        cloud = self.dir / "Cloud"
+        self._write("Cloud/deep/a.py", "beta")
+        self._write("local/b.py", "beta")
+        posted = []
+
+        class Host(_Host):
+            _file_remote_roots = staticmethod(lambda: {os.path.normcase(str(cloud))})
+
+            def _tool_info(self, message):
+                posted.append(message)
+
+        host = Host()
+        res = self._glob("**/*.py", host=host)
+        self.assertIn("b.py", res)
+        self.assertNotIn("a.py", res)
+        self.assertIn("⚠ Not entered", res)
+        self.assertIn(str(cloud), res)
+        self.assertIn("Pass one as 'path' to search it", res)
+        self.assertTrue(any("not entering" in m and str(cloud) in m for m in posted), posted)
+        # Targeted, it is searched like any folder — as `path` or as a literal lead-in.
+        inside = self._glob("**/*.py", base=cloud, host=host)
+        self.assertIn("a.py", inside)
+        self.assertNotIn("Not entered", inside)
+        self.assertIn("a.py", self._glob("Cloud/**/*.py", host=host))
+        # grep shares the rule.
+        res = host.do_grep_files({"pattern": "beta", "path": str(self.dir)})
+        self.assertIn("b.py", res)
+        self.assertNotIn("a.py", res)
+        self.assertIn("⚠ Not entered", res)
+        self.assertIn("a.py", host.do_grep_files({"pattern": "beta", "path": str(cloud)}))
+
+    def test_platform_remote_roots(self):
+        roots = FileMixin._file_remote_roots()
+        home = os.path.expanduser("~")
+        if sys.platform == "darwin":
+            for rel in (("Library", "CloudStorage"), ("Library", "Mobile Documents")):
+                self.assertIn(os.path.normcase(os.path.join(home, *rel)), roots)
+            self.assertIn("/Volumes", roots)
+        elif sys.platform == "win32":
+            with mock.patch.dict(os.environ, {"OneDrive": r"C:\Users\x\OneDrive"}):
+                self.assertIn(os.path.normcase(r"C:\Users\x\OneDrive"), FileMixin._file_remote_roots())
+        else:
+            self.assertEqual(roots, set())
+
+    def test_wildcards_do_not_follow_symlinked_dirs_but_a_named_link_is_followed(self):
+        target = self._write("real/t.py").parent
+        link = self.dir / "link"
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except (OSError, NotImplementedError, AttributeError):
+            self.skipTest("cannot create a directory symlink here")
+        res = self._glob("**/*.py")
+        self.assertTrue(res.startswith("1 file(s)"), res)
+        self.assertNotIn(os.path.join("link", "t.py"), res)
+        self.assertIn(os.path.join("link", "t.py"), self._glob("link/*.py"))
+
+    # ── STOP and the ceiling ────────────────────────────────────────────
+
+    def _stopping_host(self):
+        class Host(_Host):
+            checks = 0
+
+            @property
+            def stop_requested(self):
+                self.checks += 1
+                return self.checks > 1          # the first directory lists, the next check stops
+
+        return Host()
+
+    def test_stop_ends_the_walk_with_partial_results(self):
+        self._write("a.py", "beta")
+        self._write("d1/x.py", "beta")
+        self._write("d2/y.py", "beta")
+        res = self._glob("**/*.py", host=self._stopping_host())
+        self.assertTrue(res.startswith("1 file(s)"), res)
+        self.assertIn("⚠ Walk ended by STOP — results are PARTIAL.", res)
+        res = self._stopping_host().do_grep_files({"pattern": "beta", "path": str(self.dir)})
+        self.assertTrue(res.startswith("1 matching file(s)"), res)
+        self.assertIn("⚠ Walk ended by STOP", res)
+
+    def test_ceiling_marks_results_partial(self):
+        class Host(_Host):
+            @staticmethod
+            def _file_walk_deadline():
+                return time.monotonic() - 1     # already expired
+
+        self._write("a.py", "beta")
+        res = self._glob("*.py", host=Host())
+        self.assertIn("No files match", res)
+        self.assertIn("⚠ Walk stopped after", res)
+        self.assertIn("PARTIAL", res)
+        res = Host().do_grep_files({"pattern": "beta", "path": str(self.dir)})
+        self.assertIn("No matches", res)
+        self.assertIn("⚠ Walk stopped after", res)
 
 
 if __name__ == "__main__":
