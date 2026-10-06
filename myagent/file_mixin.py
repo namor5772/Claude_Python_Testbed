@@ -19,10 +19,11 @@ instead of corrupting files:
   string, and _apply_edit falls back to a \n→\r\n expanded match when the
   model supplies LF-normalized old_string against a CRLF file.
 - glob_files / grep_files prune WHILE they walk (FILE_SKIP_DIRS, and the
-  cloud-synced / network roots a wildcard must never wander into — name one
-  as `path` to search it) and stop at STOP or a 60 s ceiling with PARTIAL
-  results: glob.glob could only be filtered after crawling everything, and a
-  ** from ~ crawled the whole OneDrive through the macOS File Provider.
+  guarded roots a wildcard must never wander into — cloud-synced / network
+  trees, and on macOS other apps' sandbox containers; name one as `path` to
+  search it) and stop at STOP or a 60 s ceiling with PARTIAL results:
+  glob.glob could only be filtered after crawling everything, and a ** from
+  ~ crawled the whole OneDrive through the macOS File Provider.
 
 All helpers are prefixed _file_* or are unique to this mixin (no MRO
 shadowing risk); the pure cores (_file_apply_edit, _file_numbered) are
@@ -207,14 +208,21 @@ class FileMixin:
     # read the stop flag. The walk is done by hand now: FILE_SKIP_DIRS and the
     # remote roots are pruned as it descends, and STOP / a time ceiling are
     # honoured between directories.
+    # 2026-10-06: the same rule keeps a walk out of other apps' sandbox
+    # containers on macOS — a stat inside one is no wait, but a dialog.
 
     @staticmethod
     def _file_remote_roots():
-        """Cloud-synced / network trees a walk never ENTERS from outside: a
-        stat inside one may wait on a server. Naming one as `path` (or a
-        folder below it) searches it normally — the rule is about wandering
-        in, not about working there. Normalised absolute paths, computed per
-        call so a test can point HOME / the OneDrive variables elsewhere."""
+        """Trees a walk never ENTERS from outside: cloud-synced / network
+        ones, where a stat may wait on a server, and on macOS other apps'
+        sandbox containers (~/Library/Containers, ~/Library/Group Containers
+        — Excel's, OneDrive's, Voice Memos'…), where since macOS 15 one stat
+        raises the "would like to access data from other apps" dialog, a
+        per-process consent macOS never remembers. Naming one as `path` (or
+        a folder below it) searches it normally — the rule is about
+        wandering in, not about working there. Normalised absolute paths,
+        computed per call so a test can point HOME / the OneDrive variables
+        elsewhere."""
         roots = []
         home = os.path.expanduser("~")
         if sys.platform == "darwin":
@@ -223,6 +231,9 @@ class FileMixin:
                 os.path.join(home, "Library", "CloudStorage"),
                 os.path.join(home, "Library", "Mobile Documents"),   # iCloud Drive
                 "/Volumes",                     # mounted volumes, network shares among them
+                # sandboxed apps' private data — TCC's "App Data" protection
+                os.path.join(home, "Library", "Containers"),
+                os.path.join(home, "Library", "Group Containers"),
             ]
         elif sys.platform == "win32":
             roots += [v for v in (os.environ.get(k) for k in
@@ -359,8 +370,9 @@ class FileMixin:
         """What the model must know about a walk's result, appended to it."""
         notes = []
         if state["remote_hits"]:
-            notes.append("Not entered (cloud-synced / network trees — a stat inside one may "
-                         "wait on a server): " + ", ".join(state["remote_hits"])
+            notes.append("Not entered (cloud-synced / network trees, or other apps' sandbox "
+                         "containers — a stat inside one may wait on a server or raise a "
+                         "permission dialog): " + ", ".join(state["remote_hits"])
                          + ". Pass one as 'path' to search it.")
         if state["stopped"]:
             notes.append("Walk ended by STOP — results are PARTIAL.")
@@ -377,7 +389,7 @@ class FileMixin:
         if post is None:
             return
         for hit in state["remote_hits"]:
-            post(f"{tool}: not entering {hit} (cloud-synced / network tree)\n")
+            post(f"{tool}: not entering {hit} (cloud-synced / network tree, or another app's container)\n")
         if state["stopped"]:
             post(f"{tool}: walk ended by STOP\n")
         elif state["timed_out_at"]:

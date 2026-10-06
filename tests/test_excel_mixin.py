@@ -3,15 +3,19 @@
 Only the no-IO staticmethods are covered — the live xlwings surface needs a
 running Excel and is exercised by hand (see CLAUDE_MYAGENT.md). Tests run on
 the bare class: no Tk, no xlwings import required (the mixin degrades to
-xw=None gracefully).
+xw=None gracefully) — except TestUserConfigPath, which needs xlwings
+installed and pins where its per-user config is looked for (2026-10-06).
 """
 
 import datetime
 import decimal
 import os
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
+import myagent.excel_mixin as excel_mixin
 from myagent.excel_mixin import ExcelMixin
 
 
@@ -429,6 +433,42 @@ class TestWriteVerificationWiring(unittest.TestCase):
         self.assertNotIn("VERIFICATION FAILED", out)
         # still no full echo for large writes
         self.assertNotIn("Current values", out)
+
+
+@unittest.skipIf(excel_mixin.xw is None, "xlwings not installed")
+class TestUserConfigPath(unittest.TestCase):
+    """2026-10-06: xlwings' per-user config is looked for at the per-user
+    ~/.xlwings/xlwings.conf on every platform. xlwings' own macOS default is
+    INSIDE Excel's sandbox container, and Book.fullname stats it for every
+    OneDrive-hosted workbook — which, since macOS 15, raises the per-process
+    "access data from other apps" dialog macOS never remembers."""
+
+    def test_config_path_is_the_per_user_one_outside_any_container(self):
+        path = excel_mixin.xw.USER_CONFIG_FILE
+        self.assertEqual(path, os.path.join(os.path.expanduser("~"), ".xlwings", "xlwings.conf"))
+        self.assertNotIn(os.path.join("Library", "Containers"), path)
+
+    def test_the_repoint_is_excel_mixins_and_macos_only(self):
+        import inspect
+        src = inspect.getsource(excel_mixin)
+        head = src[:src.index("class ExcelMixin")]
+        self.assertIn("xw.USER_CONFIG_FILE = os.path.join(os.path.expanduser(\"~\"), \".xlwings\"", head)
+        self.assertLess(head.index('sys.platform == "darwin"'), head.index("xw.USER_CONFIG_FILE ="))
+
+    def test_xlwings_reads_the_repointed_path_at_call_time(self):
+        # The repoint works only because read_user_config reads the module
+        # attribute when it is called, not a copy taken at import.
+        import xlwings.utils as xu
+        with tempfile.TemporaryDirectory() as d:
+            conf = os.path.join(d, "xlwings.conf")
+            with open(conf, "w", encoding="utf-8") as f:
+                f.write('"ONEDRIVE_CONSUMER_MAC","/tmp/od"\n')
+            with mock.patch.object(excel_mixin.xw, "USER_CONFIG_FILE", conf):
+                self.assertEqual(xu.read_user_config().get("onedrive_consumer_mac"), "/tmp/od")
+        if sys.platform == "darwin":
+            # And what it reads now is NOT the container path.
+            self.assertFalse(excel_mixin.xw.USER_CONFIG_FILE.startswith(
+                os.path.join(os.path.expanduser("~"), "Library", "Containers")))
 
 
 if __name__ == "__main__":

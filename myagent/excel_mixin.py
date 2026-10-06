@@ -17,6 +17,9 @@ Architecture notes (mirrors the mail mixins):
 - xlwings import failure leaves the module importable (_HAS_EXCEL in
   constants gates the checkbox and dispatch); Excel-not-installed is
   detected at first-call time, like Proton Bridge availability.
+- On macOS the import also moves xlwings' per-user config path OUT of
+  Excel's sandbox container (see under the import): one stat in there is a
+  TCC "access data from other apps" dialog on every new process.
 """
 
 import datetime as _dt
@@ -31,6 +34,21 @@ try:
     import xlwings as xw
 except Exception:
     xw = None
+else:
+    if sys.platform == "darwin":
+        # xlwings keeps its per-user config INSIDE Excel's sandbox container
+        # (~/Library/Containers/com.microsoft.Excel/Data/xlwings.conf) so that
+        # Excel's own RunPython add-in, confined to that container, can read
+        # it. MyAgent drives Excel from the outside and never uses RunPython —
+        # yet xlwings stats that path from Python whenever an open workbook's
+        # name is a OneDrive / SharePoint URL (Book.fullname →
+        # fullname_url_to_local_path → read_user_config), and since macOS 15
+        # one stat inside another app's container raises the "would like to
+        # access data from other apps" dialog, a per-process consent macOS
+        # never remembers (seen 2026-10-06). The config is read from the
+        # per-user path xlwings uses everywhere else instead; nothing of
+        # MyAgent's lives at either path.
+        xw.USER_CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".xlwings", "xlwings.conf")
 
 
 class ExcelMixin:

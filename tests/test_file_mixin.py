@@ -341,9 +341,14 @@ class WalkPruningCase(unittest.TestCase):
         roots = FileMixin._file_remote_roots()
         home = os.path.expanduser("~")
         if sys.platform == "darwin":
-            for rel in (("Library", "CloudStorage"), ("Library", "Mobile Documents")):
+            # Cloud / network trees, and since 2026-10-06 other apps' sandbox
+            # containers — one stat in there raises the per-process "access
+            # data from other apps" dialog macOS never remembers.
+            for rel in (("Library", "CloudStorage"), ("Library", "Mobile Documents"),
+                        ("Library", "Containers"), ("Library", "Group Containers")):
                 self.assertIn(os.path.normcase(os.path.join(home, *rel)), roots)
             self.assertIn("/Volumes", roots)
+            self.assertEqual(len(roots), 5)
         elif sys.platform == "win32":
             with mock.patch.dict(os.environ, {"OneDrive": r"C:\Users\x\OneDrive"}):
                 self.assertIn(os.path.normcase(r"C:\Users\x\OneDrive"), FileMixin._file_remote_roots())

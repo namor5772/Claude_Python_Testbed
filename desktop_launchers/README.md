@@ -59,6 +59,33 @@ with `-T /usr/bin/codesign` + `set-key-partition-list` into a dedicated
 keychain added to the user search list. Note the identifier must never
 change once granted — TCC matches on both halves.
 
+**Full Disk Access for `My Agent.app` (macOS 15+, recommended)** — one TCC
+permission is NEVER remembered: "“My Agent” would like to access data from
+other apps" (`kTCCServiceSystemPolicyAppData`), which guards other apps'
+sandbox containers under `~/Library/Containers` and `~/Library/Group
+Containers` (Excel's, OneDrive's, Voice Memos', Notes'…). `tccd` logs each
+request with `DB Action: None` — the answer is a per-process consent — and
+MyAgent starts a fresh process for every shell command the model runs, so
+each command that touches such a folder asks again, titled after the
+launcher (11 dialogs in 46 minutes on 2026-10-06: the model's `python3`
+scripts, `afinfo`, `ls`). The one setting that ends it is Full Disk Access
+for the launcher: System Settings → Privacy & Security → Full Disk Access →
+`+` → `~/Applications/My Agent.app` (⌘⇧G to type the path), then relaunch
+MyAgent. Full Disk Access is evaluated before the App Data check and covers
+every child process, and the stable signing above keeps the grant across
+rebuilds. Nothing else pre-approves it: `tccutil` only resets, a PPPC
+profile needs MDM, the TCC database needs SIP off. The grant also lets the
+model's commands read Mail / Safari / Messages data — a judgement call.
+MyAgent's own code stays out of those folders regardless (since 2026-10-06
+the file-tool walks never enter them and xlwings' config is read from
+`~/.xlwings`), so without the grant only the model's own `ls` / `find` /
+scripts into them will ask. A launchd job is a different TCC client (the
+bare Homebrew python, ad-hoc signed): a grant to it would break at the next
+`brew upgrade`, and an unanswered dialog hangs the run. Reading `tccd`'s
+own account needs `/usr/bin/log` by path — `log` is also a zsh builtin:
+`/usr/bin/log show --last 1d --info --predicate 'process == "tccd" AND
+eventMessage CONTAINS "kTCCServiceSystemPolicyAppData"'`.
+
 **Detachment trap (why the launch lines read `cd X && (nohup ... &)`)** — under
 `do shell script`, a trailing `&` on a *compound* list (`cd X && cmd &`) does
 NOT detach: the spawned `sh` sits in `wait4()` on the child until the Python app

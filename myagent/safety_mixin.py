@@ -1,4 +1,4 @@
-import os, re, signal, subprocess, threading, tkinter as tk
+import os, re, signal, subprocess, sys, threading, tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (
@@ -737,6 +737,35 @@ class SafetyMixin:
             except Exception:
                 pass
 
+    @staticmethod
+    def _run_command_env(environ=None, executable=None):
+        """The environment a run_command child inherits: the caller's, with
+        the interpreter's own bin folder FIRST on PATH (and VIRTUAL_ENV set)
+        when MyAgent runs from a venv — what `activate` would have done.
+        The launchers start `.venv/bin/python MyAgent.py` without activating
+        anything, so a child's bare `python3` / `pip` resolved to whatever the
+        system has — on the Mac the Xcode Command Line Tools' Python 3.9, with
+        none of the venv's packages (the TCC log of 2026-10-06 showed the
+        model's scripts running under it) — while every instruction and skill
+        assumes the venv's. A venv is recognised by its `pyvenv.cfg` beside
+        the bin folder, Python's own rule; outside one the environment comes
+        back unchanged. Pure: the mapping and the interpreter are parameters
+        so a test can pass its own."""
+        env = dict(os.environ if environ is None else environ)
+        exe = sys.executable if executable is None else executable
+        if not exe:
+            return env
+        bin_dir = os.path.dirname(os.path.abspath(exe))
+        venv_dir = os.path.dirname(bin_dir)
+        if not os.path.isfile(os.path.join(venv_dir, "pyvenv.cfg")):
+            return env
+        same = os.path.normcase(bin_dir)
+        rest = [p for p in env.get("PATH", "").split(os.pathsep)
+                if p and os.path.normcase(p) != same]
+        env["PATH"] = os.pathsep.join([bin_dir] + rest)
+        env["VIRTUAL_ENV"] = venv_dir
+        return env
+
     def run_powershell(self, command, timeout=30):
         safety, info = self._check_command_safety(command)
         if safety == "blocked":
@@ -770,6 +799,7 @@ class SafetyMixin:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=self._run_command_env(),
                 **popen_kwargs,
             )
             try:
