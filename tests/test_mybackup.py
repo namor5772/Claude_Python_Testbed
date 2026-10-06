@@ -75,7 +75,14 @@ def can_symlink(base):
         os.symlink(target, link, target_is_directory=True)
     except (OSError, NotImplementedError):
         return False
-    os.rmdir(link)
+    # Removed the way the engine removes a link (_remove_file): a plain
+    # remove — a link is a file on POSIX, where rmdir on one is ENOTDIR and
+    # errored this probe on macOS (2026-10-06) — with Windows' rmdir for a
+    # link to a directory as the fallback.
+    try:
+        os.remove(link)
+    except PermissionError:
+        os.rmdir(link)
     return True
 
 

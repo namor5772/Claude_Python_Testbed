@@ -390,12 +390,25 @@ class FieldTests(unittest.TestCase):
         return {tag: self.rgb(tree.tag_configure(tag, "background"))
                 for tag in ("section", "unfiled", "odd")}
 
-    def popdown_bg(self, combo):
-        """The colour of the combobox's dropdown list — built by Tk on the
-        Tcl side at the first drop (here: now), invisible to tkinter's
-        winfo_children, so read by name."""
+    def popdown_list(self, combo):
+        """The combobox's dropdown LIST — built by Tk on the Tcl side at the
+        first drop (here: now), invisible to tkinter's winfo_children, so
+        reached by name — or None where Tk drops down a native MENU instead:
+        Tk 9's combobox.tcl builds `$cb.popdown.menu` on aqua, which no
+        colour reaches and which the field walk's `winfo exists` check
+        leaves alone (2026-10-06, the suite's first run on the Mac)."""
         combo.tk.call("ttk::combobox::PopdownWindow", combo)
-        return self.rgb(combo.tk.call(f"{combo}.popdown.f.l", "cget", "-background"))
+        path = f"{combo}.popdown.f.l"
+        if int(combo.tk.call("winfo", "exists", path)):
+            return path
+        self.assertTrue(int(combo.tk.call("winfo", "exists", f"{combo}.popdown.menu")),
+                        "Tk built neither a dropdown list nor a dropdown menu")
+        return None
+
+    def popdown_bg(self, combo):
+        """The colour of the dropdown list, or None where there is no list."""
+        path = self.popdown_list(combo)
+        return None if path is None else self.rgb(combo.tk.call(path, "cget", "-background"))
 
     def test_the_fields_take_the_colour_and_the_chrome_keeps_its_own(self):
         w = self.build(self.root)
@@ -438,19 +451,23 @@ class FieldTests(unittest.TestCase):
         self.assertEqual(self.wears(tk.Entry(dlg, bg="white")), self.rgb("white"))
         self.assertEqual(self.wears(w["white"]), self.rgb("white"))   # explicit on purpose
         self.assertNotEqual(self.wears(w["label"]), peach)
-        self.assertEqual(self.popdown_bg(w["combo"]), peach)         # a list built after: born with it
+        bg = self.popdown_bg(w["combo"])            # a list built after: born with it
+        if bg is not None:                          # (aqua: a native menu, nothing to colour)
+            self.assertEqual(bg, peach)
 
     def test_the_ttk_side_follows_and_default_puts_everything_back(self):
         w = self.build(self.root)
         own = ttk.Combobox(self.root, style="Own.TCombobox")
         tree_before = {opt: self.style.lookup("Treeview", opt)
                        for opt in ("background", "fieldbackground")}
-        self.popdown_bg(w["combo"])                 # the dropdown list exists before the colour
+        self.popdown_list(w["combo"])               # the dropdown list exists before the colour
         default_field = self.h._theme_field_default()
         self.h._theme_apply_field(PEACH)
         self.assertEqual(self.style.lookup("Treeview", "background"), PEACH)
         self.assertEqual(self.style.lookup("Treeview", "fieldbackground"), PEACH)
-        self.assertEqual(self.popdown_bg(w["combo"]), self.rgb(PEACH))   # built before: walked
+        bg = self.popdown_bg(w["combo"])            # built before: walked
+        if bg is not None:                          # (aqua: a native menu, nothing to colour)
+            self.assertEqual(bg, self.rgb(PEACH))
         expected = FIELD_COMBOBOX_STYLE if self.h._theme_combo_built else ""
         self.assertEqual(str(w["combo"].cget("style")), expected)
         self.assertEqual(str(ttk.Combobox(self.root).cget("style")), expected)   # born with it
@@ -479,7 +496,9 @@ class FieldTests(unittest.TestCase):
         self.assertEqual(self.tags(w["tree"]),
                          {"section": self.rgb(LIST_BAND_BG), "unfiled": self.rgb(LIST_BAND_BG),
                           "odd": self.rgb(LIST_ZEBRA_BG)})
-        self.assertEqual(self.popdown_bg(w["combo"]), self.rgb(default_field))
+        bg = self.popdown_bg(w["combo"])            # the list back to the default too
+        if bg is not None:                          # (aqua: a native menu, nothing to colour)
+            self.assertEqual(bg, self.rgb(default_field))
 
     @unittest.skipUnless(IS_WINDOWS, "the custom combobox style is built on the vista layout")
     def test_the_combobox_style_keeps_the_native_border_and_arrow(self):

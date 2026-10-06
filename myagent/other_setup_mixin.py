@@ -57,7 +57,10 @@ honours `fieldbackground`; the native border and arrow stay (probed
 drawn). The style is built once; every combobox is switched to it while a
 field colour is chosen and back to the default style for the system default,
 later comboboxes through the option database's `*TCombobox.style`; where the
-native layout has no such element (aqua) comboboxes keep their look. A
+native layout has no such element (aqua) comboboxes keep their look — and on
+aqua Tk 9 drops a native MENU down (`$cb.popdown.menu`, combobox.tcl's aqua
+`PopdownWindow`), not a Listbox, so there is no dropdown list to colour there
+either; the walk's `winfo exists` check leaves it alone. A
 widget embedded in a text box (the Safety dialog's checkbuttons) wears the
 text box's colour, so it belongs to the field walk and the chrome walk skips
 it. The Instructions list's zebra stripes and section header bands become
@@ -412,7 +415,8 @@ class OtherSetupMixin:
                     widget.configure(style=combo_style)
                 # Its dropdown list, built by Tk on the Tcl side at the first
                 # drop: tkinter's winfo_children skips it, so it is reached
-                # by name.
+                # by name. None on aqua, where Tk 9 drops a native menu
+                # (`.popdown.menu`) — the exists check is what skips it.
                 popdown = f"{widget}.popdown.f.l"
                 if int(widget.tk.call("winfo", "exists", popdown)):
                     current = widget.tk.call(popdown, "cget", "-background")
