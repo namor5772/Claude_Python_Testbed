@@ -179,6 +179,7 @@ class StopLifecycleTests(unittest.TestCase):
             messages=[], stop_requested=True, chat_display=mock.Mock(),
             pending_images=[], _start_button=mock.Mock(), _stop_button=mock.Mock(),
             instruction_button=mock.Mock(), stream_worker=lambda *args: None,
+            _name_run_chat=lambda: None,   # chat_mixin's, on the real App
         )
         with mock.patch.object(safety_mixin.threading, "Thread") as thread:
             app._start_agent()

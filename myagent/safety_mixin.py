@@ -32,6 +32,12 @@ class SafetyMixin:
             messagebox.showwarning("No instruction", "Set an Agent Instruction before starting.")
             return
 
+        # The run's chat name (chat_mixin._name_run_chat): the "Save Chat as"
+        # text, or a fresh "<Instruction>_<timestamp>" when the box is empty
+        # or still holds the previous run's auto name — every run leaves a
+        # transcript, and the cost log's CHAT field names it.
+        self._name_run_chat()
+
         # Reset for a new run
         self.messages = []
         # The file tools' read-before-write gate belongs to the conversation:

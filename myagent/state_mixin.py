@@ -1172,7 +1172,9 @@ class StateMixin:
             self._auto_launch_failed("No instruction",
                                      f"The saved instruction '{name}' has no text.")
             return
-        auto_name = f"{name}_{time.strftime('%Y-%m-%d_%H%M%S')}"
+        # "Save Chat as" is left empty, so _start_agent gives the run its
+        # "<Name>_<timestamp>" chat name (chat_mixin._name_run_chat, which
+        # names EVERY run since 2026-10-07 — this path named its own before;
+        # same form, one place).
         self.chat_name_entry.delete(0, tk.END)
-        self.chat_name_entry.insert(0, auto_name)
         self.root.after(200, self._start_agent)

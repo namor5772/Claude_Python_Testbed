@@ -342,6 +342,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # Agent instruction — the text injected as the first user message
         self.agent_instruction = DEFAULT_INSTRUCTION
         self.agent_instruction_name = ""
+        # The chat name _start_agent gave the previous run (chat_mixin: the
+        # next START replaces it with a fresh one unless the user typed a
+        # name) and the current run's chat file stem, the cost log's CHAT.
+        self._auto_chat_name = None
+        self._run_chat_name = ""
 
         self.setup_ui()
         self._bind_geometry_tracking()

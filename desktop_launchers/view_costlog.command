@@ -45,7 +45,12 @@
 # refusal fallback — whose MODEL field is the model it ENDED on:
 # "model,cost,in,out,cache_w,cache_r" per model, joined by "|". The two
 # By-model blocks split such a run between its models; every other block and
-# the full log read it as one run, as before.
+# the full log read it as one run, as before. The 14th field (2026-10-07) is
+# the stem of the chat files the run's transcript is saved under
+# (saved_chats/<chat>.json + .txt — every MyAgent run names its chat since the
+# same day); whenever it is present the 13th is too, blank for a one-model
+# run → the CHAT column, rightmost after INSTRUCTION, blank on older and
+# SelfBot lines.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -94,11 +99,13 @@ fi
 #  cache_r;machine", sorted by timestamp — cross-machine order comes from the
 # field, not file order. Shorter historic shapes (4-field pre-params, 5-field
 # pre-secs, 6-field pre-instruction/calls, 8-field pre-tokens) are padded with
-# empty fields so every merged row is uniformly 14 fields: machine is ALWAYS
-# $W (=14), then the per-model split $S (=13, 2026-09-27 — empty unless more
-# than one model served the run), cache_r $12, cache_w $11, out $10, in $9
-# (the 2026-09-14 token group), calls $8, instruction $7, secs $6, params $5
-# — any of the middle nine possibly empty. Since 2026-08-16 SelfBot writes an EMPTY secs,
+# empty fields so every merged row is uniformly 15 fields: machine is ALWAYS
+# $W (=15), then the chat file stem $14 (2026-10-07 — empty on a line written
+# before it, and on SelfBot's), the per-model split $S (=13, 2026-09-27 —
+# empty unless more than one model served the run), cache_r $12, cache_w
+# $11, out $10, in $9 (the 2026-09-14 token group), calls $8, instruction
+# $7, secs $6, params $5
+# — any of the middle ten possibly empty. Since 2026-08-16 SelfBot writes an EMPTY secs,
 # so it lands in the same shape. W is the one place the merged width lives:
 # every awk below takes it as -v W, so a future field costs only W and the
 # column list in the FULL LOG awk. NF>=4 keeps the guard the old per-width
@@ -108,7 +115,7 @@ fi
 # The sub() strips the CR that Windows-written lines carry (CRLF via Python
 # text mode until 2026-08-03, and any not-yet-updated writer): without it the
 # last field ends in \r and the viewer shows ^M after every Windows row.
-W=14
+W=15
 S=13
 MERGED="$(mktemp)"
 trap 'rm -f "$MERGED"' EXIT
@@ -306,12 +313,17 @@ rollups() {
   # renders as "-" — they sit mid-row and BSD column -t COLLAPSES consecutive
   # delimiters, so a genuinely empty field would shift every later column
   # left. That is why tok() returns "-" and not "" for an absent count.
-  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;TOK-IN;TOK-OUT;CACHE-W;CACHE-R;MODEL;PARAMETERS;INSTRUCTION"
+  # CHAT (2026-10-07) is the new last column, so INSTRUCTION now sits
+  # mid-row and an empty one renders "-" like the others (column -t would
+  # otherwise pull the chat name left into its place); an empty chat is a
+  # trailing field, which column -t simply leaves off.
+  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;TOK-IN;TOK-OUT;CACHE-W;CACHE-R;MODEL;PARAMETERS;INSTRUCTION;CHAT"
     tail -r "$MERGED" | awk -F';' -v W="$W" "$TOK_FN"'
       NF>=W {
       t=($6=="" ? "-" : $6); k=($8=="" ? "-" : $8); p=($5=="" ? "-" : $5);
+      n=($7=="" ? "-" : $7);
       print $1 ";" $W ";" $2 ";" $4 ";" t ";" k ";" \
             tok($9) ";" tok($10) ";" tok($11) ";" tok($12) ";" \
-            $3 ";" p ";" $7 }'; } \
+            $3 ";" p ";" n ";" $14 }'; } \
     | column -t -s';'
 } | less -R

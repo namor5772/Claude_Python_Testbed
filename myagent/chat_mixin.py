@@ -38,6 +38,34 @@ class ChatMixin:
     def _chat_file_path(name):
         return os.path.join(CHATS_DIR, ChatMixin._sanitize_filename(name))
 
+    def _new_auto_chat_name(self):
+        """A fresh auto name for a run's chat: ``<Instruction>_<YYYY-MM-DD_HHMMSS>``
+        — the applied instruction's name (whitespace-collapsed), ``Agent`` for
+        an ad-hoc run — the form a ``-l`` launch has always used."""
+        base = " ".join(str(getattr(self, "agent_instruction_name", "") or "").split())
+        return f"{base or 'Agent'}_{time.strftime('%Y-%m-%d_%H%M%S')}"
+
+    def _name_run_chat(self):
+        """Give the run about to START its chat name (2026-10-07): the "Save
+        Chat as" box's text when the user typed one, else a fresh auto name
+        put into the box — so EVERY run leaves saved_chats/<name>.json + .txt,
+        as a -l / headless launch always did, where a GUI run with the box
+        empty (the default) used to leave nothing. The box is auto-named when
+        it is empty or still holds the name this app gave the PREVIOUS run
+        (`_auto_chat_name`): each START is a new conversation, and reusing
+        that name would overwrite the earlier run's transcript; a name the
+        user typed or edited is kept. Records the file stem — the name as
+        _sanitize_filename writes it, no extension — in `_run_chat_name`,
+        which stream_worker snapshots for the cost log's CHAT field (its 14th).
+        Returns the name."""
+        name = self.chat_name_entry.get().strip()
+        if not name or name == getattr(self, "_auto_chat_name", None):
+            name = self._auto_chat_name = self._new_auto_chat_name()
+            self.chat_name_entry.delete(0, tk.END)
+            self.chat_name_entry.insert(0, name)
+        self._run_chat_name = self._sanitize_filename(name, "")
+        return name
+
     def _save_chat_file(self, name, data):
         os.makedirs(CHATS_DIR, exist_ok=True)
         data['name'] = name

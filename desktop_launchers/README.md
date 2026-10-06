@@ -142,15 +142,22 @@ folder) — see the Windows section.
 
 The **API Cost Log** launcher is the same viewer pattern for the API cost log
 (`{timestamp};{provider};{model};{cost}[;{params}[;{secs}[;{instruction}[;{calls}
-[;{in};{out};{cache_write};{cache_read}[;{split}]]]]]]`,
+[;{in};{out};{cache_write};{cache_read}[;{split}[;{chat}]]]]]]]`,
 semicolon-delimited, gitignored — the trailing fields arrived 2026-08-10 /
-2026-08-12 / 2026-08-16 / 2026-09-14 / 2026-09-27 and are absent on older lines, which both viewers
+2026-08-12 / 2026-08-16 / 2026-09-14 / 2026-09-27 / 2026-10-07 and are absent on older lines, which both viewers
 still accept; `{split}` is written only for a run more than one model served —
 a MyAgent Model upgrade, or an Anthropic refusal fallback — as
 `model,cost,in,out,cache_w,cache_r` per model joined by `|`, and both viewers'
 By-model blocks split such a run between its models (`Expand-ModelSplit` on
 Windows, the `$S` field in `bucket` / `token_rollup` on macOS, whose merged
-rows are 14 fields wide since), while every other block counts it once).
+rows are 15 fields wide since 2026-10-07 — 14 before), while every other block counts it once;
+`{chat}` (2026-10-07) is the stem of the chat files the run's transcript is
+saved under (`saved_chats/<chat>.json` + `.txt` — every MyAgent run names its
+chat since that day), and whenever it is present `{split}` is written too,
+blank for a one-model run, so the chat can never be read as a split → the
+CHAT column, rightmost after INSTRUCTION, blank on older and SelfBot lines
+(on macOS an empty INSTRUCTION then renders `-`, since `column -t` would
+otherwise pull the chat name left into its place)).
 Since 2026-08-03 each machine writes its own `APICostLog_<machine>.txt` into
 `<OneDrive>/MyAppShare` (per-machine files never conflict-fork, yet OneDrive
 syncs them all everywhere — see `myagent/datapaths.py`), so
@@ -476,8 +483,8 @@ month, by machine, by provider, by model, by instruction — and, since
 and effective blended rate)** block from `Get-TokenRollup` — 2026-09-14; its CACHE% column, cache
 reads as a share of the input side, 2026-09-15) then lists every run
 most-recent-first with its cost, TIME(sec), CALLS, TOK-IN / TOK-OUT / CACHE-W / CACHE-R
-(2026-09-14, compacted to k/M, `-` when absent), MODEL, PARAMETERS and
-INSTRUCTION columns (fixed-width format strings, console widened to 226 best-effort). Both resolve the repo from the script's own location, page
+(2026-09-14, compacted to k/M, `-` when absent), MODEL, PARAMETERS,
+INSTRUCTION and CHAT columns (2026-10-07, the run's chat file name; fixed-width format strings — INSTRUCTION padded to its widest name now that CHAT follows it — console widened to 280 best-effort, 226 before). Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On
 Windows `heartbeat.log` lives at the repo root (`BASE_DIR / "heartbeat.log"`,
 not under a `Logs` folder); the cost log lives in the OneDrive share on both

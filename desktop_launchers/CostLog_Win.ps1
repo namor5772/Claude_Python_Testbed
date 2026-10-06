@@ -41,6 +41,11 @@
 # on: "model,cost,in,out,cache_w,cache_r" per model, joined by "|". The two
 # By-model blocks split such a run between its models (Expand-ModelSplit);
 # every other block and the full log read it as one run, as before.
+# The 14th field (2026-10-07) is the stem of the chat files the run's
+# transcript is saved under (saved_chats/<chat>.json + .txt -- every MyAgent
+# run names its chat since the same day); whenever it is present the 13th is
+# too, blank for a one-model run -> the CHAT column, rightmost after
+# INSTRUCTION, blank on older and SelfBot lines.
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
@@ -52,15 +57,16 @@ $inv = [Globalization.CultureInfo]::InvariantCulture
 # Widen a narrow console (a fresh shortcut's conhost defaults to 80 columns)
 # so the full-log lines don't wrap (190: the 2026-08-16 CALLS + INSTRUCTION
 # columns pushed the widest rows past the previous 142; 226 since the
-# 2026-09-14 TOKENS group added four 8-wide columns). Best-effort: the
-# cost column stays visible even when this fails, because it is placed
-# before the model name.
+# 2026-09-14 TOKENS group added four 8-wide columns; 280 since the
+# 2026-10-07 CHAT column -- a ~40-character name after an INSTRUCTION that
+# is now padded to the widest one). Best-effort: the cost column stays
+# visible even when this fails, because it is placed before the model name.
 try {
     $rawUI = $Host.UI.RawUI
-    if ($rawUI.BufferSize.Width -lt 226) {
-        $bs = $rawUI.BufferSize; $bs.Width = 226; $rawUI.BufferSize = $bs
+    if ($rawUI.BufferSize.Width -lt 280) {
+        $bs = $rawUI.BufferSize; $bs.Width = 280; $rawUI.BufferSize = $bs
         $ws = $rawUI.WindowSize
-        $ws.Width = [Math]::Min(226, $rawUI.MaxPhysicalWindowSize.Width)
+        $ws.Width = [Math]::Min(280, $rawUI.MaxPhysicalWindowSize.Width)
         $rawUI.WindowSize = $ws
     }
 } catch {}
@@ -237,7 +243,9 @@ try {
     # (8th, both added 2026-08-16) are blank on older lines, as are the four
     # token fields (9th-12th, added 2026-09-14: input / output / cache-write /
     # cache-read, the buckets _get_pricing rates). The per-model split (13th,
-    # added 2026-09-27) exists only on a run more than one model served.
+    # added 2026-09-27) exists only on a run more than one model served; the
+    # chat file stem (14th, 2026-10-07) on every MyAgent run since -- and
+    # then the 13th is always there, blank for a one-model run.
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
@@ -253,6 +261,7 @@ try {
                 Calls = if ($f.Count -ge 8) { $f[7] } else { '' }
                 TokIn = $tok[0]; TokOut = $tok[1]; TokCW = $tok[2]; TokCR = $tok[3]
                 Split = if ($f.Count -ge 13) { $f[12] } else { '' }
+                Chat = if ($f.Count -ge 14) { $f[13] } else { '' }
             }
         }
     }
@@ -332,29 +341,33 @@ try {
         # after PARAMETERS) sits after them; at a too-narrow console the
         # instruction name is the one that wraps -- cost never moves. CALLS
         # (2026-08-16) joins the numeric cluster right of TIME(sec).
-        $machW = 7; $provW = 8; $modW = 5; $parW = 10
+        $machW = 7; $provW = 8; $modW = 5; $parW = 10; $instrW = 11
         foreach ($r in $rows) {
             if ($r.Machine.Length -gt $machW) { $machW = $r.Machine.Length }
             if ($r.Provider.Length -gt $provW) { $provW = $r.Provider.Length }
             if ($r.Model.Length -gt $modW) { $modW = $r.Model.Length }
             if ($r.Params.Length -gt $parW) { $parW = $r.Params.Length }
+            if ($r.Instr.Length -gt $instrW) { $instrW = $r.Instr.Length }
         }
         # TOKENS (2026-09-14) joins the fixed-width numeric cluster right of
         # CALLS and still LEFT of the open-ended MODEL/PARAMETERS/INSTRUCTION,
         # so the invariant above holds unchanged: cost never moves, and a
         # narrow console wraps the instruction name.
-        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,8} {7,8} {8,8} {9,8} {10,-$modW} {11,-$parW} {12}"
+        # CHAT (2026-10-07) is the new rightmost, open-ended column -- the
+        # chat file stem, blank on a line without one -- so INSTRUCTION is
+        # padded to the widest name like MODEL and PARAMETERS before it.
+        $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,8} {7,8} {8,8} {9,8} {10,-$modW} {11,-$parW} {12,-$instrW} {13}"
         # The dash rule under each heading is exactly the heading's width, so
         # it is derived from the one heading list rather than kept by hand.
         $hdr = @('DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS',
-                 'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION')
+                 'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION', 'CHAT')
         $out += ($fmt -f $hdr)
         $out += ($fmt -f @($hdr | ForEach-Object { '-' * $_.Length }))
         $rev = @($rows); [array]::Reverse($rev)
         $out += @(foreach ($r in $rev) {
             $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls,
                 (Format-Tok $r.TokIn), (Format-Tok $r.TokOut), (Format-Tok $r.TokCW), (Format-Tok $r.TokCR),
-                $r.Model, $r.Params, $r.Instr
+                $r.Model, $r.Params, $r.Instr, $r.Chat
         })
     }
 

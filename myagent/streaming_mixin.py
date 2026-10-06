@@ -1292,16 +1292,26 @@ class StreamingMixin:
         return "|".join(parts)
 
     def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,
-                      instruction="", calls=None, tokens=None, split=None):
+                      instruction="", calls=None, tokens=None, split=None,
+                      chat=None):
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
         Line format:
         {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
-        ;{in};{out};{cache_write};{cache_read}[;{split}]
+        ;{in};{out};{cache_write};{cache_read}[;{split}[;{chat}]]
         — split (13th field, 2026-09-27, `_cost_split_field`) is present
         only for a run served by more than one model, or by one model other
         than the MODEL field, which is the model the run ENDED on;
+        — chat (14th field, 2026-10-07) is the stem of the chat files the
+        run's transcript is saved under — saved_chats/<chat>.json + .txt,
+        the "Save Chat as" name, which every MyAgent run has since the same
+        day (chat_mixin._name_run_chat) — whitespace-collapsed with any ';'
+        turned into ',' like the instruction. When it is written the 13th
+        field is ALWAYS present, blank for a one-model run, so a chat name
+        can never be read as a split; a blank / None chat (SelfBot's caller,
+        a bare host) keeps the 12-/13-field shapes exactly → the viewers'
+        CHAT column, rightmost after INSTRUCTION;
         — params is the compact _get_model_param_summary() string
         (comma-joined), so the log records the thinking/temperature settings
         the run used alongside its cost; secs (6th field, 2026-08-12) is the
@@ -1385,13 +1395,20 @@ class StreamingMixin:
             # model served (or one model other than the MODEL field) — a line
             # its MODEL field describes keeps its 12 fields exactly.
             split_s = self._cost_split_field(split, self.model)
-            split_s = f";{split_s}" if split_s else ""
+            # 14th field (2026-10-07): the chat file stem, sanitised like the
+            # instruction. It forces the 13th out, blank or not, so a reader
+            # finds the split at 13 and the chat at 14 whatever the run did.
+            chat_s = " ".join(str(chat or "").split()).replace(";", ",")
+            if chat_s:
+                tail = f";{split_s};{chat_s}"
+            else:
+                tail = f";{split_s}" if split_s else ""
             # ';' delimiter (not ',') so a comma inside a model name, the
             # params field or an instruction name can't be misread as a
             # field separator.
             line = (f"{timestamp};{self.provider};{self.model};"
                     f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
-                    f"{tok_s}{split_s}\n")
+                    f"{tok_s}{tail}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
@@ -1495,6 +1512,10 @@ class StreamingMixin:
         # By-model summaries. Hoisted with the totals for the same reason.
         per_model = {}
         instr_name = getattr(self, "agent_instruction_name", "")
+        # The chat file stem _start_agent recorded (chat_mixin._name_run_chat),
+        # snapshotted like the instruction: the box can be edited mid-run,
+        # and the worker must not touch a Tk widget anyway.
+        chat_name = getattr(self, "_run_chat_name", "")
         run_started = time.monotonic()
         self._input_wait_secs = 0.0
         # Set by an "exit" reply to an Agent Request (CONVO_EXIT_WORD — the
@@ -1514,7 +1535,7 @@ class StreamingMixin:
                                tokens=(total_input_tokens, total_output_tokens,
                                        total_cache_write_tokens,
                                        total_cache_read_tokens),
-                               split=per_model)
+                               split=per_model, chat=chat_name)
 
         def _end_run():
             # The log line first — it records the run under the model it

@@ -254,5 +254,84 @@ class ModelSplitTests(_ViewerCase):
         self.assertIn("1.2500", full[0])
 
 
+class ChatColumnTests(_ViewerCase):
+    """The CHAT column (2026-10-07): the 14th field — the stem of the chat
+    files the run's transcript is saved under — rendered rightmost after
+    INSTRUCTION, blank on a line without one. With it the 13th field (the
+    split) is always present, blank for a one-model run, so both viewers must
+    read the split at 13 and the chat at 14 on every line shape, and the
+    By-model blocks must still split a 13- or 14-field line that carries a
+    split. The ad-hoc line (empty INSTRUCTION, a chat) pins that the chat
+    name does not slide left into the empty column."""
+
+    SPLIT_A = "claude-sonnet-5,0.100000,50,25,0,0|claude-fable-5-1,0.200000,50,25,0,0"
+    SPLIT_B = "claude-sonnet-5,0.250000,1000,300,0,10000|claude-fable-5-1,1.000000,2000,400,10000,10000"
+
+    def write(self, today):
+        day = today.isoformat()
+        self.chat_luna = f"Act_on_unread_emails_{day}_080000"
+        self.chat_split = f"Split_Test_{day}_090000"
+        self.chat_adhoc = f"Agent_{day}_110000"
+        lines = [
+            # 13 fields: a split, no chat (a run from before the column)
+            f"{day} 07:00:00;Anthropic;claude-fable-5-1;0.3000;mode=Max, "
+            f"upgraded-from=claude-sonnet-5@call1;10;Old_Split;2;100;50;0;0;{self.SPLIT_A}",
+            # 14 fields: a one-model run, blank split, a chat
+            f"{day} 08:00:00;OpenAI;gpt-6-luna;0.0129;reasoning=Max, verbosity=low;117;"
+            f"Act_on_unread_emails;9;612;8138;48113;276910;;{self.chat_luna}",
+            # 14 fields: a split AND a chat
+            f"{day} 09:00:00;Anthropic;claude-fable-5-1;1.2500;mode=Max, "
+            f"upgraded-from=claude-sonnet-5@call2;60;Split_Test;5;3000;700;10000;20000;"
+            f"{self.SPLIT_B};{self.chat_split}",
+            # 12 fields: an older line
+            f"{day} 10:00:00;Anthropic;claude-sonnet-5;0.5000;mode=Low;30;Old_Line;4;"
+            "1000;200;0;5000",
+            # 14 fields: an ad-hoc GUI run — empty INSTRUCTION, a chat
+            f"{day} 11:00:00;OpenAI;gpt-6-luna;0.0100;reasoning=Max, verbosity=low;8;;3;"
+            f"10;20;0;0;;{self.chat_adhoc}",
+        ]
+        (self.share / "APICostLog_MACHINE-A.txt").write_bytes(
+            ("\n".join(lines) + "\n").encode("utf-8"))
+
+    def test_the_chat_is_the_last_column_and_the_splits_still_split(self):
+        for _attempt in range(2):          # a run crossing a month boundary retries
+            today = datetime.date.today()
+            self.write(today)
+            lines = self.run_viewer()
+            if datetime.date.today() == today:
+                break
+        header = next(line for line in lines if line.startswith("DATE/TIME"))
+        self.assertEqual(header.split()[-2:], ["INSTRUCTION", "CHAT"])
+
+        def row(marker):
+            found = [line for line in lines if marker in line and line[:4].isdigit()]
+            self.assertEqual(len(found), 1, marker)
+            return found[0]
+
+        luna = row(self.chat_luna)
+        self.assertTrue(luna.rstrip().endswith(self.chat_luna))
+        self.assertIn(" Act_on_unread_emails ", luna)
+        split = row("@call2")
+        self.assertTrue(split.rstrip().endswith(self.chat_split))
+        self.assertIn("1.2500", split)
+        adhoc = row(self.chat_adhoc)
+        self.assertTrue(adhoc.rstrip().endswith(self.chat_adhoc))
+        # The chat column starts where it does on every other row: an empty
+        # INSTRUCTION is padded (Windows) or dashed (macOS), never collapsed.
+        self.assertEqual(adhoc.index(self.chat_adhoc), luna.index(self.chat_luna))
+        self.assertTrue(row(" Old_Line").rstrip().endswith("Old_Line"))    # no chat
+        self.assertTrue(row("@call1").rstrip().endswith("Old_Split"))      # split, no chat
+
+        def cost_row(model, cost, runs):
+            return f"    {model:<32} ${cost:>10.4f}  ({runs})"
+
+        # fable 0.2 + 1.0, sonnet 0.1 + 0.25 + 0.5, luna 0.0129 + 0.0100
+        self.assertEqual(
+            ModelSplitTests.block(lines, "  By model (highest spend first):"),
+            [cost_row("claude-fable-5-1", 1.2, 2), cost_row("claude-sonnet-5", 0.85, 3),
+             cost_row("gpt-6-luna", 0.0229, 2)])
+        self.assertIn("  5 runs", "\n".join(lines))
+
+
 if __name__ == "__main__":
     unittest.main()
