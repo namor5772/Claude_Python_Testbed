@@ -21,11 +21,16 @@ tests/test_fast_mode.py's capturing fake client and pins the request shape
 for the two modes an instruction can run it in, with Haiku 4.5 as the
 unchanged control."""
 
+import pathlib
+import tempfile
 import unittest
+from unittest import mock
 
+import myagent.streaming_mixin as sm
 from myagent.constants import (ANTHROPIC_FAST_MODE_BETA, ANTHROPIC_SERVER_FALLBACK_BETA,
                                ANTHROPIC_THINKING_BINDING_BETA, MAX_TOKENS,
                                MAX_TOKENS_THINKING)
+from tests.test_costlog_run_fields import _Host as _LoopHost
 from tests.test_fast_mode import _WireHost
 
 TRIPLE = [{"type": "web_search_20260209", "name": "web_search"},
@@ -112,6 +117,70 @@ class Haiku55Wire(unittest.TestCase):
         betas, kw = _call(host)
         self.assertNotIn("block_binding", kw["thinking"])
         self.assertNotIn(ANTHROPIC_THINKING_BINDING_BETA, betas)
+
+
+class _LongPromptHost(_LoopHost):
+    """The real loop on claude-haiku-5-5: call 1's prompt is 121K tokens
+    (over the second-card line), call 2's 51K (under it)."""
+
+    def __init__(self):
+        super().__init__(second_call="end", instruction="Long run")
+        self.model = "claude-haiku-5-5"
+
+    def _stream_anthropic_call(self, messages, max_retries, label_emitted):
+        stop, blocks, text, thinking, label, usage = super()._stream_anthropic_call(
+            messages, max_retries, label_emitted)
+        usage["cache_creation_input_tokens"] = 0
+        usage["cache_read_input_tokens"] = 120_000 if self._calls_made == 1 else 50_000
+        return stop, blocks, text, thinking, label, usage
+
+
+class LongContextAccounting(unittest.TestCase):
+    """The announcement's second rate card ($0.50 / $2.50 above 100K prompt
+    tokens) is applied per call by the prompt the API counted — input plus
+    both cache buckets — with one ⚠ per run when a call first crosses it."""
+
+    def test_each_call_is_priced_on_the_card_its_prompt_selects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "APICostLog_test.txt"
+            with mock.patch.object(sm, "APICOST_LOG_FILE", str(log)):
+                host = _LongPromptHost()
+                host.stream_worker([{"role": "user", "content": "go"}])
+                line = log.read_text(encoding="utf-8").splitlines()[0].split(";")
+        # call 1 on the long card: 1,000 in + 100 out + 120,000 cache reads;
+        # call 2 on the base card: 1,000 in + 100 out + 50,000 cache reads.
+        call1 = 1000 * 0.50e-6 + 100 * 2.50e-6 + 120_000 * 0.05e-6
+        call2 = 1000 * 0.10e-6 + 100 * 0.50e-6 + 50_000 * 0.01e-6
+        self.assertEqual(line[1:3], ["Anthropic", "claude-haiku-5-5"])
+        self.assertEqual(line[3], f"{call1 + call2:.4f}")
+        self.assertEqual(line[3], "0.0074")
+        self.assertEqual(line[8:12], ["2000", "200", "0", "170000"])
+        warns = []
+        while not host.queue.empty():
+            msg = host.queue.get_nowait()
+            if msg.get("type") == "warning":
+                warns.append(msg["content"])
+        notes = [w for w in warns if "second rate card" in w]
+        self.assertEqual(len(notes), 1)        # once per run, not per call
+        self.assertIn("121,000", notes[0])
+        self.assertIn("100,000", notes[0])
+        self.assertIn("$0.50 / $2.50", notes[0])
+
+    def test_a_run_under_the_line_is_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = pathlib.Path(tmp) / "APICostLog_test.txt"
+            with mock.patch.object(sm, "APICOST_LOG_FILE", str(log)):
+                host = _LoopHost(second_call="end")
+                host.model = "claude-haiku-5-5"
+                host.stream_worker([{"role": "user", "content": "go"}])
+                line = log.read_text(encoding="utf-8").splitlines()[0].split(";")
+        self.assertEqual(line[3], f"{2 * (1000 * 0.10e-6 + 100 * 0.50e-6):.4f}")
+        warns = []
+        while not host.queue.empty():
+            msg = host.queue.get_nowait()
+            if msg.get("type") == "warning":
+                warns.append(msg["content"])
+        self.assertFalse([w for w in warns if "second rate card" in w])
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from myagent.constants import (
     _HAS_PHYSICAL,
     MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
+    ANTHROPIC_LONG_CONTEXT_PRICING,
     OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING, OPENAI_RESPONSES_INCLUDE,
     RESPONSES_REASONING_INCLUDE, XAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
@@ -1208,7 +1209,8 @@ class StreamingMixin:
                 f"Token counts are still shown per call. Add the model's row.")
 
     @staticmethod
-    def _get_pricing(provider, model_name, today=None, speed=None):
+    def _get_pricing(provider, model_name, today=None, speed=None,
+                     prompt_tokens=None):
         """Look up per-token pricing for a model.
         Returns a dict with per-token prices, or None if no match.
         ``speed`` is what the provider says served the call (Anthropic's
@@ -1229,7 +1231,14 @@ class StreamingMixin:
         2026-12-31); it is resolved against ``today`` (default: the real date,
         so a long-running agent flips at the boundary; tests pin it).
         The longest-prefix step lives in _pricing_match, shared with
-        _generic_pricing_warning."""
+        _generic_pricing_warning.
+        ``prompt_tokens`` (2026-10-08) is the call's whole prompt — the
+        uncached input plus both cache buckets — and selects a model's
+        SECOND rate card where it has one (ANTHROPIC_LONG_CONTEXT_PRICING:
+        Haiku 5.5 above 100K tokens, $0.50 / $2.50): the returned dict then
+        carries that card's four rates plus ``long_context`` = the
+        threshold crossed. None, or a prompt at or under the line, is the
+        base card; the fast lookup and every other provider ignore it."""
         if provider == "Anthropic" and speed == "fast":
             _prefix, fast_match = StreamingMixin._pricing_match(
                 provider, model_name, table=ANTHROPIC_FAST_PRICING)
@@ -1247,8 +1256,18 @@ class StreamingMixin:
         # it would raise.
         per_token = tuple(None if p is None else p / 1_000_000 for p in best_match)
         if provider == "Anthropic":
-            return {"input": per_token[0], "output": per_token[1],
-                    "cache_write": per_token[2], "cache_read": per_token[3]}
+            priced = {"input": per_token[0], "output": per_token[1],
+                      "cache_write": per_token[2], "cache_read": per_token[3]}
+            if prompt_tokens is not None:
+                _lc_prefix, card = StreamingMixin._pricing_match(
+                    provider, model_name, table=ANTHROPIC_LONG_CONTEXT_PRICING)
+                if card is not None and prompt_tokens > card[0]:
+                    long_rates = tuple(p / 1_000_000 for p in card[1])
+                    priced = {"input": long_rates[0], "output": long_rates[1],
+                              "cache_write": long_rates[2],
+                              "cache_read": long_rates[3],
+                              "long_context": card[0]}
+            return priced
         priced = {"input": per_token[0], "output": per_token[1]}
         # OpenAI/Gemini carry a 3rd cached-input element; a None entry means the
         # model has no cached tier, so the key is left out entirely and the
@@ -1652,6 +1671,9 @@ class StreamingMixin:
         # Anthropic refusal fallback) is split between them by the viewers'
         # By-model summaries. Hoisted with the totals for the same reason.
         per_model = {}
+        # One ⚠ per run the first time a call's prompt crosses a model's
+        # second-rate-card line (ANTHROPIC_LONG_CONTEXT_PRICING).
+        long_context_noted = False
         instr_name = getattr(self, "agent_instruction_name", "")
         # The chat file stem _start_agent recorded (chat_mixin._name_run_chat),
         # snapshotted like the instruction: the box can be edited mid-run,
@@ -1858,10 +1880,15 @@ class StreamingMixin:
                     # the SPEED that served it (usage["speed"]="fast" prices from
                     # the fast table at 2x; absent everywhere but Anthropic).
                     call_speed = usage.get("speed")
+                    # The whole prompt the API counted for this call — the
+                    # uncached input plus both cache buckets — selects the
+                    # rate card where a model has two (Haiku 5.5 above 100K
+                    # tokens: ANTHROPIC_LONG_CONTEXT_PRICING, 2026-10-08).
+                    call_prompt = call_input + call_cache_write + call_cache_read
                     pricing = (self._get_pricing(self.provider, usage.get("model") or self.model,
-                                                 speed=call_speed)
+                                                 speed=call_speed, prompt_tokens=call_prompt)
                                or self._get_pricing(self.provider, self.model,
-                                                    speed=call_speed))
+                                                    speed=call_speed, prompt_tokens=call_prompt))
                     # xAI reports the authoritative billed cost per call
                     # (cost_in_usd_ticks → cost_usd, set in _xai_usage_dict).
                     # Prefer it over the table estimate: it already includes
@@ -1887,6 +1914,16 @@ class StreamingMixin:
                                           * ANTHROPIC_WEB_SEARCH_FEE)
                         total_cost += call_cost
                         part[0] += call_cost
+                        if (pricing and pricing.get("long_context")
+                                and not long_context_noted):
+                            long_context_noted = True
+                            self.queue.put({"type": "warning", "content": (
+                                f"⚠ Prompt of {call_prompt:,} tokens (input plus cache) — over "
+                                f"the {pricing['long_context']:,}-token line where {served} "
+                                f"moves to its second rate card: this call, and the rest of "
+                                f"the run while prompts stay this long, are priced at "
+                                f"${pricing['input'] * 1e6:.2f} / ${pricing['output'] * 1e6:.2f} "
+                                f"per MTok instead of the base rates.\n")})
                         self.queue.put({
                             "type": "cost_update",
                             "call_cost": call_cost,

@@ -335,5 +335,46 @@ class TestGenericPricingWarning(unittest.TestCase):
              "cache_read": 0.05 / 1_000_000})
 
 
+class TestLongContextCard(unittest.TestCase):
+    """Haiku 5.5's second rate card (2026-10-08): the whole request moves to
+    $0.50 / $2.50 (cache $0.625 / $0.05) once its prompt — uncached input
+    plus both cache buckets — exceeds 100K tokens. Selected per call by
+    prompt_tokens; a lookup without it, or at the line, is the base card."""
+    BASE = {"input": 0.10 / 1_000_000, "output": 0.50 / 1_000_000,
+            "cache_write": 0.125 / 1_000_000, "cache_read": 0.01 / 1_000_000}
+    LONG = {"input": 0.50 / 1_000_000, "output": 2.50 / 1_000_000,
+            "cache_write": 0.625 / 1_000_000, "cache_read": 0.05 / 1_000_000,
+            "long_context": 100_000}
+
+    def test_base_card_without_a_prompt_size_or_at_the_line(self):
+        for n in (None, 0, 99_999, 100_000):
+            with self.subTest(prompt_tokens=n):
+                self.assertEqual(StreamingMixin._get_pricing(
+                    "Anthropic", "claude-haiku-5-5", prompt_tokens=n), self.BASE)
+
+    def test_long_card_above_the_line(self):
+        for model in ("claude-haiku-5-5", "claude-haiku-5-5-20261007"):
+            for n in (100_001, 400_000):
+                with self.subTest(model=model, prompt_tokens=n):
+                    self.assertEqual(StreamingMixin._get_pricing(
+                        "Anthropic", model, prompt_tokens=n), self.LONG)
+
+    def test_models_without_a_second_card_ignore_the_prompt_size(self):
+        for provider, model in (("Anthropic", "claude-opus-5-5"),
+                                ("Anthropic", "claude-haiku-4-5"),
+                                ("OpenAI", "gpt-6-astra"),
+                                ("Google", "gemini-3.8-flash")):
+            with self.subTest(model=model):
+                big = StreamingMixin._get_pricing(provider, model, prompt_tokens=900_000)
+                self.assertEqual(big, StreamingMixin._get_pricing(provider, model))
+                self.assertNotIn("long_context", big)
+
+    def test_fast_lookup_is_untouched(self):
+        self.assertEqual(
+            StreamingMixin._get_pricing("Anthropic", "claude-opus-5-5",
+                                        speed="fast", prompt_tokens=900_000),
+            StreamingMixin._get_pricing("Anthropic", "claude-opus-5-5", speed="fast"))
+
+
 if __name__ == "__main__":
     unittest.main()

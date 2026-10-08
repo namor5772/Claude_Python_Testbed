@@ -114,7 +114,8 @@
   claude-haiku-5-5       $0.10    $0.50    $0.125       $0.01   (live 2026-10-07; the
                          rate card for a prompt of 100K tokens or fewer — the API
                          bills a longer prompt at $0.50 / $2.50, cache $0.625 /
-                         $0.05, which the table does not model; 1M context, 128K
+                         $0.05, applied per call once the prompt — input plus cache —
+                         exceeds 100K (ANTHROPIC_LONG_CONTEXT_PRICING); 1M context, 128K
                          output; its own row, no claude-haiku-5 family prefix)
   claude-haiku-4         $1.00    $5.00    $1.25        $0.10
   claude-3-5-sonnet      $3.00    $15.00   $3.75        $0.30

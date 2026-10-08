@@ -3497,10 +3497,10 @@ ANTHROPIC_PRICING = {
     # Haiku 5.5 (live 2026-10-07, row added 2026-10-08 — pricing page and the
     # migration guide read that day): $0.10 / $0.50 for a prompt of 100K
     # tokens or fewer — cache reads 0.1x ($0.01), 5-minute writes 1.25x
-    # ($0.125). The API bills a prompt OVER 100K tokens on a second rate
-    # card ($0.50 / $2.50, cache $0.05 / $0.625), which this table does not
-    # model — the same choice as the >200K Gemini / GPT-6 tiers — so such a
-    # run is logged low. Its own row, not a "claude-haiku-5" family row:
+    # ($0.125). A prompt OVER 100K tokens is billed on its second rate card
+    # ($0.50 / $2.50, cache $0.625 / $0.05): ANTHROPIC_LONG_CONTEXT_PRICING
+    # below, which stream_worker selects per call by the prompt's size (the
+    # whole request moves to that card). Its own row, not a "claude-haiku-5" family row:
     # the Anthropic policy is unknown id → unpriced, never mispriced.
     "claude-haiku-5-5":    (0.10, 0.50, 0.125, 0.01),
     # Haiku 4.5 (prefix also covers the dated claude-haiku-4-5-20251001 id)
@@ -3523,6 +3523,24 @@ ANTHROPIC_FAST_PRICING = {
     "claude-opus-5-5":     (8.00, 40.00, 10.00, 0.40),
     "claude-opus-5":       (10.00, 50.00, 12.50, 1.00),
     "claude-opus-4-8":     (10.00, 50.00, 12.50, 1.00),
+}
+
+# A SECOND rate card, chosen per request by prompt length (2026-10-08):
+# model prefix → (threshold in prompt tokens, (input, output, 5min cache
+# write, cache read) per million). The migration guide for Haiku 5.5 says
+# "two rate cards, chosen by prompt length" — the WHOLE request bills on
+# the card its prompt selects — and the announcement gives the numbers:
+# $0.10 / $0.50 up to 100K tokens, $0.50 / $2.50 above, cache 1.25x / 0.1x
+# of the card's input rate. stream_worker hands _get_pricing the call's
+# prompt size — the uncached input plus BOTH cache buckets, which is what
+# the API counted — and the lookup returns this card above the line (with
+# a "long_context" key the one-shot ⚠ in stream_worker reads). An ordinary
+# agentic run crosses 100K within a dozen calls, so leaving it out — the
+# choice still made for the Gemini 3.1 Pro (>200K) and GPT-6 (>272K)
+# tiers, whose rows are unverified — would have logged every long Haiku
+# 5.5 run at a fifth of its cost. Longest prefix, like every table.
+ANTHROPIC_LONG_CONTEXT_PRICING = {
+    "claude-haiku-5-5":    (100_000, (0.50, 2.50, 0.625, 0.05)),
 }
 
 # Anthropic's server-side web_search bills a flat fee per EXECUTED search
