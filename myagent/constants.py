@@ -4020,6 +4020,13 @@ STORES_SYNCED = os.path.dirname(INSTRUCTIONS_FILE) != _BASE_DIR  # shared dir in
 # APICostLog.txt fallback on solo machines; both locations gitignored.
 APICOST_LOG_FILE = resolve_costlog()
 APICOST_LOG_MAX_BYTES = 100_000  # one-slot rotation cap (helpers.rotate_log_if_needed), same as heartbeat.log's
+# The periodic save's tick (state_mixin._periodic_save, scheduled first by
+# MyAgent.py __init__): every tick writes the state file and, when the message
+# count changed, the run's chat files. 10 s since 2026-10-08 (5 s before, the
+# user's request) — the chats live in the OneDrive share now, and every rewrite
+# of a growing transcript is a re-upload; the interval has no bearing on a
+# run's speed, the work being one file write on the Tk thread.
+PERIODIC_SAVE_MS = 10_000
 
 DEFAULT_SYSTEM_PROMPT = (
     "You are an autonomous AI agent with access to a rich set of tools. "

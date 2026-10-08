@@ -40,6 +40,7 @@ from myagent.constants import (
     XAI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL, KIMI_DEFAULT_BASE_URL,
     OLLAMA_DEFAULT_MODEL,
     OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA, _HAS_MCP, AGENT_STATE_FILE, _BASE_DIR,
+    PERIODIC_SAVE_MS,
 )
 from myagent.ui_mixin import UIMixin
 from myagent.state_mixin import StateMixin
@@ -370,7 +371,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # 2026-10-08). A no-op where no shared dir is in use.
         self._fold_local_chats_in()
         self.root.after(50, self.check_queue)
-        self.root.after(5000, self._periodic_save)
+        self.root.after(PERIODIC_SAVE_MS, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         # Connect MCP servers once the UI is built. The connect WAITS on the Tk

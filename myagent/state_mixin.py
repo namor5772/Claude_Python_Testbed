@@ -1,6 +1,7 @@
 import os, re, json, time, tempfile, subprocess, ctypes, tkinter as tk
 from tkinter import messagebox
-from myagent.constants import IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY, _BASE_DIR
+from myagent.constants import (IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY, _BASE_DIR,
+                               PERIODIC_SAVE_MS)
 from myagent.helpers import rotate_log_if_needed
 
 # Optional diagnostic trace of every geometry save/restore, one line per event,
@@ -998,7 +999,7 @@ class StateMixin:
         if getattr(self, "_instr_list_width", None):
             state["instruction_list_width"] = self._instr_list_width
         # Atomic — a temp file beside it, then os.replace — like the shared
-        # stores: the file is rewritten every 5 s and embeds the applied
+        # stores: the file is rewritten every PERIODIC_SAVE_MS (10 s) and embeds the applied
         # instruction's images, and a process killed mid-write (taskkill /F is
         # routine here) left it truncated: the next launch restored nothing,
         # and its first save wrote every monitor layout's geometry away.
@@ -1092,7 +1093,7 @@ class StateMixin:
                     self._last_autosaved_msg_count = msg_count
             except Exception:
                 pass
-        self.root.after(5000, self._periodic_save)
+        self.root.after(PERIODIC_SAVE_MS, self._periodic_save)
 
     def _apply_instruction_entry(self, name, entry):
         """Load an instruction entry into live state. Returns True if model params were restored."""

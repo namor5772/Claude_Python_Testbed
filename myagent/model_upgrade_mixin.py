@@ -300,7 +300,7 @@ class ModelUpgradeMixin:
             return
         # Restore FIRST, then drop the stash — _upgrade_apply's order in
         # reverse: while the stash exists, _save_last_state (Tk thread, every
-        # 5 s) writes it, so a save landing between the two steps writes the
+        # PERIODIC_SAVE_MS, 10 s) writes it, so a save landing between the two steps writes the
         # instruction's model either way, never the upgrade's.
         for field in UPGRADE_FIELDS:
             setattr(self, field, original[field])

@@ -275,7 +275,8 @@ def _migrate_costlog(local, shared_path):
 CHATS_DIRNAME = "saved_chats"
 # A chat file touched within this many seconds is left where it is by
 # migrate_local_chats: an instance of the pre-move code still running
-# rewrites its chat every 5 s (state_mixin._periodic_save), and the next
+# rewrites its chat every PERIODIC_SAVE_MS (state_mixin._periodic_save; 10 s,
+# 5 s before 2026-10-08), and the next
 # launch folds the finished file in.
 CHATS_SETTLE_SECS = 120
 
