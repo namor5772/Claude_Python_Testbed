@@ -338,6 +338,10 @@ class LevelTests(unittest.TestCase):
         self.assertEqual(self.levels("Anthropic", "claude-fable-5-1"),
                          ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"])
         self.assertEqual(self.levels("Anthropic", "claude-opus-5-5")[0], "Adaptive")
+        # Haiku 5.5: adaptive with an Off rung (disabled is accepted at
+        # effort <= high), every effort level (2026-10-08).
+        self.assertEqual(self.levels("Anthropic", "claude-haiku-5-5"),
+                         ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"])
 
     def test_anthropic_budget_models_get_off_and_the_presets(self):
         self.assertEqual(self.levels("Anthropic", "claude-haiku-4-5-20251001"),

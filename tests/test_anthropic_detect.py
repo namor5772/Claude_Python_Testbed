@@ -63,6 +63,20 @@ EXPECTED = {
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
     "claude-haiku-4-5":           (False, False, False, False, False,
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
+    # Haiku 5.5 (live 2026-10-07, audited 2026-10-08): the first Haiku with
+    # adaptive thinking — its Models API capability tree reports thinking
+    # enabled=False / adaptive=True / disabled=True and effort low..max all
+    # True; probed live, budget_tokens, any temperature but 1, fast mode and
+    # a fallbacks list are 400, while disabled is accepted at effort <= high,
+    # so it keeps its Off rung (unlike Opus 5.5). Version-gated as Haiku
+    # major >= 5, so a dated snapshot and a later Haiku ride along and
+    # Haiku 4.5 keeps its manual budget.
+    "claude-haiku-5-5":           (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-haiku-5-5-20261007":  (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-haiku-6":             (False, True,  True,  True,  True,
+                                   ["Off", "Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     "claude-opus-3":              (False, False, False, False, False,
                                    ["Off", "Adaptive", "Low", "Medium", "High"]),
 }
@@ -83,6 +97,10 @@ THINKING_DEFAULT_ON = {
     "claude-sonnet-4-5": False,
     "claude-opus-4-8": False,
     "claude-haiku-4-5": False,
+    # Haiku 5.5 thinks when the param is omitted (probed 2026-10-08), so
+    # its Off is an explicit disable — accepted at effort <= high.
+    "claude-haiku-5-5": True,
+    "claude-haiku-5-5-20261007": True,
 }
 
 
@@ -105,6 +123,20 @@ class TestAnthropicDetect(unittest.TestCase):
         for model, expected in THINKING_DEFAULT_ON.items():
             with self.subTest(model=model):
                 self.assertEqual(self.u._anthropic_thinking_on_by_default(model), expected)
+
+    def test_thinking_kind_per_haiku_generation(self):
+        # The editor's control: Haiku 4.5 keeps the checkbox + budget
+        # presets (manual), Haiku 5.5 gets the Thinking-mode combobox
+        # (adaptive) — a budget request is HTTP 400 on it.
+        self.assertEqual(self.u._model_supports_thinking("claude-haiku-4-5"), "manual")
+        self.assertEqual(self.u._model_supports_thinking("claude-haiku-4-5-20251001"), "manual")
+        self.assertEqual(self.u._model_supports_thinking("claude-haiku-5-5"), "adaptive")
+        self.assertEqual(self.u._model_supports_thinking("claude-haiku-5-5-20261007"), "adaptive")
+        self.assertTrue(self.u._is_anthropic_haiku_5("claude-haiku-5-5"))
+        self.assertFalse(self.u._is_anthropic_haiku_5("claude-haiku-4-5"))
+        self.assertFalse(self.u._is_anthropic_haiku_5("claude-sonnet-5-5"))
+        other = stub(UIMixin, provider="OpenAI", model="gpt-6-luna")
+        self.assertFalse(other._is_anthropic_haiku_5("claude-haiku-5-5"))
 
     def test_adaptive_requires_anthropic_provider(self):
         # _is_anthropic_adaptive_model returns False unless self.provider == "Anthropic"

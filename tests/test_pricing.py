@@ -59,6 +59,14 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-opus-5-5"): {
             "input": 4.00 / 1_000_000, "output": 20.00 / 1_000_000,
             "cache_write": 5.00 / 1_000_000, "cache_read": 0.20 / 1_000_000},
+        # Haiku 5.5 (live 2026-10-07, row added 2026-10-08): the <= 100K-token
+        # rate card — the prompt-length tier above it is not modelled — with
+        # cache reads 0.1x and writes 1.25x; a later Haiku 5.x id is unpriced,
+        # not caught by a family prefix (the Anthropic policy).
+        ("Anthropic", "claude-haiku-5-5"): {
+            "input": 0.10 / 1_000_000, "output": 0.50 / 1_000_000,
+            "cache_write": 0.125 / 1_000_000, "cache_read": 0.01 / 1_000_000},
+        ("Anthropic", "claude-haiku-5-6"): None,
         # Retired generations were dropped from the table (2026-07 audit)
         ("Anthropic", "claude-3-haiku-20240307"): None,
         ("Anthropic", "claude-opus-4-1"): None,

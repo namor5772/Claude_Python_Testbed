@@ -56,7 +56,9 @@ def _host(model, unsupported=()):
 class ServerToolSelection(unittest.TestCase):
     def test_current_models_get_the_new_triple_without_betas(self):
         for model in ("claude-sonnet-5", "claude-opus-5-5", "claude-opus-5",
-                      "claude-fable-5-1", "claude-opus-4-5"):
+                      "claude-fable-5-1", "claude-opus-4-5",
+                      # Haiku 5.5 accepts the triple (probed live 2026-10-08)
+                      "claude-haiku-5-5", "claude-haiku-5-5-20261007"):
             with self.subTest(model=model):
                 tools, betas = _host(model)._anthropic_server_tools()
                 self.assertEqual(tools, NEW_TRIPLE)

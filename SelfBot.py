@@ -6553,14 +6553,21 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         served model accepts the triple — Fable/Mythos 5 and 5.1, Opus 5.5 /
         5 / 4.5, Sonnet 5 / 4.5 — EXCEPT Haiku 4.5, whose 400 says it "does
         not support programmatic tool calling" (what the 20260209 filtering
-        runs on); Haiku keeps the older web pair (web_fetch_20250910 under
-        its beta) with the new code-execution type, also probed. A future
+        runs on); Haiku 4.5 keeps the older web pair (web_fetch_20250910
+        under its beta) with the new code-execution type, also probed.
+        Haiku 5.5 (2026-10-08) takes the triple like every other current
+        model, so the fallback is gated to Haiku BELOW 5. A future
         model rejecting the triple is learned off per session by the
         BadRequest rung in _stream_anthropic_call ("server_tools_20260209"
         in _anthropic_unsupported) and retried on the fallback set. The
         definitions cost ~6.4K input tokens against the old pair's ~4K,
         absorbed by the prompt cache after the first call."""
-        fallback = (self.model or "").startswith("claude-haiku") or (
+        # Haiku BELOW 5 only: Haiku 5.5 accepts the triple (probed live
+        # 2026-10-08 — HTTP 200 with the ~6.5K tokens of definitions;
+        # its capability tree lists web_search + code_execution), so the
+        # rule is version-parsed rather than the family prefix it was.
+        haiku = self._parse_claude_major_minor(self.model or "", ("claude-haiku-",))
+        fallback = (haiku is not None and haiku < (5, 0)) or (
             "server_tools_20260209" in getattr(self, "_anthropic_unsupported", set()))
         if fallback:
             return ([{"type": "web_search_20250305", "name": "web_search"},

@@ -705,9 +705,9 @@ class UIMixin:
 
     def _anthropic_thinking_on_by_default(self, model_id=None):
         """True for Anthropic models that run ADAPTIVE thinking when the
-        `thinking` parameter is omitted — Opus 5+ and Sonnet 5+ (a silent
-        change from the 4.x generation, which ran thinking-off on omission)
-        and the always-on Mythos class. For these, "Off" must be sent as an
+        `thinking` parameter is omitted — Opus 5+, Sonnet 5+ and Haiku 5+ (a
+        silent change from the 4.x generation, which ran thinking-off on
+        omission) and the always-on Mythos class. For these, "Off" must be sent as an
         explicit thinking={"type": "disabled"} or the model silently thinks
         (and bills thinking tokens) against the non-thinking max_tokens cap
         with the Show Thinking pane dark. (Opus 5 accepts the explicit
@@ -718,6 +718,8 @@ class UIMixin:
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
+            return True
+        if self._is_anthropic_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (5, 0)
@@ -749,8 +751,9 @@ class UIMixin:
 
     def _anthropic_rejects_temperature(self, model_id=None):
         """True for Anthropic models that removed sampling params (temperature/
-        top_p/top_k) — Opus 4.7+, Sonnet 5+, and the Claude 5 Mythos class
-        (Fable/Mythos) return HTTP 400 if a non-default temperature is sent.
+        top_p/top_k) — Opus 4.7+, Sonnet 5+, Haiku 5+ (2026-10-08: '`temperature`
+        is deprecated for this model', any value but 1) and the Claude 5 Mythos
+        class (Fable/Mythos) return HTTP 400 if a non-default temperature is sent.
         Version-parsed per family so future releases are covered without a
         hardcoded list; the reactive cache in _stream_anthropic_call backstops
         anything this misses."""
@@ -758,6 +761,8 @@ class UIMixin:
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
+            return True
+        if self._is_anthropic_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-",))
         if version is not None and version >= (4, 7):
@@ -767,8 +772,8 @@ class UIMixin:
 
     def _anthropic_supports_max_effort(self, model_id=None):
         """True for Anthropic models that expose the 'max' thinking effort —
-        Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5), and the Claude 5 Mythos class
-        (Fable/Mythos). Version-parsed per family so future releases keep "Max"
+        Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5), Haiku 5+ and the Claude 5
+        Mythos class (Fable/Mythos). Version-parsed per family so future releases keep "Max"
         without editing a hardcoded list. (An older revision capped Sonnet at
         High claiming the API 400s effort='max' for non-Opus — stale: the
         Models API capability tree reports max=True for claude-sonnet-4-6 and
@@ -778,6 +783,8 @@ class UIMixin:
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
             return True
+        if self._is_anthropic_haiku_5(mid):
+            return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (4, 6)
 
@@ -785,11 +792,14 @@ class UIMixin:
         """True for Anthropic models that accept effort='xhigh' (between high
         and max) — Opus 4.7+, Sonnet 5+ (the first Sonnet tier with xhigh —
         verified live 2026-07 via the Models API capability tree; Sonnet 4.6
-        reports xhigh=False), plus the Claude 5 Mythos class (Fable/Mythos)."""
+        reports xhigh=False), Haiku 5+ (its tree reports every level,
+        2026-10-08), plus the Claude 5 Mythos class (Fable/Mythos)."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
         if self._is_anthropic_always_on_thinking(mid):
+            return True
+        if self._is_anthropic_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-",))
         if version is not None and version >= (4, 7):
@@ -844,10 +854,32 @@ class UIMixin:
             values.append("Max")
         return values
 
+    def _is_anthropic_haiku_5(self, model_id=None):
+        """True for the Haiku 5 generation — claude-haiku-5-5 (live
+        2026-10-07, audited 2026-10-08) and any later Haiku, version-parsed
+        as Haiku major >= 5 so a dated snapshot rides along and Haiku 4.5
+        keeps its manual budget. The first Haiku with the Claude 5 request
+        contract: ADAPTIVE thinking only (the budget form is HTTP 400:
+        '"thinking.type.enabled" is not supported for this model'), on by
+        default when the param is omitted, an explicit disable accepted at
+        effort high or below (400 at xhigh / max — "Off" sends no effort, so
+        the UI keeps its Off rung), effort low..max (default MEDIUM, as on
+        Opus 5.5), and no sampling params ('`temperature` is deprecated for
+        this model' — any value but 1). Every fact probed live 2026-10-08
+        against the Models API capability tree and the real endpoint. Read
+        by the adaptive / temperature / on-by-default / xhigh / max helpers
+        below and by _anthropic_fable_features (the thinking binding, no
+        fallbacks) and _anthropic_server_tools (the current triple)."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        version = self._parse_claude_major_minor(mid, ("claude-haiku-",))
+        return version is not None and version >= (5, 0)
+
     def _is_anthropic_adaptive_model(self, model_id=None):
         """True for Anthropic models that use ADAPTIVE thinking (the {type:adaptive}
-        + output_config effort API) rather than a manual token budget — Opus 4.6+
-        and Sonnet 4.6+. Parses claude-(opus|sonnet)-<major>-<minor> >= (4, 6) so
+        + output_config effort API) rather than a manual token budget — Opus 4.6+,
+        Sonnet 4.6+ and Haiku 5+ (_is_anthropic_haiku_5, 2026-10-08). Parses claude-(opus|sonnet)-<major>-<minor> >= (4, 6) so
         DATED snapshots (e.g. claude-sonnet-4-6-20260101) and future minors are
         detected without editing the exact-match ADAPTIVE_THINKING_MODELS set —
         the API returns some Claude IDs dated and some undated (verified live), so
@@ -860,6 +892,8 @@ class UIMixin:
         mid = model_id or self.model or ""
         # Claude 5 Mythos-class (Fable/Mythos): adaptive-only, always-on thinking.
         if self._is_anthropic_always_on_thinking(mid):
+            return True
+        if self._is_anthropic_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (4, 6)

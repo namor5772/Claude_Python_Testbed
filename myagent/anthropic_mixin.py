@@ -93,14 +93,21 @@ class AnthropicMixin:
         served model accepts the triple — Fable/Mythos 5 and 5.1, Opus 5.5 /
         5 / 4.5, Sonnet 5 / 4.5 — EXCEPT Haiku 4.5, whose 400 says it "does
         not support programmatic tool calling" (what the 20260209 filtering
-        runs on); Haiku keeps the older web pair (web_fetch_20250910 under
-        its beta) with the new code-execution type, also probed. A future
+        runs on); Haiku 4.5 keeps the older web pair (web_fetch_20250910
+        under its beta) with the new code-execution type, also probed.
+        Haiku 5.5 (2026-10-08) takes the triple like every other current
+        model, so the fallback is gated to Haiku BELOW 5. A future
         model rejecting the triple is learned off per session by the
         BadRequest rung in _stream_anthropic_call ("server_tools_20260209"
         in _anthropic_unsupported) and retried on the fallback set. The
         definitions cost ~6.4K input tokens against the old pair's ~4K,
         absorbed by the prompt cache after the first call."""
-        fallback = (self.model or "").startswith("claude-haiku") or (
+        # Haiku BELOW 5 only: Haiku 5.5 accepts the triple (probed live
+        # 2026-10-08 — HTTP 200 with the ~6.5K tokens of definitions;
+        # its capability tree lists web_search + code_execution), so the
+        # rule is version-parsed rather than the family prefix it was.
+        haiku = self._parse_claude_major_minor(self.model or "", ("claude-haiku-",))
+        fallback = (haiku is not None and haiku < (5, 0)) or (
             "server_tools_20260209" in getattr(self, "_anthropic_unsupported", set()))
         if fallback:
             return ([{"type": "web_search_20250305", "name": "web_search"},
@@ -116,21 +123,30 @@ class AnthropicMixin:
         """The always-on class's request surface for this call — Fable /
         Mythos, and Claude Opus 5.5+ since 2026-09-23 (it carries preserved
         thinking and the refusal fallbacks too; both accepted live that day)
-        — or None for every other model: the beta headers to add plus the
+        — the thinking binding ALONE for Haiku 5.5+ (2026-10-08) — or None
+        for every other model: the beta headers to add plus the
         `thinking.block_binding` and `fallbacks` values to send (constants.py
         explains both), minus any surface this session has already seen the
         API reject — `_anthropic_unsupported`, filled by the BadRequest rungs
         in _stream_anthropic_call, so an org that isn't enrolled in a beta
         learns once and stops sending it. Also drives the Debug payload dump
         (_payload_for_display), so the dump shows what is really sent."""
-        if not self._is_anthropic_always_on_thinking():
+        always_on = self._is_anthropic_always_on_thinking()
+        # Haiku 5.5+ (2026-10-08) runs the preserved-thinking check too —
+        # the binding is accepted beside adaptive thinking and refused
+        # beside a disable ('thinking.disabled.block_binding: Extra inputs
+        # are not permitted'), which is why the builder adds it in the
+        # adaptive branch only — but it has NO server-side fallback: a
+        # fallbacks list is a 400 and "default" is accepted and does
+        # nothing (the migration guide says not to send it). Probed live.
+        if not (always_on or self._is_anthropic_haiku_5()):
             return None
         unsupported = getattr(self, "_anthropic_unsupported", set())
         features = {"betas": [], "block_binding": None, "fallbacks": None}
         if "block_binding" not in unsupported:
             features["betas"].append(ANTHROPIC_THINKING_BINDING_BETA)
             features["block_binding"] = dict(ANTHROPIC_THINKING_BLOCK_BINDING)
-        if "fallbacks" not in unsupported:
+        if always_on and "fallbacks" not in unsupported:
             features["betas"].append(ANTHROPIC_SERVER_FALLBACK_BETA)
             features["fallbacks"] = ANTHROPIC_SERVER_FALLBACKS
         return features
@@ -213,17 +229,25 @@ class AnthropicMixin:
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
             api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
-            # Opus 5+ and Sonnet 5+ run ADAPTIVE thinking when the param is
-            # omitted (a silent change from 4.x-era models, which ran
+            # Opus 5+, Sonnet 5+ and Haiku 5.5+ run ADAPTIVE thinking when the
+            # param is omitted (a silent change from 4.x-era models, which ran
             # thinking-off on omission) — "Off" must be an explicit disable
             # there, or the model silently thinks against the non-thinking
             # max_tokens cap with the Show Thinking pane dark. Explicit
             # disabled is accepted on the whole 4.6+/5 Sonnet-Opus range
-            # (Opus 5 only at effort ≤ high — satisfied, as "Off" sends no
-            # effort); the always-on Fable/Mythos models (where it is HTTP
+            # (Opus 5 and Haiku 5.5 only at effort ≤ high — satisfied, as "Off"
+            # sends no effort); the always-on Fable/Mythos models (where it is HTTP
             # 400) never reach this branch.
             if self._anthropic_thinking_on_by_default():
                 api_kwargs["thinking"] = {"type": "disabled"}
+            if fable and fable["block_binding"]:
+                # The binding rides only beside adaptive thinking (Haiku 5.5
+                # refuses it beside a disable: thinking.disabled.block_binding
+                # Extra inputs are not permitted), and this branch sends no
+                # binding field, so its beta header stays home too.
+                fable["block_binding"] = None
+                fable["betas"] = [b for b in fable["betas"]
+                                  if b != ANTHROPIC_THINKING_BINDING_BETA]
             # Opus 4.7+, Sonnet 5+, and Fable/Mythos 5 removed temperature/top_p/
             # top_k — sending temperature returns a 400. Skip it for those models
             # (parsed by version) and for any model that rejected it earlier this

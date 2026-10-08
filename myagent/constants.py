@@ -1424,6 +1424,7 @@ FALLBACK_MODELS = [
     "claude-fable-5",
     "claude-sonnet-5",
     "claude-sonnet-4-6",
+    "claude-haiku-5-5",    # Haiku 5.5 (live 2026-10-07): $0.10/$0.50, adaptive-only thinking — see _is_anthropic_haiku_5
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
@@ -1456,7 +1457,8 @@ ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5", "claude-opus-5-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-                            "claude-sonnet-5", "claude-sonnet-4-6"}
+                            "claude-sonnet-5", "claude-sonnet-4-6",
+                            "claude-haiku-5-5"}
 # Claude 5 Mythos-class models (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is
 # ALWAYS ON. The API rejects thinking={"type": "disabled"} and budget_tokens with
 # HTTP 400 — only omitting the param or {"type": "adaptive"} is accepted, and
@@ -3492,6 +3494,15 @@ ANTHROPIC_PRICING = {
     "claude-sonnet-5":     (2.00, 10.00, 2.50, 0.20),
     "claude-sonnet-4-6":   (3.00, 15.00, 3.75, 0.30),
     "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
+    # Haiku 5.5 (live 2026-10-07, row added 2026-10-08 — pricing page and the
+    # migration guide read that day): $0.10 / $0.50 for a prompt of 100K
+    # tokens or fewer — cache reads 0.1x ($0.01), 5-minute writes 1.25x
+    # ($0.125). The API bills a prompt OVER 100K tokens on a second rate
+    # card ($0.50 / $2.50, cache $0.05 / $0.625), which this table does not
+    # model — the same choice as the >200K Gemini / GPT-6 tiers — so such a
+    # run is logged low. Its own row, not a "claude-haiku-5" family row:
+    # the Anthropic policy is unknown id → unpriced, never mispriced.
+    "claude-haiku-5-5":    (0.10, 0.50, 0.125, 0.01),
     # Haiku 4.5 (prefix also covers the dated claude-haiku-4-5-20251001 id)
     "claude-haiku-4":      (1.00, 5.00, 1.25, 0.10),
 }

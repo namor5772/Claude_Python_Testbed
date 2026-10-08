@@ -66,6 +66,7 @@ class SupportsFastMode(unittest.TestCase):
         "claude-sonnet-5": False,
         "claude-fable-5-1": False,
         "claude-haiku-4-5": False,
+        "claude-haiku-5-5": False,       # "does not support the `speed` parameter" (2026-10-08)
     }
 
     def test_matrix(self):

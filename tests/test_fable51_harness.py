@@ -64,6 +64,21 @@ class FableFeatures(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertIsNone(_host(model)._anthropic_fable_features())
 
+    def test_haiku_5_5_gets_the_binding_but_no_fallbacks(self):
+        # Probed live 2026-10-08: block_binding accepted beside adaptive
+        # thinking; a fallbacks list is 400 ("does not support the
+        # `fallbacks` parameter") and "default" is a no-op — so only the
+        # binding beta goes out, and the request body carries no fallbacks.
+        for model in ("claude-haiku-5-5", "claude-haiku-5-5-20261007"):
+            with self.subTest(model=model):
+                f = _host(model)._anthropic_fable_features()
+                self.assertEqual(f["betas"], [ANTHROPIC_THINKING_BINDING_BETA])
+                self.assertEqual(f["block_binding"],
+                                 {"prefix_mismatch_behavior": "drop_block"})
+                self.assertIsNone(f["fallbacks"])
+        f = _host("claude-haiku-5-5", unsupported={"block_binding"})._anthropic_fable_features()
+        self.assertEqual(f, {"betas": [], "block_binding": None, "fallbacks": None})
+
     def test_none_for_other_providers(self):
         self.assertIsNone(_host("claude-fable-5-1", provider="OpenAI")
                           ._anthropic_fable_features())

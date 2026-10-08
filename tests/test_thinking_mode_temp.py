@@ -80,6 +80,9 @@ class TempAfterModeTests(unittest.TestCase):
 
     def test_anthropic_off_hides_it_on_models_that_reject_it(self):
         self.assertFalse(self._temp_shown(self._host("Anthropic", "claude-opus-5", "Off")))
+        # Haiku 5.5 rejects every temperature but 1 (2026-10-08): no widget.
+        self.assertFalse(self._temp_shown(self._host("Anthropic", "claude-haiku-5-5", "Off")))
+        self.assertTrue(self._temp_shown(self._host("Anthropic", "claude-haiku-4-5-20251001", "Off")))
         self.assertTrue(self._temp_shown(self._host("Anthropic", "claude-opus-4-6", "Off")))
         self.assertFalse(self._temp_shown(self._host("Anthropic", "claude-opus-4-6", "High")))
 
