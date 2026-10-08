@@ -76,6 +76,7 @@ Design invariants:
   in "\\n" compares UNequal to its file-era twin in union_stores.
 """
 
+import errno
 import glob
 import json
 import os
@@ -327,30 +328,68 @@ def _move_file(src, dst):
     """Move src to dst, which the caller found free: a rename on one volume,
     else — the repo and OneDrive's File Provider volume on macOS are
     different filesystems, EXDEV, as the cost-log migration found — a copy
-    into a file opened exclusively (never over one that appeared meanwhile),
-    the modification time carried across so the share lists the chats in
-    their order, then the delete; a copy that fails is removed again."""
+    into a temporary file BESIDE dst (mkstemp, exclusive: a dot-prefixed
+    `.<name>.<random>.part`), the modification time carried across so the
+    share lists the chats in their order, then ONE rename onto the final
+    name — atomic within the share's volume — then the delete of src. The
+    final name therefore never exists until it is complete: a process that
+    dies mid-copy (a headless Heartbeat child ending while its fold-in
+    still runs) leaves only the .part file, which _sweep_part_files removes
+    once it is CHATS_PART_STALE_SECS old; a copy that FAILS is removed at
+    once. A dst that appeared meanwhile is never replaced."""
     try:
         os.rename(src, dst)
         return
     except OSError:
         pass
     st = os.stat(src)
-    fdst = open(dst, "xb")
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(dst)}.", suffix=".part",
+                               dir=os.path.dirname(dst) or ".")
     try:
-        with fdst, open(src, "rb") as fsrc:
+        with os.fdopen(fd, "wb") as fdst, open(src, "rb") as fsrc:
             shutil.copyfileobj(fsrc, fdst, 1 << 20)
+        try:
+            os.utime(tmp, (st.st_atime, st.st_mtime))
+        except OSError:
+            pass
+        if os.path.exists(dst):
+            raise FileExistsError(errno.EEXIST, "destination appeared meanwhile", dst)
+        os.rename(tmp, dst)
     except OSError:
         try:
-            os.remove(dst)
+            os.remove(tmp)
         except OSError:
             pass
         raise
-    try:
-        os.utime(dst, (st.st_atime, st.st_mtime))
-    except OSError:
-        pass
     os.remove(src)
+
+
+# A `.part` file in the share older than this is a copy whose process died
+# (_move_file) and is swept; a younger one may be a sibling instance's live
+# copy, or another machine's arriving through the sync — left alone.
+CHATS_PART_STALE_SECS = 3600
+
+
+def _sweep_part_files(shared_dir, now):
+    """Remove the `.<name>.<random>.part` temp files a cross-volume copy
+    leaves when its process dies mid-copy (_move_file), once they are
+    CHATS_PART_STALE_SECS old. Best-effort; returns the count removed."""
+    try:
+        names = os.listdir(shared_dir)
+    except OSError:
+        return 0
+    swept = 0
+    for fn in names:
+        if not (fn.startswith(".") and fn.endswith(".part")):
+            continue
+        path = os.path.join(shared_dir, fn)
+        try:
+            if now - os.path.getmtime(path) >= CHATS_PART_STALE_SECS:
+                os.remove(path)
+                swept += 1
+        except OSError:
+            pass
+    return swept
 
 
 def _chat_slot(shared_dir, stem, ext, src, label):
@@ -398,11 +437,11 @@ def migrate_local_chats(local_dir, shared_dir, label=None, now=None):
     idempotent, a folder with no MyAgent chat moves nothing. The .txt is
     moved after its .json and lands under the same stem (its own collision
     check, so even an orphan .txt in the share is never overwritten).
+    Stale `.part` temp files in the share — a cross-volume copy whose
+    process died (_move_file) — are swept first (_sweep_part_files).
     Returns the counts {"moved", "absorbed", "waiting", "errors"} — files,
     not chats; a .json and its .txt count twice."""
     summary = {"moved": 0, "absorbed": 0, "waiting": 0, "errors": 0}
-    if not os.path.isdir(local_dir):
-        return summary
     try:
         same = os.path.samefile(local_dir, shared_dir)
     except OSError:
@@ -410,8 +449,12 @@ def migrate_local_chats(local_dir, shared_dir, label=None, now=None):
                 == os.path.normcase(os.path.abspath(shared_dir)))
     if same:
         return summary
-    label = label or machine_label()
     now = time.time() if now is None else now
+    if os.path.isdir(shared_dir):
+        _sweep_part_files(shared_dir, now)
+    if not os.path.isdir(local_dir):
+        return summary
+    label = label or machine_label()
     try:
         names = sorted(os.listdir(local_dir))
     except OSError:

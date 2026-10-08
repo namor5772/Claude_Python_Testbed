@@ -23,6 +23,7 @@ last two minutes left for the next launch, every launch repeating the pass
 until nothing is left to move.
 """
 
+import errno
 import os
 import queue
 import re
@@ -41,6 +42,18 @@ from tests.test_datapaths import DatapathsCase
 
 REPO = Path(__file__).resolve().parents[1]
 OLD = 600  # seconds — comfortably past CHATS_SETTLE_SECS
+
+
+def _exdev_between_dirs(real_rename):
+    """An os.rename that behaves like the Mac's repo → OneDrive File
+    Provider boundary: EXDEV between two folders, the real rename within
+    one — so the copy path's final temp → name rename inside the share
+    still works."""
+    def rename(a, b):
+        if os.path.dirname(os.path.abspath(a)) != os.path.dirname(os.path.abspath(b)):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_rename(a, b)
+    return rename
 
 
 def _myagent_chat(name, text="hello"):
@@ -272,21 +285,18 @@ class MigrationTests(MigrationCase):
         self.assertFalse(self.shared.exists())
 
     def test_a_cross_volume_move_copies_and_keeps_the_mtime(self):
-        # The repo and OneDrive's File Provider volume on macOS: os.rename is
-        # EXDEV, so the file is copied, its modification time carried over,
-        # then deleted.
+        # The repo and OneDrive's File Provider volume on macOS: os.rename
+        # between them is EXDEV, so the file is copied into a temp file beside
+        # the destination, its modification time carried over, renamed onto
+        # the final name (one volume — that rename works) and deleted.
         src = self.put(self.local, "A.json", _myagent_chat("A"))
         src_mtime = os.path.getmtime(src)
         real_rename = os.rename
-
-        def no_rename(a, b):
-            raise OSError(18, "Invalid cross-device link")
-
-        with mock.patch.object(dp.os, "rename", no_rename):
+        with mock.patch.object(dp.os, "rename", _exdev_between_dirs(real_rename)):
             summary = self.run_pass()
         self.assertEqual(summary["moved"], 1)
         self.assertEqual(self.names(self.local), [])
-        self.assertEqual(self.names(self.shared), ["A.json"])
+        self.assertEqual(self.names(self.shared), ["A.json"])  # and no .part left behind
         self.assertAlmostEqual(os.path.getmtime(self.shared / "A.json"), src_mtime, delta=2)
         self.assertIs(os.rename, real_rename)
 
@@ -294,21 +304,69 @@ class MigrationTests(MigrationCase):
         src = self.put(self.local, "A.json", _myagent_chat("A"))
         self.put(self.local, "A.txt", "pane")
 
-        def no_rename(a, b):
-            raise OSError(18, "Invalid cross-device link")
-
         def broken_copy(fsrc, fdst, length=0):
             fdst.write(b"partial")
-            raise OSError(28, "No space left on device")
+            raise OSError(errno.ENOSPC, "No space left on device")
 
-        with mock.patch.object(dp.os, "rename", no_rename), \
+        with mock.patch.object(dp.os, "rename", _exdev_between_dirs(os.rename)), \
              mock.patch.object(dp.shutil, "copyfileobj", broken_copy):
             summary = self.run_pass()
         self.assertEqual(summary["errors"], 1)
         self.assertEqual(summary["moved"], 0)
         self.assertTrue(src.exists())
         self.assertEqual(self.names(self.local), ["A.json", "A.txt"])
-        self.assertEqual(self.names(self.shared), [])  # the partial copy was removed
+        self.assertEqual(self.names(self.shared), [])  # the temp copy was removed
+
+    def test_an_interrupted_copy_leaves_only_a_part_file_never_the_name(self):
+        # A process dying mid-copy (a headless Heartbeat child ending while
+        # its fold-in still runs) raises nothing the code can catch —
+        # modelled by a BaseException out of the copy: the final name must
+        # not exist, the source must be intact, and only the dot-prefixed
+        # temp file remains, for the sweep.
+        class _Killed(BaseException):
+            pass
+
+        def dying_copy(fsrc, fdst, length=0):
+            fdst.write(b"partial")
+            raise _Killed()
+
+        src = self.put(self.local, "A.json", _myagent_chat("A"))
+        self.shared.mkdir(parents=True)
+        with mock.patch.object(dp.os, "rename", _exdev_between_dirs(os.rename)), \
+             mock.patch.object(dp.shutil, "copyfileobj", dying_copy), \
+             self.assertRaises(_Killed):
+            dp._move_file(str(src), str(self.shared / "A.json"))
+        self.assertTrue(src.exists())
+        self.assertFalse((self.shared / "A.json").exists())
+        left = self.names(self.shared)
+        self.assertEqual(len(left), 1)
+        self.assertRegex(left[0], r"^\.A\.json\..+\.part$")
+
+    def test_a_stale_part_file_is_swept_at_the_next_pass_a_fresh_one_kept(self):
+        self.put(self.shared, ".A.json.abc123.part", "partial", age=dp.CHATS_PART_STALE_SECS + 5)
+        self.put(self.shared, ".B.json.def456.part", "partial", age=10)
+        self.put(self.shared, "C.part", "not a temp of ours", age=dp.CHATS_PART_STALE_SECS + 5)
+        self.run_pass()
+        self.assertEqual(self.names(self.shared), [".B.json.def456.part", "C.part"])
+        self.assertEqual(dp.CHATS_PART_STALE_SECS, 3600)
+
+    def test_a_destination_that_appeared_meanwhile_is_never_replaced(self):
+        src = self.put(self.local, "A.json", _myagent_chat("A", text="laptop"))
+        dst = self.shared / "A.json"
+        self.shared.mkdir(parents=True)
+        real_copy = shutil.copyfileobj
+
+        def copy_then_someone_lands(fsrc, fdst, length=0):
+            real_copy(fsrc, fdst, length or 1 << 20)
+            dst.write_text("the desktop's", encoding="utf-8")
+
+        with mock.patch.object(dp.os, "rename", _exdev_between_dirs(os.rename)), \
+             mock.patch.object(dp.shutil, "copyfileobj", copy_then_someone_lands), \
+             self.assertRaises(FileExistsError):
+            dp._move_file(str(src), str(dst))
+        self.assertEqual(dst.read_text(encoding="utf-8"), "the desktop's")
+        self.assertTrue(src.exists())
+        self.assertEqual(self.names(self.shared), ["A.json"])  # the temp was removed
 
     def test_an_error_on_one_chat_does_not_stop_the_others(self):
         self.put(self.local, "A.json", _myagent_chat("A"))
