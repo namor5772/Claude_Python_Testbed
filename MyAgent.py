@@ -364,6 +364,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # (streaming_mixin) — gets its cost line now, before anything here
         # can start a run of its own.
         self._run_progress_fold_in()
+        # This machine's earlier chats, still in the repo-root saved_chats
+        # folder, move into the shared one in the background (chat_mixin;
+        # the chats live in <OneDrive>/MyAppShare/saved_chats since
+        # 2026-10-08). A no-op where no shared dir is in use.
+        self._fold_local_chats_in()
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)

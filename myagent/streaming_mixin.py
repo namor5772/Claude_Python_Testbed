@@ -1326,7 +1326,9 @@ class StreamingMixin:
         only for a run served by more than one model, or by one model other
         than the MODEL field, which is the model the run ENDED on;
         — chat (14th field, 2026-10-07) is the stem of the chat files the
-        run's transcript is saved under — saved_chats/<chat>.json + .txt,
+        run's transcript is saved under — <chat>.json + .txt in CHATS_DIR,
+        the saved_chats folder of the OneDrive share since 2026-10-08 (every
+        machine's runs in one folder, so the file this names opens anywhere),
         the "Save Chat as" name, which every MyAgent run has since the same
         day (chat_mixin._name_run_chat) — whitespace-collapsed with any ';'
         turned into ',' like the instruction. When it is written the 13th

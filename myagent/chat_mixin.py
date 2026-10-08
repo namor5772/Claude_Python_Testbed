@@ -1,7 +1,8 @@
-import os, re, json, io, time, base64, tkinter as tk
+import os, re, json, io, time, base64, threading, tkinter as tk
 from tkinter import filedialog, messagebox
 
-from myagent.constants import CHATS_DIR, IS_WINDOWS
+from myagent.constants import CHATS_DIR, LOCAL_CHATS_DIR, IS_WINDOWS
+from myagent.datapaths import migrate_local_chats
 
 try:
     from PIL import Image, ImageOps
@@ -65,6 +66,42 @@ class ChatMixin:
             self.chat_name_entry.insert(0, name)
         self._run_chat_name = self._sanitize_filename(name, "")
         return name
+
+    def _fold_local_chats_in(self):
+        """At launch (MyAgent.py __init__): move this machine's earlier MyAgent
+        chats from the repo-root saved_chats folder into the shared one
+        (2026-10-08 — the chats followed the stores and the cost log into
+        <OneDrive>/MyAppShare; datapaths.migrate_local_chats says what moves
+        and what stays: SelfBot's chats and the ci_output_* files never do),
+        on a daemon thread, so a first pass over a few hundred files never
+        delays the launch and a copy into OneDrive's File Provider volume on
+        the Mac never holds the Tk thread. Every launch runs it — a folder
+        with no MyAgent chat left costs one listing — and the pane gets an
+        Activity line when files moved (a bare host without a queue gets
+        none). Returns the thread, or None where no shared dir is in use and
+        the chats are at the repo root as ever."""
+        if (os.path.normcase(os.path.abspath(LOCAL_CHATS_DIR))
+                == os.path.normcase(os.path.abspath(CHATS_DIR))):
+            return None
+
+        def run():
+            try:
+                summary = migrate_local_chats(LOCAL_CHATS_DIR, CHATS_DIR)
+            except Exception:
+                return
+            q = getattr(self, "queue", None)
+            if q is None or not (summary["moved"] or summary["absorbed"]):
+                return
+            text = (f"Moved {summary['moved']} earlier chat file(s) from "
+                    f"{LOCAL_CHATS_DIR} into {CHATS_DIR}")
+            if summary["errors"]:
+                text += (f" ({summary['errors']} could not be moved — "
+                         "tried again at the next launch)")
+            q.put({"type": "tool_info", "content": text})
+
+        thread = threading.Thread(target=run, daemon=True, name="chats-fold-in")
+        thread.start()
+        return thread
 
     def _save_chat_file(self, name, data):
         os.makedirs(CHATS_DIR, exist_ok=True)

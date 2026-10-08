@@ -152,7 +152,8 @@ By-model blocks split such a run between its models (`Expand-ModelSplit` on
 Windows, the `$S` field in `bucket` / `token_rollup` on macOS, whose merged
 rows are 15 fields wide since 2026-10-07 — 14 before), while every other block counts it once;
 `{chat}` (2026-10-07) is the stem of the chat files the run's transcript is
-saved under (`saved_chats/<chat>.json` + `.txt` — every MyAgent run names its
+saved under (`<chat>.json` + `.txt` in `<OneDrive>/MyAppShare/saved_chats/`
+since 2026-10-08, so any machine can open it — every MyAgent run names its
 chat since that day), and whenever it is present `{split}` is written too,
 blank for a one-model run, so the chat can never be read as a split → the
 CHAT column, rightmost after INSTRUCTION, blank on older and SelfBot lines

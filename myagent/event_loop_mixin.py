@@ -1,5 +1,7 @@
 import os, io, sys, time, queue, tkinter as tk
 
+from myagent.constants import CHATS_DIR
+
 try:
     from PIL import Image, ImageTk
 except ImportError:
@@ -174,10 +176,14 @@ class EventLoopMixin:
                                     pil_img.load()  # a valid header can still hide a truncated body
                                 except Exception:
                                     pil_img = None
-                            os.makedirs("saved_chats", exist_ok=True)
+                            # Beside the chats (the shared folder when
+                            # OneDrive is in use) — the literal relative
+                            # "saved_chats" this used was whatever the
+                            # process's CWD held.
+                            os.makedirs(CHATS_DIR, exist_ok=True)
                             ts = time.strftime("%Y%m%d_%H%M%S")
                             if pil_img is not None:
-                                img_path = os.path.join("saved_chats", f"ci_output_{ts}.png")
+                                img_path = os.path.join(CHATS_DIR, f"ci_output_{ts}.png")
                                 with open(img_path, "wb") as f:
                                     f.write(img_data)
                                 # Scale to fit chat display width (max ~600px)
@@ -201,7 +207,7 @@ class EventLoopMixin:
                                 self.chat_display.config(state="disabled")
                             else:
                                 fname = self._ci_file_name(file_id, img_data)
-                                file_path = os.path.join("saved_chats", f"ci_output_{ts}_{fname}")
+                                file_path = os.path.join(CHATS_DIR, f"ci_output_{ts}_{fname}")
                                 with open(file_path, "wb") as f:
                                     f.write(img_data)
                                 self._chat_insert((f"[File saved: {file_path}]\n", "tool_info"))

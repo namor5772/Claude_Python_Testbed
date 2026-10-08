@@ -47,8 +47,9 @@
 # By-model blocks split such a run between its models; every other block and
 # the full log read it as one run, as before. The 14th field (2026-10-07) is
 # the stem of the chat files the run's transcript is saved under
-# (saved_chats/<chat>.json + .txt — every MyAgent run names its chat since the
-# same day); whenever it is present the 13th is too, blank for a one-model
+# (<chat>.json + .txt in the share's saved_chats folder since 2026-10-08, so
+# any machine can open it — every MyAgent run names its chat since
+# 2026-10-07); whenever it is present the 13th is too, blank for a one-model
 # run → the CHAT column, rightmost after INSTRUCTION, blank on older and
 # SelfBot lines.
 DIR="$(cd "$(dirname "$0")" && pwd)"

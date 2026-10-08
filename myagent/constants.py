@@ -3991,9 +3991,18 @@ _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # client is present (one copy follows the user across machines — OneDrive, not
 # git, is the sync channel; see myagent/datapaths.py), falling back to the
 # repo root on solo machines. State files below stay per-machine at the root.
-from myagent.datapaths import resolve_store, resolve_costlog, resolve_skills_dir  # noqa: E402  (needs os already imported)
+from myagent.datapaths import (resolve_store, resolve_costlog, resolve_skills_dir,  # noqa: E402  (needs os already imported)
+                               resolve_chats_dir, CHATS_DIRNAME)
 INSTRUCTIONS_FILE = resolve_store("agent_instructions.json")
-CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
+# The chat files every run saves (<name>.json + .txt) and the code-interpreter
+# outputs: <OneDrive>/MyAppShare/saved_chats since 2026-10-08 — one folder
+# every machine's runs write to and any machine can read — with the repo-root
+# saved_chats as the no-OneDrive fallback (datapaths.resolve_chats_dir).
+# LOCAL_CHATS_DIR is that repo-root folder: where this machine's earlier chats
+# wait to be folded into the share at launch (chat_mixin._fold_local_chats_in)
+# and where SelfBot's chats stay — SelfBot is per machine by design.
+CHATS_DIR = resolve_chats_dir()
+LOCAL_CHATS_DIR = os.path.join(_BASE_DIR, CHATS_DIRNAME)
 AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
 # The in-progress cost record of a running instance (streaming_mixin

@@ -86,7 +86,10 @@ mcp_servers.json
 # without npx cache volatility — paths are absolute and per-machine)
 .mcp-deps/
 
-# Saved chat conversations — local-only, never committed
+# Saved chat conversations — never committed. MyAgent's live in
+# <OneDrive>/MyAppShare/saved_chats since 2026-10-08; this repo-root folder
+# keeps SelfBot's (39 early duo chats are tracked by choice) and the older
+# code-interpreter outputs.
 saved_chats/
 
 # Local scratch files at repo root (not part of the project)

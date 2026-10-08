@@ -40,6 +40,17 @@ Design invariants:
   the stores, its one-shot repo→shared migration runs AT RESOLVE TIME (there
   is no load step to hang it on), claimed atomically by the local-file
   rename so concurrently-launching apps migrate exactly once.
+- resolve_chats_dir() (2026-10-08) puts MyAgent's chat files — every run's
+  <name>.json + .txt and the code-interpreter outputs — in <shared>/
+  saved_chats, one folder for every machine: each run's files are named
+  <Instruction>_<timestamp>, so machines never write the same name, and
+  the transcript the cost log's CHAT column names can be opened anywhere.
+  Its migration (migrate_local_chats, run by the app on a background
+  thread at launch — not at resolve time, since the first pass moves a
+  few hundred files) takes ONLY MyAgent's chats from the repo-root folder:
+  SelfBot writes the same folder and stays per machine (its duo chats are
+  the ones git tracks), told apart by content — a MyAgent chat carries
+  agent_instruction_name at its top level — and never overwrites.
 - The SKILLS library is the one store that is NOT a JSON file (since
   2026-08-07): skills are hand-authored prose documents, so each lives as
   its own Anthropic-Agent-Skills-shaped file — <shared>/skills/<Name>/
@@ -259,6 +270,173 @@ def _migrate_costlog(local, shared_path):
         os.replace(old_local, old_local + _MIGRATED_SUFFIX)
     except OSError:
         pass
+
+
+CHATS_DIRNAME = "saved_chats"
+# A chat file touched within this many seconds is left where it is by
+# migrate_local_chats: an instance of the pre-move code still running
+# rewrites its chat every 5 s (state_mixin._periodic_save), and the next
+# launch folds the finished file in.
+CHATS_SETTLE_SECS = 120
+
+
+def resolve_chats_dir():
+    """Directory MyAgent writes its chat files to — <name>.json + <name>.txt
+    per run, and the code-interpreter outputs (since 2026-10-08):
+    <shared dir>/saved_chats when a shared dir is available (env override or
+    OneDrive), so every machine's transcripts sync into ONE folder and the
+    file the cost log's CHAT column names can be opened from any of them —
+    else the classic <repo root>/saved_chats. Not created here: the first
+    save creates it (OneDrive garbage-collects an empty new dir, see
+    save_store). SelfBot keeps its own repo-root folder on purpose — its
+    chats are per machine, and its duo chats are the files git tracks."""
+    shared = _ensured_shared_dir()
+    return os.path.join(shared if shared else _BASE_DIR, CHATS_DIRNAME)
+
+
+def _is_myagent_chat(path):
+    """True for a chat file MyAgent wrote: a JSON object carrying
+    agent_instruction_name at its top level (chat_mixin._auto_save_on_close).
+    SelfBot's chats — the same folder, the same <name>.json + .txt shape —
+    carry system_prompt_name instead; an unparseable file is nobody's."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and "agent_instruction_name" in data
+
+
+def _same_bytes(a, b):
+    try:
+        if os.path.getsize(a) != os.path.getsize(b):
+            return False
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                ca, cb = fa.read(1 << 16), fb.read(1 << 16)
+                if ca != cb:
+                    return False
+                if not ca:
+                    return True
+    except OSError:
+        return False
+
+
+def _move_file(src, dst):
+    """Move src to dst, which the caller found free: a rename on one volume,
+    else — the repo and OneDrive's File Provider volume on macOS are
+    different filesystems, EXDEV, as the cost-log migration found — a copy
+    into a file opened exclusively (never over one that appeared meanwhile),
+    the modification time carried across so the share lists the chats in
+    their order, then the delete; a copy that fails is removed again."""
+    try:
+        os.rename(src, dst)
+        return
+    except OSError:
+        pass
+    st = os.stat(src)
+    fdst = open(dst, "xb")
+    try:
+        with fdst, open(src, "rb") as fsrc:
+            shutil.copyfileobj(fsrc, fdst, 1 << 20)
+    except OSError:
+        try:
+            os.remove(dst)
+        except OSError:
+            pass
+        raise
+    try:
+        os.utime(dst, (st.st_atime, st.st_mtime))
+    except OSError:
+        pass
+    os.remove(src)
+
+
+def _chat_slot(shared_dir, stem, ext, src, label):
+    """Where the local chat file src (<stem><ext>) lands in shared_dir: its
+    own name when free; None when a file of that name already holds the
+    SAME bytes (the local copy is redundant — a half-done earlier pass);
+    else <stem>__<label>, numbered <stem>__<label>_2, _3 … while that too is
+    taken by other content — the stores' conflict rule (union_stores,
+    _variant_slot)."""
+    cand, n = stem, 1
+    while True:
+        dst = os.path.join(shared_dir, cand + ext)
+        if not os.path.exists(dst):
+            return dst
+        if _same_bytes(src, dst):
+            return None
+        n += 1
+        cand = f"{stem}__{label}" if n == 2 else f"{stem}__{label}_{n - 1}"
+
+
+def _settle_chat_file(shared_dir, src, stem, ext, label, summary):
+    """Move one local chat file into shared_dir under _chat_slot's name (or
+    absorb it there); returns the stem it lives under in the share."""
+    dst = _chat_slot(shared_dir, stem, ext, src, label)
+    if dst is None:
+        os.remove(src)
+        summary["absorbed"] += 1
+        return stem
+    _move_file(src, dst)
+    summary["moved"] += 1
+    return os.path.splitext(os.path.basename(dst))[0]
+
+
+def migrate_local_chats(local_dir, shared_dir, label=None, now=None):
+    """Move this machine's MyAgent chats from the repo-root folder into the
+    shared one — the history following the move, as the stores' and the
+    cost log's did. Only MyAgent's files go: a <stem>.json whose top level
+    carries agent_instruction_name (_is_myagent_chat) and its <stem>.txt
+    twin; SelfBot's chats, the ci_output_* files (either app's), an
+    unparseable file and a .txt without its .json all stay. Nothing is ever
+    overwritten (_chat_slot: same bytes → the local copy is absorbed, other
+    content → <stem>__<machine label>, numbered). A chat touched within
+    CHATS_SETTLE_SECS waits for the next launch. Per chat best-effort: an
+    error leaves it local for the next launch, which repeats the pass —
+    idempotent, a folder with no MyAgent chat moves nothing. The .txt is
+    moved after its .json and lands under the same stem (its own collision
+    check, so even an orphan .txt in the share is never overwritten).
+    Returns the counts {"moved", "absorbed", "waiting", "errors"} — files,
+    not chats; a .json and its .txt count twice."""
+    summary = {"moved": 0, "absorbed": 0, "waiting": 0, "errors": 0}
+    if not os.path.isdir(local_dir):
+        return summary
+    try:
+        same = os.path.samefile(local_dir, shared_dir)
+    except OSError:
+        same = (os.path.normcase(os.path.abspath(local_dir))
+                == os.path.normcase(os.path.abspath(shared_dir)))
+    if same:
+        return summary
+    label = label or machine_label()
+    now = time.time() if now is None else now
+    try:
+        names = sorted(os.listdir(local_dir))
+    except OSError:
+        return summary
+    for fn in names:
+        stem, ext = os.path.splitext(fn)
+        if ext.lower() != ".json" or fn.startswith("ci_output_"):
+            continue
+        src = os.path.join(local_dir, fn)
+        if not os.path.isfile(src) or not _is_myagent_chat(src):
+            continue
+        twin = os.path.join(local_dir, stem + ".txt")
+        if not os.path.isfile(twin):
+            twin = None
+        try:
+            if any(now - os.path.getmtime(p) < CHATS_SETTLE_SECS
+                   for p in (src, twin) if p):
+                summary["waiting"] += 1
+                continue
+            os.makedirs(shared_dir, exist_ok=True)
+            used = _settle_chat_file(shared_dir, src, stem, ".json", label, summary)
+            if twin:
+                _settle_chat_file(shared_dir, twin, used, ".txt", label, summary)
+        except OSError:
+            summary["errors"] += 1
+    return summary
 
 
 def union_stores(primary, other, label):

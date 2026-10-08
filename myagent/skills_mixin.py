@@ -1,7 +1,7 @@
 import os, re, sys, json, subprocess, tempfile, threading, time, tkinter as tk
 from tkinter import messagebox
 
-from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, MONO_FONT,
+from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, CHATS_DIR, MONO_FONT,
                                COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
 from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
@@ -384,8 +384,7 @@ class SkillsMixin:
                     proc.terminate()
                     return (f"Error: instruction '{name}' did not finish within "
                             f"{timeout_s}s; child process terminated. Its partial "
-                            "transcript (if the instruction names a chat) is in "
-                            "saved_chats/.")
+                            f"transcript ({name}_<timestamp>.txt) is in {CHATS_DIR}.")
                 time.sleep(1)
             elapsed = int(time.time() - start)
             try:
