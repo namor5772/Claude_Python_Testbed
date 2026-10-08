@@ -3,6 +3,7 @@ import copy
 import re
 import concurrent.futures
 import os
+import tempfile
 import time
 import tkinter as tk
 from datetime import datetime
@@ -21,6 +22,7 @@ from myagent.constants import (
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
     APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS, CONVO_EXIT_WORD,
+    AGENT_RUN_PREFIX,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
                              responses_replay_refused, rotate_log_if_needed)
@@ -1293,7 +1295,8 @@ class StreamingMixin:
 
     def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,
                       instruction="", calls=None, tokens=None, split=None,
-                      chat=None):
+                      chat=None, provider=None, model=None, params=None,
+                      timestamp=None):
         """Append the run's final cumulative cost to this machine's cost log.
 
         Called once when stream_worker's agentic loop ends (GUI and headless).
@@ -1357,9 +1360,18 @@ class StreamingMixin:
         never conflict-fork, yet every machine's spend syncs everywhere for
         the viewers to aggregate — falling back to repo-root APICostLog.txt
         on solo machines. Best-effort: any I/O failure is reported but never
-        interrupts the run."""
+        interrupts the run. Returns True when a line was written.
+        provider / model / params / timestamp (2026-10-08) override the
+        live fields for a line written on behalf of ANOTHER run — the
+        in-progress record a killed instance left behind
+        (_run_progress_fold_in): the record's own provider and model, its
+        raw parameter summary (joined here like the live one) and the time
+        of its last completed call, never this process's. None = the live
+        value, so every existing caller writes exactly what it wrote."""
+        provider = provider or self.provider
+        model = model or self.model
         if not total_cost or total_cost <= 0:
-            if not (self.provider == "Ollama" and had_usage):
+            if not (provider == "Ollama" and had_usage):
                 q = getattr(self, "queue", None)
                 if had_usage and q is not None:
                     # A paid provider's run that made calls but could price
@@ -1367,18 +1379,19 @@ class StreamingMixin:
                     # report): say so where the user looks for the line,
                     # rather than skipping in silence.
                     q.put({"type": "warning", "content": (
-                        f"⚠ Run NOT written to the API cost log: {self.model} has no "
-                        f"row in the {self.provider} pricing table, so its cost is "
+                        f"⚠ Run NOT written to the API cost log: {model} has no "
+                        f"row in the {provider} pricing table, so its cost is "
                         f"unknown (a $0.0000 line would claim it was free). Add the "
                         f"row in myagent/constants.py.\n")})
-                return
+                return False
             total_cost = 0.0
         try:
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             # 5th field: the title-bar parameter summary (e.g. "mode=Adaptive",
             # "reasoning=Medium temp=1"), comma-joined for log readability —
             # parts never contain ';' or ',' so the field can't split.
-            params = ", ".join(self._get_model_param_summary().split())
+            summary = self._get_model_param_summary() if params is None else params
+            params = ", ".join(str(summary).split())
             secs = "" if duration_secs is None else f"{duration_secs:.0f}"
             # 7th field: the instruction name is user-typed free text —
             # collapse whitespace (a stray newline would end the record
@@ -1394,7 +1407,7 @@ class StreamingMixin:
             # 13th field: the per-model split, only for a run more than one
             # model served (or one model other than the MODEL field) — a line
             # its MODEL field describes keeps its 12 fields exactly.
-            split_s = self._cost_split_field(split, self.model)
+            split_s = self._cost_split_field(split, model)
             # 14th field (2026-10-07): the chat file stem, sanitised like the
             # instruction. It forces the 13th out, blank or not, so a reader
             # finds the split at 13 and the chat at 14 whatever the run did.
@@ -1406,7 +1419,7 @@ class StreamingMixin:
             # ';' delimiter (not ',') so a comma inside a model name, the
             # params field or an instruction name can't be misread as a
             # field separator.
-            line = (f"{timestamp};{self.provider};{self.model};"
+            line = (f"{timestamp};{provider};{model};"
                     f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
                     f"{tok_s}{tail}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
@@ -1415,10 +1428,138 @@ class StreamingMixin:
             with open(APICOST_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line)
             self._tool_info(f"Logged API cost to {APICOST_LOG_FILE}: {line}")
+            return True
         except Exception as e:
             self.queue.put({"type": "warning",
                             "content": f"⚠ Could not write the API cost log "
                                        f"({APICOST_LOG_FILE}): {e}\n"})
+            return False
+
+    # ── In-progress cost record (2026-10-08) ─────────────────────────────
+    def _run_progress_path(self):
+        """agent_run_<N>.json for this instance — None on a host without an
+        instance number (the bare test hosts), which therefore never writes
+        one: the real App always has _instance_num, and a test harness run
+        beside a live instance must not touch that instance's record."""
+        num = getattr(self, "_instance_num", None)
+        if not num:
+            return None
+        return f"{AGENT_RUN_PREFIX}{num}.json"
+
+    def _run_progress_write(self, total_cost, had_usage, duration_secs,
+                            instruction="", calls=None, tokens=None, split=None,
+                            chat=None):
+        """Rewrite this instance's in-progress cost record: the exact
+        arguments _log_run would hand _log_api_cost if the run ended now,
+        plus the live provider / model / parameter summary and the time, so
+        the line can be written later by a process that knows nothing else
+        about the run. stream_worker calls it after every call's cost
+        accounting (on the worker — file IO only, no Tk), and _end_run
+        removes the record after the real line on both tails, so a record
+        found at launch means its instance died with a run in flight: a
+        reboot while parked at an Agent Request (the 2026-10-08 case — a
+        US$7.77 run with a complete transcript and no line), a taskkill, a
+        power cut. Atomic (mkstemp + os.replace) so a kill mid-write leaves
+        the previous record, never a torn one. Best-effort: a failure is
+        reported once per run and never interrupts it."""
+        path = self._run_progress_path()
+        if path is None:
+            return
+        try:
+            record = {
+                "version": 1,
+                "written": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "provider": self.provider,
+                "model": self.model,
+                "params": self._get_model_param_summary(),
+                "total_cost": total_cost,
+                "had_usage": bool(had_usage),
+                "duration_secs": duration_secs,
+                "instruction": instruction or "",
+                "calls": calls,
+                "tokens": list(tokens) if tokens else None,
+                "split": split or {},
+                "chat": chat or "",
+            }
+            fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
+                                       suffix=".tmp", dir=os.path.dirname(path))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(record, f, ensure_ascii=False)
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+        except Exception as e:
+            if not getattr(self, "_run_progress_warned", False):
+                self._run_progress_warned = True
+                self.queue.put({"type": "warning", "content": (
+                    f"⚠ Could not write the in-progress cost record ({path}): {e}\n")})
+
+    def _run_progress_clear(self):
+        """Remove this instance's in-progress record: the run ended and
+        _log_run has written (or deliberately skipped) its line. Called by
+        stream_worker's _end_run on both tails, AFTER _log_run."""
+        self._run_progress_warned = False
+        path = self._run_progress_path()
+        if path is None:
+            return
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            self.queue.put({"type": "warning", "content": (
+                f"⚠ Could not remove the in-progress cost record ({path}): {e}\n")})
+
+    def _run_progress_fold_in(self):
+        """At launch, once this process owns its instance slot (MyAgent.py
+        __init__): a record the slot's previous owner left behind means that
+        instance died with a run in flight — killed from outside, since both
+        loop-end tails remove the record after the line — so its cost line is
+        written NOW from the record: under the record's own provider / model
+        / parameters, stamped with the time of its last completed call, with
+        `unfinished@call<N>` appended to PARAMETERS (the viewers show it in
+        that column; the cost counts, it was spent). The zero-cost gate
+        applies as it would have at the run's end. The record is removed
+        whatever happens (an unreadable one is reported, not retried at every
+        launch). Returns True when a line was written."""
+        path = self._run_progress_path()
+        if path is None or not os.path.exists(path):
+            return False
+        written = False
+        try:
+            with open(path, encoding="utf-8") as f:
+                rec = json.load(f)
+            if not isinstance(rec, dict):
+                raise ValueError("not a JSON object")
+            calls = rec.get("calls")
+            marker = f"unfinished@call{int(calls)}" if calls else "unfinished"
+            summary = str(rec.get("params") or "")
+            tokens = rec.get("tokens")
+            written = self._log_api_cost(
+                float(rec.get("total_cost") or 0.0), bool(rec.get("had_usage")),
+                rec.get("duration_secs"),
+                instruction=rec.get("instruction") or "", calls=calls,
+                tokens=tuple(tokens) if tokens else None,
+                split=rec.get("split") or None, chat=rec.get("chat") or "",
+                provider=rec.get("provider") or None,
+                model=rec.get("model") or None,
+                params=f"{summary} {marker}".strip(),
+                timestamp=rec.get("written") or None)
+            if written:
+                self.queue.put({"type": "warning", "content": (
+                    f"⚠ The previous run of this instance ended without its cost "
+                    f"line (MyAgent was killed while it ran — chat "
+                    f"{rec.get('chat') or '?'}): logged now as {marker}.\n")})
+        except Exception as e:
+            self.queue.put({"type": "warning", "content": (
+                f"⚠ Could not fold in the in-progress cost record ({path}): {e}\n")})
+        self._run_progress_clear()
+        return written
 
     @staticmethod
     def _filter_blocked_tools(tools, blocked):
@@ -1546,6 +1687,9 @@ class StreamingMixin:
             # (skills_mixin). The getattr guards keep bare test hosts without
             # the mixins working.
             _log_run()
+            # The in-progress record is for a run that never gets here:
+            # the line is written, so the record goes (both tails).
+            self._run_progress_clear()
             end_upgrade = getattr(self, "_upgrade_end_run", None)
             if end_upgrade is not None:
                 end_upgrade()
@@ -1774,6 +1918,24 @@ class StreamingMixin:
                             "total_input_tokens": total_input_tokens,
                             "total_output_tokens": total_output_tokens,
                         })
+                    # The in-progress record (agent_run_<N>.json): the
+                    # line _log_run would write if the run ended now,
+                    # rewritten after every call, so a run killed from
+                    # outside — a reboot while parked at an Agent Request
+                    # — still gets its line at the next launch
+                    # (_run_progress_fold_in). Its TIME is the working
+                    # time up to this call, which excludes a wait that
+                    # then begins: input_wait_timer adds its seconds only
+                    # once the wait ends.
+                    self._run_progress_write(
+                        total_cost, had_usage,
+                        max(0.0, time.monotonic() - run_started
+                            - self._input_wait_secs),
+                        instruction=instr_name, calls=call_num,
+                        tokens=(total_input_tokens, total_output_tokens,
+                                total_cache_write_tokens,
+                                total_cache_read_tokens),
+                        split=per_model, chat=chat_name)
 
                 # Post-process LaTeX in the just-completed text segment
                 if full_text:

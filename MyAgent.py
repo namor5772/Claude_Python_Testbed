@@ -359,6 +359,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             self._save_last_state()
         except Exception:
             pass
+        # A run the previous owner of this instance slot never finished —
+        # killed from outside with its in-progress cost record left behind
+        # (streaming_mixin) — gets its cost line now, before anything here
+        # can start a run of its own.
+        self._run_progress_fold_in()
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)

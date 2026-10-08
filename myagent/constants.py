@@ -3967,6 +3967,13 @@ INSTRUCTIONS_FILE = resolve_store("agent_instructions.json")
 CHATS_DIR = os.path.join(_BASE_DIR, "saved_chats")
 AGENT_STATE_FILE = os.path.join(_BASE_DIR, "agent_state.json")  # instance 1 default
 AGENT_LOCK_PREFIX = os.path.join(_BASE_DIR, "agent_lock_")
+# The in-progress cost record of a running instance (streaming_mixin
+# _run_progress_write, 2026-10-08): agent_run_<N>.json beside its state file,
+# rewritten after every call and removed at the run's end. A run killed from
+# outside (a reboot, a taskkill, a power cut) leaves it behind, and the next
+# launch that claims slot N folds it into the cost log as an
+# "unfinished@call<N>" line (_run_progress_fold_in). Per machine, gitignored.
+AGENT_RUN_PREFIX = os.path.join(_BASE_DIR, "agent_run_")
 SKILLS_DIR = resolve_skills_dir()  # per-skill SKILL.md tree; a legacy skills.json migrates in on first load
 STORES_SYNCED = os.path.dirname(INSTRUCTIONS_FILE) != _BASE_DIR  # shared dir in use
 # Per-run cost log: APICostLog_<machine>.txt in the OneDrive share (one file
