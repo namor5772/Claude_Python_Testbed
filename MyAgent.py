@@ -216,6 +216,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # out not to be enrolled in (a 400 naming them). Learned once per session
         # by _stream_anthropic_call; _anthropic_fable_features stops sending them.
         self._anthropic_unsupported = set()
+        # Each Anthropic model's output ceiling (the Models API's max_tokens),
+        # filled by _fetch_available_models from the startup listing below
+        # and by a 400 naming a lower ceiling; _anthropic_output_cap reads it
+        # ahead of the family table for every call's max_tokens.
+        self._anthropic_output_caps = {}
         # Kimi models that rejected the reasoning_content round-trip with a 400
         # (a future model without Preserved Thinking support). Learn once, then
         # _kimi_include_reasoning skips sending reasoning back for that model.

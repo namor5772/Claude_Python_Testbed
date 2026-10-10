@@ -28,8 +28,7 @@ from unittest import mock
 
 import myagent.streaming_mixin as sm
 from myagent.constants import (ANTHROPIC_FAST_MODE_BETA, ANTHROPIC_SERVER_FALLBACK_BETA,
-                               ANTHROPIC_THINKING_BINDING_BETA, MAX_TOKENS,
-                               MAX_TOKENS_THINKING)
+                               ANTHROPIC_THINKING_BINDING_BETA)
 from tests.test_costlog_run_fields import _Host as _LoopHost
 from tests.test_fast_mode import _WireHost
 
@@ -65,7 +64,7 @@ class Haiku55Wire(unittest.TestCase):
         self.assertNotIn("output_config", kw)                    # Off sends no effort
         self.assertNotIn("extra_body", kw)                       # no fallbacks
         self.assertNotIn("speed", kw)
-        self.assertEqual(kw["max_tokens"], MAX_TOKENS)
+        self.assertEqual(kw["max_tokens"], 128000)   # the model's own ceiling, Off too
         self.assertEqual(kw["tools"], TRIPLE)
         for beta in (ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_SERVER_FALLBACK_BETA,
                      ANTHROPIC_FAST_MODE_BETA, "web-fetch-2025-09-10"):
@@ -78,7 +77,7 @@ class Haiku55Wire(unittest.TestCase):
         self.assertEqual(kw["output_config"], {"effort": "low"})
         self.assertNotIn("temperature", kw)
         self.assertNotIn("extra_body", kw)
-        self.assertEqual(kw["max_tokens"], MAX_TOKENS_THINKING)
+        self.assertEqual(kw["max_tokens"], 128000)
         self.assertEqual(kw["tools"], TRIPLE)
         self.assertIn(ANTHROPIC_THINKING_BINDING_BETA, betas)
         self.assertNotIn(ANTHROPIC_SERVER_FALLBACK_BETA, betas)
@@ -102,6 +101,7 @@ class Haiku55Wire(unittest.TestCase):
         # The control: the manual budget, a temperature, the old web pair.
         betas, kw = _call(_host("claude-haiku-4-5-20251001", "high", enabled=True))
         self.assertEqual(kw["thinking"], {"type": "enabled", "budget_tokens": 8192})
+        self.assertEqual(kw["max_tokens"], 64000)    # the dated 4.5 ids' ceiling (live 2026-10-11)
         self.assertNotIn("output_config", kw)
         self.assertNotIn("block_binding", kw["thinking"])
         self.assertEqual(kw["tools"], OLD_PAIR)

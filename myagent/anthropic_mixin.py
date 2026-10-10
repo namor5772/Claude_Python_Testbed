@@ -3,13 +3,14 @@ import time
 import anthropic
 
 from myagent.constants import (
-    MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
+    ANTHROPIC_MAX_OUTPUT_TOKENS, ANTHROPIC_MAX_OUTPUT_DEFAULT,
     ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
     ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
     ANTHROPIC_FAST_MODE_BETA,
 )
-from myagent.helpers import (parse_overflow_counts, strip_pre_fallback_blocks,
-                             strip_thinking_blocks, trim_history_for_context)
+from myagent.helpers import (parse_output_cap, parse_overflow_counts,
+                             strip_pre_fallback_blocks, strip_thinking_blocks,
+                             trim_history_for_context)
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
 
 
@@ -181,6 +182,52 @@ class AnthropicMixin:
         note += " Rephrase the task or switch this instruction to claude-opus-5.\n"
         return note
 
+    @staticmethod
+    def _anthropic_output_cap_for(model_id):
+        """The family table's output ceiling for an Anthropic id — the longest
+        matching prefix of ANTHROPIC_MAX_OUTPUT_TOKENS, so a dated snapshot
+        rides with its family — and ANTHROPIC_MAX_OUTPUT_DEFAULT for an id no
+        row names (the 400 rung in _stream_anthropic_call corrects a guess
+        the API refuses)."""
+        best = None
+        for prefix, cap in ANTHROPIC_MAX_OUTPUT_TOKENS:
+            if (model_id or "").startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+                best = (prefix, cap)
+        return best[1] if best else ANTHROPIC_MAX_OUTPUT_DEFAULT
+
+    def _anthropic_output_cap(self, model=None):
+        """The output ceiling an Anthropic call sends as `max_tokens` — the
+        model's OWN maximum, thinking on or off: the startup listing's
+        `max_tokens` for the id (`_anthropic_output_caps`, filled by
+        _fetch_available_models and by a 400 naming a lower ceiling), else
+        the family table. Nothing else bounds adaptive thinking, so a smaller
+        figure cut a long reasoning phase off, billed and lost — see
+        ANTHROPIC_MAX_OUTPUT_TOKENS in constants.py. The Debug dump reads the
+        same helper, so it cannot drift from the wire."""
+        model = model or self.model
+        caps = getattr(self, "_anthropic_output_caps", None) or {}
+        cap = caps.get(model)
+        if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+            return cap
+        return self._anthropic_output_cap_for(model)
+
+    @staticmethod
+    def _thinking_drop_why(reasons):
+        """Why the API dropped replayed thinking blocks, from the reasons its
+        `input_transformations` gave, in plain words for the Activity line:
+        model_binding_mismatch — they were written by another model (the one
+        the run started on before a Model upgrade, or a refusal fallback's),
+        and only the model that wrote a block reads it; prefix_binding_mismatch
+        — earlier history changed since they were written (the overflow trim);
+        anything else as given."""
+        words = {
+            "model_binding_mismatch": ("they were written by another model (the one this "
+                                       "run started on, before the upgrade, or a refusal "
+                                       "fallback's), which this model cannot read"),
+            "prefix_binding_mismatch": "earlier history changed since they were written",
+        }
+        return "; ".join(words.get(r, f"reason: {r}") for r in reasons)
+
     def _stream_anthropic_call(self, messages, max_retries, label_emitted):
         """Execute one Anthropic API call with streaming and retry logic.
         Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage)."""
@@ -198,7 +245,12 @@ class AnthropicMixin:
             "messages": messages,  # replaced per attempt with the breakpointed copy
             "tools": tools,
         }
-        model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
+        # The model's own output ceiling, thinking on or off (the listing's
+        # max_tokens, the family table, or a ceiling a 400 taught — see
+        # _anthropic_output_cap): adaptive thinking is bounded by nothing
+        # else, so a smaller figure cut a long reasoning phase off, billed and
+        # lost (constants.py, ANTHROPIC_MAX_OUTPUT_TOKENS).
+        api_kwargs["max_tokens"] = self._anthropic_output_cap()
         # Fable/Mythos — and Opus 5.5+ — thinking is always on (an explicit
         # disable is HTTP 400), so a stale thinking_mode of "off" — possible
         # via headless state restore, which skips the UI coercion — still
@@ -209,7 +261,6 @@ class AnthropicMixin:
         fable = self._anthropic_fable_features()
         if self.thinking_enabled or always_on:
             support = self._model_supports_thinking()
-            api_kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
             if support == "adaptive":
                 # display="summarized" restores readable thinking text on Fable /
                 # Opus 4.7+ (their default became "omitted" — empty thinking deltas,
@@ -228,12 +279,11 @@ class AnthropicMixin:
             elif support == "manual":
                 api_kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
-            api_kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
             # Opus 5+, Sonnet 5+ and Haiku 5.5+ run ADAPTIVE thinking when the
             # param is omitted (a silent change from 4.x-era models, which ran
             # thinking-off on omission) — "Off" must be an explicit disable
-            # there, or the model silently thinks against the non-thinking
-            # max_tokens cap with the Show Thinking pane dark. Explicit
+            # there, or the model silently thinks, billed, with the Show
+            # Thinking pane dark. Explicit
             # disabled is accepted on the whole 4.6+/5 Sonnet-Opus range
             # (Opus 5 and Haiku 5.5 only at effort ≤ high — satisfied, as "Off"
             # sends no effort); the always-on Fable/Mythos models (where it is HTTP
@@ -492,6 +542,24 @@ class AnthropicMixin:
                                     "web tools — retrying with the older variants...\n")
                     full_text = ""
                     continue
+                # max_tokens above the model's ceiling ("max_tokens: 200000 >
+                # 64000, which is the maximum allowed number of output tokens
+                # for <model>" — the wording probed live 2026-10-11): an id
+                # the startup listing did not describe and the family table
+                # over-estimates. Learn the ceiling for the session (the
+                # listing's own key), retry at it. A validation 400 — nothing
+                # was billed.
+                real_cap = parse_output_cap(msg)
+                if real_cap and real_cap < api_kwargs.get("max_tokens", 0):
+                    caps = getattr(self, "_anthropic_output_caps", None)
+                    if caps is None:
+                        caps = self._anthropic_output_caps = {}
+                    caps[self.model] = real_cap
+                    api_kwargs["max_tokens"] = real_cap
+                    self._tool_info(f"{self.model} takes at most {real_cap:,} output tokens "
+                                    "per call — retrying at that ceiling...\n")
+                    full_text = ""
+                    continue
                 # Input exceeds the model's context window ("prompt is too long:
                 # N tokens > M maximum"). Resending the same history can't fix it,
                 # so compact instead: drop the oldest conversation rounds (never
@@ -550,14 +618,25 @@ class AnthropicMixin:
         # (prefix_binding_mismatch: history changed, e.g. the overflow trim;
         # model_binding_mismatch: the blocks came from another model). Unbilled,
         # but the model re-plans without that reasoning, so say so.
+        # Said ONCE per run per shape (count + reasons), not on every call:
+        # after a Model upgrade the earlier model's blocks are dropped on
+        # every later call — the same N, the same reason — and the line
+        # repeated per call read like a fault (the 2026-10-11 report), when
+        # nothing changes from one call to the next. A new count or reason
+        # (a prefix edit joining the model mismatch) is a new line; the
+        # memory is reset at run start by stream_worker.
         transformations = getattr(final_message, "input_transformations", None) or []
         if transformations:
             reasons = sorted({str((t.get("reason") if isinstance(t, dict)
                                    else getattr(t, "reason", None)) or "unknown")
                               for t in transformations})
-            self._tool_info(f"API dropped {len(transformations)} replayed thinking block(s) "
-                            f"({', '.join(reasons)}) — earlier history changed; the model "
-                            "continues without that reasoning.\n")
+            shape = (len(transformations), tuple(reasons))
+            if shape != getattr(self, "_thinking_drops_noted", None):
+                self._thinking_drops_noted = shape
+                self._tool_info(f"API dropped {len(transformations)} replayed thinking "
+                                f"block(s) — {self._thinking_drop_why(reasons)}; the model "
+                                "continues without that reasoning (not billed, and the "
+                                "text and tool history is intact).\n")
 
         # Server-side refusal fallback: `message.model` names the model that
         # produced this message, and a `fallback_message` entry in

@@ -383,6 +383,21 @@ class UIMixin:
             self._model_display_names = {}
             model_ids = []
             note_served_models(self, "Anthropic", [m.id for m in response.data])
+            # Each served id's output ceiling — the listing's `max_tokens`
+            # (the Models API's field since 2026-03, an attribute on the SDK's
+            # object; 128,000 on every current tier, 64,000 on the dated 4.5
+            # ids, live 2026-10-11) — is what every call sends as its
+            # max_tokens (_anthropic_output_cap, since the same day). Kept for
+            # the hidden ids too: a pinned instruction still runs one. An
+            # object without the field (an older SDK) contributes nothing and
+            # the family table answers; a failed fetch leaves the dict as it
+            # was, so a ceiling a 400 taught survives a listing outage.
+            caps = {}
+            for m in response.data:
+                cap = getattr(m, "max_tokens", None)
+                if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+                    caps[m.id] = cap
+            self._anthropic_output_caps = caps
             for m in response.data:
                 # Hide deprecated / retiring ids (2026-07 audit) — a pinned
                 # instruction still runs one while it is served (the listing

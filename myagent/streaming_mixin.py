@@ -15,7 +15,6 @@ from myagent.constants import (
     _HAS_DESKTOP, _HAS_MCP, _HAS_GOOGLE,
     _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE,
     _HAS_PHYSICAL,
-    MAX_TOKENS, MAX_TOKENS_THINKING, MODEL_MAX_OUTPUT_TOKENS,
     ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
     ANTHROPIC_LONG_CONTEXT_PRICING,
     OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING, OPENAI_RESPONSES_INCLUDE,
@@ -478,16 +477,16 @@ class StreamingMixin:
                 "tools": tools,
                 "messages": display_msgs,
             }
-            model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
-            # Mirror _stream_anthropic_call: Fable/Mythos always take the
-            # thinking branch (thinking can't be disabled on them), and carry
-            # the 5.1 block-binding + fallbacks surface.
+            # Mirror _stream_anthropic_call: the model's own output ceiling
+            # (the same helper the live call reads), Fable/Mythos always on
+            # the thinking branch (thinking can't be disabled on them) and
+            # carrying the 5.1 block-binding + fallbacks surface.
+            payload["max_tokens"] = self._anthropic_output_cap()
             always_on = (self.provider == "Anthropic"
                          and self._is_anthropic_always_on_thinking())
             fable = self._anthropic_fable_features() if self.provider == "Anthropic" else None
             if self.thinking_enabled or always_on:
                 support = self._model_supports_thinking()
-                payload["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
                 if support == "adaptive":
                     payload["thinking"] = {"type": "adaptive"}
                     if self.provider == "Anthropic":
@@ -499,7 +498,6 @@ class StreamingMixin:
                 elif support == "manual":
                     payload["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
             else:
-                payload["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
                 # Opus 5+ / Sonnet 5+ think when the param is omitted, so the
                 # real call sends an explicit disable for "Off" — show it.
                 if (self.provider == "Anthropic"
@@ -1689,6 +1687,9 @@ class StreamingMixin:
         # main window's [X] would. Per run, so a GUI session's next START
         # starts clean.
         self._close_after_run = False
+        # The dropped-thinking-blocks notice is said once per run per shape
+        # (_stream_anthropic_call); a new run starts with nothing said.
+        self._thinking_drops_noted = None
 
         def _log_run():
             # The one cost-log call for both loop-end paths, so the fields
@@ -2002,10 +2003,19 @@ class StreamingMixin:
                     truncated_note = (
                         f"the model's reply was cut off (stop_reason={stop_reason})"
                         + ("; its unfinished tool call was not run" if unfinished_tool else ""))
+                    # The ceiling named where it is the model's own (Anthropic
+                    # since 2026-10-11: _anthropic_output_cap — thinking
+                    # included, so a reply of nothing but thinking filled it
+                    # all); a window overflow is the context, not the cap.
+                    cap_fn = getattr(self, "_anthropic_output_cap", None)
+                    cap = (cap_fn() if cap_fn and stop_reason == "max_tokens"
+                           and self.provider == "Anthropic" else None)
+                    why = (f"it filled the whole {cap:,}-token output window {self.model} "
+                           "allows per call (thinking included)" if cap
+                           else "it filled the whole output window the call allows")
                     self.queue.put({"type": "warning", "content":
-                                    f"⚠ {truncated_note[0].upper()}{truncated_note[1:]}. "
-                                    f"The turn ends here — ask for smaller steps, or use "
-                                    f"a larger output budget (Thinking on raises it).\n"})
+                                    f"⚠ {truncated_note[0].upper()}{truncated_note[1:]}: "
+                                    f"{why}. The turn ends here — ask for smaller steps.\n"})
 
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})

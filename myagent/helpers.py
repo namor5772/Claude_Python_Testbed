@@ -132,6 +132,21 @@ def parse_overflow_counts(msg):
             int(mt.group(2).replace(",", "")))
 
 
+def parse_output_cap(msg):
+    """The model's output ceiling from the 400 an over-large `max_tokens`
+    draws — 'max_tokens: 200000 > 64000, which is the maximum allowed number
+    of output tokens for claude-haiku-4-5-20251001' (the exact wording, probed
+    live 2026-10-11 on Haiku 4.5 and Fable 5.1). None for any other message:
+    the overflow text ('prompt is too long: N tokens > M maximum') shares the
+    N > M shape but never the max_tokens prefix, so the two cannot be
+    confused."""
+    mt = re.search(r"max_tokens:\s*(\d[\d,]*)\s*>\s*(\d[\d,]*)", msg or "")
+    if not mt:
+        return None
+    cap = int(mt.group(2).replace(",", ""))
+    return cap if cap > 0 else None
+
+
 def trim_history_for_context(messages, reported_tokens=None, reported_max=None):
     """Drop the oldest conversation rounds IN PLACE so `messages` fits the
     context window after a 400 'prompt is too long'.

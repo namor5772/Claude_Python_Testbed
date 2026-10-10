@@ -1428,14 +1428,44 @@ FALLBACK_MODELS = [
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
+# Moonshot's output caps (kimi_mixin's max_completion_tokens: the thinking
+# figure when a Kimi model reasons — its docs ask for >= 16,000 in tool loops —
+# else the plain one). Until 2026-10-11 the Anthropic caller used them too;
+# it now sends the model's own ceiling, below.
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
-# Models with lower max output token limits than MAX_TOKENS. Empty since the
-# 2026 retirements: the Claude 3 generation (the only 4K-cap models) is fully
-# retired (claude-3-sonnet 2025-07, claude-3-opus 2026-01, claude-3-haiku
-# 2026-04-19). Kept as a dict because the streaming paths .get() it per call —
-# repopulate if a low-cap model ever ships again.
-MODEL_MAX_OUTPUT_TOKENS = {}
+# The output ceiling an Anthropic call sends as `max_tokens` — the model's OWN
+# maximum, thinking on or off. Read live from the Models API's `max_tokens`
+# field at the startup listing (_fetch_available_models keeps every served
+# id's in `_anthropic_output_caps`; a 400 naming a lower ceiling teaches it
+# too) and from this table — longest prefix wins — for a model the listing did
+# not describe (a failed fetch, a dated id, an older SDK object without the
+# field); an Anthropic id no row names gets ANTHROPIC_MAX_OUTPUT_DEFAULT, and
+# the 400 rung ("max_tokens: N > M, which is the maximum allowed number of
+# output tokens for <model>") retries at the real one. Live 2026-10-11:
+# 128,000 on every Claude 5 / 4.6+ tier, 64,000 on the three dated 4.5 ids.
+# Why the whole window: adaptive thinking is bounded by NOTHING else, so a
+# smaller cap cuts a long reasoning phase off — stop_reason=max_tokens, the
+# output billed and discarded, the run ended. Every thinking-on call used to
+# send MAX_TOKENS_THINKING (32,768, a quarter of Fable 5.1's ceiling): the
+# chat Act_on_unread_emails_2026-10-11_063721, upgraded to claude-fable-5-1
+# at Max, reasoned past it on call 14 without writing a word — 32,768 output
+# tokens, US$1.69, nothing kept — and the run ended there.
+ANTHROPIC_MAX_OUTPUT_TOKENS = (
+    ("claude-fable-5", 128000),
+    ("claude-mythos-5", 128000),
+    ("claude-opus-5", 128000),
+    ("claude-sonnet-5", 128000),
+    ("claude-haiku-5", 128000),
+    ("claude-opus-4-8", 128000),
+    ("claude-opus-4-7", 128000),
+    ("claude-opus-4-6", 128000),
+    ("claude-sonnet-4-6", 128000),
+    ("claude-opus-4-5", 64000),
+    ("claude-sonnet-4-5", 64000),
+    ("claude-haiku-4-5", 64000),
+)
+ANTHROPIC_MAX_OUTPUT_DEFAULT = 128000
 # Deprecated / soon-to-be-retired Anthropic id prefixes hidden from the model
 # picker (2026-07 audit; same filter SelfBot has carried). _fetch_available_models
 # drops live models.list() entries matching these, so new models appear
