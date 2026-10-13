@@ -4238,8 +4238,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                          if IS_WINDOWS else ["/bin/bash", "-c", command])
             # Popen, not subprocess.run: on timeout the whole process TREE must
             # die before the final pipe read, and POSIX needs its own session
-            # (start_new_session) for killpg to reach every descendant.
-            popen_kwargs = {} if IS_WINDOWS else {"start_new_session": True}
+            # (start_new_session) for killpg to reach every descendant. On
+            # Windows the child gets NO console window (_SUBPROCESS_NOWND, as
+            # MyAgent passes it since 2026-09-03): without the flag every
+            # run_command flashed a terminal over the chat (the user saw it
+            # while dictating, 2026-10-14 - the bot was reading the clock).
+            popen_kwargs = dict(_SUBPROCESS_NOWND)
+            if not IS_WINDOWS:
+                popen_kwargs["start_new_session"] = True
             proc = subprocess.Popen(
                 shell_cmd,
                 stdout=subprocess.PIPE,
