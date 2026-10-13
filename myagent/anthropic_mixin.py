@@ -11,7 +11,8 @@ from myagent.constants import (
 from myagent.helpers import (parse_output_cap, parse_overflow_counts,
                              strip_pre_fallback_blocks, strip_thinking_blocks,
                              trim_history_for_context)
-from myagent.retry_util import rate_limit_backoff, server_error_backoff
+from myagent.retry_util import (connection_error_backoff, rate_limit_backoff,
+                                server_error_backoff)
 
 
 _CACHE_CONTROL = {"type": "ephemeral"}
@@ -606,6 +607,29 @@ class AnthropicMixin:
                     self.queue.put({
                         "type": "tool_info",
                         "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                    })
+                    time.sleep(wait)
+                    full_text = ""
+                else:
+                    raise
+            except anthropic.APIConnectionError as e:
+                # No HTTP status at all: the request never reached the API, or
+                # the stream broke under it (APITimeoutError is a subclass).
+                # The SDK has already retried it twice, quickly, before raising;
+                # here it used to end the run outright — the chat
+                # JustChat_2026-10-13_172727 died on call #30 with a bare
+                # "Connection error." and never got to clean up after itself.
+                # A rung of its own, after APIStatusError (a sibling under
+                # APIError, so neither catches the other): wait, retry the same
+                # request. A mid-stream break restarts the call — the partial
+                # text already shown is streamed again, as after a 429.
+                if attempt < max_retries - 1:
+                    wait = connection_error_backoff(attempt)
+                    detail = (getattr(e, "message", "") or str(e) or "Connection error").strip()
+                    self.queue.put({
+                        "type": "tool_info",
+                        "content": f"{detail} — retrying in {wait}s "
+                                   f"(attempt {attempt + 1}/{max_retries})...\n",
                     })
                     time.sleep(wait)
                     full_text = ""
