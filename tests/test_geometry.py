@@ -365,19 +365,27 @@ class ApplyEntry(unittest.TestCase):
         # the restored spot is remembered so an external mover can be undone
         self.assertEqual(self.h._reassert_geo, "679x930+-723+73")
 
-    def test_an_off_screen_main_falls_back_to_the_default_centred_on_primary(self):
+    def test_an_off_screen_main_keeps_its_size_centred_on_the_primary(self):
         with rects(SINGLE):
             self.h._apply_geometry_entry({"geometry": "679x930+-723+73", "main_zoomed": False})
-        # centred on the single 2560x1440 primary, not a bare WM-placed default
-        self.assertEqual(self.root.calls, [("geometry", "1050x930+755+255")])
+        # the saved SIZE centred on the single 2560x1440 primary (2026-10-13 — it used
+        # to take the default size), not a bare WM-placed default
+        self.assertEqual(self.root.calls, [("geometry", "679x930+940+255")])
         self.assertNotIn("main", self.h._geo_cache())
+
+    def test_a_junk_size_off_screen_takes_the_default_size(self):
+        with rects(SINGLE):
+            self.h._apply_geometry_entry({"geometry": "1x1+-723+73", "main_zoomed": False})
+        self.assertEqual(self.root.calls, [("geometry", "1050x930+755+255")])
 
     def test_the_default_is_explicitly_positioned_on_the_primary(self):
         with rects(DUAL):
             self.assertEqual(self.h._default_main_geometry(), "1050x930+755+255")
+            self.assertEqual(self.h._default_main_geometry((679, 930)), "679x930+940+255")
         # a small primary shrinks and clamps the default rather than overflowing
         with rects([(0, 0, 800, 600)]):
             self.assertEqual(self.h._default_main_geometry(), "800x600+0+0")
+            self.assertEqual(self.h._default_main_geometry((3000, 2000)), "800x600+0+0")
 
     def test_zoomed_restores_the_normal_geometry_then_maximizes(self):
         with rects(DUAL):

@@ -32,6 +32,9 @@ GEOMETRY_KINDS = {
 GEOMETRY_VISIBLE_W = 50
 GEOMETRY_TITLE_STRIP = 30
 GEOMETRY_TITLE_VISIBLE_H = 10
+# A saved main-window size below this is junk (a never-mapped root reports 1x1
+# until Tk's first idle pass); the dialogs pass their own minimums.
+MAIN_MIN_W, MAIN_MIN_H = 200, 150
 
 # Windows only (Tk 8.6's Windows port): once a window is on screen its SIZE is
 # compared with the one asked for and corrected by the residual, at most
@@ -443,7 +446,7 @@ class StateMixin:
         return False
 
     @staticmethod
-    def _sanitize_geometry(geo, min_w=200, min_h=150):
+    def _sanitize_geometry(geo, min_w=MAIN_MIN_W, min_h=MAIN_MIN_H):
         """Return `geo` normalised if it is a usable position on the CURRENT
         layout, else None — the caller then applies its own default (each
         dialog has its own; the main window uses _default_main_geometry(),
@@ -528,7 +531,7 @@ class StateMixin:
         self._geometry_dirty = True
         return geo
 
-    def _saved_geometry(self, kind, min_w=200, min_h=150):
+    def _saved_geometry(self, kind, min_w=MAIN_MIN_W, min_h=MAIN_MIN_H):
         """The cached geometry for `kind`, if still visible on the current layout."""
         geo = self._geo_cache().get(kind)
         return self._sanitize_geometry(geo, min_w, min_h) if geo else None
@@ -742,16 +745,19 @@ class StateMixin:
                 return entry
         return {}
 
-    def _default_main_geometry(self):
-        """DEFAULT_GEOMETRY explicitly centred on the primary monitor. Without
-        the +x+y the WM chooses the spot, which is NOT reliably the primary on
-        a multi-monitor box — the same reason every dialog computes its own
-        fallback position rather than leaving it to the WM."""
-        parsed = self._parse_geometry(DEFAULT_GEOMETRY)
-        if parsed:
-            w, h = parsed[0], parsed[1]
+    def _default_main_geometry(self, size=None):
+        """DEFAULT_GEOMETRY's size — or `size`, (w, h), the saved window's when
+        only its POSITION was unusable (since 2026-10-13: the user's resize
+        survives a monitor change, as it does for the dialogs and in MyBackup /
+        CSVEditor / TodoList) — explicitly centred on the primary monitor.
+        Without the +x+y the WM chooses the spot, which is NOT reliably the
+        primary on a multi-monitor box — the same reason every dialog computes
+        its own fallback position rather than leaving it to the WM."""
+        if size:
+            w, h = size
         else:
-            w, h = 1050, 930
+            m = re.match(r"(\d+)x(\d+)", DEFAULT_GEOMETRY)
+            w, h = (int(m.group(1)), int(m.group(2))) if m else (1050, 930)
         left, top, right, bottom = self._primary_rect()
         w, h = min(w, right - left), min(h, bottom - top)
         x, y = self._clamp_to_monitor(
@@ -787,7 +793,11 @@ class StateMixin:
             self._set_geometry(self.root, geo)
         else:
             cache.pop("main", None)
-            geo = self._default_main_geometry()
+            # Only the position was unusable (its monitor is gone): the saved
+            # SIZE survives, centred on the primary; a junk size takes the default.
+            parsed = self._parse_geometry(main) if main else None
+            size = parsed[:2] if parsed and parsed[0] >= MAIN_MIN_W and parsed[1] >= MAIN_MIN_H else None
+            geo = self._default_main_geometry(size)
             self._set_geometry(self.root, geo)
             self._geo_log("restore-default", applied=geo, rejected=main)
         self._main_zoomed = bool(zoomed)

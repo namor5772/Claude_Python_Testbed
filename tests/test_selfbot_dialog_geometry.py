@@ -383,11 +383,16 @@ class MainGeometryFromStateTests(unittest.TestCase):
     def test_current_layout_entry_per_mode(self):
         self.assertEqual(SelfBot.App._main_geometry_from_state(self.STATE, TWO_KEY, "solo"), "804x930+-1900+119")
         self.assertEqual(SelfBot.App._main_geometry_from_state(self.STATE, TWO_KEY, "duo"), "735x898+-2400+148")
-        self.assertIsNone(SelfBot.App._main_geometry_from_state(self.STATE, ONE_KEY, "duo"))
+        # no duo entry for that layout: the flat last-used value, junk here, which the caller refuses
+        self.assertEqual(SelfBot.App._main_geometry_from_state(self.STATE, ONE_KEY, "duo"), "1x1+0+0")
 
-    def test_another_layout_is_never_used(self):
+    def test_another_layouts_entry_is_never_used_the_last_used_position_is(self):
         state = {"main_geometries": {TWO_KEY: {"solo": "804x930+-1900+119"}}, "geometry": "804x930+620+119"}
-        self.assertIsNone(SelfBot.App._main_geometry_from_state(state, ONE_KEY, "solo"))
+        # 2026-10-13: a layout seen for the first time gets the flat key — the last used
+        # position, validated by the caller — where it got nothing and lost the size
+        self.assertEqual(SelfBot.App._main_geometry_from_state(state, ONE_KEY, "solo"), "804x930+620+119")
+        self.assertIsNone(SelfBot.App._main_geometry_from_state(
+            {"main_geometries": {TWO_KEY: {"solo": "804x930+-1900+119"}}}, ONE_KEY, "solo"))
 
     def test_legacy_flat_keys_when_no_per_layout_data(self):
         state = {"geometry": "804x930+620+119", "duo_geometry": "735x898+788+148"}
@@ -416,6 +421,27 @@ class UsableMainGeometryTests(unittest.TestCase):
     def test_left_monitor_position_is_rejected_once_that_monitor_is_gone(self):
         with _rects(ONE_MONITOR):
             self.assertIsNone(_app()._usable_main_geometry("804x930+-1900+119"))
+
+
+@_needs_selfbot
+class DefaultMainGeometryTests(unittest.TestCase):
+    """The solo fallback (2026-10-13): the saved size, else the default, centred on the primary."""
+
+    def test_default_size_centred_on_the_primary(self):
+        with _rects(TWO_MONITORS):
+            self.assertEqual(_app()._default_main_geometry(), "1050x930+755+255")
+
+    def test_saved_size_is_kept(self):
+        with _rects(TWO_MONITORS):
+            self.assertEqual(_app()._default_main_geometry(804, 930), "804x930+878+255")
+
+    def test_shrunk_to_a_small_primary(self):
+        with _rects(ONE_MONITOR):
+            self.assertEqual(_app()._default_main_geometry(3000, 2000), "1920x1080+0+0")
+
+    def test_primary_is_the_monitor_holding_the_origin(self):
+        with _rects([(-2560, 0, 0, 1440), (0, 0, 2560, 1440)]):
+            self.assertEqual(_app()._default_main_geometry(), "1050x930+755+255")
 
 
 @_needs_selfbot
@@ -465,6 +491,10 @@ class MainRestoreWiringTests(unittest.TestCase):
         # The primary-only test is gone.
         self.assertNotIn("x < cur_sw", src)
         self.assertNotIn("saved_sw == cur_sw", src)
+        # With nothing usable the solo window is placed by the helper (the saved size
+        # centred on the primary), never left to the WM; instance 2 cascades off that.
+        self.assertIn("self._default_main_geometry(w, h)", src)
+        self.assertNotIn('f"+{CASCADE_OFFSET}+{CASCADE_OFFSET}"', src)
 
 
 @_needs_selfbot

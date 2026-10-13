@@ -2468,9 +2468,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             else:
                 self._set_geometry(self.root, f"{half_w}x{wa_h}+{wa_x}+{wa_y}")
         else:
-            # Manual launch — restore the solo geometry saved for THIS monitor layout
-            # (another layout's entry is never used; with none, the WM places the
-            # default-size window — the safe fallback after monitors change).
+            # Manual launch — restore the solo geometry saved for THIS monitor layout,
+            # else the last used one (another layout's entry is never used); a
+            # position no monitor shows gives way to its SIZE centred on the primary.
             geometry = self._main_geometry_from_state(state, layout_key, "solo")
             parsed = self._usable_main_geometry(geometry)
             if parsed:
@@ -2500,11 +2500,20 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         geometry = f"{w}x{h}+{x}+{y}"
                 self.root.update_idletasks()
                 self._set_geometry(self.root, geometry)
-            elif self._is_second_instance:
-                # No usable saved solo geometry — still offset instance 2 off the default
-                # top-left position so it doesn't stack on instance 1.
+            else:
+                # No saved position a monitor shows (the laptop undocked): the saved
+                # SIZE — the last used, when real — or the default, centred on the
+                # primary monitor, never left to the WM (since 2026-10-13); instance 2
+                # cascades off that spot so it doesn't stack on instance 1.
+                size = self._parse_geometry(geometry)
+                w, h = ((size[0], size[1]) if size and size[0] >= MAIN_MIN_W and size[1] >= MAIN_MIN_H
+                        else (None, None))
+                geometry = self._default_main_geometry(w, h)
+                if self._is_second_instance:
+                    w, h, x, y = self._parse_geometry(geometry)
+                    geometry = f"{w}x{h}+{x + CASCADE_OFFSET}+{y + CASCADE_OFFSET}"
                 self.root.update_idletasks()
-                self._set_geometry(self.root, f"+{CASCADE_OFFSET}+{CASCADE_OFFSET}")
+                self._set_geometry(self.root, geometry)
 
     def _retry_load_names(self):
         """Instance 2: retry reading names from instance 1's state if they were empty."""
@@ -3053,14 +3062,20 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     @staticmethod
     def _main_geometry_from_state(state, layout_key, mode):
         """The main-window geometry to restore for `mode` ("solo" / "duo"): the
-        entry saved under `layout_key` in `main_geometries`, else — for a
-        pre-2026-09-16 file with no per-layout data — the legacy flat
-        `geometry` / `duo_geometry` key (validated against the monitors by the
-        caller). Another layout's entry is never used."""
+        entry saved under `layout_key` in `main_geometries`, else the flat
+        `geometry` / `duo_geometry` key — the LAST USED position, which every
+        save still writes and all a pre-2026-09-16 file has (since 2026-10-13;
+        until then a file with per-layout data read it for no layout, so a
+        layout seen for the first time — the laptop undocked — lost the
+        window's size and spot). Validated against the monitors by the
+        caller, so a last position on a monitor that is gone is refused there.
+        Another layout's entry is never used."""
         layouts = state.get("main_geometries")
         if isinstance(layouts, dict):
             entry = layouts.get(layout_key)
-            return (entry.get(mode) or None) if isinstance(entry, dict) else None
+            geo = (entry.get(mode) or None) if isinstance(entry, dict) else None
+            if geo:
+                return geo
         return state.get("duo_geometry" if mode == "duo" else "geometry") or None
 
     def _usable_main_geometry(self, geo):
@@ -3074,6 +3089,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if w < MAIN_MIN_W or h < MAIN_MIN_H or not self._dialog_geometry_visible(x, y, w, h):
             return None
         return parsed
+
+    def _default_main_geometry(self, w=None, h=None):
+        """`w`x`h` — DEFAULT_GEOMETRY's size without them — shrunk to fit the
+        primary monitor and centred on it: the main window's spot when no saved
+        position is usable (since 2026-10-13, the rule MyAgent / MyBackup /
+        CSVEditor / TodoList share; a size-only geometry left the spot to the
+        WM, and the saved size went with it)."""
+        m = re.match(r"(\d+)x(\d+)", DEFAULT_GEOMETRY)
+        w = w or int(m.group(1))
+        h = h or int(m.group(2))
+        left, top, right, bottom = self._monitor_rect_containing(0, 0)
+        w, h = min(w, right - left), min(h, bottom - top)
+        return f"{w}x{h}+{left + (right - left - w) // 2}+{top + (bottom - top - h) // 2}"
 
     @staticmethod
     def _dialog_geometries_from_state(state, layout_key):
