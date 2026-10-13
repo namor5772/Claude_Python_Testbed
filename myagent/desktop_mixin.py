@@ -275,28 +275,7 @@ class DesktopMixin:
                 img = img.resize((log_w, log_h))
         logical_w, logical_h = img.size
         # Resize to API image limit (provider-specific)
-        if self.provider == "Google":
-            # Gemini supports much higher resolution than Anthropic via its tile system
-            # (each image broken into 768x768 tiles, up to many tiles per request).
-            # Bumping above the previous Anthropic-matched 1568/1.15MP cap gives older
-            # models like Gemini 2.5 Pro substantially more pixel density on small UI
-            # elements (close buttons, icons, menu items), which they otherwise struggle
-            # to localize. 2048/4M is safe under Gemini's tile budget.
-            max_long_edge, max_megapixels = 2048, 4_000_000
-        elif self.provider == "OpenAI":
-            # OpenAI's vision pipeline silently resizes images to ~2048 long edge
-            # server-side, regardless of what we send. Verified empirically: when
-            # we sent 2560x1440 the model's code_interpreter loaded the cached
-            # bytes and PIL reported 2048x1152. Capping ourselves at 2048 ensures
-            # _screenshot_scale matches what the model actually sees — otherwise
-            # our scale=1.0 lies about the relationship between image pixels and
-            # screen pixels, and any model that inspects dimensions via code
-            # interpreter gets confused and pre-scales coordinates.
-            # 5M megapixels is a permissive cap (well above 2048x2048=4.2MP) so
-            # the long-edge constraint is the only one that ever bites.
-            max_long_edge, max_megapixels = 2048, 5_000_000
-        else:
-            max_long_edge, max_megapixels = 1568, 1_150_000
+        max_long_edge, max_megapixels = self._api_image_caps()
         longest = max(logical_w, logical_h)
         if longest > max_long_edge:
             r = max_long_edge / longest
@@ -732,6 +711,114 @@ class DesktopMixin:
             )
         except Exception as e:
             return f"Find image error: {e}"
+
+    def _api_image_caps(self):
+        """(max long edge, max pixels) an image sent to the current provider
+        is resized to — the ONE table behind screenshots and view_image.
+        Past these the API downscales anyway, and the extra bytes only slow
+        the request down (and fill the 32 MB request limit sooner).
+
+        Google: Gemini supports much higher resolution than Anthropic via its
+        tile system (each image broken into 768x768 tiles, up to many tiles
+        per request); 2048 / 4 MP gives small UI elements (close buttons,
+        icons, menu items) the pixel density older models need and is safe
+        under the tile budget. OpenAI: its vision pipeline silently resizes
+        to ~2048 long edge server-side regardless of what is sent — verified
+        empirically: sent 2560x1440, the model's code_interpreter loaded the
+        cached bytes and PIL reported 2048x1152 — so capping at 2048 keeps
+        _screenshot_scale matching what the model sees (otherwise scale=1.0
+        lies about image pixels vs screen pixels and a model that inspects
+        dimensions via code interpreter pre-scales coordinates); 5 MP is a
+        permissive cap (well above 2048x2048 = 4.2 MP) so the long edge is
+        the only constraint that ever bites. Everyone else: Anthropic's
+        1568 / 1.15 MP."""
+        provider = getattr(self, "provider", "")
+        if provider == "Google":
+            return 2048, 4_000_000
+        if provider == "OpenAI":
+            return 2048, 5_000_000
+        return 1568, 1_150_000
+
+    #: view_image refuses a file above this many bytes before decoding it —
+    #: a PIL decode of a huge TIFF is memory, not pixels the model could use.
+    VIEW_IMAGE_MAX_BYTES = 100 * 1024 * 1024
+    VIEW_IMAGE_JPEG_QUALITY = 85
+    #: A PNG encoding above this is re-encoded as JPEG: a photo compresses
+    #: 5-10x better that way, and the history keeps every image (see the
+    #: 413 rung) — a drawing, a chart or a screenshot stays PNG, crisp.
+    VIEW_IMAGE_PNG_LIMIT = 1_200_000
+
+    def do_view_image(self, path):
+        """Read an image file into the conversation as an image block (the
+        [text, image] pair a screenshot returns, so every provider path
+        carries it), resized to the provider's API caps. NOT a click
+        surface: it never touches _screenshot_scale / _offset / _dims or the
+        per-display states, and its text opens with FILE_IMAGE_MARKER so the
+        hoisting translators word their hint accordingly. 2026-10-13: a
+        trail-camera review had no way to look at its files but to build a
+        full-screen viewer and screenshot it, 32 times, until the request
+        limit ended the run."""
+        from myagent.helpers import FILE_IMAGE_MARKER
+        raw = str(path or "").strip()
+        if not raw:
+            return "view_image error: no path given."
+        path = os.path.expanduser(raw)
+        if os.path.isdir(path):
+            return f"view_image error: {path} is a directory, not an image file."
+        if not os.path.isfile(path):
+            return f"view_image error: file not found: {path}"
+        try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            return f"view_image error: {e}"
+        if size > self.VIEW_IMAGE_MAX_BYTES:
+            return (f"view_image error: {path} is {size / 1e6:.0f} MB — too large to "
+                    f"view (limit {self.VIEW_IMAGE_MAX_BYTES // (1024 * 1024)} MB).")
+        try:
+            from PIL import Image, ImageOps
+        except ImportError:
+            return "view_image error: Pillow is not installed (pip install pillow)."
+        try:
+            with Image.open(path) as im:
+                im.load()
+                full_w, full_h = im.size
+                fmt = im.format or ""
+                # A phone photo's orientation lives in EXIF; apply it, as the
+                # Attach Images compression does, or the model sees it sideways.
+                im = ImageOps.exif_transpose(im)
+                max_edge, max_pixels = self._api_image_caps()
+                ratio = min(1.0, max_edge / max(im.size),
+                            (max_pixels / (im.size[0] * im.size[1])) ** 0.5)
+                if ratio < 1.0:
+                    im = im.resize((max(1, round(im.size[0] * ratio)),
+                                    max(1, round(im.size[1] * ratio))), Image.LANCZOS)
+                shown_w, shown_h = im.size
+                buf = io.BytesIO()
+                if im.mode not in ("RGB", "RGBA", "L", "LA", "P"):
+                    im = im.convert("RGB")
+                im.save(buf, format="PNG", optimize=True)
+                media = "image/png"
+                if buf.tell() > self.VIEW_IMAGE_PNG_LIMIT:
+                    buf = io.BytesIO()
+                    im.convert("RGB").save(buf, format="JPEG",
+                                           quality=self.VIEW_IMAGE_JPEG_QUALITY)
+                    media = "image/jpeg"
+        except Exception as e:
+            return f"view_image error: could not read {path} as an image ({e})."
+        b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        shown = ("" if (shown_w, shown_h) == (full_w, full_h)
+                 else f", shown at {shown_w}x{shown_h}")
+        # No "(WxH pixels)" in parentheses — the shape the translators'
+        # screenshot-hint regex picks dimensions out of (the camera's rule).
+        text = (f"{FILE_IMAGE_MARKER} — {os.path.basename(path)}, {fmt or 'image'} "
+                f"{full_w}x{full_h} pixels{shown}, {size:,} bytes. This is a picture "
+                "read from a file, NOT the screen: its pixel coordinates mean nothing "
+                "to mouse_click.")
+        return [
+            {"type": "text", "text": text},
+            {"type": "image", "source": {"type": "base64", "media_type": media,
+                                         "data": b64_data}},
+        ]
 
     def do_mouse_drag(self, start_x, start_y, end_x, end_y, duration=0.5, button="left", display=None):
         try:

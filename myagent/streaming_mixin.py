@@ -848,13 +848,18 @@ class StreamingMixin:
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
                              "wait_for_window", "read_screen_text",
-                             "find_image_on_screen", "mouse_drag", "find_element"):
+                             "find_image_on_screen", "mouse_drag", "find_element",
+                             "view_image"):
             if not self.desktop_enabled.get():
                 return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
             inp = block.input
             click_display = inp.get("display")
             if click_display is not None:
                 click_display = int(click_display)
+            if block.name == "view_image":
+                path = str(inp.get("path", "") or "")
+                self._tool_info(f"Viewing image: {os.path.basename(path)}\n")
+                return self.do_view_image(path)
             if block.name == "screenshot":
                 display = click_display  # alias for clarity in screenshot path
                 disp_label = f"display {display}" if display is not None else "all displays"

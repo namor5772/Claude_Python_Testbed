@@ -1056,6 +1056,34 @@ DESKTOP_TOOLS = [
             "required": ["description"],
         },
     },
+    {
+        # 2026-10-13: a run that had to LOOK at image files (a trail-camera
+        # review) built its own full-screen viewer and screenshotted it 32
+        # times, and died on the 32 MB request limit the screenshots filled.
+        # This reads the file straight into the conversation instead: no
+        # viewer, no screen, no coordinates.
+        "name": "view_image",
+        "description": (
+            "Look at an image FILE on this computer: a photo, a scan, a screenshot "
+            "saved earlier, a chart, a contact sheet — any JPEG, PNG, GIF, BMP, WebP or "
+            "TIFF. The picture is returned to you as an image, resized to fit the API "
+            "limit, so you can describe it, read text in it or compare it with others. "
+            "Use this instead of opening the file in a viewer and taking a screenshot "
+            "of the screen. The picture is NOT the screen: never pass coordinates read "
+            "from it to mouse_click. To review many files, call this once per file; "
+            "each image stays in the conversation, so look at what you need and no more."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path of the image file (~ is expanded).",
+                },
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 # Browser automation tool definitions (Playwright via CDP)
@@ -1921,6 +1949,8 @@ KIMI_NO_REASONING_ROUNDTRIP_PREFIXES = ("kimi-k2.5",)
 KIMI_NON_VISION_PREFIXES = ()
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document",
                        "read_file", "glob_files", "grep_files",
+                       "view_image",   # a file read: no device, no screenshot state
+
                        # run_instruction: each spawn is an independent child PROCESS, and a
                        # waited call blocks only its own executor thread — so several
                        # run_instruction calls in ONE assistant turn become concurrent

@@ -29,7 +29,7 @@ TOOL_NAMES = {
                       "mouse_scroll", "open_application", "find_window",
                       "clipboard_read", "clipboard_write", "wait_for_window",
                       "read_screen_text", "find_image_on_screen", "mouse_drag",
-                      "find_element"],
+                      "find_element", "view_image"],
     "BROWSER_TOOLS": ["browser_open", "browser_navigate", "browser_click",
                       "browser_download",
                       "browser_fill", "browser_get_text", "browser_run_js",

@@ -197,6 +197,60 @@ def trim_history_for_context(messages, reported_tokens=None, reported_max=None):
     return cut_at
 
 
+IMAGE_REMOVED_NOTE = ("[image removed: the request had grown past the API's size "
+                      "limit — take a fresh screenshot if you need to see it again]")
+
+
+def strip_old_images(messages, keep=None):
+    """Replace the OLDEST image blocks in `messages` with a short text note,
+    IN PLACE, so the request fits the API's byte limit after an HTTP 413
+    (`request_too_large`: the body is over 32 MB). Returns the number of
+    images removed.
+
+    Images are the bytes: a screenshot of a 2560x1440 display, resized to the
+    Anthropic cap, is ~1 MB of base64, and the loop keeps every one in the
+    history — the chat JustChat_2026-10-13_180525 (Opus 5.5) died on call #33
+    with 32 screenshots behind it. The text and tool history stays whole, so
+    the model keeps what it SAW; only the pixels of the oldest `n` images
+    go, where `n` leaves the newest `keep` images (default: the newest half,
+    rounded down, so a 413 removes at least one and the rung converges in a
+    few rounds). Images in the FIRST user message — the instruction's
+    reference images, attached at run start — are never touched: they are
+    the task, not the record. Looks inside tool_result content lists (where
+    screenshots live) and at a user turn's own blocks (a reply's attached
+    images). A history edit, so on the models that bind thinking blocks to
+    the prefix the API drops the earlier ones (unbilled) and the prompt cache
+    is rebuilt once."""
+    slots = []                          # (container list, index) per image, oldest first
+    first_user_seen = False
+    for msg in messages:
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        if not first_user_seen:
+            first_user_seen = True
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for i, block in enumerate(content):
+            btype = _block_type(block)
+            if btype == "image":
+                slots.append((content, i))
+            elif btype == "tool_result" and isinstance(block, dict):
+                inner = block.get("content")
+                if isinstance(inner, list):
+                    slots.extend((inner, j) for j, b in enumerate(inner)
+                                 if _block_type(b) == "image")
+    if not slots:
+        return 0
+    if keep is None:
+        keep = len(slots) // 2
+    remove = max(1, len(slots) - max(0, int(keep)))
+    for container, i in slots[:remove]:
+        container[i] = {"type": "text", "text": IMAGE_REMOVED_NOTE}
+    return remove
+
+
 def responses_usage_dict(usage, cache_write_billed=False):
     """Normalize a Responses-API usage object (OpenAI's shape, which xAI
     shares) into stream_worker's DISJOINT buckets.
@@ -398,17 +452,37 @@ class _ToolBlock:
 # How a camera_capture result's text begins. physical_mixin writes it and
 # is_camera_result reads it back, so the two ends share this one constant.
 CAMERA_RESULT_MARKER = "Camera photo"
+#: view_image's twin (2026-10-13): an image FILE read into the conversation is
+#: no click surface either, and the hoisting hint must say so.
+FILE_IMAGE_MARKER = "Image file"
+_NON_SCREEN_MARKERS = ((CAMERA_RESULT_MARKER, "camera"), (FILE_IMAGE_MARKER, "file"))
 
 
 def is_camera_result(tc_content):
-    """True when a tool_result's content is camera_capture's: a block list
-    whose first text block opens with CAMERA_RESULT_MARKER."""
+    """What a tool_result's image is, when it is NOT the screen: "camera" for
+    camera_capture's photo, "file" for view_image's file (a block list whose
+    first text block opens with the tool's marker), else False. Truthy for
+    either kind, so the translators' per-image flags need no change; the
+    hint reads the kind to word itself."""
     if not isinstance(tc_content, list):
         return False
     for part in tc_content:
         if isinstance(part, dict) and part.get("type") == "text":
-            return str(part.get("text", "")).startswith(CAMERA_RESULT_MARKER)
+            text = str(part.get("text", ""))
+            for marker, kind in _NON_SCREEN_MARKERS:
+                if text.startswith(marker):
+                    return kind
+            return False
     return False
+
+
+def _non_screen_words(kind, count):
+    """(what the image is, the tool, what it shows) for the hint, per kind."""
+    if kind == "file":
+        what = "the image file" if count == 1 else f"the {count} image files"
+        return what, "view_image", "a picture read from a file on disk"
+    what = "the camera photo" if count == 1 else f"the {count} camera photos"
+    return what, "camera_capture", "the physical scene in front of the camera"
 
 
 def camera_aware_hint(screen_hint, from_camera):
@@ -416,24 +490,52 @@ def camera_aware_hint(screen_hint, from_camera):
     a follow-up user message (every provider but Anthropic, which takes images
     inside the tool_result). `screen_hint` is the translator's own screenshot
     wording — "use these pixel coordinates for mouse_click" — and comes back
-    UNTOUCHED unless camera photos are among the images: over a photo that
-    sentence would send the model clicking at the furniture. `from_camera`
-    holds one bool per hoisted image, in order."""
+    UNTOUCHED unless non-screen images are among them: over a photo that
+    sentence would send the model clicking at the furniture, over a file at
+    the picture. `from_camera` holds one entry per hoisted image, in order:
+    False for a screenshot, else the kind `is_camera_result` returned
+    ("camera" / "file"; a bare True counts as a camera photo, the shape the
+    camera's own tests use)."""
     if not any(from_camera):
         return screen_hint
     count = len(from_camera)
+    kinds = [("file" if k == "file" else "camera") if k else None for k in from_camera]
     if all(from_camera):
-        what = "the camera photo" if count == 1 else f"the {count} camera photos"
-        return (f"Below is {what} returned by the camera_capture tool above: the "
-                "physical scene in front of the camera, NOT the screen. Describe or "
-                "reason about what it shows; never use coordinates read from a "
-                "camera photo for mouse_click.")
-    photos = [str(i + 1) for i, cam in enumerate(from_camera) if cam]
-    which = (f"image {photos[0]} is a camera photo" if len(photos) == 1
-             else f"images {', '.join(photos)} are camera photos")
-    return (f"{screen_hint} EXCEPTION: of the {count} images below, {which} "
-            "(camera_capture) — the physical scene in front of the camera, not the "
-            "screen. Never use coordinates read from a camera photo for mouse_click.")
+        present = sorted({k for k in kinds if k}, key=("camera", "file").index)
+        if len(present) == 1:
+            what, tool, shows = _non_screen_words(present[0], count)
+            return (f"Below is {what} returned by the {tool} tool above: {shows}, "
+                    "NOT the screen. Describe or reason about what it shows; never "
+                    f"use coordinates read from {'an image file' if present[0] == 'file' else 'a camera photo'} "
+                    "for mouse_click.")
+        return (f"Below are the {count} images returned by the camera_capture / "
+                "view_image tools above: camera photos and image files, NOT the "
+                "screen. Describe or reason about what they show; never use "
+                "coordinates read from them for mouse_click.")
+    parts = []
+    for kind in ("camera", "file"):
+        nums = [str(i + 1) for i, k in enumerate(kinds) if k == kind]
+        if not nums:
+            continue
+        noun = "camera photo" if kind == "camera" else "image file"
+        tool = "camera_capture" if kind == "camera" else "view_image"
+        if len(nums) == 1:
+            article = "a" if kind == "camera" else "an"
+            parts.append(f"image {nums[0]} is {article} {noun} ({tool})")
+        else:
+            parts.append(f"images {', '.join(nums)} are {noun}s ({tool})")
+    which = " and ".join(parts)
+    if all(k != "file" for k in kinds):
+        # The camera-only wording, byte-identical to before view_image.
+        photos = [str(i + 1) for i, cam in enumerate(from_camera) if cam]
+        which = (f"image {photos[0]} is a camera photo" if len(photos) == 1
+                 else f"images {', '.join(photos)} are camera photos")
+        return (f"{screen_hint} EXCEPTION: of the {count} images below, {which} "
+                "(camera_capture) — the physical scene in front of the camera, not the "
+                "screen. Never use coordinates read from a camera photo for mouse_click.")
+    return (f"{screen_hint} EXCEPTION: of the {count} images below, {which} — not "
+            "the screen. Never use coordinates read from a camera photo or an image "
+            "file for mouse_click.")
 
 
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")

@@ -8,7 +8,7 @@ from myagent.constants import (
     ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
     ANTHROPIC_FAST_MODE_BETA,
 )
-from myagent.helpers import (parse_output_cap, parse_overflow_counts,
+from myagent.helpers import (parse_output_cap, parse_overflow_counts, strip_old_images,
                              strip_pre_fallback_blocks, strip_thinking_blocks,
                              trim_history_for_context)
 from myagent.retry_util import (connection_error_backoff, rate_limit_backoff,
@@ -602,6 +602,37 @@ class AnthropicMixin:
                         f"Context window exceeded on {self.model} — nothing left to trim") from None
                 raise
             except anthropic.APIStatusError as e:
+                # HTTP 413 request_too_large: the BODY is over the API's 32 MB
+                # limit — bytes, not tokens, so the overflow rung (a 400) never
+                # sees it, and the bytes are the screenshots: every one the
+                # loop took is still in the history, ~1 MB of base64 each at
+                # the Anthropic resize cap. JustChat_2026-10-13_180525 (Opus
+                # 5.5) died here on call #33 with 32 behind it. Replace the
+                # oldest half with a note (the text and tool history stays
+                # whole), retry on the same list — the rebuild at the top of
+                # the loop picks it up. No image left to drop: fall back to
+                # the overflow rung's round trim, then give up.
+                if e.status_code == 413:
+                    removed = strip_old_images(messages)
+                    if removed:
+                        self.queue.put({"type": "warning", "content":
+                            f"⚠ The request grew past the API's size limit (HTTP 413) — "
+                            f"removed the {removed} oldest screenshot/image(s) from the "
+                            "history and retried; the newest ones and all the text stay. "
+                            "The prompt cache is rebuilt once.\n"})
+                        full_text = ""
+                        continue
+                    removed = trim_history_for_context(messages)
+                    if removed > 0:
+                        self.queue.put({"type": "warning", "content":
+                            f"⚠ The request grew past the API's size limit (HTTP 413) with "
+                            f"no images to drop — dropped the {removed} oldest message(s) "
+                            "and retried; earlier history is no longer in context.\n"})
+                        full_text = ""
+                        continue
+                    raise RuntimeError(
+                        f"Request too large on {self.model} (HTTP 413) — nothing left to "
+                        "remove") from None
                 if e.status_code == 529 and attempt < max_retries - 1:
                     wait = server_error_backoff(attempt)
                     self.queue.put({
