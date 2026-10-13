@@ -415,6 +415,7 @@ SELFBOT_META_TOOLS = [
                 "excel": {"type": "boolean", "description": "Bundle the Excel live-workbook tools ON (default false on create)"},
                 "physical": {"type": "boolean", "description": "Bundle the Physical tools (camera_capture, microphone_listen) ON (default false on create)"},
                 "pause": {"type": "boolean", "description": "Bundle the pause_conversation (rest the self-chat) tool ON (default false on create)"},
+                "dictation_auto_send": {"type": "boolean", "description": "Bundle the Mike button's Auto-send box ON — a dictated message is sent the moment its transcript lands (default false on create)"},
                 "skill_modes": {
                     "type": "object",
                     "description": "Map of skill name -> mode ('disabled'/'enabled'/'on_demand'). On create, defaults to the current skill modes; on update, only listed skills change.",
@@ -1188,6 +1189,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.excel_enabled = tk.BooleanVar(value=False)
         self.physical_enabled = tk.BooleanVar(value=False)
         self.diag_enabled = tk.BooleanVar(value=False)
+        # Voice input (MyAgent's VoiceMixin, 2026-10-14): the Auto-send box
+        # beside the Mike button under the message box — a dictated message
+        # is sent the moment its transcript lands. Kept like the other
+        # toggles: in app_state.json and in a saved prompt's bundle.
+        self.dictation_auto_send = tk.BooleanVar(value=False)
+        self._dictation = None            # the row's _VoiceDictation, set by setup_ui
         # MyAgent-style tool subsystems (Meta / MCP / Google / IMAP / Outlook).
         self.meta_enabled = tk.BooleanVar(value=False)
         self.mcp_enabled = tk.BooleanVar(value=False)
@@ -1209,14 +1216,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._google_init_state()
             self._proton_init_state()
             self._outlook_init_state()
-        # Speech-to-text clients for the Physical set's microphone_listen:
-        # VoiceMixin transcribes with the Voice Setup provider (OpenAI by
+        # Speech-to-text clients for the Mike button, Voice Setup's Test and
+        # the Physical set's microphone_listen (sounddevice itself is imported
+        # at the first press, never here): VoiceMixin transcribes with the
+        # Voice Setup provider (OpenAI by
         # default; xAI; Google) through self.openai_client / xai_client /
         # gemini_client, built here from the keys in the environment when the
         # SDK is installed. The CHAT stays Anthropic-only — these transcribe
         # audio and nothing else (2026-10-14).
         self.openai_client = self.xai_client = self.gemini_client = None
-        if _HAS_MYAGENT_TOOLS and _HAS_MICROPHONE:
+        if _HAS_MYAGENT_TOOLS:
             try:
                 import openai
                 if os.environ.get("OPENAI_API_KEY"):
@@ -1595,9 +1604,24 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.input_field.bind("<Return>", self.on_enter_key)
         self.input_field.focus_set()
 
+        # Voice input (MyAgent's, 2026-10-14): Mike, the Auto-send box and the
+        # status line under the message box — the row MyAgent's Agent Request
+        # dialog carries under its reply box, built by the inherited
+        # _voice_build_row over SelfBot's own send path (_send_as_enter) and
+        # Auto-send setting. The root is the row's window, so its <Destroy>
+        # releases the microphone when the app closes. Without the myagent
+        # package there is no VoiceMixin, hence no row. See CLAUDE_SELFBOT.md's
+        # Voice input paragraph.
+        if _HAS_MYAGENT_TOOLS:
+            self.voice_row, self.mike_button, self.auto_send_toggle, self._dictation = (
+                self._voice_build_row(self.root, self.input_field,
+                                      self.dictation_auto_send, self._send_as_enter))
+            self.voice_row.grid(row=5, column=0, columnspan=2, sticky="ew",
+                                padx=10, pady=(0, 5))
+
         # Button bar
         button_frame = tk.Frame(self.root)
-        button_frame.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        button_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         self.attach_button = tk.Button(
             button_frame, text="Attach Images", width=14, font=toolbar_font,
@@ -1642,7 +1666,20 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
 
         # Checkbox row (below buttons)
         checkbox_frame = tk.Frame(self.root)
-        checkbox_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        checkbox_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 5))
+
+        # Voice Setup at the row's left, where MyAgent's main window has it
+        # (left of Debug, created first so Tab reaches it first): the
+        # inherited dialog — provider / model / language / vocabulary hint /
+        # microphone + Test — over the per-user settings file MyAgent's uses.
+        # Disabled without the myagent package, whose VoiceMixin opens it.
+        self.voice_setup_button = tk.Button(
+            checkbox_frame, text="Voice Setup", font=("Arial", 9),
+            command=lambda: self._voice_setup_from_main(),
+        )
+        self.voice_setup_button.pack(side=tk.LEFT, padx=(5, 5))
+        if not _HAS_MYAGENT_TOOLS:
+            self.voice_setup_button.config(state=tk.DISABLED)
 
         self.debug_toggle = tk.Checkbutton(
             checkbox_frame, text="Debug", variable=self.debug_enabled,
@@ -1688,7 +1725,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         # disabled when its optional libraries are absent (Meta and Pause need none).
         # Proton is labelled IMAP. Left-aligned (sticky="w") to match the Debug row above.
         tools_frame = tk.Frame(self.root)
-        tools_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 5))
+        tools_frame.grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 5))
 
         self.desktop_toggle = tk.Checkbutton(
             tools_frame, text="Desktop", variable=self.desktop_enabled,
@@ -1774,7 +1811,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.attach_label = tk.Label(
             self.root, text="", foreground="#6a1b9a", font=("Arial", 9)
         )
-        self.attach_label.grid(row=8, column=0, columnspan=2)
+        self.attach_label.grid(row=9, column=0, columnspan=2)
 
     # --- App State Persistence ---
 
@@ -2169,6 +2206,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.diag_enabled.set(True)
         if state.get("pause_enabled"):
             self.pause_enabled.set(True)
+        if state.get("dictation_auto_send"):
+            self.dictation_auto_send.set(True)
         # Restore the dialog geometries saved for the CURRENT monitor layout (applied
         # when each dialog next opens). They come from THIS instance's state file, so
         # instance 2 keeps its own placements; a layout with no entry leaves the
@@ -2349,6 +2388,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             "physical_enabled": self.physical_enabled.get(),
             "diag_enabled": self.diag_enabled.get(),
             "pause_enabled": self.pause_enabled.get(),
+            "dictation_auto_send": self.dictation_auto_send.get(),
         }
         state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
         # Load existing state to preserve the other mode's geometry
@@ -2505,6 +2545,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             "excel": self.excel_enabled.get(),
             "physical": self.physical_enabled.get(),
             "pause": self.pause_enabled.get(),
+            "dictation_auto_send": self.dictation_auto_send.get(),
             "skill_modes": {n: s.get("mode", "disabled") for n, s in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
         }
@@ -2566,6 +2607,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.physical_enabled.set(bool(entry["physical"]))
         if "pause" in entry:
             self.pause_enabled.set(bool(entry["pause"]))
+        if "dictation_auto_send" in entry:
+            self.dictation_auto_send.set(bool(entry["dictation_auto_send"]))
         if "disabled_confirm_patterns" in entry:
             self._disabled_confirm_patterns = set(entry["disabled_confirm_patterns"])
             self._update_ps_safety_button()
@@ -3815,13 +3858,30 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
     def on_enter_key(self, event):
         if event.state & 0x1:  # Shift held — allow newline
             return None
+        # A dictation in flight (the Mike button, 2026-10-14): Enter while
+        # recording ENDS the recording — Mike's own toggle — and while
+        # transcribing is swallowed, because sending mid-dictation would lose
+        # the speech (the Agent Request dialog's rule in MyAgent).
+        dictation = getattr(self, "_dictation", None)
+        if dictation is not None and dictation.state == "recording":
+            dictation.toggle()
+            return "break"
+        if dictation is not None and dictation.state == "transcribing":
+            return "break"
+        self._send_as_enter()
+        return "break"
+
+    def _send_as_enter(self):
+        """What Enter does once the Shift and dictation rules have passed — and
+        what the Auto-send box does the moment a transcript lands (the row's
+        `send`): the duo's send delay, which parks the message for editing or
+        cancellation, else the send itself."""
         if self._send_delay > 0:
             # Delay before processing to allow editing/cancellation
             self.input_field.config(state="disabled")
             self._send_timer = self.root.after(self._send_delay, self._delayed_send)
         else:
             self.send_message()
-        return "break"
 
     def _delayed_send(self):
         self.input_field.config(state="normal")
@@ -4663,6 +4723,57 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.root.after(200, self._finish_close)
             return
         self._finish_close()
+
+    # ── Voice input — MyAgent's VoiceMixin, adjusted (2026-10-14) ──────────
+    # The Mike / Auto-send row under the message box and the Voice Setup
+    # button on the Debug row are built in setup_ui; the dialog, the dictation
+    # state machine, the recorder and the transcription paths are the inherited
+    # mixin's, over the per-user settings file MyAgent's Voice Setup edits
+    # (one Voice Setup serves both apps on a machine). Four points are SelfBot's
+    # own — see CLAUDE_SELFBOT.md's Voice input paragraph.
+
+    @staticmethod
+    def _voice_end_word(transcript):
+        """SelfBot has no end words — a dictated "Stop." or "Quit." is a message
+        to the bot like any other — so the row's end-word rule (MyAgent's, for
+        the Agent Request dialog's Convo-mode words) lands nothing bare here:
+        "" tells the row the transcript is no end word, and it lands as heard."""
+        return ""
+
+    def _voice_auto_send_changed(self):
+        """The Auto-send box was toggled. Kept like SelfBot's other toggles: in
+        app_state.json now (`_save_last_state`), and in the active system
+        prompt's bundle at its next SAVE (`_capture_prompt_settings`), restored
+        with the prompt (`_apply_prompt_settings`). MyAgent's writes the value
+        into the applied instruction's store entry at once, because its editor
+        has no widget for the setting; SelfBot's prompt editor SAVE snapshots
+        every toggle, so this one follows that convention instead."""
+        try:
+            self._save_last_state()
+        except Exception:
+            pass
+
+    def _voice_key_status(self, provider):
+        """(message, missing) for the provider's API key line — VoiceMixin's,
+        naming SelfBot as the app to restart."""
+        attribute, name = {"Google": ("gemini_client", "GEMINI_API_KEY"),
+                           "xAI": ("xai_client", "XAI_API_KEY")}.get(
+            provider, ("openai_client", "OPENAI_API_KEY"))
+        present = getattr(self, attribute, None) is not None
+        if present:
+            return f"{name} is set.", False
+        return (f"{name} is NOT set: {provider} cannot transcribe until it is "
+                "(set the environment variable, then restart SelfBot)."), True
+
+    def _place_window(self, win, kind, default_size, parent=None, min_size=None):
+        """MyAgent's dialog-placement entry point, for the inherited dialogs that
+        call it (Voice Setup): SelfBot's `_place_dialog` — the geometry saved for
+        `kind` when some monitor still shows it, else centred on the main window
+        — applied and returned. `parent` is always the main window here;
+        `min_size` is `_place_dialog`'s default when not given."""
+        if min_size is None:
+            return self._place_dialog(win, kind, default_size)
+        return self._place_dialog(win, kind, default_size, min_size=min_size)
 
     def _finish_close(self):
         """Continue the close sequence once streaming has stopped."""
@@ -5614,7 +5725,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
     _PROMPT_MODEL_KEYS = ("model", "temperature", "thinking_enabled", "thinking_effort",
                           "thinking_budget", "thinking_mode")
     _PROMPT_TOGGLE_KEYS = ("desktop", "browser", "meta", "mcp", "google", "proton", "outlook",
-                           "excel", "physical", "pause")
+                           "excel", "physical", "pause", "dictation_auto_send")
     _PROMPT_NAME_KEYS = ("my_name", "my_friend")
 
     def do_manage_prompts(self, params):

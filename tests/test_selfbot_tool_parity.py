@@ -305,10 +305,13 @@ class PersistenceTests(unittest.TestCase):
     def test_a_new_chat_resets_the_file_tools_memory(self):
         self.assertIn("self._file_read_paths = set()", inspect.getsource(SelfBot.App._new_chat))
 
-    def test_the_stt_clients_exist_for_the_microphone_only(self):
+    def test_the_stt_clients_exist_with_the_package_for_transcription_only(self):
+        # the Mike button and Voice Setup need them too since the voice port
+        # (2026-10-14); sounddevice is imported at the first press, never here
         src = inspect.getsource(SelfBot.App.__init__)
         self.assertIn("self.openai_client = self.xai_client = self.gemini_client = None", src)
-        self.assertIn("if _HAS_MYAGENT_TOOLS and _HAS_MICROPHONE:", src)
+        self.assertIn("if _HAS_MYAGENT_TOOLS:\n            try:\n                import openai", src)
+        self.assertNotIn("_HAS_MICROPHONE:", src)
 
 
 # ── a real capture through the inherited pipeline ───────────────────────
