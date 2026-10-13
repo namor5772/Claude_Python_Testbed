@@ -753,7 +753,7 @@ def monitor_rects():
 
 
 def layout_key(monitors):
-    """The state.json key for a monitor layout: every rect, sorted, joined —
+    """The state file's key for a monitor layout: every rect, sorted, joined —
     MyAgent's format, so docked, undocked and rearranged each get their own."""
     return "|".join(",".join(str(v) for v in rect) for rect in sorted(monitors))
 
@@ -799,10 +799,10 @@ def centred_geometry(size, rect):
 
 def restore_geometry(state, key, monitors):
     """The geometry to open with: this layout's saved one (`geometries[key]`)
-    when a monitor still shows it, else the legacy flat `geometry` (written
-    before 2026-10-13, layout unknown) when one does; otherwise the saved SIZE
-    — the user's resize survives, only the position is lost — or DEFAULT_SIZE,
-    centred on the primary monitor. A saved size under MIN_SIZE is junk."""
+    when a monitor still shows it, else the last used one (the flat `geometry`
+    every build writes) when one does; otherwise the saved SIZE — the user's
+    resize survives, only the position is lost — or DEFAULT_SIZE, centred on
+    the primary monitor. A saved size under MIN_SIZE is junk."""
     geometries = state.get("geometries")
     candidates = [(geometries or {}).get(key) if isinstance(geometries, dict) else None,
                   state.get("geometry")]
@@ -818,20 +818,25 @@ def restore_geometry(state, key, monitors):
     return centred_geometry(size, primary_rect(monitors))
 
 
-def state_for_save(existing, key, geometry, filepath, col_widths):
-    """The state.json dict to write: `geometry` filed under this layout's key,
-    every other layout's entry — and a legacy flat `geometry`, which may still
-    be the right position for a layout not seen since — kept as they were."""
+def state_for_save(existing, key, geometry, fields):
+    """The state file's dict to write: `geometry` as the last used position —
+    the one key every earlier build (and TodoList's native ports) reads and
+    writes — and filed under this layout's key in `geometries` with every
+    other layout's entry kept; then `fields`, the app's own keys; and any
+    other key the file held, as it was."""
     geometries = existing.get("geometries") if isinstance(existing, dict) else None
     geometries = dict(geometries) if isinstance(geometries, dict) else {}
     geometries[key] = geometry
-    state = dict(existing) if isinstance(existing, dict) else {}
-    state.update({"geometries": geometries, "filepath": filepath, "col_widths": col_widths})
+    state = {"geometry": geometry, "geometries": geometries}
+    state.update(fields)
+    if isinstance(existing, dict):
+        for name, value in existing.items():
+            state.setdefault(name, value)
     return state
 
 
 def load_state_file(path):
-    """state.json as a dict; {} when missing, unreadable or not a dict."""
+    """The state file as a dict; {} when missing, unreadable or not a dict."""
     try:
         with open(path, encoding="utf-8") as f:
             state = json.load(f)
@@ -1312,8 +1317,8 @@ class App:
 
     def _save_state(self):
         self._capture_col_widths()
-        state = state_for_save(load_state_file(STATE_FILE), layout_key(self._monitors()),
-                               self.root.geometry(), self.filepath, self._col_widths)
+        state = state_for_save(load_state_file(STATE_FILE), layout_key(self._monitors()), self.root.geometry(),
+                               {"filepath": self.filepath, "col_widths": self._col_widths})
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             with open(STATE_FILE, "w", encoding="utf-8") as f:

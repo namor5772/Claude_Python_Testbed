@@ -766,21 +766,24 @@ class GeometryTests(unittest.TestCase):
                          centred_default)
         self.assertTrue(centred_default.startswith("1000x620+780+410"))
 
-    def test_state_for_save_keeps_other_layouts_and_the_legacy_value(self):
+    def test_state_for_save_files_the_geometry_per_layout_and_as_the_last_used(self):
         existing = {"geometries": {mb.layout_key(DOCKED): SAVED_DOCKED}, "geometry": SAVED_DOCKED,
-                    "filepath": "old.csv", "col_widths": {"FROM": 1, "TO": 2}}
-        state = mb.state_for_save(existing, mb.layout_key(LAPTOP), "900x600+100+50", "new.csv",
-                                  {"FROM": 500, "TO": 400})
+                    "filepath": "old.csv", "col_widths": {"FROM": 1, "TO": 2}, "future_key": [1, 2]}
+        fields = {"filepath": "new.csv", "col_widths": {"FROM": 500, "TO": 400}}
+        state = mb.state_for_save(existing, mb.layout_key(LAPTOP), "900x600+100+50", fields)
         self.assertEqual(state["geometries"], {mb.layout_key(DOCKED): SAVED_DOCKED,
                                                mb.layout_key(LAPTOP): "900x600+100+50"})
-        self.assertEqual(state["geometry"], SAVED_DOCKED, "the pre-fix value stays for a layout not seen since")
+        self.assertEqual(state["geometry"], "900x600+100+50",
+                         "the flat key is the last used position, as every earlier build wrote it")
         self.assertEqual((state["filepath"], state["col_widths"]), ("new.csv", {"FROM": 500, "TO": 400}))
+        self.assertEqual(state["future_key"], [1, 2], "a key this build does not know is kept")
+        self.assertEqual(list(state)[:2], ["geometry", "geometries"], "the geometry keys lead the file")
         self.assertEqual(existing["geometries"], {mb.layout_key(DOCKED): SAVED_DOCKED}, "the input is not mutated")
         # A replaced entry, a fresh file and a file that was not a dict.
-        again = mb.state_for_save(state, mb.layout_key(LAPTOP), "901x601+1+1", "new.csv", {})
+        again = mb.state_for_save(state, mb.layout_key(LAPTOP), "901x601+1+1", fields)
         self.assertEqual(again["geometries"][mb.layout_key(LAPTOP)], "901x601+1+1")
-        self.assertEqual(mb.state_for_save({}, "k", "g", None, {})["geometries"], {"k": "g"})
-        self.assertEqual(mb.state_for_save(["junk"], "k", "g", None, {})["geometries"], {"k": "g"})
+        self.assertEqual(mb.state_for_save({}, "k", "g", {}), {"geometry": "g", "geometries": {"k": "g"}})
+        self.assertEqual(mb.state_for_save(["junk"], "k", "g", {})["geometries"], {"k": "g"})
 
     def test_state_round_trip_through_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -795,12 +798,16 @@ class GeometryTests(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as f:
                 json.dump({"geometry": SAVED_DOCKED}, f)
             state = mb.load_state_file(path)
-            state = mb.state_for_save(state, mb.layout_key(LAPTOP), "900x600+100+50", "s.csv", {})
+            state = mb.state_for_save(state, mb.layout_key(LAPTOP), "900x600+100+50", {"filepath": "s.csv"})
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(state, f)
             back = mb.load_state_file(path)
             self.assertEqual(mb.restore_geometry(back, mb.layout_key(LAPTOP), LAPTOP), "900x600+100+50")
-            self.assertEqual(mb.restore_geometry(back, mb.layout_key(DOCKED), DOCKED), SAVED_DOCKED)
+            self.assertEqual(mb.restore_geometry(back, mb.layout_key(DOCKED), DOCKED), "900x600+100+50",
+                             "docked again: no entry for that layout yet, the last used position is visible there")
+            back["geometries"][mb.layout_key(DOCKED)] = SAVED_DOCKED
+            self.assertEqual(mb.restore_geometry(back, mb.layout_key(DOCKED), DOCKED), SAVED_DOCKED,
+                             "and that layout's own entry wins once it has one")
 
     def test_monitor_rects_answers_on_this_platform(self):
         rects = mb.monitor_rects()
