@@ -35,6 +35,7 @@ import csv
 import json
 import os
 import queue
+import re
 import shutil
 import stat
 import sys
@@ -56,6 +57,15 @@ LOG_FILE = os.path.join(CONFIG_DIR, "mybackup.log")
 LOG_MAX_BYTES = 1_000_000  # one-slot rotation to mybackup.log.1, like the suite's other runtime logs
 MTIME_TOLERANCE = 2.0  # seconds: FAT32 keeps modification times to 2 s (exFAT to 10 ms, NTFS to 100 ns)
 MAX_ERROR_LINES = 50  # per row, in the log pane and file — the error COUNT is always exact
+DEFAULT_SIZE = (1000, 620)  # the window with nothing saved, centred on the primary monitor
+MIN_SIZE = (720, 460)  # the window's minsize; a smaller SAVED size is junk and falls back to DEFAULT_SIZE
+# A saved position is usable only if enough of the window's title bar lands on
+# a connected monitor to grab it: at least GEOMETRY_VISIBLE_W px wide, and at
+# least GEOMETRY_TITLE_VISIBLE_H px of the window's top GEOMETRY_TITLE_STRIP px
+# (MyAgent's rule — state_mixin.py).
+GEOMETRY_VISIBLE_W = 50
+GEOMETRY_TITLE_STRIP = 30
+GEOMETRY_TITLE_VISIBLE_H = 10
 
 _isjunction = getattr(os.path, "isjunction", lambda path: False)  # Python 3.12+
 
@@ -689,14 +699,155 @@ def run_headless(setup_path, dry_run=False, out=None):
     return 0 if summary.ok else 1
 
 
+# ── Window placement ──────────────────────────────────────────────────
+#
+# The window's geometry is remembered PER MONITOR LAYOUT and a saved position
+# is applied only when a connected monitor shows it (2026-10-13: a geometry
+# saved on the laptop's docked second monitor was restored verbatim after the
+# undock, so the window opened entirely off-screen — and the Desktop
+# launcher's launch-or-focus then raised that invisible window on every click,
+# which read as "MyBackup does not start"). The helpers are pure: `monitors`
+# is a list of (left, top, right, bottom) rects, `state` the state.json dict.
+
+def monitor_rects():
+    """Every connected monitor's (left, top, right, bottom) — Win32
+    EnumDisplayMonitors / macOS CoreGraphics — in the coordinates Tk's
+    `wm geometry` uses in this process; [] where neither answers (the caller
+    falls back to Tk's screen size)."""
+    try:
+        import ctypes
+        if sys.platform == "win32":
+            class RECT(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                            ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+            rects = []
+            proc_type = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                           ctypes.POINTER(RECT), ctypes.c_void_p)
+
+            def callback(hmonitor, hdc, lprc, lparam):
+                r = lprc[0]
+                rects.append((r.left, r.top, r.right, r.bottom))
+                return 1
+
+            ctypes.windll.user32.EnumDisplayMonitors(None, None, proc_type(callback), 0)
+            return rects
+        if sys.platform == "darwin":
+            cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+
+            class CGRect(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double),
+                            ("width", ctypes.c_double), ("height", ctypes.c_double)]
+
+            ids = (ctypes.c_uint32 * 16)()
+            count = ctypes.c_uint32()
+            cg.CGGetActiveDisplayList(16, ids, ctypes.byref(count))
+            cg.CGDisplayBounds.restype = CGRect
+            rects = []
+            for i in range(count.value):
+                b = cg.CGDisplayBounds(ids[i])
+                rects.append((int(b.x), int(b.y), int(b.x + b.width), int(b.y + b.height)))
+            return rects
+    except Exception:
+        pass
+    return []
+
+
+def layout_key(monitors):
+    """The state.json key for a monitor layout: every rect, sorted, joined —
+    MyAgent's format, so docked, undocked and rearranged each get their own."""
+    return "|".join(",".join(str(v) for v in rect) for rect in sorted(monitors))
+
+
+def parse_geometry(geo):
+    """'WxH+X+Y' -> (w, h, x, y), else None. X / Y may be negative ('+-723' is
+    how Tk reports a window left of or above the primary monitor); a size-only
+    string is not a restorable position."""
+    m = re.fullmatch(r"=?(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", str(geo or "").strip())
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def geometry_visible(geo, monitors):
+    """True when enough of the window's title strip lies on SOME monitor to
+    grab it — per monitor, not the virtual desktop's bounding box, whose dead
+    corners on an L-shaped layout would pass."""
+    parsed = parse_geometry(geo)
+    if parsed is None:
+        return False
+    w, h, x, y = parsed
+    for left, top, right, bottom in monitors:
+        overlap_w = min(x + w, right) - max(x, left)
+        overlap_h = min(y + GEOMETRY_TITLE_STRIP, bottom) - max(y, top)
+        if overlap_w >= GEOMETRY_VISIBLE_W and overlap_h >= GEOMETRY_TITLE_VISIBLE_H:
+            return True
+    return False
+
+
+def primary_rect(monitors):
+    """The monitor holding the origin (the primary), else the first."""
+    for rect in monitors:
+        if rect[0] <= 0 < rect[2] and rect[1] <= 0 < rect[3]:
+            return rect
+    return monitors[0]
+
+
+def centred_geometry(size, rect):
+    """`size` shrunk to fit `rect` and centred in it, as a geometry string."""
+    left, top, right, bottom = rect
+    w, h = min(size[0], right - left), min(size[1], bottom - top)
+    return f"{w}x{h}+{left + (right - left - w) // 2}+{top + (bottom - top - h) // 2}"
+
+
+def restore_geometry(state, key, monitors):
+    """The geometry to open with: this layout's saved one (`geometries[key]`)
+    when a monitor still shows it, else the legacy flat `geometry` (written
+    before 2026-10-13, layout unknown) when one does; otherwise the saved SIZE
+    — the user's resize survives, only the position is lost — or DEFAULT_SIZE,
+    centred on the primary monitor. A saved size under MIN_SIZE is junk."""
+    geometries = state.get("geometries")
+    candidates = [(geometries or {}).get(key) if isinstance(geometries, dict) else None,
+                  state.get("geometry")]
+    size = DEFAULT_SIZE
+    for geo in candidates:
+        parsed = parse_geometry(geo)
+        if parsed is None or parsed[0] < MIN_SIZE[0] or parsed[1] < MIN_SIZE[1]:
+            continue
+        if geometry_visible(geo, monitors):
+            return f"{parsed[0]}x{parsed[1]}+{parsed[2]}+{parsed[3]}"
+        if size is DEFAULT_SIZE:
+            size = parsed[:2]
+    return centred_geometry(size, primary_rect(monitors))
+
+
+def state_for_save(existing, key, geometry, filepath, col_widths):
+    """The state.json dict to write: `geometry` filed under this layout's key,
+    every other layout's entry — and a legacy flat `geometry`, which may still
+    be the right position for a layout not seen since — kept as they were."""
+    geometries = existing.get("geometries") if isinstance(existing, dict) else None
+    geometries = dict(geometries) if isinstance(geometries, dict) else {}
+    geometries[key] = geometry
+    state = dict(existing) if isinstance(existing, dict) else {}
+    state.update({"geometries": geometries, "filepath": filepath, "col_widths": col_widths})
+    return state
+
+
+def load_state_file(path):
+    """state.json as a dict; {} when missing, unreadable or not a dict."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
 # ── GUI ───────────────────────────────────────────────────────────────
 
 class App:
     def __init__(self, setup_path=None):
         self.root = tk.Tk()
         self.root.title(APP_TITLE)
-        self.root.geometry("1000x620")
-        self.root.minsize(720, 460)
+        self.root.geometry("%dx%d" % DEFAULT_SIZE)
+        self.root.minsize(*MIN_SIZE)
 
         self.filepath = None  # the setup file in use; None until one is opened or saved
         self.rows = []  # list of [from, to]
@@ -1138,18 +1289,14 @@ class App:
 
     # ── State persistence ─────────────────────────────────────────────
 
+    def _monitors(self):
+        """The connected monitors' rects, Tk's screen size when none were enumerated."""
+        return monitor_rects() or [(0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())]
+
     def _load_state(self, setup_path=None):
-        state = {}
-        try:
-            with open(STATE_FILE, encoding="utf-8") as f:
-                state = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            pass
-        if not isinstance(state, dict):
-            state = {}
-        geo = state.get("geometry")
-        if geo:
-            self.root.geometry(geo)
+        state = load_state_file(STATE_FILE)
+        monitors = self._monitors()
+        self.root.geometry(restore_geometry(state, layout_key(monitors), monitors))
         widths = state.get("col_widths")
         if isinstance(widths, dict):
             for cid, header in zip(("from", "to"), HEADERS):
@@ -1165,11 +1312,8 @@ class App:
 
     def _save_state(self):
         self._capture_col_widths()
-        state = {
-            "geometry": self.root.geometry(),
-            "filepath": self.filepath,
-            "col_widths": self._col_widths,
-        }
+        state = state_for_save(load_state_file(STATE_FILE), layout_key(self._monitors()),
+                               self.root.geometry(), self.filepath, self._col_widths)
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             with open(STATE_FILE, "w", encoding="utf-8") as f:

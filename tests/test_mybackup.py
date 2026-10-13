@@ -689,5 +689,138 @@ class FormatTests(unittest.TestCase):
         self.assertTrue(callable(mb.App))
 
 
+# ── Window placement (2026-10-13) ─────────────────────────────────────
+#
+# The laptop case that motivated it: state.json held "1920x1009+2541+17",
+# saved while a second monitor sat right of the 1707x1067 panel; undocked,
+# the window was restored there verbatim and opened entirely off-screen.
+
+LAPTOP = [(0, 0, 1707, 1067)]
+DOCKED = [(0, 0, 1707, 1067), (2541, 0, 4461, 1080)]
+LEFT_OF_PRIMARY = [(-2560, 0, 0, 1440), (0, 0, 2560, 1440)]
+SAVED_DOCKED = "1920x1009+2541+17"
+
+
+class GeometryTests(unittest.TestCase):
+    def test_parse_geometry(self):
+        self.assertEqual(mb.parse_geometry(SAVED_DOCKED), (1920, 1009, 2541, 17))
+        self.assertEqual(mb.parse_geometry("613x946+-723+73"), (613, 946, -723, 73), "left of the primary")
+        self.assertEqual(mb.parse_geometry("=800x600+10+20"), (800, 600, 10, 20), "Tk's leading '='")
+        for junk in ("1000x620", "+10+20", "", None, "800x600-10-20", "wide"):
+            self.assertIsNone(mb.parse_geometry(junk), junk)
+
+    def test_layout_key_is_the_sorted_rects(self):
+        self.assertEqual(mb.layout_key(LAPTOP), "0,0,1707,1067")
+        self.assertEqual(mb.layout_key(list(reversed(DOCKED))), "0,0,1707,1067|2541,0,4461,1080")
+        self.assertNotEqual(mb.layout_key(LAPTOP), mb.layout_key(DOCKED))
+
+    def test_visible_per_monitor(self):
+        self.assertFalse(mb.geometry_visible(SAVED_DOCKED, LAPTOP), "the laptop case: off the only monitor")
+        self.assertTrue(mb.geometry_visible(SAVED_DOCKED, DOCKED))
+        self.assertTrue(mb.geometry_visible("613x946+-723+73", LEFT_OF_PRIMARY))
+        self.assertFalse(mb.geometry_visible("613x946+-723+73", LAPTOP))
+        # The title strip must be grabbable: >= 50 px wide and >= 10 px of its top 30 px.
+        self.assertTrue(mb.geometry_visible("800x600+1657+0", LAPTOP), "50 px of width on screen")
+        self.assertFalse(mb.geometry_visible("800x600+1658+0", LAPTOP), "49 px is not enough")
+        self.assertTrue(mb.geometry_visible("800x600+0+-20", LAPTOP), "10 px of the title strip")
+        self.assertFalse(mb.geometry_visible("800x600+0+-21", LAPTOP), "9 px is not enough")
+        self.assertFalse(mb.geometry_visible("800x600+0+1060", LAPTOP), "below the bottom edge")
+        self.assertFalse(mb.geometry_visible("1000x620", LAPTOP), "a size alone is no position")
+        self.assertFalse(mb.geometry_visible(SAVED_DOCKED, []), "no monitors known")
+
+    def test_primary_is_the_monitor_holding_the_origin(self):
+        self.assertEqual(mb.primary_rect(LEFT_OF_PRIMARY), (0, 0, 2560, 1440))
+        self.assertEqual(mb.primary_rect([(100, 100, 900, 700)]), (100, 100, 900, 700), "else the first")
+
+    def test_centred_geometry_shrinks_to_fit(self):
+        self.assertEqual(mb.centred_geometry((1000, 620), (0, 0, 1707, 1067)), "1000x620+353+223")
+        self.assertEqual(mb.centred_geometry((1000, 620), (2541, 0, 4461, 1080)), "1000x620+3001+230")
+        self.assertEqual(mb.centred_geometry((3000, 2000), (0, 0, 1707, 1067)), "1707x1067+0+0")
+
+    def test_restore_prefers_this_layouts_entry(self):
+        state = {"geometries": {mb.layout_key(DOCKED): SAVED_DOCKED,
+                                mb.layout_key(LAPTOP): "900x600+100+50"},
+                 "geometry": SAVED_DOCKED}
+        self.assertEqual(mb.restore_geometry(state, mb.layout_key(LAPTOP), LAPTOP), "900x600+100+50")
+        self.assertEqual(mb.restore_geometry(state, mb.layout_key(DOCKED), DOCKED), SAVED_DOCKED)
+
+    def test_restore_uses_the_legacy_flat_geometry_only_where_a_monitor_shows_it(self):
+        legacy = {"geometry": SAVED_DOCKED, "filepath": "x.csv"}
+        self.assertEqual(mb.restore_geometry(legacy, mb.layout_key(DOCKED), DOCKED), SAVED_DOCKED,
+                         "docked again, the pre-fix file still restores its position")
+        self.assertEqual(mb.restore_geometry(legacy, mb.layout_key(LAPTOP), LAPTOP),
+                         mb.centred_geometry((1920, 1009), LAPTOP[0]),
+                         "undocked: the saved SIZE, shrunk to the panel and centred on it")
+        self.assertEqual(mb.restore_geometry(legacy, mb.layout_key(LAPTOP), LAPTOP), "1707x1009+0+29",
+                         "what the laptop opens with after the undock")
+        self.assertTrue(mb.geometry_visible(mb.restore_geometry(legacy, mb.layout_key(LAPTOP), LAPTOP), LAPTOP))
+
+    def test_restore_falls_back_to_the_default_size_centred_on_the_primary(self):
+        centred_default = mb.centred_geometry(mb.DEFAULT_SIZE, mb.primary_rect(LEFT_OF_PRIMARY))
+        self.assertEqual(mb.restore_geometry({}, "k", LEFT_OF_PRIMARY), centred_default)
+        self.assertEqual(mb.restore_geometry({"geometry": "1000x620"}, "k", LEFT_OF_PRIMARY), centred_default,
+                         "a size-only legacy value is not a position")
+        self.assertEqual(mb.restore_geometry({"geometry": "1x1+0+0"}, "k", LEFT_OF_PRIMARY), centred_default,
+                         "a junk size is not kept")
+        self.assertEqual(mb.restore_geometry({"geometries": "junk", "geometry": None}, "k", LEFT_OF_PRIMARY),
+                         centred_default)
+        self.assertTrue(centred_default.startswith("1000x620+780+410"))
+
+    def test_state_for_save_keeps_other_layouts_and_the_legacy_value(self):
+        existing = {"geometries": {mb.layout_key(DOCKED): SAVED_DOCKED}, "geometry": SAVED_DOCKED,
+                    "filepath": "old.csv", "col_widths": {"FROM": 1, "TO": 2}}
+        state = mb.state_for_save(existing, mb.layout_key(LAPTOP), "900x600+100+50", "new.csv",
+                                  {"FROM": 500, "TO": 400})
+        self.assertEqual(state["geometries"], {mb.layout_key(DOCKED): SAVED_DOCKED,
+                                               mb.layout_key(LAPTOP): "900x600+100+50"})
+        self.assertEqual(state["geometry"], SAVED_DOCKED, "the pre-fix value stays for a layout not seen since")
+        self.assertEqual((state["filepath"], state["col_widths"]), ("new.csv", {"FROM": 500, "TO": 400}))
+        self.assertEqual(existing["geometries"], {mb.layout_key(DOCKED): SAVED_DOCKED}, "the input is not mutated")
+        # A replaced entry, a fresh file and a file that was not a dict.
+        again = mb.state_for_save(state, mb.layout_key(LAPTOP), "901x601+1+1", "new.csv", {})
+        self.assertEqual(again["geometries"][mb.layout_key(LAPTOP)], "901x601+1+1")
+        self.assertEqual(mb.state_for_save({}, "k", "g", None, {})["geometries"], {"k": "g"})
+        self.assertEqual(mb.state_for_save(["junk"], "k", "g", None, {})["geometries"], {"k": "g"})
+
+    def test_state_round_trip_through_the_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "state.json")
+            self.assertEqual(mb.load_state_file(path), {}, "missing")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{not json")
+            self.assertEqual(mb.load_state_file(path), {}, "unreadable")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(["a list"], f)
+            self.assertEqual(mb.load_state_file(path), {}, "not a dict")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({"geometry": SAVED_DOCKED}, f)
+            state = mb.load_state_file(path)
+            state = mb.state_for_save(state, mb.layout_key(LAPTOP), "900x600+100+50", "s.csv", {})
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+            back = mb.load_state_file(path)
+            self.assertEqual(mb.restore_geometry(back, mb.layout_key(LAPTOP), LAPTOP), "900x600+100+50")
+            self.assertEqual(mb.restore_geometry(back, mb.layout_key(DOCKED), DOCKED), SAVED_DOCKED)
+
+    def test_monitor_rects_answers_on_this_platform(self):
+        rects = mb.monitor_rects()
+        self.assertIsInstance(rects, list)
+        if sys.platform in ("win32", "darwin"):
+            self.assertTrue(rects, "the platform API should enumerate at least one monitor")
+            self.assertIn(mb.primary_rect(rects), rects)
+        for rect in rects:
+            self.assertEqual(len(rect), 4)
+            self.assertLess(rect[0], rect[2])
+            self.assertLess(rect[1], rect[3])
+
+    def test_app_wiring(self):
+        import inspect
+        load = inspect.getsource(mb.App._load_state)
+        self.assertIn("restore_geometry(state, layout_key(monitors), monitors)", load)
+        self.assertNotIn('state.get("geometry")', load, "the raw restore is gone")
+        save = inspect.getsource(mb.App._save_state)
+        self.assertIn("state_for_save(load_state_file(STATE_FILE), layout_key(self._monitors())", save)
+
+
 if __name__ == "__main__":
     unittest.main()
