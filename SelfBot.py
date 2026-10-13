@@ -46,10 +46,14 @@ try:
         ANTHROPIC_PRICING, ANTHROPIC_WEB_SEARCH_FEE, APICOST_LOG_MAX_BYTES,
         ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
         ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
+        ANTHROPIC_MAX_OUTPUT_TOKENS, ANTHROPIC_MAX_OUTPUT_DEFAULT,
+        ANTHROPIC_LONG_CONTEXT_PRICING,
         TOOLBAR_ACTIVE_BG, LIST_TITLE_BG,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
     )
-    from myagent.helpers import rotate_log_if_needed
+    from myagent.helpers import (rotate_log_if_needed, parse_output_cap, strip_old_images,
+                                 FILE_IMAGE_MARKER)
+    from myagent.retry_util import connection_error_backoff
     from myagent.mcp_mixin import MCPMixin
     from myagent.gmail_mixin import GmailMixin
     from myagent.protonmail_mixin import ProtonMailMixin
@@ -69,6 +73,14 @@ except Exception:
     ANTHROPIC_THINKING_BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
     ANTHROPIC_SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01"
     ANTHROPIC_SERVER_FALLBACKS = "default"
+    # The Anthropic output ceiling (MyAgent 2026-10-11, here 2026-10-14) and
+    # Haiku 5.5's second rate card (2026-10-08) — see myagent/constants.py.
+    # Without the package every model takes the default ceiling (a 400
+    # teaches a lower one) and no model has a second card.
+    ANTHROPIC_MAX_OUTPUT_TOKENS = ()
+    ANTHROPIC_MAX_OUTPUT_DEFAULT = 128000
+    ANTHROPIC_LONG_CONTEXT_PRICING = {}
+    FILE_IMAGE_MARKER = "Image file"   # view_image's result marker (myagent/helpers.py)
     # Background of the toolbar button pressed most recently (the "last
     # pressed" group — see App._track_toolbar_presses).
     TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
@@ -78,6 +90,18 @@ except Exception:
 
     def rotate_log_if_needed(log_path, max_bytes):
         return False  # no myagent package -> no rotation; the log just grows
+
+    def parse_output_cap(msg):
+        """The ceiling named by an over-cap max_tokens 400 (myagent/helpers.py)."""
+        mt = re.search(r"max_tokens:\s*(\d[\d,]*)\s*>\s*(\d[\d,]*)", msg or "")
+        cap = int(mt.group(2).replace(",", "")) if mt else 0
+        return cap if cap > 0 else None
+
+    def strip_old_images(messages, keep=None):
+        return 0   # no myagent package -> a 413 falls through to the round trim
+
+    def connection_error_backoff(attempt):
+        return min(2 ** attempt * 5, 60)   # myagent/retry_util.py's schedule
 
     class MCPMixin:
         pass
@@ -90,6 +114,16 @@ except Exception:
 
     class OutlookMixin:
         pass
+
+# Windows PowerShell writes redirected output in the OEM code page while
+# Python's text mode decoded it as ANSI (cp1252): non-ASCII came back garbled,
+# and a byte cp1252 leaves undefined killed communicate()'s reader thread, so
+# the WHOLE stdout came back None — "[No output]". run_powershell tells
+# PowerShell to write UTF-8 (no BOM; a console-less host just keeps its
+# default) on its own line, so an error's char position in the command stays
+# true, and decodes as UTF-8 with replacement (MyAgent's fix of 2026-09-28).
+_PS_UTF8_OUTPUT = ("try { [Console]::OutputEncoding = "
+                   "New-Object System.Text.UTF8Encoding $false } catch {}")
 
 _HAS_DESKTOP = True
 try:
@@ -618,6 +652,34 @@ DESKTOP_TOOLS = [
             "required": ["start_x", "start_y", "end_x", "end_y"],
         },
     },
+    {
+        # MyAgent 2026-10-13 (here 2026-10-14): a run that had to LOOK at image
+        # files built its own full-screen viewer and screenshotted it 32 times,
+        # and died on the 32 MB request limit the screenshots filled. This
+        # reads the file straight into the conversation instead: no viewer,
+        # no screen, no coordinates.
+        "name": "view_image",
+        "description": (
+            "Look at an image FILE on this computer: a photo, a scan, a screenshot "
+            "saved earlier, a chart, a contact sheet — any JPEG, PNG, GIF, BMP, WebP or "
+            "TIFF. The picture is returned to you as an image, resized to fit the API "
+            "limit, so you can describe it, read text in it or compare it with others. "
+            "Use this instead of opening the file in a viewer and taking a screenshot "
+            "of the screen. The picture is NOT the screen: never pass coordinates read "
+            "from it to mouse_click. To review many files, call this once per file; "
+            "each image stays in the conversation, so look at what you need and no more."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path of the image file (~ is expanded).",
+                },
+            },
+            "required": ["path"],
+        },
+    },
 ]
 
 # Browser automation tool definitions (Playwright via CDP)
@@ -943,11 +1005,17 @@ FALLBACK_MODELS = [
     "claude-fable-5",
     "claude-sonnet-5",
     "claude-sonnet-4-6",
+    "claude-haiku-5-5",
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
-MAX_TOKENS = 8192
-MAX_TOKENS_THINKING = 32768
+# Every call's max_tokens is the model's OWN output ceiling — the startup
+# listing's figure for the id, else ANTHROPIC_MAX_OUTPUT_TOKENS' family row,
+# else ANTHROPIC_MAX_OUTPUT_DEFAULT (_anthropic_output_cap; MyAgent's rule of
+# 2026-10-11, here since 2026-10-14). Adaptive thinking has no budget of its
+# own, so the 32,768 every thinking call used to send (8,192 with thinking
+# off) was the only bound on reasoning, and a long thinking phase could be
+# cut off at it — billed and lost.
 # Betas every call carries (server-side web search + code execution, and the
 # Files API for the code-execution file outputs). The Fable/Mythos class
 # appends its own two — see _fable_features.
@@ -957,10 +1025,6 @@ ANTHROPIC_BETAS = ["web-search-2025-03-05", "code-execution-2025-08-25", "files-
 # so _get_pricing's four-bucket cost stays accurate. A "ttl": "1h" variant
 # would need the extended-cache-ttl-2025-04-11 beta and 2x writes.
 CACHE_CONTROL = {"type": "ephemeral"}
-# Models with lower max output token limits than MAX_TOKENS. Empty since the
-# 2026 retirements: the Claude 3 generation (the only 4K-cap models) is fully
-# retired. Kept as a dict because stream_worker .get()s it per call.
-MODEL_MAX_OUTPUT_TOKENS = {}
 # Deprecated / soon-to-be-retired model id prefixes hidden from the picker.
 # _fetch_available_models filters the live models.list() against these, so newer
 # models appear automatically and only the retiring ones drop out. Opus 4.5 /
@@ -982,7 +1046,8 @@ ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5-5", "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-                            "claude-sonnet-5", "claude-sonnet-4-6"}
+                            "claude-sonnet-5", "claude-sonnet-4-6",
+                            "claude-haiku-5-5"}
 # Claude 5 Mythos-class (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is ALWAYS ON —
 # the API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400,
 # and sampling params (temperature/top_p/top_k) are rejected unconditionally.
@@ -1552,6 +1617,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # any rejecting model the version parser doesn't know yet (e.g. a future
         # Haiku tier). Populated by the stream_worker BadRequest handler.
         self._no_temperature = set()
+        # Served id -> output ceiling, from the startup listing or a 400 that
+        # named a lower one (see _anthropic_output_cap).
+        self._anthropic_output_caps = {}
+        # The last dropped-thinking notice's shape (count, reasons) — said once
+        # per conversation; a new chat resets it. And the second-rate-card ⚠,
+        # said once per process.
+        self._thinking_drops_noted = None
+        self._long_context_noted = False
         # Fable/Mythos beta surfaces ("block_binding", "fallbacks") this API key
         # turned out not to be enrolled in (a 400 naming them). Learned once per
         # process by the stream_worker 400 rungs; _fable_features stops sending.
@@ -2039,6 +2112,17 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         soon-to-be-retired ids — and fall back to the hardcoded list."""
         try:
             response = self.client.models.list(limit=100)
+            # Each served id's output ceiling — the listing's `max_tokens`,
+            # the Models API's field since 2026-03 — is what every call sends
+            # (_anthropic_output_cap); kept for the hidden ids too, and a
+            # failed fetch leaves the dict as it was, so a ceiling a 400
+            # taught survives a listing outage (MyAgent's rule of 2026-10-11).
+            caps = {}
+            for m in response.data:
+                cap = getattr(m, "max_tokens", None)
+                if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+                    caps[m.id] = cap
+            self._anthropic_output_caps = caps
             # Build {id: display_name} mapping and id list
             self._model_display_names = {}
             model_ids = []
@@ -2156,34 +2240,53 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             minor = 0   # claude-opus-5-20260724: a date, not a minor
         return (major, minor) >= ALWAYS_ON_OPUS_MIN
 
-    def _is_adaptive_model(self, model_id=None):
-        """Adaptive-thinking models — Opus/Sonnet 4.6+ and the always-on Mythos
-        class. Version-parsed so dated snapshots and future minors are caught
-        without editing ADAPTIVE_THINKING_MODELS."""
+    def _is_haiku_5(self, model_id=None):
+        """True for the Haiku 5 generation — claude-haiku-5-5 (live 2026-10-07)
+        and any later Haiku, version-parsed as Haiku major >= 5 so a dated
+        snapshot rides along and Haiku 4.5 keeps its manual budget. The first
+        Haiku with the Claude 5 request contract, every fact probed live for
+        MyAgent on 2026-10-08 (_is_anthropic_haiku_5; ported 2026-10-14):
+        ADAPTIVE thinking only (the budget form is HTTP 400), on by default
+        when the param is omitted, an explicit disable accepted at effort
+        high or below ("Off" sends no effort, so the Off rung stays), effort
+        low..max, and no sampling params ('`temperature` is deprecated for
+        this model', any value but 1). Read by the adaptive / on-by-default /
+        temperature / max / xhigh helpers below, by _fable_features (the
+        thinking binding, no fallbacks) and by _anthropic_server_tools (the
+        current triple)."""
         mid = model_id or self.model or ""
-        if self._is_always_on_thinking(mid):
+        version = self._parse_claude_major_minor(mid, ("claude-haiku-",))
+        return version is not None and version >= (5, 0)
+
+    def _is_adaptive_model(self, model_id=None):
+        """Adaptive-thinking models — Opus/Sonnet 4.6+, Haiku 5+ and the
+        always-on Mythos class. Version-parsed so dated snapshots and future
+        minors are caught without editing ADAPTIVE_THINKING_MODELS."""
+        mid = model_id or self.model or ""
+        if self._is_always_on_thinking(mid) or self._is_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (4, 6)
 
     def _thinking_on_by_default(self, model_id=None):
         """Models that run ADAPTIVE thinking when `thinking` is omitted — Opus
-        5+, Sonnet 5+, and the always-on class. For these, "Off" must be sent as
-        an explicit thinking={"type": "disabled"} or the model silently thinks
-        against the non-thinking max_tokens cap. (Opus 5 accepts the explicit
-        disable only at effort high or below — satisfied, "Off" sends no
-        effort.)"""
+        5+, Sonnet 5+, Haiku 5+ and the always-on class. For these, "Off" must
+        be sent as an explicit thinking={"type": "disabled"} or the model
+        silently thinks, billed, with the Show Thinking pane dark. (Opus 5 and
+        Haiku 5.5 accept the explicit disable only at effort high or below —
+        satisfied, "Off" sends no effort.)"""
         mid = model_id or self.model or ""
-        if self._is_always_on_thinking(mid):
+        if self._is_always_on_thinking(mid) or self._is_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (5, 0)
 
     def _rejects_temperature(self, model_id=None):
-        """Models that removed sampling params — Opus 4.7+, Sonnet 5+, and the
-        always-on Mythos class (a non-default temperature returns HTTP 400)."""
+        """Models that removed sampling params — Opus 4.7+, Sonnet 5+, Haiku 5+
+        and the always-on Mythos class (a non-default temperature returns
+        HTTP 400)."""
         mid = model_id or self.model or ""
-        if self._is_always_on_thinking(mid):
+        if self._is_always_on_thinking(mid) or self._is_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-",))
         if version is not None and version >= (4, 7):
@@ -2192,19 +2295,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         return version is not None and version >= (5, 0)
 
     def _supports_max_effort(self, model_id=None):
-        """'max' thinking effort — Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5), and
-        the always-on Mythos class."""
+        """'max' thinking effort — Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5),
+        Haiku 5+ and the always-on Mythos class."""
         mid = model_id or self.model or ""
-        if self._is_always_on_thinking(mid):
+        if self._is_always_on_thinking(mid) or self._is_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
         return version is not None and version >= (4, 6)
 
     def _supports_xhigh_effort(self, model_id=None):
         """'xhigh' thinking effort (between high and max) — Opus 4.7+, Sonnet 5+,
-        and the always-on Mythos class. Sonnet 4.6 does NOT support it."""
+        Haiku 5+ and the always-on Mythos class. Sonnet 4.6 does NOT support it."""
         mid = model_id or self.model or ""
-        if self._is_always_on_thinking(mid):
+        if self._is_always_on_thinking(mid) or self._is_haiku_5(mid):
             return True
         version = self._parse_claude_major_minor(mid, ("claude-opus-",))
         if version is not None and version >= (4, 7):
@@ -3908,6 +4011,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
     def _new_chat(self):
         self.messages = []
+        self._thinking_drops_noted = None  # a fresh conversation: the notice may be said again
         self.pending_images.clear()
         self.update_attach_label()
         self.chat_display.config(state="normal")
@@ -4332,6 +4436,35 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             except Exception:
                 pass
 
+    @staticmethod
+    def _run_command_env(environ=None, executable=None):
+        """The environment a run_command child inherits: the caller's, with
+        the interpreter's own bin folder FIRST on PATH (and VIRTUAL_ENV set)
+        when MyAgent runs from a venv — what `activate` would have done.
+        The launchers start `.venv/bin/python MyAgent.py` without activating
+        anything, so a child's bare `python3` / `pip` resolved to whatever the
+        system has — on the Mac the Xcode Command Line Tools' Python 3.9, with
+        none of the venv's packages (the TCC log of 2026-10-06 showed the
+        model's scripts running under it) — while every instruction and skill
+        assumes the venv's. A venv is recognised by its `pyvenv.cfg` beside
+        the bin folder, Python's own rule; outside one the environment comes
+        back unchanged. Pure: the mapping and the interpreter are parameters
+        so a test can pass its own."""
+        env = dict(os.environ if environ is None else environ)
+        exe = sys.executable if executable is None else executable
+        if not exe:
+            return env
+        bin_dir = os.path.dirname(os.path.abspath(exe))
+        venv_dir = os.path.dirname(bin_dir)
+        if not os.path.isfile(os.path.join(venv_dir, "pyvenv.cfg")):
+            return env
+        same = os.path.normcase(bin_dir)
+        rest = [p for p in env.get("PATH", "").split(os.pathsep)
+                if p and os.path.normcase(p) != same]
+        env["PATH"] = os.pathsep.join([bin_dir] + rest)
+        env["VIRTUAL_ENV"] = venv_dir
+        return env
+
     def run_powershell(self, command, timeout=30):
         """Execute a command with safety checks (PowerShell on Windows, bash on macOS)."""
         # Tier 1 & 2 safety checks
@@ -4346,7 +4479,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             return "Command was rejected by the user."
 
         try:
-            shell_cmd = (["powershell", "-NoProfile", "-Command", command]
+            # UTF-8 output from PowerShell, decoded as UTF-8 with replacement —
+            # see _PS_UTF8_OUTPUT (the bare command used to come back garbled or,
+            # on one undecodable byte, as no output at all).
+            shell_cmd = (["powershell", "-NoProfile", "-Command",
+                          _PS_UTF8_OUTPUT + "\n" + command]
                          if IS_WINDOWS else ["/bin/bash", "-c", command])
             # Popen, not subprocess.run: on timeout the whole process TREE must
             # die before the final pipe read, and POSIX needs its own session
@@ -4357,6 +4494,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                # The venv's bin folder first on PATH, as MyAgent's children
+                # get it (an in-file copy of SafetyMixin._run_command_env, the
+                # 2026-10-06 fix): a bare `python3` / `pip` is this venv's.
+                env=self._run_command_env(),
                 **popen_kwargs,
             )
             try:
@@ -4575,8 +4718,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if phys_w != log_w and log_w:
                 img = img.resize((log_w, log_h))
         logical_w, logical_h = img.size
-        # Resize to Anthropic API image limit (1568px long edge, 1.15MP)
-        max_long_edge, max_megapixels = 1568, 1_150_000
+        # Resize to the Anthropic API image limit (the one table behind
+        # screenshots and view_image)
+        max_long_edge, max_megapixels = self._api_image_caps()
         longest = max(logical_w, logical_h)
         if longest > max_long_edge:
             r = max_long_edge / longest
@@ -4601,6 +4745,94 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         img.save(buf, format="PNG")
         b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
         return img_w, img_h, b64_data
+
+    @staticmethod
+    def _api_image_caps():
+        """(max long edge, max pixels) an image sent to the API is resized to —
+        the ONE table behind screenshots and view_image: Anthropic's 1568 /
+        1.15 MP, past which the API downscales anyway and the extra bytes only
+        slow the request down (and fill the 32 MB request limit sooner)."""
+        return 1568, 1_150_000
+
+    #: view_image refuses a file above this many bytes before decoding it —
+    #: a PIL decode of a huge TIFF is memory, not pixels the model could use.
+    VIEW_IMAGE_MAX_BYTES = 100 * 1024 * 1024
+    VIEW_IMAGE_JPEG_QUALITY = 85
+    #: A PNG encoding above this is re-encoded as JPEG: a photo compresses
+    #: 5-10x better that way, and the history keeps every image (see the
+    #: 413 rung) — a drawing, a chart or a screenshot stays PNG, crisp.
+    VIEW_IMAGE_PNG_LIMIT = 1_200_000
+
+    def do_view_image(self, path):
+        """Read an image file into the conversation as an image block (the
+        [text, image] pair a screenshot returns), resized to the API caps.
+        NOT a click surface: it never touches _screenshot_scale / _offset /
+        _dims or the per-display states, and its text opens with
+        FILE_IMAGE_MARKER, the marker MyAgent's translators read. MyAgent's
+        tool of 2026-10-13 (desktop_mixin.do_view_image): a trail-camera
+        review had no way to look at its files but to build a full-screen
+        viewer and screenshot it, 32 times, until the request limit ended
+        the run."""
+        raw = str(path or "").strip()
+        if not raw:
+            return "view_image error: no path given."
+        path = os.path.expanduser(raw)
+        if os.path.isdir(path):
+            return f"view_image error: {path} is a directory, not an image file."
+        if not os.path.isfile(path):
+            return f"view_image error: file not found: {path}"
+        try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            return f"view_image error: {e}"
+        if size > self.VIEW_IMAGE_MAX_BYTES:
+            return (f"view_image error: {path} is {size / 1e6:.0f} MB — too large to "
+                    f"view (limit {self.VIEW_IMAGE_MAX_BYTES // (1024 * 1024)} MB).")
+        try:
+            from PIL import Image, ImageOps
+        except ImportError:
+            return "view_image error: Pillow is not installed (pip install pillow)."
+        try:
+            with Image.open(path) as im:
+                im.load()
+                full_w, full_h = im.size
+                fmt = im.format or ""
+                # A phone photo's orientation lives in EXIF; apply it, as the
+                # Attach Images compression does, or the model sees it sideways.
+                im = ImageOps.exif_transpose(im)
+                max_edge, max_pixels = self._api_image_caps()
+                ratio = min(1.0, max_edge / max(im.size),
+                            (max_pixels / (im.size[0] * im.size[1])) ** 0.5)
+                if ratio < 1.0:
+                    im = im.resize((max(1, round(im.size[0] * ratio)),
+                                    max(1, round(im.size[1] * ratio))), Image.LANCZOS)
+                shown_w, shown_h = im.size
+                buf = io.BytesIO()
+                if im.mode not in ("RGB", "RGBA", "L", "LA", "P"):
+                    im = im.convert("RGB")
+                im.save(buf, format="PNG", optimize=True)
+                media = "image/png"
+                if buf.tell() > self.VIEW_IMAGE_PNG_LIMIT:
+                    buf = io.BytesIO()
+                    im.convert("RGB").save(buf, format="JPEG",
+                                           quality=self.VIEW_IMAGE_JPEG_QUALITY)
+                    media = "image/jpeg"
+        except Exception as e:
+            return f"view_image error: could not read {path} as an image ({e})."
+        b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
+        shown = ("" if (shown_w, shown_h) == (full_w, full_h)
+                 else f", shown at {shown_w}x{shown_h}")
+        # No "(WxH pixels)" in parentheses — the shape MyAgent's screenshot-hint
+        # regex picks dimensions out of (the camera's rule).
+        text = (f"{FILE_IMAGE_MARKER} — {os.path.basename(path)}, {fmt or 'image'} "
+                f"{full_w}x{full_h} pixels{shown}, {size:,} bytes. This is a picture "
+                "read from a file, NOT the screen: its pixel coordinates mean nothing "
+                "to mouse_click.")
+        return [
+            {"type": "text", "text": text},
+            {"type": "image", "source": {"type": "base64", "media_type": media,
+                                         "data": b64_data}},
+        ]
 
     def do_screenshot(self, region=None, display=None):
         """Capture screen (or region), resize, return as content list with image block."""
@@ -5311,6 +5543,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             if not name:
                 name = time.strftime("SelfBot_%Y%m%d_%H%M%S")
         save_name = self._save_name(name)
+        # The file stem, for the cost log's CHAT field (_log_api_cost runs after
+        # this save in _finish_close).
+        self._last_saved_chat_name = os.path.splitext(
+            os.path.basename(self._chat_file_path(save_name)))[0]
         self._save_chat_file(save_name, {
             "messages": self._serialize_messages(),
             "tools": self._get_tools(),
@@ -5732,12 +5968,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         see _fable_features; `fallbacks` sits here under its wire name so the
         debug dump shows it, and stream_worker moves it into extra_body
         because anthropic 0.84.0 has no typed kwarg for it."""
-        model_cap = MODEL_MAX_OUTPUT_TOKENS.get(self.model)
+        # The model's own output ceiling, thinking on or off — the only bound
+        # on adaptive reasoning (see _anthropic_output_cap).
+        kwargs["max_tokens"] = self._anthropic_output_cap()
         always_on = self._is_always_on_thinking()
         fable = self._fable_features()
         if self.thinking_enabled or always_on:
             support = self._model_supports_thinking()
-            kwargs["max_tokens"] = min(MAX_TOKENS_THINKING, model_cap) if model_cap else MAX_TOKENS_THINKING
             if support == "adaptive":
                 kwargs["thinking"] = {"type": "adaptive", "display": "summarized"}
                 if fable and fable["block_binding"]:
@@ -5747,7 +5984,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             elif support == "manual":
                 kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
-            kwargs["max_tokens"] = min(MAX_TOKENS, model_cap) if model_cap else MAX_TOKENS
             if self._thinking_on_by_default():
                 kwargs["thinking"] = {"type": "disabled"}
             if not self._rejects_temperature() and self.model not in self._no_temperature:
@@ -6041,9 +6277,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
                              "wait_for_window", "read_screen_text",
-                             "find_image_on_screen", "mouse_drag"):
+                             "find_image_on_screen", "mouse_drag", "view_image"):
             if not self.desktop_enabled.get():
                 return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
+            if block.name == "view_image":
+                self._tool_info(f"Viewing image file {inp.get('path', '')}...\n")
+                return self.do_view_image(inp.get("path", ""))
             if block.name == "screenshot":
                 display = inp.get("display")
                 if display is not None:
@@ -6616,17 +6855,71 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         `fallbacks` (server-side refusal fallbacks) values to send, minus any
         surface this process has already seen the API reject
         (`_anthropic_unsupported`, filled by the stream_worker 400 rungs)."""
-        if not self._is_always_on_thinking():
+        always_on = self._is_always_on_thinking()
+        # Haiku 5.5+ (2026-10-08) runs the preserved-thinking check too — the
+        # binding is accepted beside adaptive thinking and refused beside a
+        # disable, which is why _apply_thinking_params adds it in the adaptive
+        # branch only (and stream_worker keeps its beta header off a disabled
+        # call) — but it has NO server-side fallback: a list is a 400 and
+        # "default" is accepted and does nothing. Probed live for MyAgent.
+        if not (always_on or self._is_haiku_5()):
             return None
         unsupported = getattr(self, "_anthropic_unsupported", set())
         features = {"betas": [], "block_binding": None, "fallbacks": None}
         if "block_binding" not in unsupported:
             features["betas"].append(ANTHROPIC_THINKING_BINDING_BETA)
             features["block_binding"] = dict(ANTHROPIC_THINKING_BLOCK_BINDING)
-        if "fallbacks" not in unsupported:
+        if always_on and "fallbacks" not in unsupported:
             features["betas"].append(ANTHROPIC_SERVER_FALLBACK_BETA)
             features["fallbacks"] = ANTHROPIC_SERVER_FALLBACKS
         return features
+
+    @staticmethod
+    def _anthropic_output_cap_for(model_id):
+        """The family table's output ceiling for an Anthropic id — the longest
+        matching prefix of ANTHROPIC_MAX_OUTPUT_TOKENS, so a dated snapshot
+        rides with its family — and ANTHROPIC_MAX_OUTPUT_DEFAULT for an id no
+        row names (the 400 rung in _stream_anthropic_call corrects a guess
+        the API refuses)."""
+        best = None
+        for prefix, cap in ANTHROPIC_MAX_OUTPUT_TOKENS:
+            if (model_id or "").startswith(prefix) and (best is None or len(prefix) > len(best[0])):
+                best = (prefix, cap)
+        return best[1] if best else ANTHROPIC_MAX_OUTPUT_DEFAULT
+
+    def _anthropic_output_cap(self, model=None):
+        """The output ceiling an Anthropic call sends as `max_tokens` — the
+        model's OWN maximum, thinking on or off: the startup listing's
+        `max_tokens` for the id (`_anthropic_output_caps`, filled by
+        _fetch_available_models and by a 400 naming a lower ceiling), else
+        the family table. Nothing else bounds adaptive thinking, so a smaller
+        figure cut a long reasoning phase off, billed and lost — see
+        ANTHROPIC_MAX_OUTPUT_TOKENS in constants.py. The Debug dump reads the
+        same helper, so it cannot drift from the wire."""
+        model = model or self.model
+        caps = getattr(self, "_anthropic_output_caps", None) or {}
+        cap = caps.get(model)
+        if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0:
+            return cap
+        return self._anthropic_output_cap_for(model)
+
+    @staticmethod
+    def _thinking_drop_why(reasons):
+        """Why the API dropped replayed thinking blocks, from the reasons its
+        `input_transformations` gave, in plain words for the Activity line
+        (MyAgent's helper, worded for SelfBot): model_binding_mismatch — they
+        were written by another model (a mid-chat model switch, or a refusal
+        fallback's), and only the model that wrote a block reads it;
+        prefix_binding_mismatch — earlier history changed since they were
+        written (the overflow trim, a system-prompt switch, a tool-toggle
+        change); anything else as given."""
+        words = {
+            "model_binding_mismatch": ("they were written by another model (a mid-chat model "
+                                       "switch, or a refusal fallback's), which this model "
+                                       "cannot read"),
+            "prefix_binding_mismatch": "earlier history changed since they were written",
+        }
+        return "; ".join(words.get(r, f"reason: {r}") for r in reasons)
 
     @staticmethod
     def _refusal_note(stop_details, fallbacks_requested=False):
@@ -6832,6 +7125,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 if "fallbacks" in api_kwargs:
                     api_kwargs["extra_body"] = {"fallbacks": api_kwargs.pop("fallbacks")}
                 betas = ANTHROPIC_BETAS + server_betas + (fable["betas"] if fable else [])
+                if api_kwargs.get("thinking", {}).get("type") == "disabled":
+                    # Haiku 5.5's explicit disable refuses the binding field (the
+                    # builder keeps it off that branch); its beta header goes too.
+                    betas = [b for b in betas if b != ANTHROPIC_THINKING_BINDING_BETA]
                 stripped_thinking = False  # one-shot guard for the signature-400 rung
                 stop_details = None
 
@@ -7009,11 +7306,82 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                                             "web tools — retrying with the older variants...\n")
                             full_text = ""
                             continue
+                        # max_tokens above the model's ceiling ("max_tokens: 200000 >
+                        # 64000, which is the maximum allowed number of output tokens
+                        # for <model>" — the wording MyAgent probed live 2026-10-11):
+                        # an id the startup listing did not describe and the family
+                        # table over-estimates. Learn the ceiling for the process
+                        # (the listing's own key), retry at it. A validation 400 —
+                        # nothing was billed.
+                        real_cap = parse_output_cap(emsg)
+                        if e.status_code == 400 and real_cap and real_cap < api_kwargs.get("max_tokens", 0):
+                            caps = getattr(self, "_anthropic_output_caps", None)
+                            if caps is None:
+                                caps = self._anthropic_output_caps = {}
+                            caps[self.model] = real_cap
+                            api_kwargs["max_tokens"] = real_cap
+                            self._tool_info(f"{self.model} takes at most {real_cap:,} output tokens "
+                                            "per call — retrying at that ceiling...\n")
+                            full_text = ""
+                            continue
+                        # HTTP 413 request_too_large: the BODY is over the API's 32 MB
+                        # limit — bytes, not tokens, so the overflow rung above never
+                        # sees it, and the bytes are the screenshots: every one a
+                        # desktop-driving chat took is still in the history, ~1 MB of
+                        # base64 each at the resize cap (MyAgent's rung of 2026-10-13).
+                        # Replace the oldest half with a note (the text and tool
+                        # history stays whole), retry on the same list — the rebuild
+                        # at the top of the loop picks it up. No image left to drop:
+                        # fall back to the overflow rung's round trim, then give up.
+                        if e.status_code == 413:
+                            removed = strip_old_images(messages)
+                            if removed:
+                                self.queue.put({"type": "warning", "content":
+                                    f"⚠ The request grew past the API's size limit (HTTP 413) — "
+                                    f"removed the {removed} oldest screenshot/image(s) from the "
+                                    "history and retried; the newest ones and all the text stay. "
+                                    "The prompt cache is rebuilt once.\n"})
+                                full_text = ""
+                                continue
+                            removed = self._trim_history_for_context(messages)
+                            if removed > 0:
+                                self.queue.put({"type": "warning", "content":
+                                    f"⚠ The request grew past the API's size limit (HTTP 413) with "
+                                    f"no images to drop — dropped the {removed} oldest message(s) "
+                                    "and retried; earlier history is no longer in context.\n"})
+                                full_text = ""
+                                continue
+                            raise RuntimeError(
+                                f"Request too large on {self.model} (HTTP 413) — nothing left to "
+                                "remove") from None
                         if e.status_code == 529 and attempt < max_retries - 1:
                             wait = min(2 ** attempt * 10, 90)  # 10s, 20s, 40s, 80s, 90s, 90s… (capped)
                             self.queue.put({
                                 "type": "tool_info",
                                 "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
+                            })
+                            time.sleep(wait)
+                            full_text = ""
+                        else:
+                            raise
+                    except anthropic.APIConnectionError as e:
+                        # No HTTP status at all: the request never reached the API,
+                        # or the stream broke under it (APITimeoutError is a
+                        # subclass). The SDK has already retried it twice, quickly,
+                        # before raising; here it used to end the reply outright —
+                        # in a duo chat, the conversation (MyAgent's rung of
+                        # 2026-10-13). A rung of its own, after APIStatusError (a
+                        # sibling under APIError, so neither catches the other):
+                        # wait, retry the same request. A mid-stream break restarts
+                        # the call — the partial text already shown is streamed
+                        # again, as after a 429.
+                        if attempt < max_retries - 1:
+                            wait = connection_error_backoff(attempt)
+                            detail = (getattr(e, "message", "") or str(e) or "Connection error").strip()
+                            self.queue.put({
+                                "type": "tool_info",
+                                "content": f"{detail} — retrying in {wait}s "
+                                           f"(attempt {attempt + 1}/{max_retries})...\n",
                             })
                             time.sleep(wait)
                             full_text = ""
@@ -7025,14 +7393,23 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 # blocks the API dropped before the model saw them (a history edit,
                 # or blocks from another model after a mid-chat model switch).
                 # Unbilled, but the model re-plans without that reasoning.
+                # Said ONCE per conversation per shape (count + reasons), not on
+                # every call: after a mid-chat model switch the earlier model's
+                # blocks drop on every later call — the same N, the same reason —
+                # and a line per call read like a fault (MyAgent's 2026-10-11
+                # report). A new count or reason is a new line; a new chat resets.
                 transformations = getattr(final_message, "input_transformations", None) or []
                 if transformations:
                     reasons = sorted({str((t.get("reason") if isinstance(t, dict)
                                            else getattr(t, "reason", None)) or "unknown")
                                       for t in transformations})
-                    self._tool_info(f"API dropped {len(transformations)} replayed thinking block(s) "
-                                    f"({', '.join(reasons)}) — earlier history changed; the model "
-                                    "continues without that reasoning.\n")
+                    shape = (len(transformations), tuple(reasons))
+                    if shape != getattr(self, "_thinking_drops_noted", None):
+                        self._thinking_drops_noted = shape
+                        self._tool_info(f"API dropped {len(transformations)} replayed thinking "
+                                        f"block(s) — {self._thinking_drop_why(reasons)}; the model "
+                                        "continues without that reasoning (not billed, and the "
+                                        "text and tool history is intact).\n")
 
                 # Server-side refusal fallback: `message.model` names the model that
                 # produced this message; a `fallback_message` entry in
@@ -7060,14 +7437,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
 
                 # --- API cost tracking (Anthropic) — accumulate this API call ---
                 if usage:
+                    ci = getattr(usage, "input_tokens", 0) or 0
+                    co = getattr(usage, "output_tokens", 0) or 0
+                    cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                    cr = getattr(usage, "cache_read_input_tokens", 0) or 0
                     # Priced by the model that actually served the call (an Opus-tier
-                    # fallback bills at ITS rates), falling back to the configured row.
-                    pricing = self._get_pricing(served_model) or self._get_pricing(self.model)
+                    # fallback bills at ITS rates), falling back to the configured row —
+                    # on the rate card the whole prompt (the uncached input plus both
+                    # cache buckets) selects where a model has two: Haiku 5.5 above
+                    # 100K tokens (ANTHROPIC_LONG_CONTEXT_PRICING, MyAgent 2026-10-08).
+                    call_prompt = ci + cw + cr
+                    pricing = (self._get_pricing(served_model, call_prompt)
+                               or self._get_pricing(self.model, call_prompt))
                     if pricing:
-                        ci = getattr(usage, "input_tokens", 0) or 0
-                        co = getattr(usage, "output_tokens", 0) or 0
-                        cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
-                        cr = getattr(usage, "cache_read_input_tokens", 0) or 0
                         # input_tokens is the NON-cached count; cache-write/read are
                         # disjoint buckets, each with its own rate — no double-counting.
                         call_cost = (ci * pricing["input"] + co * pricing["output"]
@@ -7082,6 +7464,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                         self._session_tokens_out += co
                         self._session_tokens_cache_write += cw
                         self._session_tokens_cache_read += cr
+                        if pricing.get("long_context") and not getattr(self, "_long_context_noted", False):
+                            self._long_context_noted = True
+                            self.queue.put({"type": "warning", "content": (
+                                f"⚠ Prompt of {call_prompt:,} tokens (input plus cache) — over the "
+                                f"{pricing['long_context']:,}-token line where {served_model} moves "
+                                f"to its second rate card: this call, and every later one while "
+                                f"prompts stay this long, are priced at ${pricing['input'] * 1e6:.2f} "
+                                f"/ ${pricing['output'] * 1e6:.2f} per MTok instead of the base "
+                                "rates.\n")})
                         self.queue.put({
                             "type": "cost_update",
                             "call_cost": call_cost,
@@ -7099,7 +7490,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     tool_blocks = [b for b in content_blocks if b.type == "tool_use"]
 
                     # -- Parallel-safe tools (network I/O, pure lookups) --
-                    PARALLEL_SAFE = {"csv_search", "get_skill"}
+                    PARALLEL_SAFE = {"csv_search", "get_skill", "view_image"}
 
                     # Log all tool calls up front
                     for block in tool_blocks:
@@ -7179,10 +7570,17 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.queue.put({"type": "tool_info", "content": message})
 
     @staticmethod
-    def _get_pricing(model_name):
+    def _get_pricing(model_name, prompt_tokens=None):
         """Longest-prefix Anthropic pricing lookup → a per-token dict, or None. Uses
         MyAgent's ANTHROPIC_PRICING table (per-MTok 4-tuples: input, output,
-        cache_write, cache_read) so the two apps' pricing stays in sync."""
+        cache_write, cache_read) so the two apps' pricing stays in sync.
+        ``prompt_tokens`` (2026-10-14; MyAgent's rule of 2026-10-08) is the
+        call's whole prompt — the uncached input plus both cache buckets — and
+        selects a model's SECOND rate card where it has one
+        (ANTHROPIC_LONG_CONTEXT_PRICING: Haiku 5.5 above 100K tokens): the
+        dict then carries that card's four rates plus ``long_context`` = the
+        threshold crossed. None, or a prompt at or under the line, is the
+        base card."""
         best, best_len = None, 0
         for prefix, prices in ANTHROPIC_PRICING.items():
             if model_name.startswith(prefix) and len(prefix) > best_len:
@@ -7190,7 +7588,17 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if best is None:
             return None
         pt = tuple(p / 1_000_000 for p in best)
-        return {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
+        priced = {"input": pt[0], "output": pt[1], "cache_write": pt[2], "cache_read": pt[3]}
+        if prompt_tokens is not None:
+            card, card_len = None, 0
+            for prefix, entry in ANTHROPIC_LONG_CONTEXT_PRICING.items():
+                if model_name.startswith(prefix) and len(prefix) > card_len:
+                    card, card_len = entry, len(prefix)
+            if card is not None and prompt_tokens > card[0]:
+                lr = tuple(p / 1_000_000 for p in card[1])
+                priced = {"input": lr[0], "output": lr[1], "cache_write": lr[2],
+                          "cache_read": lr[3], "long_context": card[0]}
+        return priced
 
     def _get_model_param_summary(self):
         """Compact string of the parameters actually in effect — SelfBot's
@@ -7252,11 +7660,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             prompt = " ".join(str(getattr(self, "system_prompt_name", "") or "")
                               .split()).replace(";", ",")
             calls = getattr(self, "_session_calls", 0)
+            # The 14th field (MyAgent's CHAT column, 2026-10-07; here 2026-10-14):
+            # the stem of the chat file the close auto-saved — written with a
+            # blank 13th (MyAgent's per-model split, which a self-chat never
+            # has), so the viewers' rightmost column names the transcript.
+            chat = " ".join(str(getattr(self, "_last_saved_chat_name", "") or "")
+                            .split()).replace(";", ",")
             line = (f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params};;"
                     f"{prompt};{calls};"
                     f"{self._session_tokens_in};{self._session_tokens_out};"
                     f"{self._session_tokens_cache_write};"
-                    f"{self._session_tokens_cache_read}\n")
+                    f"{self._session_tokens_cache_read}"
+                    + (f";;{chat}" if chat else "") + "\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
