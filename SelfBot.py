@@ -7,13 +7,22 @@ if IS_WINDOWS:
     # Fix DPI scaling for desktop automation tools — must run before any window creation.
     # Without this, Windows display scaling (125%, 150%, etc.) causes screenshot pixel
     # coordinates and mouse click coordinates to use different scales, so clicks miss.
+    # MyAgent's bootstrap since 2026-10-14 (the Desktop tools are its DesktopMixin
+    # now): PER_MONITOR_AWARE_V2 (-4) over v1, which reported a secondary monitor
+    # at another scale as a logically-scaled smaller rect — a low-res capture and
+    # clicks landing in the wrong place there; v1, then the legacy call, as fallbacks.
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(
+            ctypes.c_void_p(-4)  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        )
     except Exception:
         try:
-            ctypes.windll.user32.SetProcessDPIAware()
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)  # v1 fallback
         except Exception:
-            pass
+            try:
+                ctypes.windll.user32.SetProcessDPIAware()
+            except Exception:
+                pass
 
 import tkinter as tk
 from tkinter import font as tkfont, messagebox, filedialog, ttk
@@ -50,19 +59,33 @@ try:
         ANTHROPIC_LONG_CONTEXT_PRICING,
         TOOLBAR_ACTIVE_BG, LIST_TITLE_BG,
         _HAS_MCP, _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
+        # Tool parity with MyAgent (2026-10-14): the schemas and flags of the
+        # tool sets SelfBot inherits by mixin below — see CLAUDE_SELFBOT.md.
+        TOOLS as _MYAGENT_TOOLS, FILE_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS,
+        EXCEL_TOOLS, PHYSICAL_TOOLS, PARALLEL_SAFE_TOOLS,
+        _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE, _HAS_PHYSICAL,
     )
-    from myagent.helpers import (rotate_log_if_needed, parse_output_cap, strip_old_images,
-                                 FILE_IMAGE_MARKER)
+    from myagent.helpers import rotate_log_if_needed, parse_output_cap, strip_old_images
     from myagent.retry_util import connection_error_backoff
     from myagent.mcp_mixin import MCPMixin
     from myagent.gmail_mixin import GmailMixin
     from myagent.protonmail_mixin import ProtonMailMixin
     from myagent.outlook_mixin import OutlookMixin
+    from myagent.document_mixin import DocumentMixin
+    from myagent.file_mixin import FileMixin
+    from myagent.desktop_mixin import DesktopMixin
+    from myagent.browser_mixin import BrowserMixin
+    from myagent.excel_mixin import ExcelMixin
+    from myagent.physical_mixin import PhysicalMixin
+    from myagent.voice_mixin import VoiceMixin
     _HAS_MYAGENT_TOOLS = True
 except Exception:
     _HAS_MYAGENT_TOOLS = False
     _HAS_MCP = _HAS_GOOGLE = _HAS_PROTONMAIL = _HAS_OUTLOOK = False
+    _HAS_EXCEL = _HAS_CAMERA = _HAS_MICROPHONE = _HAS_PHYSICAL = False
     GOOGLE_TOOLS = PROTON_TOOLS = OUTLOOK_TOOLS = MCP_TOOLS = []
+    _MYAGENT_TOOLS = FILE_TOOLS = DESKTOP_TOOLS = BROWSER_TOOLS = EXCEL_TOOLS = PHYSICAL_TOOLS = []
+    PARALLEL_SAFE_TOOLS = set()
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
     ANTHROPIC_PRICING = {}
     ANTHROPIC_WEB_SEARCH_FEE = 10.00 / 1000   # USD per executed web search
@@ -80,7 +103,6 @@ except Exception:
     ANTHROPIC_MAX_OUTPUT_TOKENS = ()
     ANTHROPIC_MAX_OUTPUT_DEFAULT = 128000
     ANTHROPIC_LONG_CONTEXT_PRICING = {}
-    FILE_IMAGE_MARKER = "Image file"   # view_image's result marker (myagent/helpers.py)
     # Background of the toolbar button pressed most recently (the "last
     # pressed" group — see App._track_toolbar_presses).
     TOOLBAR_ACTIVE_BG = "#add8e6"   # Tk's "light blue"
@@ -115,6 +137,31 @@ except Exception:
     class OutlookMixin:
         pass
 
+    class DocumentMixin:
+        pass
+
+    class FileMixin:
+        pass
+
+    class DesktopMixin:
+        pass
+
+    class BrowserMixin:
+        pass
+
+    class ExcelMixin:
+        pass
+
+    class PhysicalMixin:
+        pass
+
+    class VoiceMixin:
+        pass
+
+# read_document rides along unconditionally, like MyAgent's TOOLS; the schema
+# is MyAgent's own (an empty list without the package).
+READ_DOCUMENT_TOOLS = [t for t in _MYAGENT_TOOLS if t["name"] == "read_document"]
+
 # Windows PowerShell writes redirected output in the OEM code page while
 # Python's text mode decoded it as ANSI (cp1252): non-ASCII came back garbled,
 # and a byte cp1252 leaves undefined killed communicate()'s reader thread, so
@@ -147,10 +194,9 @@ if IS_WINDOWS:
         import pygetwindow as gw
     except Exception:
         pass
-    try:
-        from PIL import ImageGrab
-    except Exception:
-        pass
+# The Desktop tools are DesktopMixin's since 2026-10-14 (it imports pyautogui
+# and ImageGrab itself): without the myagent package there are none to offer.
+_HAS_DESKTOP = _HAS_DESKTOP and _HAS_MYAGENT_TOOLS
 
 _SUBPROCESS_NOWND = {"creationflags": subprocess.CREATE_NO_WINDOW} if IS_WINDOWS else {}
 
@@ -352,6 +398,8 @@ SELFBOT_META_TOOLS = [
                 "google": {"type": "boolean", "description": "Bundle Gmail tools ON (default false on create)"},
                 "proton": {"type": "boolean", "description": "Bundle Proton/IMAP mail tools ON (default false on create)"},
                 "outlook": {"type": "boolean", "description": "Bundle Outlook tools ON (default false on create)"},
+                "excel": {"type": "boolean", "description": "Bundle the Excel live-workbook tools ON (default false on create)"},
+                "physical": {"type": "boolean", "description": "Bundle the Physical tools (camera_capture, microphone_listen) ON (default false on create)"},
                 "pause": {"type": "boolean", "description": "Bundle the pause_conversation (rest the self-chat) tool ON (default false on create)"},
                 "skill_modes": {
                     "type": "object",
@@ -399,494 +447,10 @@ PAUSE_TOOLS = [
     },
 ]
 
-# Desktop automation tool definitions (pyautogui-based)
-DESKTOP_TOOLS = [
-    {
-        "name": "screenshot",
-        "description": "",  # patched at runtime with actual screen resolution
-
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "display": {
-                    "type": "integer",
-                    "description": "Which display to capture (0 = primary, 1 = secondary, etc.). Default: 0 (primary). Use this to see and interact with windows on different monitors.",
-                },
-                "x": {"type": "integer", "description": "Left edge of region to capture (use coordinates from the screenshot image)"},
-                "y": {"type": "integer", "description": "Top edge of region to capture (use coordinates from the screenshot image)"},
-                "width": {"type": "integer", "description": "Width of region to capture"},
-                "height": {"type": "integer", "description": "Height of region to capture"},
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "mouse_click",
-        "description": (
-            "Click the mouse at the given (x, y) position. Take a screenshot first to identify "
-            "the correct coordinates — use pixel positions as seen in the screenshot image. "
-            "Coordinates are automatically mapped to the actual screen. "
-            "Supports left/right/middle button and single/double click."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "X coordinate to click"},
-                "y": {"type": "integer", "description": "Y coordinate to click"},
-                "button": {
-                    "type": "string", "enum": ["left", "right", "middle"],
-                    "description": "Mouse button (default: left)",
-                },
-                "clicks": {
-                    "type": "integer", "enum": [1, 2],
-                    "description": "Number of clicks: 1=single, 2=double (default: 1)",
-                },
-            },
-            "required": ["x", "y"],
-        },
-    },
-    {
-        "name": "type_text",
-        "description": (
-            "Type text at the current cursor position. Click on an input field first to focus it, "
-            "then use this tool to type. Uses clipboard paste for non-ASCII characters."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "text": {"type": "string", "description": "The text to type"},
-                "interval": {
-                    "type": "number",
-                    "description": "Seconds between keystrokes (default: 0.02)",
-                },
-            },
-            "required": ["text"],
-        },
-    },
-    {
-        "name": "press_key",
-        "description": (
-            "Press a key or key combination. Use '+' to combine keys. "
-            "Examples: 'enter', 'tab', 'escape', 'ctrl+c', 'ctrl+shift+s', 'alt+tab', "
-            "'command+c', 'command+q'. Key names follow pyautogui naming. "
-            "Use ctrl/alt/win on Windows, command/option on macOS."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "keys": {
-                    "type": "string",
-                    "description": "Key or combo to press, e.g. 'enter', 'ctrl+c', 'alt+tab'",
-                }
-            },
-            "required": ["keys"],
-        },
-    },
-    {
-        "name": "mouse_scroll",
-        "description": (
-            "Scroll the mouse wheel. Positive clicks = scroll up, negative = scroll down. "
-            "Optionally specify (x, y) to scroll at a specific position."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "clicks": {
-                    "type": "integer",
-                    "description": "Scroll amount: positive=up, negative=down",
-                },
-                "x": {"type": "integer", "description": "X coordinate to scroll at (optional)"},
-                "y": {"type": "integer", "description": "Y coordinate to scroll at (optional)"},
-            },
-            "required": ["clicks"],
-        },
-    },
-    {
-        "name": "open_application",
-        "description": (
-            "Open an application by common name or full path. Known names: chrome, firefox, edge, "
-            "safari, notepad, notepad++, calculator, terminal, finder, excel, word, vscode, "
-            "spotify, discord, slack, teams. Or provide a full executable path. "
-            "Use the optional 'args' parameter to pass arguments (e.g. a file path to open)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "App name (e.g. 'chrome', 'notepad++') or full path to executable",
-                },
-                "args": {
-                    "type": "string",
-                    "description": "Optional arguments to pass (e.g. a file path to open in the application)",
-                },
-            },
-            "required": ["name"],
-        },
-    },
-    {
-        "name": "find_window",
-        "description": (
-            "Find windows matching a title pattern. Returns window titles, positions, and sizes. "
-            "Optionally activate (bring to foreground) the first matching window."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "title": {
-                    "type": "string",
-                    "description": "Window title or partial text to search for",
-                },
-                "activate": {
-                    "type": "boolean",
-                    "description": "If true, bring the first matching window to the foreground (default: false)",
-                },
-            },
-            "required": ["title"],
-        },
-    },
-    {
-        "name": "clipboard_read",
-        "description": "Read the current text contents of the clipboard.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "clipboard_write",
-        "description": "Write text to the clipboard, replacing any current content.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "The text to place on the clipboard",
-                }
-            },
-            "required": ["text"],
-        },
-    },
-    {
-        "name": "wait_for_window",
-        "description": (
-            "Wait until a window with the given title appears, polling every 0.5 seconds. "
-            "Returns the window info once found, or times out."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "title": {
-                    "type": "string",
-                    "description": "Window title or partial text to wait for",
-                },
-                "timeout": {
-                    "type": "number",
-                    "description": "Maximum seconds to wait (default: 10)",
-                },
-            },
-            "required": ["title"],
-        },
-    },
-    {
-        "name": "read_screen_text",
-        "description": (
-            "Read text from a region of the screen using OCR. "
-            "Specify the region as x, y, width, height using coordinates from the screenshot image."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "x": {"type": "integer", "description": "Left edge of region"},
-                "y": {"type": "integer", "description": "Top edge of region"},
-                "width": {"type": "integer", "description": "Width of region"},
-                "height": {"type": "integer", "description": "Height of region"},
-            },
-            "required": ["x", "y", "width", "height"],
-        },
-    },
-    {
-        "name": "find_image_on_screen",
-        "description": (
-            "Find an image on the screen by matching a reference image file. "
-            "Returns the center coordinates if found. Useful for finding buttons or icons."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "image_path": {
-                    "type": "string",
-                    "description": "Absolute path to the reference image file (PNG, JPG, etc.)",
-                },
-                "confidence": {
-                    "type": "number",
-                    "description": "Match confidence threshold 0.0-1.0 (default: 0.8)",
-                },
-            },
-            "required": ["image_path"],
-        },
-    },
-    {
-        "name": "mouse_drag",
-        "description": (
-            "Drag the mouse from one point to another. Useful for drag-and-drop, "
-            "resizing windows, moving sliders, drawing, etc."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "start_x": {"type": "integer", "description": "Starting X coordinate"},
-                "start_y": {"type": "integer", "description": "Starting Y coordinate"},
-                "end_x": {"type": "integer", "description": "Ending X coordinate"},
-                "end_y": {"type": "integer", "description": "Ending Y coordinate"},
-                "duration": {
-                    "type": "number",
-                    "description": "Duration of drag in seconds (default: 0.5)",
-                },
-                "button": {
-                    "type": "string",
-                    "description": "Mouse button: 'left', 'right', or 'middle' (default: 'left')",
-                },
-            },
-            "required": ["start_x", "start_y", "end_x", "end_y"],
-        },
-    },
-    {
-        # MyAgent 2026-10-13 (here 2026-10-14): a run that had to LOOK at image
-        # files built its own full-screen viewer and screenshotted it 32 times,
-        # and died on the 32 MB request limit the screenshots filled. This
-        # reads the file straight into the conversation instead: no viewer,
-        # no screen, no coordinates.
-        "name": "view_image",
-        "description": (
-            "Look at an image FILE on this computer: a photo, a scan, a screenshot "
-            "saved earlier, a chart, a contact sheet — any JPEG, PNG, GIF, BMP, WebP or "
-            "TIFF. The picture is returned to you as an image, resized to fit the API "
-            "limit, so you can describe it, read text in it or compare it with others. "
-            "Use this instead of opening the file in a viewer and taking a screenshot "
-            "of the screen. The picture is NOT the screen: never pass coordinates read "
-            "from it to mouse_click. To review many files, call this once per file; "
-            "each image stays in the conversation, so look at what you need and no more."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Path of the image file (~ is expanded).",
-                },
-            },
-            "required": ["path"],
-        },
-    },
-]
-
-# Browser automation tool definitions (Playwright via CDP)
-BROWSER_TOOLS = [
-    {
-        "name": "browser_open",
-        "description": (
-            "Open or connect to Google Chrome or Microsoft Edge and navigate to a URL. "
-            "Uses the user's real browser profile with all cookies, logins, and extensions. "
-            "If the browser isn't running, it will be launched automatically. "
-            "Call this first before using any other browser tools."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL to navigate to (e.g. 'https://google.com')",
-                }
-            },
-            "required": ["url"],
-        },
-    },
-    {
-        "name": "browser_navigate",
-        "description": "Navigate the current browser page to a new URL.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL to navigate to",
-                }
-            },
-            "required": ["url"],
-        },
-    },
-    {
-        "name": "browser_click",
-        "description": (
-            "Click an element on the page. Use a CSS selector (e.g. '#submit-btn', 'a.nav-link') "
-            "or provide visible text to find and click the element. Prefer selectors when possible."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector of the element to click (e.g. '#login', 'button.submit')",
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Visible text of the element to click (used if selector is not provided)",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "browser_fill",
-        "description": (
-            "Fill a form field with text. This clears any existing value and types instantly "
-            "(not character-by-character). Use a CSS selector to identify the input field."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector of the input field (e.g. 'input[name=q]', '#email')",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "The text to fill into the field",
-                },
-            },
-            "required": ["selector", "value"],
-        },
-    },
-    {
-        "name": "browser_get_text",
-        "description": (
-            "Get the text content of the page or a specific element. "
-            "Use this to read page content without taking a screenshot. "
-            "If no selector is given, returns the full page text."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector of the element to read (optional — omit for full page text)",
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "browser_run_js",
-        "description": (
-            "Execute JavaScript code on the current page and return the result. "
-            "Use for advanced interactions, extracting data, or manipulating the DOM. "
-            "The code runs in the page context. Use 'return' to get a value back."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string",
-                    "description": "JavaScript code to execute (e.g. \"return document.title\")",
-                },
-            },
-            "required": ["code"],
-        },
-    },
-    {
-        "name": "browser_screenshot",
-        "description": (
-            "Take a screenshot of the current browser page. Returns an image. "
-            "Use this to see what the page looks like visually."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "browser_close",
-        "description": (
-            "Disconnect from the browser. Edge stays open — only the automation connection is closed. "
-            "Use this when you're done with browser tasks."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-    {
-        "name": "browser_wait_for",
-        "description": (
-            "Wait for an element matching a CSS selector to appear on the page. "
-            "Returns the element's text content once found, or times out."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector to wait for (e.g. '#result', '.loaded')",
-                },
-                "timeout": {
-                    "type": "integer",
-                    "description": "Maximum milliseconds to wait (default: 10000)",
-                },
-            },
-            "required": ["selector"],
-        },
-    },
-    {
-        "name": "browser_select",
-        "description": (
-            "Select an option from a <select> dropdown element. "
-            "Specify the option by value attribute or visible label text."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector for the <select> element",
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Option value attribute to select",
-                },
-                "label": {
-                    "type": "string",
-                    "description": "Visible text of the option to select",
-                },
-            },
-            "required": ["selector"],
-        },
-    },
-    {
-        "name": "browser_get_elements",
-        "description": (
-            "Get information about elements matching a CSS selector. "
-            "Returns tag name, text content, key attributes, and visibility for each match."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector to query (e.g. 'a', 'button', '.item')",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Maximum number of elements to return (default: 10)",
-                },
-            },
-            "required": ["selector"],
-        },
-    },
-]
+# DESKTOP_TOOLS and BROWSER_TOOLS are MyAgent's (myagent.constants, try-imported
+# above) since 2026-10-14: SelfBot inherits DesktopMixin / BrowserMixin, so the
+# schemas and the implementations stay one set — see CLAUDE_SELFBOT.md's
+# "Tool parity with MyAgent".
 
 # Command safety guardrails — two-tier system, platform-specific
 # Tier 1: Hard-blocked patterns (rejected outright, never run)
@@ -1536,7 +1100,8 @@ def _get_window_pid(hwnd):
     return 0
 
 
-class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
+class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, FileMixin,
+          DesktopMixin, BrowserMixin, ExcelMixin, PhysicalMixin, VoiceMixin):
     def __init__(self, root):
         self.root = root
         self.root.title("Claude SelfBot")
@@ -1570,6 +1135,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
         self._screenshot_dims = (0, 0)    # (width, height) of last screenshot sent to model
+        # The per-display coordinate state DesktopMixin keeps (MyAgent's, here
+        # since 2026-10-14): the most recent capture per display, the most
+        # recent FULL capture per display (a region screenshot is read in that
+        # space) and the last resized screenshot's bytes.
+        self._display_states = {}
+        self._display_images = {}
+        self._display_full_states = {}
+        self._display_full_images = {}
+        self._last_screenshot_bytes = None
+        # The native file tools' read-before-edit memory (FileMixin): the paths
+        # read_file has shown this conversation; a new chat starts over.
+        self._file_read_paths = set()
         self.debug_enabled = tk.BooleanVar(value=False)
         self.tool_calls_enabled = tk.BooleanVar(value=False)
         self.show_activity = tk.BooleanVar(value=False)
@@ -1577,6 +1154,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self.save_thinking = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
+        # MyAgent's Excel (xlwings) and Physical (camera / microphone) sets, and
+        # its Diag toggle for the desktop tools' coordinate-trail lines (2026-10-14)
+        self.excel_enabled = tk.BooleanVar(value=False)
+        self.physical_enabled = tk.BooleanVar(value=False)
+        self.diag_enabled = tk.BooleanVar(value=False)
         # MyAgent-style tool subsystems (Meta / MCP / Google / IMAP / Outlook).
         self.meta_enabled = tk.BooleanVar(value=False)
         self.mcp_enabled = tk.BooleanVar(value=False)
@@ -1598,6 +1180,30 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self._google_init_state()
             self._proton_init_state()
             self._outlook_init_state()
+        # Speech-to-text clients for the Physical set's microphone_listen:
+        # VoiceMixin transcribes with the Voice Setup provider (OpenAI by
+        # default; xAI; Google) through self.openai_client / xai_client /
+        # gemini_client, built here from the keys in the environment when the
+        # SDK is installed. The CHAT stays Anthropic-only — these transcribe
+        # audio and nothing else (2026-10-14).
+        self.openai_client = self.xai_client = self.gemini_client = None
+        if _HAS_MYAGENT_TOOLS and _HAS_MICROPHONE:
+            try:
+                import openai
+                if os.environ.get("OPENAI_API_KEY"):
+                    self.openai_client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+                if os.environ.get("XAI_API_KEY"):
+                    self.xai_client = openai.OpenAI(api_key=os.environ["XAI_API_KEY"],
+                                                    base_url="https://api.x.ai/v1")
+            except Exception:
+                pass
+            try:
+                from google import genai
+                gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+                if gemini_key:
+                    self.gemini_client = genai.Client(api_key=gemini_key)
+            except Exception:
+                pass
         self._playwright = None
         self._browser = None
         self._page = None
@@ -2034,6 +1640,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         )
         self.save_thinking_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
+        # MyAgent's Diag toggle: the desktop tools' [DIAG capture] / [DIAG click]
+        # coordinate-trail lines (DesktopMixin reads diag_enabled), off by default
+        self.diag_toggle = tk.Checkbutton(
+            checkbox_frame, text="Diag", variable=self.diag_enabled,
+            font=("Arial", 9),
+        )
+        self.diag_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
         # Tool row (below the Debug/display-toggle row) — Desktop / Browser plus the
         # MyAgent-style subsystems Meta / MCP / Google / IMAP / Outlook and the
         # SelfBot-native Pause (rest-the-self-chat) tool. Anthropic-only; each is
@@ -2056,6 +1670,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             font=("Arial", 9),
         )
         self.browser_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not _HAS_MYAGENT_TOOLS:
+            # BrowserMixin's tools (Playwright is imported at the first call,
+            # so only the package's absence disables the box, like Desktop's)
+            self.browser_enabled.set(False)
+            self.browser_toggle.config(state=tk.DISABLED)
 
         self.meta_toggle = tk.Checkbutton(
             tools_frame, text="Meta", variable=self.meta_enabled, font=("Arial", 9),
@@ -2093,6 +1712,24 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         if not (_HAS_MYAGENT_TOOLS and _HAS_OUTLOOK):
             self.outlook_enabled.set(False)
             self.outlook_toggle.config(state=tk.DISABLED)
+
+        # MyAgent's Excel (xlwings) and Physical (camera via OpenCV, microphone
+        # via sounddevice) sets — disabled when the package behind each is absent
+        self.excel_toggle = tk.Checkbutton(
+            tools_frame, text="Excel", variable=self.excel_enabled, font=("Arial", 9),
+        )
+        self.excel_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not (_HAS_MYAGENT_TOOLS and _HAS_EXCEL):
+            self.excel_enabled.set(False)
+            self.excel_toggle.config(state=tk.DISABLED)
+
+        self.physical_toggle = tk.Checkbutton(
+            tools_frame, text="Physical", variable=self.physical_enabled, font=("Arial", 9),
+        )
+        self.physical_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        if not (_HAS_MYAGENT_TOOLS and _HAS_PHYSICAL):
+            self.physical_enabled.set(False)
+            self.physical_toggle.config(state=tk.DISABLED)
 
         self.pause_toggle = tk.Checkbutton(
             tools_frame, text="Pause", variable=self.pause_enabled, font=("Arial", 9),
@@ -2478,7 +2115,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # saved-on flag can't re-enable a checkbox that is disabled here).
         if state.get("desktop_enabled") and _HAS_DESKTOP:
             self.desktop_enabled.set(True)
-        if state.get("browser_enabled"):
+        if _HAS_MYAGENT_TOOLS and state.get("browser_enabled"):
             self.browser_enabled.set(True)
         if state.get("meta_enabled"):
             self.meta_enabled.set(True)
@@ -2490,6 +2127,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.proton_enabled.set(True)
         if _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK and state.get("outlook_enabled"):
             self.outlook_enabled.set(True)
+        if _HAS_MYAGENT_TOOLS and _HAS_EXCEL and state.get("excel_enabled"):
+            self.excel_enabled.set(True)
+        if _HAS_MYAGENT_TOOLS and _HAS_PHYSICAL and state.get("physical_enabled"):
+            self.physical_enabled.set(True)
+        if state.get("diag_enabled"):
+            self.diag_enabled.set(True)
         if state.get("pause_enabled"):
             self.pause_enabled.set(True)
         # Restore the dialog geometries saved for the CURRENT monitor layout (applied
@@ -2668,6 +2311,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "google_enabled": self.google_enabled.get(),
             "proton_enabled": self.proton_enabled.get(),
             "outlook_enabled": self.outlook_enabled.get(),
+            "excel_enabled": self.excel_enabled.get(),
+            "physical_enabled": self.physical_enabled.get(),
+            "diag_enabled": self.diag_enabled.get(),
             "pause_enabled": self.pause_enabled.get(),
         }
         state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
@@ -2822,6 +2468,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             "google": self.google_enabled.get(),
             "proton": self.proton_enabled.get(),
             "outlook": self.outlook_enabled.get(),
+            "excel": self.excel_enabled.get(),
+            "physical": self.physical_enabled.get(),
             "pause": self.pause_enabled.get(),
             "skill_modes": {n: s.get("mode", "disabled") for n, s in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
@@ -2866,7 +2514,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         # Tool-row toggles — respect the same _HAS_* gating as _load_last_state.
         if "desktop" in entry and _HAS_DESKTOP:
             self.desktop_enabled.set(bool(entry["desktop"]))
-        if "browser" in entry:
+        if "browser" in entry and _HAS_MYAGENT_TOOLS:
             self.browser_enabled.set(bool(entry["browser"]))
         if "meta" in entry:
             self.meta_enabled.set(bool(entry["meta"]))
@@ -2878,6 +2526,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             self.proton_enabled.set(bool(entry["proton"]))
         if "outlook" in entry and _HAS_MYAGENT_TOOLS and _HAS_OUTLOOK:
             self.outlook_enabled.set(bool(entry["outlook"]))
+        if "excel" in entry and _HAS_MYAGENT_TOOLS and _HAS_EXCEL:
+            self.excel_enabled.set(bool(entry["excel"]))
+        if "physical" in entry and _HAS_MYAGENT_TOOLS and _HAS_PHYSICAL:
+            self.physical_enabled.set(bool(entry["physical"]))
         if "pause" in entry:
             self.pause_enabled.set(bool(entry["pause"]))
         if "disabled_confirm_patterns" in entry:
@@ -4012,6 +3664,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     def _new_chat(self):
         self.messages = []
         self._thinking_drops_noted = None  # a fresh conversation: the notice may be said again
+        self._file_read_paths = set()      # and the file tools' read-before-edit memory starts over
         self.pending_images.clear()
         self.update_attach_label()
         self.chat_display.config(state="normal")
@@ -4602,635 +4255,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         except Exception as e:
             return f"Error reading CSV: {e}"
 
-    # --- Desktop Automation Tools ---
-
-    KNOWN_APPS = {
-        "chrome": "start chrome",
-        "firefox": "start firefox",
-        "edge": "start msedge",
-        "notepad": "notepad",
-        "notepad++": "start notepad++",
-        "calculator": "calc",
-        "calc": "calc",
-        "excel": "start excel",
-        "word": "start winword",
-        "powerpoint": "start powerpnt",
-        "explorer": "explorer",
-        "cmd": "start cmd",
-        "powershell": "start powershell",
-        "vscode": "code",
-        "code": "code",
-        "spotify": "start spotify:",
-        "discord": "start discord:",
-        "slack": "start slack:",
-        "teams": "start msteams:",
-    } if IS_WINDOWS else {
-        "chrome": "open -a 'Google Chrome'",
-        "firefox": "open -a Firefox",
-        "edge": "open -a 'Microsoft Edge'",
-        "safari": "open -a Safari",
-        "calculator": "open -a Calculator",
-        "calc": "open -a Calculator",
-        "terminal": "open -a Terminal",
-        "finder": "open .",
-        "explorer": "open .",
-        "vscode": "code",
-        "code": "code",
-        "spotify": "open -a Spotify",
-        "discord": "open -a Discord",
-        "slack": "open -a Slack",
-        "teams": "open -a 'Microsoft Teams'",
-    }
-
-    def _macos_display_screenshot(self, display_index=0):
-        """Capture a single display on macOS using Quartz CoreGraphics.
-        Returns (PIL Image, display_origin_x, display_origin_y) or (None, 0, 0)."""
-        try:
-            import Quartz
-            rects = self._get_macos_display_rects()
-            if not rects or display_index >= len(rects):
-                return None, 0, 0
-            l, t, r, b = rects[display_index]
-            w, h = r - l, b - t
-            cg_rect = Quartz.CGRectMake(l, t, w, h)
-            cg_img = Quartz.CGWindowListCreateImage(
-                cg_rect,
-                Quartz.kCGWindowListOptionOnScreenOnly,
-                Quartz.kCGNullWindowID,
-                Quartz.kCGWindowImageDefault,
-            )
-            if not cg_img:
-                return None, 0, 0
-            iw = Quartz.CGImageGetWidth(cg_img)
-            ih = Quartz.CGImageGetHeight(cg_img)
-            cf_data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_img))
-            img = Image.frombytes("RGBA", (iw, ih), cf_data, "raw", "BGRA")
-            return img.convert("RGB"), l, t
-        except Exception:
-            return None, 0, 0
-
-    def _capture_single_display(self, display_idx, region=None):
-        """Capture a single display (or region), resize to API limit, update scale/offset.
-        Returns (img_w, img_h, b64_data)."""
-        if region:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            rx, ry, rw, rh = int(region[0]), int(region[1]), int(region[2]), int(region[3])
-            screen_x = round(rx * scale) + ox
-            screen_y = round(ry * scale) + oy
-            screen_w = max(round(rw * scale), 1)
-            screen_h = max(round(rh * scale), 1)
-            if IS_WINDOWS:
-                img = ImageGrab.grab(bbox=(screen_x, screen_y,
-                                          screen_x + screen_w, screen_y + screen_h),
-                                    all_screens=True)
-            else:
-                img = pyautogui.screenshot(region=(screen_x, screen_y, screen_w, screen_h))
-            self._screenshot_offset = (screen_x, screen_y)
-            phys_w_r, _ = img.size
-            if not IS_WINDOWS and phys_w_r != screen_w and screen_w:
-                img = img.resize((screen_w, screen_h))
-        elif not IS_WINDOWS:
-            img, disp_x, disp_y = self._macos_display_screenshot(display_idx)
-            if img is not None:
-                self._screenshot_offset = (disp_x, disp_y)
-            else:
-                img = pyautogui.screenshot()
-                self._screenshot_offset = (0, 0)
-        else:
-            rects = self._get_windows_display_rects()
-            if rects and display_idx < len(rects):
-                l, t, r, b = rects[display_idx]
-                img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
-                self._screenshot_offset = (l, t)
-            else:
-                img = pyautogui.screenshot()
-                self._screenshot_offset = (0, 0)
-        phys_w, _ = img.size
-        if not region:
-            rects = self._get_display_rects()
-            if rects:
-                idx = min(display_idx, len(rects) - 1)
-                l, t, r, b = rects[idx]
-                log_w, log_h = r - l, b - t
-            else:
-                log_w, log_h = pyautogui.size()
-            if phys_w != log_w and log_w:
-                img = img.resize((log_w, log_h))
-        logical_w, logical_h = img.size
-        # Resize to the Anthropic API image limit (the one table behind
-        # screenshots and view_image)
-        max_long_edge, max_megapixels = self._api_image_caps()
-        longest = max(logical_w, logical_h)
-        if longest > max_long_edge:
-            r = max_long_edge / longest
-            max_w = round(logical_w * r)
-        else:
-            max_w = logical_w
-        max_h = round(logical_h * (max_w / logical_w)) if logical_w else logical_h
-        if max_w * max_h > max_megapixels:
-            r = (max_megapixels / (max_w * max_h)) ** 0.5
-            max_w = round(max_w * r)
-        if logical_w > max_w:
-            ratio = logical_w / max_w
-            new_h = round(logical_h / ratio)
-            img = img.resize((max_w, new_h))
-            self._screenshot_scale = ratio
-            img_w, img_h = max_w, new_h
-        else:
-            self._screenshot_scale = 1.0
-            img_w, img_h = logical_w, logical_h
-        self._screenshot_dims = (img_w, img_h)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-        return img_w, img_h, b64_data
-
-    @staticmethod
-    def _api_image_caps():
-        """(max long edge, max pixels) an image sent to the API is resized to —
-        the ONE table behind screenshots and view_image: Anthropic's 1568 /
-        1.15 MP, past which the API downscales anyway and the extra bytes only
-        slow the request down (and fill the 32 MB request limit sooner)."""
-        return 1568, 1_150_000
-
-    #: view_image refuses a file above this many bytes before decoding it —
-    #: a PIL decode of a huge TIFF is memory, not pixels the model could use.
-    VIEW_IMAGE_MAX_BYTES = 100 * 1024 * 1024
-    VIEW_IMAGE_JPEG_QUALITY = 85
-    #: A PNG encoding above this is re-encoded as JPEG: a photo compresses
-    #: 5-10x better that way, and the history keeps every image (see the
-    #: 413 rung) — a drawing, a chart or a screenshot stays PNG, crisp.
-    VIEW_IMAGE_PNG_LIMIT = 1_200_000
-
-    def do_view_image(self, path):
-        """Read an image file into the conversation as an image block (the
-        [text, image] pair a screenshot returns), resized to the API caps.
-        NOT a click surface: it never touches _screenshot_scale / _offset /
-        _dims or the per-display states, and its text opens with
-        FILE_IMAGE_MARKER, the marker MyAgent's translators read. MyAgent's
-        tool of 2026-10-13 (desktop_mixin.do_view_image): a trail-camera
-        review had no way to look at its files but to build a full-screen
-        viewer and screenshot it, 32 times, until the request limit ended
-        the run."""
-        raw = str(path or "").strip()
-        if not raw:
-            return "view_image error: no path given."
-        path = os.path.expanduser(raw)
-        if os.path.isdir(path):
-            return f"view_image error: {path} is a directory, not an image file."
-        if not os.path.isfile(path):
-            return f"view_image error: file not found: {path}"
-        try:
-            size = os.path.getsize(path)
-        except OSError as e:
-            return f"view_image error: {e}"
-        if size > self.VIEW_IMAGE_MAX_BYTES:
-            return (f"view_image error: {path} is {size / 1e6:.0f} MB — too large to "
-                    f"view (limit {self.VIEW_IMAGE_MAX_BYTES // (1024 * 1024)} MB).")
-        try:
-            from PIL import Image, ImageOps
-        except ImportError:
-            return "view_image error: Pillow is not installed (pip install pillow)."
-        try:
-            with Image.open(path) as im:
-                im.load()
-                full_w, full_h = im.size
-                fmt = im.format or ""
-                # A phone photo's orientation lives in EXIF; apply it, as the
-                # Attach Images compression does, or the model sees it sideways.
-                im = ImageOps.exif_transpose(im)
-                max_edge, max_pixels = self._api_image_caps()
-                ratio = min(1.0, max_edge / max(im.size),
-                            (max_pixels / (im.size[0] * im.size[1])) ** 0.5)
-                if ratio < 1.0:
-                    im = im.resize((max(1, round(im.size[0] * ratio)),
-                                    max(1, round(im.size[1] * ratio))), Image.LANCZOS)
-                shown_w, shown_h = im.size
-                buf = io.BytesIO()
-                if im.mode not in ("RGB", "RGBA", "L", "LA", "P"):
-                    im = im.convert("RGB")
-                im.save(buf, format="PNG", optimize=True)
-                media = "image/png"
-                if buf.tell() > self.VIEW_IMAGE_PNG_LIMIT:
-                    buf = io.BytesIO()
-                    im.convert("RGB").save(buf, format="JPEG",
-                                           quality=self.VIEW_IMAGE_JPEG_QUALITY)
-                    media = "image/jpeg"
-        except Exception as e:
-            return f"view_image error: could not read {path} as an image ({e})."
-        b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-        shown = ("" if (shown_w, shown_h) == (full_w, full_h)
-                 else f", shown at {shown_w}x{shown_h}")
-        # No "(WxH pixels)" in parentheses — the shape MyAgent's screenshot-hint
-        # regex picks dimensions out of (the camera's rule).
-        text = (f"{FILE_IMAGE_MARKER} — {os.path.basename(path)}, {fmt or 'image'} "
-                f"{full_w}x{full_h} pixels{shown}, {size:,} bytes. This is a picture "
-                "read from a file, NOT the screen: its pixel coordinates mean nothing "
-                "to mouse_click.")
-        return [
-            {"type": "text", "text": text},
-            {"type": "image", "source": {"type": "base64", "media_type": media,
-                                         "data": b64_data}},
-        ]
-
-    def do_screenshot(self, region=None, display=None):
-        """Capture screen (or region), resize, return as content list with image block."""
-        try:
-            if region:
-                img_w, img_h, b64_data = self._capture_single_display(0, region=region)
-                return [
-                    {"type": "text", "text": f"Region screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click."},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
-                ]
-            rects = self._get_display_rects()
-            num_displays = len(rects) if rects else 1
-            if display is not None:
-                img_w, img_h, b64_data = self._capture_single_display(display)
-                return [
-                    {"type": "text", "text": f"Display {display} screenshot ({img_w}x{img_h}). Use pixel positions from this image for mouse_click — coordinates are automatically mapped to the correct screen."},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
-                ]
-            # No display specified — capture ALL displays
-            result = []
-            for i in range(num_displays):
-                img_w, img_h, b64_data = self._capture_single_display(i)
-                result.append({"type": "text", "text": f"Display {i} ({img_w}x{img_h}):"})
-                result.append({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}})
-            result.append({"type": "text", "text": "To click on a target, first call screenshot with that display number, THEN use mouse_click with coordinates from that specific display's screenshot."})
-            if num_displays > 1:
-                self._capture_single_display(0)  # reset scale/offset to display 0
-            return result
-        except Exception as e:
-            return f"Screenshot error: {e}"
-
-    def do_mouse_click(self, x, y, button="left", clicks=1):
-        """Click at (x, y) with specified button and click count."""
-        try:
-            x, y = int(x), int(y)
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            iw, ih = self._screenshot_dims
-            # Clamp to screenshot image bounds to prevent gross misclicks
-            warning = ""
-            if iw and ih and (x < 0 or y < 0 or x >= iw or y >= ih):
-                warning = f" ⚠ coords ({x},{y}) outside screenshot {iw}x{ih} — clamped"
-                x = max(0, min(x, iw - 1))
-                y = max(0, min(y, ih - 1))
-            screen_x = round(x * scale) + ox
-            screen_y = round(y * scale) + oy
-            pyautogui.click(screen_x, screen_y, button=button, clicks=clicks)
-            return f"Clicked ({button}, {clicks}x) at screen ({screen_x}, {screen_y}) [image ({x},{y}) of {iw}x{ih}, scale {scale:.2f}x, offset ({ox},{oy})]{warning}"
-        except Exception as e:
-            return f"Click error: {e}"
-
-    def do_type_text(self, text, interval=0.02):
-        """Type text. Uses pyautogui.write for ASCII, clipboard paste for Unicode."""
-        try:
-            if all(ord(c) < 128 for c in text):
-                pyautogui.write(text, interval=interval)
-            else:
-                # Clipboard paste for Unicode
-                import pyperclip
-                pyperclip.copy(text)
-                paste_mod = "ctrl" if IS_WINDOWS else "command"
-                pyautogui.hotkey(paste_mod, "v")
-            return f"Typed {len(text)} characters"
-        except Exception as e:
-            return f"Type error: {e}"
-
-    def do_press_key(self, keys):
-        """Press a key or combination like 'ctrl+c', 'enter', 'alt+tab'."""
-        try:
-            parts = [k.strip().lower() for k in keys.split("+")]
-            # Normalize common aliases (platform-adaptive)
-            if IS_WINDOWS:
-                aliases = {"windows": "win", "control": "ctrl", "return": "enter", "esc": "escape"}
-            else:
-                aliases = {"windows": "command", "win": "command", "cmd": "command",
-                           "control": "ctrl", "return": "enter", "esc": "escape", "option": "alt"}
-            parts = [aliases.get(p, p) for p in parts]
-
-            if len(parts) == 1:
-                pyautogui.press(parts[0])
-            else:
-                pyautogui.hotkey(*parts)
-            return f"Pressed: {keys}"
-        except Exception as e:
-            return f"Key press error: {e}"
-
-    def do_mouse_scroll(self, clicks, x=None, y=None):
-        """Scroll the mouse wheel at current position or specified (x, y)."""
-        try:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            kwargs = {}
-            if x is not None:
-                kwargs["x"] = round(int(x) * scale) + ox
-            if y is not None:
-                kwargs["y"] = round(int(y) * scale) + oy
-            pyautogui.scroll(clicks, **kwargs)
-            direction = "up" if clicks > 0 else "down"
-            pos = f" at ({x}, {y})" if x is not None else ""
-            return f"Scrolled {direction} {abs(clicks)} clicks{pos}"
-        except Exception as e:
-            return f"Scroll error: {e}"
-
-    def do_open_application(self, name, args=None):
-        """Open an application by known name or full path, with optional arguments."""
-        try:
-            key = name.lower().strip()
-            cmd = self.KNOWN_APPS.get(key, name)
-            if args:
-                subprocess.Popen([cmd, args], **_SUBPROCESS_NOWND)
-            else:
-                subprocess.Popen(cmd, shell=True, **_SUBPROCESS_NOWND)
-            return f"Opened {name}{f' with {args}' if args else ''} (command: {cmd})"
-        except Exception as e:
-            return f"Error opening {name}: {e}"
-
-    def _find_windows_by_title(self, title):
-        """Find windows matching title (case-insensitive substring). Cross-platform."""
-        pattern = title.lower()
-        if IS_WINDOWS:
-            matches = gw.getWindowsWithTitle(title)
-            return [{"title": w.title, "left": w.left, "top": w.top,
-                      "width": w.width, "height": w.height, "_win": w} for w in matches]
-        import Quartz
-        wins = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID)
-        results = []
-        for w in wins:
-            app = w.get("kCGWindowOwnerName", "")
-            name = w.get("kCGWindowName", "")
-            full_title = f"{app} — {name}" if name else app
-            if pattern in full_title.lower() or pattern in app.lower() or pattern in (name or "").lower():
-                b = w.get("kCGWindowBounds", {})
-                results.append({"title": full_title,
-                                "left": int(b.get("X", 0)), "top": int(b.get("Y", 0)),
-                                "width": int(b.get("Width", 0)), "height": int(b.get("Height", 0)),
-                                "_app": app, "_pid": w.get("kCGWindowOwnerPID")})
-        return results
-
-    def do_find_window(self, title, activate=False):
-        """Find windows matching title pattern, optionally activate the first match."""
-        try:
-            windows = self._find_windows_by_title(title)
-            if not windows:
-                return f"No windows found matching '{title}'"
-
-            results = [f"  Title: {w['title']}\n  Position: ({w['left']}, {w['top']})\n  Size: {w['width']}x{w['height']}"
-                       for w in windows]
-
-            if activate and windows:
-                try:
-                    win = windows[0]
-                    if IS_WINDOWS:
-                        obj = win["_win"]
-                        if obj.isMinimized:
-                            obj.restore()
-                        obj.activate()
-                    else:
-                        subprocess.run(["osascript", "-e",
-                                        f'tell application "{win["_app"]}" to activate'],
-                                       capture_output=True, timeout=5)
-                    results.insert(0, f"Activated: {win['title']}")
-                except Exception as e:
-                    results.insert(0, f"Found but could not activate: {e}")
-
-            return f"Found {len(windows)} window(s):\n" + "\n---\n".join(results)
-        except Exception as e:
-            return f"Window search error: {e}"
-
-    def do_clipboard_read(self):
-        """Read text from the Windows clipboard."""
-        try:
-            text = self.root.clipboard_get()
-            return f"Clipboard contents:\n{text}"
-        except tk.TclError:
-            return "Clipboard is empty or contains non-text data."
-        except Exception as e:
-            return f"Clipboard read error: {e}"
-
-    def do_clipboard_write(self, text):
-        """Write text to the Windows clipboard."""
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            preview = text[:100] + "..." if len(text) > 100 else text
-            return f"Copied to clipboard ({len(text)} chars): {preview}"
-        except Exception as e:
-            return f"Clipboard write error: {e}"
-
-    def do_wait_for_window(self, title, timeout=10):
-        """Poll for a window with the given title until found or timeout."""
-        try:
-            deadline = time.time() + timeout
-            while time.time() < deadline:
-                windows = self._find_windows_by_title(title)
-                if windows:
-                    w = windows[0]
-                    return (
-                        f"Window found: {w['title']}\n"
-                        f"Position: ({w['left']}, {w['top']})\n"
-                        f"Size: {w['width']}x{w['height']}"
-                    )
-                time.sleep(0.5)
-            return f"Timed out after {timeout}s waiting for window '{title}'"
-        except Exception as e:
-            return f"Wait for window error: {e}"
-
-    def do_read_screen_text(self, x, y, width, height):
-        """OCR a region of the screen. Uses winocr on Windows, Vision framework on macOS."""
-        try:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            sx = round(int(x) * scale) + ox
-            sy = round(int(y) * scale) + oy
-            sw = max(round(int(width) * scale), 1)
-            sh = max(round(int(height) * scale), 1)
-            if IS_WINDOWS:
-                img = ImageGrab.grab(bbox=(sx, sy, sx + sw, sy + sh), all_screens=True)
-            else:
-                img = pyautogui.screenshot(region=(sx, sy, sw, sh))
-
-            if IS_WINDOWS:
-                import winocr
-                import asyncio
-                result = asyncio.run(winocr.recognize_pil(img, lang="en"))
-                text = result.text.strip()
-            else:
-                import objc, Quartz
-                # Load the Vision framework for its side effect: registering the
-                # VN* ObjC classes so Quartz.VNImageRequestHandler etc. resolve.
-                objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",
-                                module_globals={})
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                ns_data = Quartz.NSData.dataWithBytes_length_(buf.getvalue(), len(buf.getvalue()))
-                ci_image = Quartz.CIImage.imageWithData_(ns_data)
-                handler = Quartz.VNImageRequestHandler.alloc().initWithCIImage_options_(ci_image, None)
-                request = Quartz.VNRecognizeTextRequest.alloc().init()
-                request.setRecognitionLevel_(0)  # 0 = accurate
-                handler.performRequests_error_([request], None)
-                observations = request.results()
-                lines = []
-                for obs in (observations or []):
-                    candidates = obs.topCandidates_(1)
-                    if candidates:
-                        lines.append(candidates[0].string())
-                text = "\n".join(lines).strip()
-
-            if not text:
-                return "OCR returned no text for the specified region."
-            return f"OCR text from ({x},{y} {width}x{height}):\n{text}"
-        except Exception as e:
-            return f"OCR error: {e}"
-
-    def do_find_image_on_screen(self, image_path, confidence=0.8):
-        """Find a reference image on the screen."""
-        try:
-            if not os.path.isfile(image_path):
-                return f"Image file not found: {image_path}"
-            location = pyautogui.locateOnScreen(image_path, confidence=confidence)
-            if location is None:
-                return f"Image not found on screen (confidence={confidence}): {image_path}"
-            cx = location.left + location.width // 2
-            cy = location.top + location.height // 2
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            img_cx = round((cx - ox) / scale) if scale else cx
-            img_cy = round((cy - oy) / scale) if scale else cy
-            return (
-                f"Image found at region ({location.left}, {location.top}, "
-                f"{location.width}x{location.height})\n"
-                f"Center (screen coords): ({cx}, {cy})\n"
-                f"Center (image coords for clicking): ({img_cx}, {img_cy})"
-            )
-        except Exception as e:
-            return f"Find image error: {e}"
-
-    def do_mouse_drag(self, start_x, start_y, end_x, end_y, duration=0.5, button="left"):
-        """Drag the mouse from one point to another."""
-        try:
-            scale = self._screenshot_scale
-            ox, oy = self._screenshot_offset
-            sx = round(int(start_x) * scale) + ox
-            sy = round(int(start_y) * scale) + oy
-            ex = round(int(end_x) * scale) + ox
-            ey = round(int(end_y) * scale) + oy
-            pyautogui.moveTo(sx, sy, duration=0.1)
-            pyautogui.mouseDown(button=button)
-            pyautogui.moveTo(ex, ey, duration=duration)
-            pyautogui.mouseUp(button=button)
-            return (
-                f"Dragged from ({start_x},{start_y}) to ({end_x},{end_y}) "
-                f"with {button} button over {duration}s"
-            )
-        except Exception as e:
-            return f"Mouse drag error: {e}"
-
-    # --- Browser Automation (Playwright via CDP) ---
-
-    def _ensure_browser(self):
-        """Connect to Edge via CDP, launching it if needed. Returns the page."""
-        import socket
-
-        # If we already have a live page, check it's still usable
-        if self._page is not None:
-            try:
-                self._page.title()
-                return self._page
-            except Exception:
-                # Connection dropped — clean up and reconnect
-                self._cleanup_browser()
-
-        # Check if something is already listening on port 9222
-        def _port_open():
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(1)
-                return s.connect_ex(("127.0.0.1", 9222)) == 0
-
-        if not _port_open():
-            # Try to launch Chrome or Edge with the debug port (Chrome preferred)
-            if IS_WINDOWS:
-                edge_paths = [
-                    os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
-                    os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
-                    os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
-                    os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
-                    os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
-                    os.path.expandvars(r"%LocalAppData%\Microsoft\Edge\Application\msedge.exe"),
-                ]
-            else:
-                edge_paths = [
-                    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-                ]
-            edge_exe = None
-            for p in edge_paths:
-                if os.path.isfile(p):
-                    edge_exe = p
-                    break
-            if not edge_exe:
-                raise RuntimeError(
-                    "No supported browser found. Install Microsoft Edge or Google Chrome."
-                )
-
-            import tempfile
-            debug_profile = os.path.join(tempfile.gettempdir(), "selfbot_browser_debug")
-            self._edge_process = subprocess.Popen(
-                [edge_exe, "--remote-debugging-port=9222", "--no-first-run",
-                 f"--user-data-dir={debug_profile}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
-            # Wait for the debug port to become available
-            for _ in range(30):
-                if _port_open():
-                    break
-                time.sleep(0.5)
-            else:
-                raise RuntimeError(
-                    "Edge launched but debug port 9222 did not open. "
-                    "If Edge was already running without --remote-debugging-port, "
-                    "close all Edge windows and try again."
-                )
-
-        # Connect Playwright via CDP
-        from playwright.sync_api import sync_playwright
-
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.connect_over_cdp("http://127.0.0.1:9222")
-
-        # Get the first page or create one
-        contexts = self._browser.contexts
-        if contexts and contexts[0].pages:
-            self._page = contexts[0].pages[0]
-        else:
-            ctx = contexts[0] if contexts else self._browser.new_context()
-            self._page = ctx.new_page()
-
-        return self._page
-
-    def _cleanup_browser(self):
-        """Disconnect Playwright. Does NOT close Edge."""
-        try:
-            if self._browser:
-                self._browser.close()
-        except Exception:
-            pass
-        try:
-            if self._playwright:
-                self._playwright.stop()
-        except Exception:
-            pass
-        self._playwright = None
-        self._browser = None
-        self._page = None
-
     def _write_inject_file(self):
         """Instance 1: write the first sent message (with user label) to the shared inject file."""
         try:
@@ -5677,198 +4701,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
         self._cleanup_browser()
         self.root.destroy()
 
-    # Shared guard message for every browser tool that needs a live page.
-    _NO_BROWSER = "No browser connection. Use browser_open first."
-
-    def do_browser_open(self, url):
-        try:
-            self._cleanup_browser()
-            if IS_WINDOWS:
-                subprocess.run(
-                    ["powershell", "-Command", "taskkill /F /IM msedge.exe 2>$null; Start-Sleep -Milliseconds 500"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-            else:
-                subprocess.run(
-                    ["pkill", "-f", "Microsoft Edge"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
-                time.sleep(0.5)
-            page = self._ensure_browser()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            return f"Navigated to {url} — page title: {page.title()}"
-        except Exception as e:
-            return f"Browser open error: {e}"
-
-    def do_browser_navigate(self, url):
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            self._page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            return f"Navigated to {url} — page title: {self._page.title()}"
-        except Exception as e:
-            return f"Browser navigate error: {e}"
-
-    def do_browser_click(self, selector=None, text=None):
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            if selector:
-                self._page.click(selector, timeout=10000)
-                return f"Clicked element: {selector}"
-            if text:
-                self._page.get_by_text(text, exact=False).first.click(timeout=10000)
-                return f"Clicked element with text: {text}"
-            return "Provide either a 'selector' or 'text' parameter."
-        except Exception as e:
-            return f"Browser click error: {e}"
-
-    def do_browser_fill(self, selector, value):
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            self._page.fill(selector, value, timeout=10000)
-            return f"Filled '{selector}' with {len(value)} characters"
-        except Exception as e:
-            return f"Browser fill error: {e}"
-
-    def do_browser_get_text(self, selector=None):
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            if selector:
-                text = self._page.inner_text(selector, timeout=10000)
-            else:
-                text = self._page.inner_text("body", timeout=10000)
-            text = self._truncate_output(text, suffix="\n\n[Content truncated at 20k chars...]")
-            return text if text.strip() else "[No visible text]"
-        except Exception as e:
-            return f"Browser get_text error: {e}"
-
-    def do_browser_run_js(self, code):
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            # Wrap in a function if it uses 'return'
-            if "return " in code:
-                result = self._page.evaluate(f"() => {{ {code} }}")
-            else:
-                result = self._page.evaluate(code)
-            text = json.dumps(result, indent=2, default=str) if result is not None else "[No return value]"
-            return self._truncate_output(text)
-        except Exception as e:
-            return f"Browser JS error: {e}"
-
-    def do_browser_screenshot(self):
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            raw_bytes = self._page.screenshot(type="png")
-            img = Image.open(io.BytesIO(raw_bytes))
-            orig_w, orig_h = img.size
-            max_w = 2048
-            if orig_w > max_w:
-                ratio = max_w / orig_w
-                new_h = int(orig_h * ratio)
-                img = img.resize((max_w, new_h))
-                img_w, img_h = max_w, new_h
-            else:
-                img_w, img_h = orig_w, orig_h
-            buf = io.BytesIO()
-            img.save(buf, format="PNG")
-            b64_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-            return [
-                {"type": "text", "text": f"Browser screenshot ({img_w}x{img_h}) — page: {self._page.title()}"},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64_data}},
-            ]
-        except Exception as e:
-            return f"Browser screenshot error: {e}"
-
-    def do_browser_close(self):
-        try:
-            self._cleanup_browser()
-            return "Browser connection closed. Edge remains open."
-        except Exception as e:
-            return f"Browser close error: {e}"
-
-    def do_browser_wait_for(self, selector, timeout=10000):
-        """Wait for an element matching a CSS selector to appear."""
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            el = self._page.wait_for_selector(selector, timeout=timeout)
-            if el is None:
-                return f"Element '{selector}' not found within {timeout}ms."
-            text = el.text_content() or ""
-            text = text.strip()
-            preview = text[:200] + "..." if len(text) > 200 else text
-            return f"Element '{selector}' appeared. Text: {preview}"
-        except Exception as e:
-            return f"browser_wait_for error: {e}"
-
-    def do_browser_select(self, selector, value=None, label=None):
-        """Select an option in a <select> dropdown."""
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            if value:
-                self._page.select_option(selector, value=value)
-                return f"Selected option with value='{value}' in '{selector}'"
-            if label:
-                self._page.select_option(selector, label=label)
-                return f"Selected option with label='{label}' in '{selector}'"
-            return "Provide either 'value' or 'label' to select an option."
-        except Exception as e:
-            return f"browser_select error: {e}"
-
-    def do_browser_get_elements(self, selector, limit=10):
-        """Get info about elements matching a CSS selector."""
-        try:
-            if self._page is None:
-                return self._NO_BROWSER
-            js = """
-            (args) => {
-                const els = document.querySelectorAll(args.selector);
-                const results = [];
-                const limit = args.limit;
-                for (let i = 0; i < Math.min(els.length, limit); i++) {
-                    const el = els[i];
-                    const rect = el.getBoundingClientRect();
-                    const attrs = {};
-                    for (const attr of el.attributes) {
-                        attrs[attr.name] = attr.value;
-                    }
-                    results.push({
-                        index: i,
-                        tag: el.tagName.toLowerCase(),
-                        text: (el.textContent || '').trim().substring(0, 200),
-                        attributes: attrs,
-                        visible: rect.width > 0 && rect.height > 0,
-                        rect: {x: Math.round(rect.x), y: Math.round(rect.y),
-                               width: Math.round(rect.width), height: Math.round(rect.height)}
-                    });
-                }
-                return {total: els.length, results: results};
-            }
-            """
-            data = self._page.evaluate(js, {"selector": selector, "limit": limit})
-            total = data.get("total", 0)
-            results = data.get("results", [])
-            if total == 0:
-                return f"No elements found matching '{selector}'"
-            lines = [f"Found {total} element(s) matching '{selector}' (showing {len(results)}):"]
-            for r in results:
-                attrs_str = ", ".join(f'{k}="{v}"' for k, v in r.get("attributes", {}).items())
-                text_preview = r.get("text", "")[:100]
-                lines.append(
-                    f"  [{r['index']}] <{r['tag']}> {attrs_str}\n"
-                    f"      text: {text_preview}\n"
-                    f"      visible: {r['visible']}, rect: {r.get('rect', {})}"
-                )
-            return "\n".join(lines)
-        except Exception as e:
-            return f"browser_get_elements error: {e}"
-
     def _make_serializable(self, obj):
         """Convert SDK objects (ParsedTextBlock, ToolUseBlock, etc.) to plain dicts."""
         if hasattr(obj, "model_dump"):
@@ -6131,8 +4963,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     def _get_tools(self):
         """Return tool list based on which toggles are enabled."""
         tools = copy.deepcopy(TOOLS)
+        # read_document and the native file tools ride along unconditionally,
+        # as in MyAgent — no checkbox (tool parity, 2026-10-14).
+        tools.extend(copy.deepcopy(READ_DOCUMENT_TOOLS))
+        tools.extend(copy.deepcopy(FILE_TOOLS))
         if self.desktop_enabled.get() and _HAS_DESKTOP:
-            desktop = copy.deepcopy(DESKTOP_TOOLS)
+            # find_element is Gemini's pointing API — MyAgent offers it to the
+            # Google provider alone, so an Anthropic-only app never does.
+            desktop = [t for t in copy.deepcopy(DESKTOP_TOOLS) if t["name"] != "find_element"]
             # Build display info for tool description (API order: 0=primary)
             rects = self._get_display_rects()
             num_displays = len(rects) if rects else 1
@@ -6172,6 +5010,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
             tools.extend(copy.deepcopy(BROWSER_TOOLS))
         # MyAgent-style tool subsystems (Anthropic-only). Each mail group patches
         # its `account` enum at runtime so the model only sees configured accounts.
+        # MyAgent's Excel (xlwings) and Physical (camera / microphone) sets —
+        # checkbox-gated like Browser; each Physical tool only with its package.
+        if _HAS_MYAGENT_TOOLS and _HAS_EXCEL and self.excel_enabled.get():
+            tools.extend(copy.deepcopy(EXCEL_TOOLS))
+        if _HAS_MYAGENT_TOOLS and _HAS_PHYSICAL and self.physical_enabled.get():
+            installed = {"camera_capture": _HAS_CAMERA, "microphone_listen": _HAS_MICROPHONE}
+            tools.extend(copy.deepcopy(t) for t in PHYSICAL_TOOLS if installed.get(t["name"], True))
         if self.meta_enabled.get():
             tools.extend(copy.deepcopy(SELFBOT_META_TOOLS))
         if _HAS_MYAGENT_TOOLS and _HAS_MCP and self.mcp_enabled.get() and MCP_TOOLS:
@@ -6273,26 +5118,85 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 max_results=inp.get("max_results", 50),
                 delimiter=inp.get("delimiter"),
             )
+        # Excel live-workbook tools (xlwings, ExcelMixin) — MyAgent's namespaced
+        # dispatch; the _HAS_EXCEL check inside so a missing xlwings gives a
+        # clear install hint instead of "Unknown tool".
+        if block.name.startswith("excel_"):
+            if not (_HAS_MYAGENT_TOOLS and _HAS_EXCEL):
+                return ("Excel tools unavailable: xlwings is not installed. "
+                        "Install with: pip install xlwings (desktop Excel must "
+                        "also be installed).")
+            if not self.excel_enabled.get():
+                return f"Excel tools are disabled. Enable the Excel checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Excel tool: {block.name}"
+            self._tool_info(f"Excel: {block.name}\n")
+            return method(inp or {})
+        # Physical tools (camera_capture via OpenCV, microphone_listen via
+        # sounddevice — PhysicalMixin) — the same pattern.
+        if block.name.startswith("camera_"):
+            if not (_HAS_MYAGENT_TOOLS and _HAS_CAMERA):
+                return ("Camera tools unavailable: OpenCV is not installed. "
+                        "Install with: pip install opencv-python")
+            if not self.physical_enabled.get():
+                return f"Physical tools are disabled. Enable the Physical checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Physical tool: {block.name}"
+            cam_inp = inp or {}
+            cam_wait = f"waiting {cam_inp['delay_seconds']} s, then " if cam_inp.get("delay_seconds") else ""
+            self._tool_info(f"Camera: {cam_wait}taking a photo (camera {cam_inp.get('camera') or 0})...\n")
+            return method(cam_inp)
+        if block.name.startswith("microphone_"):
+            if not (_HAS_MYAGENT_TOOLS and _HAS_MICROPHONE):
+                return ("Microphone tools unavailable: the 'sounddevice' package is not "
+                        "installed. Install with: pip install sounddevice")
+            if not self.physical_enabled.get():
+                return f"Physical tools are disabled. Enable the Physical checkbox to use '{block.name}'."
+            method = getattr(self, f"do_{block.name}", None)
+            if method is None:
+                return f"Unknown Physical tool: {block.name}"
+            mic_inp = inp or {}
+            asked = mic_inp.get("seconds")
+            shown = asked if asked not in (None, "") else getattr(self, "MIC_DEFAULT_SECONDS", 5)
+            shown = f"{shown:g}" if isinstance(shown, (int, float)) else shown
+            self._tool_info(f"Microphone: listening for {shown} s...\n")
+            return method(mic_inp)
+        if block.name == "read_document":
+            fp = (inp or {}).get("path", "")
+            self._tool_info(f"Reading document: {os.path.basename(fp)}\n")
+            return self.do_read_document(inp or {})
+        if block.name in ("read_file", "write_file", "edit_file",
+                          "glob_files", "grep_files"):
+            # Native file tools (FileMixin) — dynamic dispatch like the mail
+            # mixins; the label shows the path or pattern being operated on.
+            label = (inp or {}).get("path") or (inp or {}).get("pattern") or ""
+            self._tool_info(f"{block.name}: {label}\n")
+            return getattr(self, f"do_{block.name}")(inp or {})
         if block.name in ("screenshot", "mouse_click", "type_text",
                              "press_key", "mouse_scroll", "open_application",
                              "find_window", "clipboard_read", "clipboard_write",
                              "wait_for_window", "read_screen_text",
-                             "find_image_on_screen", "mouse_drag", "view_image"):
+                             "find_image_on_screen", "mouse_drag", "find_element",
+                             "view_image"):
             if not self.desktop_enabled.get():
                 return "Desktop control is disabled. Enable the Desktop checkbox to use this tool."
+            click_display = inp.get("display")
+            if click_display is not None:
+                click_display = int(click_display)
             if block.name == "view_image":
-                self._tool_info(f"Viewing image file {inp.get('path', '')}...\n")
-                return self.do_view_image(inp.get("path", ""))
+                path = str(inp.get("path", "") or "")
+                self._tool_info(f"Viewing image: {os.path.basename(path)}\n")
+                return self.do_view_image(path)
             if block.name == "screenshot":
-                display = inp.get("display")
-                if display is not None:
-                    display = int(display)  # Gemini proto returns floats
+                display = click_display  # alias for clarity in screenshot path
                 disp_label = f"display {display}" if display is not None else "all displays"
                 self._tool_info(f"Taking screenshot ({disp_label})...\n")
                 region = None
                 if all(k in inp for k in ("x", "y", "width", "height")):
                     region = (inp["x"], inp["y"], inp["width"], inp["height"])
-                return self.do_screenshot(region, display=display)
+                return self.do_screenshot(region, display=display, grid=bool(inp.get("grid", False)))
             if block.name == "mouse_click":
                 cx, cy = inp.get("x"), inp.get("y")
                 if cx is None or cy is None:
@@ -6306,6 +5210,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     cx, cy,
                     button=inp.get("button", "left"),
                     clicks=int(inp.get("clicks", 1)),
+                    display=click_display,
                 )
             if block.name == "type_text":
                 text = inp.get("text", "")
@@ -6318,8 +5223,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 return self.do_press_key(keys)
             if block.name == "mouse_scroll":
                 clicks_val = int(inp.get("clicks", 0))
+                sx, sy = inp.get("x"), inp.get("y")
                 self._tool_info(f"Scrolling {clicks_val} clicks...\n")
-                return self.do_mouse_scroll(clicks_val, x=inp.get("x"), y=inp.get("y"))
+                return self.do_mouse_scroll(clicks_val, x=sx, y=sy, display=click_display)
             if block.name == "open_application":
                 app_name = inp.get("name", "")
                 app_args = inp.get("args")
@@ -6347,7 +5253,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 if None in (rx, ry, rw, rh):
                     return f"read_screen_text error: missing region parameters. Got: {inp}"
                 self._tool_info(f"OCR region ({rx},{ry} {rw}x{rh})...\n")
-                return self.do_read_screen_text(rx, ry, rw, rh)
+                return self.do_read_screen_text(rx, ry, rw, rh, display=click_display)
             if block.name == "find_image_on_screen":
                 path = inp.get("image_path", "")
                 self._tool_info(f"Finding image: {os.path.basename(path)}\n")
@@ -6362,9 +5268,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     sx, sy, ex, ey,
                     duration=inp.get("duration", 0.5),
                     button=inp.get("button", "left"),
+                    display=click_display,
                 )
+            if block.name == "find_element":
+                # Gemini's pointing API: never offered here (_get_tools strips it),
+                # answered for a stray call the way MyAgent answers a non-Google provider.
+                return ("find_element is not available in SelfBot (it needs the Gemini "
+                        "pointing API). Use a region screenshot or grid=true overlay instead.")
         elif block.name in ("browser_open", "browser_navigate",
-                              "browser_click", "browser_fill",
+                              "browser_click", "browser_download",
+                              "browser_fill",
                               "browser_get_text", "browser_run_js",
                               "browser_screenshot", "browser_close",
                               "browser_wait_for", "browser_select",
@@ -6385,6 +5298,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                 target = sel or f"text='{txt}'"
                 self._tool_info(f"Browser: clicking {target}\n")
                 return self.do_browser_click(selector=sel or None, text=txt or None)
+            if block.name == "browser_download":
+                sel = inp.get("selector", "")
+                txt = inp.get("text", "")
+                target = sel or f"text='{txt}'"
+                path = inp.get("save_path", "")
+                self._tool_info(f"Browser: downloading via {target} -> {path}\n")
+                return self.do_browser_download(
+                    save_path=path, selector=sel or None, text=txt or None,
+                    timeout_s=inp.get("timeout_s", 60))
             if block.name == "browser_fill":
                 sel = inp.get("selector", "")
                 val = inp.get("value", "")
@@ -6646,7 +5568,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
     _PROMPT_MODEL_KEYS = ("model", "temperature", "thinking_enabled", "thinking_effort",
                           "thinking_budget", "thinking_mode")
     _PROMPT_TOGGLE_KEYS = ("desktop", "browser", "meta", "mcp", "google", "proton", "outlook",
-                           "pause")
+                           "excel", "physical", "pause")
     _PROMPT_NAME_KEYS = ("my_name", "my_friend")
 
     def do_manage_prompts(self, params):
@@ -7490,7 +6412,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin):
                     tool_blocks = [b for b in content_blocks if b.type == "tool_use"]
 
                     # -- Parallel-safe tools (network I/O, pure lookups) --
-                    PARALLEL_SAFE = {"csv_search", "get_skill", "view_image"}
+                    # MyAgent's parallel-safe set (read-only, no shared state) plus SelfBot's own
+                    PARALLEL_SAFE = {"csv_search", "get_skill"} | set(PARALLEL_SAFE_TOOLS)
 
                     # Log all tool calls up front
                     for block in tool_blocks:

@@ -39,7 +39,7 @@ from unittest import mock
 import anthropic
 
 from myagent.anthropic_mixin import AnthropicMixin
-from myagent.helpers import IMAGE_REMOVED_NOTE
+from myagent.helpers import FILE_IMAGE_MARKER, IMAGE_REMOVED_NOTE
 from myagent.safety_mixin import SafetyMixin
 from tests.test_fast_mode import _FakeStream
 
@@ -500,7 +500,7 @@ class ViewImageTests(unittest.TestCase):
         path = self._png("small.png")
         result = self.app.do_view_image(path)
         self.assertEqual([b["type"] for b in result], ["text", "image"])
-        self.assertTrue(result[0]["text"].startswith(SelfBot.FILE_IMAGE_MARKER))
+        self.assertTrue(result[0]["text"].startswith(FILE_IMAGE_MARKER))
         self.assertIn("small.png", result[0]["text"])
         self.assertIn("NOT the screen", result[0]["text"])
         self.assertEqual(result[1]["source"]["media_type"], "image/png")
@@ -533,10 +533,15 @@ class ViewImageTests(unittest.TestCase):
         self.assertIn("view_image", names)
         self.assertEqual(SelfBot.DESKTOP_TOOLS[names.index("view_image")]["input_schema"]["required"], ["path"])
         src = inspect.getsource(SelfBot.App._execute_tool)
-        self.assertIn('"find_image_on_screen", "mouse_drag", "view_image"', src)
+        self.assertIn('"view_image"', src)
         self.assertIn('if block.name == "view_image":', src)
-        self.assertIn('"view_image"', inspect.getsource(SelfBot.App.stream_worker).split("PARALLEL_SAFE = ")[1][:80])
-        self.assertEqual(SelfBot.App._api_image_caps(), (1568, 1_150_000))
+        # view_image is in MyAgent's PARALLEL_SAFE_TOOLS, which SelfBot's set takes whole
+        self.assertIn("set(PARALLEL_SAFE_TOOLS)",
+                      inspect.getsource(SelfBot.App.stream_worker).split("PARALLEL_SAFE = ")[1][:80])
+        self.assertIn("view_image", SelfBot.PARALLEL_SAFE_TOOLS)
+        # DesktopMixin's one cap table (SelfBot inherits it since 2026-10-14):
+        # Anthropic's, since SelfBot has no provider attribute
+        self.assertEqual(self.app._api_image_caps(), (1568, 1_150_000))
         self.assertIn("self._api_image_caps()", inspect.getsource(SelfBot.App._capture_single_display))
 
 

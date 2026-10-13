@@ -266,7 +266,7 @@ def _state_attrs(**overrides):
     toggles = {k: _Var(False) for k in (
         "save_thinking", "desktop_enabled", "browser_enabled", "meta_enabled",
         "mcp_enabled", "google_enabled", "proton_enabled", "outlook_enabled",
-        "pause_enabled")}
+        "excel_enabled", "physical_enabled", "pause_enabled", "diag_enabled")}
     attrs = dict(
         system_prompt_name="P", model="claude-opus-5", temperature=1.0,
         thinking_enabled=False, thinking_effort="high", thinking_budget=8192,
