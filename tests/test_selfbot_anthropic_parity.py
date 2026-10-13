@@ -120,6 +120,10 @@ def _app(model=OPUS55, mode="adaptive", enabled=True, steps=None, caps=None):
     app._session_calls, app._session_cost = 0, 0.0
     app._session_tokens_in = app._session_tokens_out = 0
     app._session_tokens_cache_write = app._session_tokens_cache_read = 0
+    app.provider = "Anthropic"
+    app._session_had_usage, app._session_per_model = False, {}
+    app._session_work_secs, app._reply_started, app._input_wait_secs = 0.0, None, 0.0
+    app._unpriced_noted = set()
     app.system_prompt, app.skills, app.messages = "You are Shaun.", {}, []
     app.system_prompt_name = "Default"
     app._run_system_prompt = None
@@ -553,7 +557,8 @@ class CostLogChatTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log = os.path.join(tmp, "APICostLog.txt")
             with mock.patch.object(SelfBot, "APICOST_LOG_FILE", log):
-                app._log_api_cost(1.5)
+                app._session_cost = 1.5
+                app._log_api_cost(**app._session_log_args())
             with open(log, encoding="utf-8") as f:
                 return f.read().rstrip("\n").split(";")
 

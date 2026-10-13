@@ -19,7 +19,8 @@
 # used, e.g. "reasoning=Medium, temp=1") is absent on older lines and shown
 # blank; the secs field (added 2026-08-12: MyAgent's wall-clock run duration
 # in whole seconds -> the TIME(sec) column) is absent on older lines and
-# EMPTY on SelfBot's, which doesn't record duration; the instruction field
+# EMPTY on SelfBot's before 2026-10-14 (since then SelfBot records the
+# session's working seconds there); the instruction field
 # (added 2026-08-16: the saved Agent Instruction the run was launched from --
 # SelfBot writes its active system prompt's name there -- blank for an ad-hoc
 # run -> the INSTRUCTION column, rightmost after PARAMETERS) and the calls
@@ -46,7 +47,7 @@
 # folder since 2026-10-08, so any machine can open it -- every MyAgent run
 # names its chat since 2026-10-07); whenever it is present the 13th is
 # too, blank for a one-model run -> the CHAT column, rightmost after
-# INSTRUCTION, blank on older and SelfBot lines.
+# INSTRUCTION, blank on older lines (SelfBot writes it since 2026-10-14).
 #
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass

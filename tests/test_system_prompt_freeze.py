@@ -189,6 +189,10 @@ def _selfbot_app(second="end"):
     app._session_calls, app._session_cost = 0, 0.0
     app._session_tokens_in = app._session_tokens_out = 0
     app._session_tokens_cache_write = app._session_tokens_cache_read = 0
+    app.provider = "Anthropic"
+    app._session_had_usage, app._session_per_model = False, {}
+    app._session_work_secs, app._reply_started, app._input_wait_secs = 0.0, None, 0.0
+    app._unpriced_noted = set()
     app.system_prompt, app.skills, app.messages = "You are Shaun.", _skills(), []
     app._mcp_wait_ready = lambda: None
     app._payload_for_display = lambda messages: ""

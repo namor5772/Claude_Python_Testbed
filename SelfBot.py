@@ -40,6 +40,8 @@ import io
 import time
 import signal
 import concurrent.futures
+import tempfile
+from datetime import datetime
 
 # --- Optional MyAgent tool subsystems (reused as mixins) --------------------
 # SelfBot borrows MyAgent's native MCP / Gmail / Proton(IMAP) / Outlook mixins
@@ -65,7 +67,7 @@ try:
         EXCEL_TOOLS, PHYSICAL_TOOLS, PARALLEL_SAFE_TOOLS,
         _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE, _HAS_PHYSICAL,
     )
-    from myagent.helpers import rotate_log_if_needed, parse_output_cap, strip_old_images
+    from myagent.helpers import rotate_log_if_needed, parse_output_cap, strip_old_images, input_wait_timer
     from myagent.retry_util import connection_error_backoff
     from myagent.mcp_mixin import MCPMixin
     from myagent.gmail_mixin import GmailMixin
@@ -109,6 +111,18 @@ except Exception:
     # Fill of the SKILLS band over the Skills Manager's list (see
     # list_title_band): the blue a clicked ttk heading shows
     LIST_TITLE_BG = "#bcdcf4"
+
+    class _NoWaitTimer:
+        """Stub of helpers.input_wait_timer: nothing to accumulate without the package."""
+
+        def __enter__(self):
+            return None
+
+        def __exit__(self, *exc):
+            return False
+
+    def input_wait_timer(app):
+        return _NoWaitTimer()
 
     def rotate_log_if_needed(log_path, max_bytes):
         return False  # no myagent package -> no rotation; the log just grows
@@ -967,6 +981,11 @@ APICOST_LOG_FILE = _resolve_costlog()
 CHATS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved_chats")
 APP_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state.json")
 APP_STATE_FILE_2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_state_2.json")
+# The in-progress cost record (MyAgent's agent_run_<N>.json, here since
+# 2026-10-14): selfbot_run_<1|2>.json beside the state file, per machine,
+# gitignored — rewritten after every call and removed by the close, so one
+# found at launch is a session killed from outside (_run_progress_fold_in).
+SELFBOT_RUN_PREFIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_run_")
 # The three persisted dialogs: kind → the App attribute holding its open Toplevel (or
 # None). Each kind also has a `_last_<kind>_geometry` attribute, its last-known
 # geometry on the CURRENT monitor layout, and a legacy flat state key from before
@@ -1131,6 +1150,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self._session_tokens_out = 0
         self._session_tokens_cache_write = 0
         self._session_tokens_cache_read = 0
+        # The rest of the cost line's arguments, kept like MyAgent's run
+        # accumulators (cost collection analogous to MyAgent's, 2026-10-14 —
+        # CLAUDE_SELFBOT.md's API cost tracking paragraph):
+        self.provider = "Anthropic"       # the line's 2nd field; SelfBot is Anthropic-only
+        self._session_had_usage = False   # a call answered with usage, priced or not (the zero-cost gate)
+        self._session_per_model = {}      # served model -> [cost, in, out, cache_write, cache_read] (the 13th field)
+        self._session_work_secs = 0.0     # the model's working seconds: every finished reply, minus dialog waits
+        self._reply_started = None        # time.monotonic() of the reply in flight, else None
+        self._input_wait_secs = 0.0       # helpers.input_wait_timer's accumulator, zeroed per reply
+        self._unpriced_noted = set()      # models already announced as having no pricing row
         self.pending_images = []  # list of (base64_data, media_type, filename)
         self._screenshot_scale = 1.0  # ratio to convert image coords → screen coords
         self._screenshot_offset = (0, 0)  # display origin offset for per-display screenshots
@@ -1302,6 +1331,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._save_last_state()
         except Exception:
             pass
+        # A record the slot's previous owner left behind means that SelfBot
+        # died with calls unlogged (killed from outside — the duo's taskkill, a
+        # crash, a reboot): its cost line is written now, from the record,
+        # before anything else can be logged (MyAgent's fold-in, 2026-10-08).
+        self._run_progress_fold_in()
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -4057,9 +4091,13 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             y = self.root.winfo_y() + (self.root.winfo_height() - h) // 2
             self._set_geometry(dlg, f"{w}x{h}+{x}+{y}")
 
-        # Schedule the dialog on the main thread
+        # Schedule the dialog on the main thread. The wait is clocked out of
+        # the reply's working time (helpers.input_wait_timer), as every
+        # dialog wait is in MyAgent, so the cost log's TIME field measures
+        # the model working, not the user's response latency.
         self.root.after(0, ask)
-        event.wait()
+        with input_wait_timer(self):
+            event.wait()
         return result_holder[0]
 
     @staticmethod
@@ -4644,8 +4682,16 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._auto_save_on_close()
         except Exception:
             pass
-        # Log this process's cumulative API cost to the shared APICostLog.txt (skips if 0).
-        self._log_api_cost(self._session_cost)
+        # Log this process's cumulative API cost to the shared cost log — the
+        # one argument list _session_log_args builds for the line and the
+        # in-progress record alike (the zero-cost gate skips a session that
+        # priced nothing) — then remove the record, which is for a session
+        # that never gets here.
+        try:
+            self._log_api_cost(**self._session_log_args())
+        except Exception:
+            pass
+        self._run_progress_clear()
         # Tear down MCP servers (no-op if never connected).
         if _HAS_MYAGENT_TOOLS and _HAS_MCP:
             try:
@@ -5987,6 +6033,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         return cut_at
 
     def stream_worker(self, messages):
+        # The reply's clock, for the cost log's TIME field (_session_secs):
+        # this reply's wall-clock minus the seconds it sits on a
+        # confirmation dialog, which helpers.input_wait_timer accumulates
+        # into _input_wait_secs — MyAgent's run clock, per reply.
+        self._reply_started = time.monotonic()
+        self._input_wait_secs = 0.0
         try:
             # Sync temperature from spinbox in case user typed a value without pressing Enter
             try:
@@ -6359,10 +6411,34 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
 
                 # --- API cost tracking (Anthropic) — accumulate this API call ---
                 if usage:
+                    # The zero-cost gate's flag (MyAgent's had_usage): a call
+                    # answered with usage, priced or not.
+                    self._session_had_usage = True
                     ci = getattr(usage, "input_tokens", 0) or 0
                     co = getattr(usage, "output_tokens", 0) or 0
                     cw = getattr(usage, "cache_creation_input_tokens", 0) or 0
                     cr = getattr(usage, "cache_read_input_tokens", 0) or 0
+                    # The session's token buckets run for every call that
+                    # reported usage, priced or not (MyAgent's rule since
+                    # 2026-09-15): the cost line records them either way...
+                    self._session_tokens_in += ci
+                    self._session_tokens_out += co
+                    self._session_tokens_cache_write += cw
+                    self._session_tokens_cache_read += cr
+                    # ...and under the model that served this call, for the
+                    # cost log's per-model split (a mid-chat model switch, or
+                    # a refusal fallback served by an Opus tier): a dated
+                    # snapshot the API echoes for the configured alias is the
+                    # same model, kept under the name the MODEL field shows.
+                    # The call's cost joins part[0] once it is priced.
+                    served_key = served_model
+                    if re.fullmatch(re.escape(self.model) + r"-\d{8}", served_key):
+                        served_key = self.model
+                    part = self._session_per_model.setdefault(served_key, [0.0, 0, 0, 0, 0])
+                    part[1] += ci
+                    part[2] += co
+                    part[3] += cw
+                    part[4] += cr
                     # Priced by the model that actually served the call (an Opus-tier
                     # fallback bills at ITS rates), falling back to the configured row —
                     # on the rate card the whole prompt (the uncached input plus both
@@ -6382,10 +6458,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                         call_cost += (getattr(getattr(usage, "server_tool_use", None),
                                               "web_search_requests", 0) or 0) * ANTHROPIC_WEB_SEARCH_FEE
                         self._session_cost += call_cost
-                        self._session_tokens_in += ci
-                        self._session_tokens_out += co
-                        self._session_tokens_cache_write += cw
-                        self._session_tokens_cache_read += cr
+                        part[0] += call_cost
                         if pricing.get("long_context") and not getattr(self, "_long_context_noted", False):
                             self._long_context_noted = True
                             self.queue.put({"type": "warning", "content": (
@@ -6404,6 +6477,34 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                             "cache_write_tokens": cw,
                             "cache_read_tokens": cr,
                         })
+                    else:
+                        # No pricing row for the model (MyAgent's unpriced
+                        # warnings, 2026-09-23): said once per model, the call's
+                        # tokens still shown, and the close will skip the line —
+                        # a $0.0000 row would claim the session was free when
+                        # the truth is that the price is unknown.
+                        if served_model not in self._unpriced_noted:
+                            self._unpriced_noted.add(served_model)
+                            self.queue.put({"type": "warning", "content": (
+                                f"⚠ {served_model} has no row in the Anthropic pricing table, so "
+                                "its calls cannot be priced and this session will NOT be written "
+                                "to the API cost log (a $0.0000 line would claim it was free). "
+                                "Add the row in myagent/constants.py.\n")})
+                        self.queue.put({
+                            "type": "cost_update",
+                            "call_cost": None,
+                            "total_cost": None,
+                            "input_tokens": ci,
+                            "output_tokens": co,
+                            "cache_write_tokens": cw,
+                            "cache_read_tokens": cr,
+                        })
+                    # The in-progress record (selfbot_run_<N>.json): the line
+                    # _finish_close would write if the session ended now,
+                    # rewritten after every call, so a SelfBot killed from
+                    # outside — the duo's taskkill, a crash, a reboot — still
+                    # gets its line at the next launch (_run_progress_fold_in).
+                    self._run_progress_write(**self._session_log_args())
 
                 if final_message.stop_reason == "tool_use":
                     # Append the full assistant message (with tool_use blocks) to history
@@ -6481,6 +6582,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.queue.put({"type": "error", "content": str(e)})
         finally:
             self._thaw_system_prompt()
+            # This reply's working time joins the session's (the cost log's
+            # TIME field): wall-clock minus the dialog waits, as in MyAgent.
+            if self._reply_started is not None:
+                self._session_work_secs += max(
+                    0.0, time.monotonic() - self._reply_started - self._input_wait_secs)
+                self._reply_started = None
 
     def _tool_info(self, message):
         """Post a tool_info activity line to the GUI queue.
@@ -6552,57 +6659,344 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 parts.append(f"temp={self.temperature:g}")
         return " ".join(parts)
 
-    def _log_api_cost(self, total_cost):
-        """Append the session's cumulative API cost to this machine's cost log
-        (APICostLog_<machine>.txt in the OneDrive share, repo-root fallback — the
-        SAME file MyAgent writes). Called once when the app closes. Semicolon-delimited
-        {timestamp};{provider};{model};{cost};{params};;{prompt};{calls} so a comma in
-        a model name, the params field or a prompt name can't split a field; 4-decimal
-        cost for spreadsheet summing; params is the comma-joined
-        _get_model_param_summary() string (thinking mode / budget / temperature in
-        effect at close). The 6th field (MyAgent's TIME(sec) run duration) is left
-        EMPTY on purpose — a self-chat's duration is window-open time, not a
-        comparable run metric — so the two 2026-08-16 fields land in the same
-        positions as MyAgent's: prompt (7th → the viewers' INSTRUCTION column) is the
-        active saved system prompt's name — SelfBot's analogue of an Agent
-        Instruction, blank when none is loaded — whitespace-collapsed with any ';'
-        turned into ','; calls (8th → CALLS) is _session_calls, the process's total
-        API round-trips; the 9th-12th fields (2026-09-14 → the viewers' TOKENS
-        columns) are the session's cumulative input / output / cache-write /
-        cache-read token counts, accumulated alongside _session_cost from the
-        same usage object so the log can answer "what is my blended $/MTok?" —
-        input is the NON-cached count and the cache buckets are disjoint, so
-        in+write+read is the true billed input volume. Skipped when the cost is
-        zero (no priced usage — e.g. an unmatched model prefix). Best-effort;
-        never raises."""
+    # ── The cost log — MyAgent's collection, per session (2026-10-14) ──────
+    # _log_api_cost, _cost_split_field, _run_progress_write and
+    # _run_progress_clear are byte-identical copies of StreamingMixin's
+    # (pinned in tests/test_selfbot_costlog.py); _run_progress_fold_in is
+    # the same with SelfBot's wording; _session_log_args, _session_secs and
+    # _run_progress_path are SelfBot's own — a session, not a run, is the
+    # unit here, and the line is written by the close (_finish_close).
+    # See CLAUDE_SELFBOT.md's API cost tracking paragraph.
+
+    def _session_log_args(self):
+        """The cost line's arguments from the live session — MyAgent's
+        _log_run argument list, built in ONE place for the close
+        (_finish_close → _log_api_cost) and the in-progress record
+        (_run_progress_write, after every call) alike, so the two cannot
+        drift: the session's cost and had_usage flag, its working seconds so
+        far, the active saved system prompt's name as the INSTRUCTION field
+        (SelfBot's analogue of an Agent Instruction; blank when none is
+        loaded), the process's call total, the four token buckets, the
+        per-model split and the stem of the chat file the close saved."""
+        return dict(
+            total_cost=self._session_cost,
+            had_usage=self._session_had_usage,
+            duration_secs=self._session_secs(),
+            instruction=getattr(self, "system_prompt_name", "") or "",
+            calls=self._session_calls,
+            tokens=(self._session_tokens_in, self._session_tokens_out,
+                    self._session_tokens_cache_write, self._session_tokens_cache_read),
+            split=self._session_per_model,
+            chat=getattr(self, "_last_saved_chat_name", "") or "")
+
+    def _session_secs(self):
+        """The session's working seconds — the cost log's TIME field: every
+        finished reply's wall-clock minus the seconds it sat on a
+        confirmation dialog (summed in stream_worker's finally), plus the
+        reply in flight so far, measured the same way. The analogue of
+        MyAgent's run clock: the model working, not the window-open time
+        and not the human's typing between messages."""
+        secs = self._session_work_secs
+        if self._reply_started is not None:
+            secs += max(0.0, time.monotonic() - self._reply_started - self._input_wait_secs)
+        return secs
+
+    @staticmethod
+    def _cost_split_field(split, logged_model=None):
+        """The cost log's 13th field (2026-09-27): a run's cost and token
+        buckets per model that served its calls — "model,cost,in,out,
+        cache_write,cache_read" per model, first-used first, joined by "|" —
+        written when MORE than one model served the run (a Model upgrade
+        from an Agent Request reply on, or an Anthropic refusal fallback
+        served by an Opus tier), or when the ONE model that served it is not
+        the row's MODEL field (`logged_model`: a run upgraded on its last
+        reply, whose new model never served a priced call, is logged under the
+        new model — without this field the viewers credited it the original
+        model's whole cost). The viewers' By-model summaries split such a run
+        between its models; every other block, and a line without the field,
+        reads as before. "" when there is nothing to split, and then the
+        field is not written at all. Cost at six places, so the parts sum to
+        the row's four-place total; a model id's field separators, which no
+        provider uses, are neutralised."""
+        if not split:
+            return ""
+        if len(split) < 2 and (logged_model is None or logged_model in split):
+            return ""
+        parts = []
+        for model, (cost, tok_in, tok_out, tok_cw, tok_cr) in split.items():
+            name = str(model).replace(",", "_").replace("|", "_").replace(";", "_")
+            parts.append(f"{name},{cost:.6f},{int(tok_in)},{int(tok_out)},"
+                         f"{int(tok_cw)},{int(tok_cr)}")
+        return "|".join(parts)
+
+    def _log_api_cost(self, total_cost, had_usage=False, duration_secs=None,
+                      instruction="", calls=None, tokens=None, split=None,
+                      chat=None, provider=None, model=None, params=None,
+                      timestamp=None):
+        """Append the run's final cumulative cost to this machine's cost log.
+
+        Called once when stream_worker's agentic loop ends (GUI and headless).
+        Line format:
+        {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
+        ;{in};{out};{cache_write};{cache_read}[;{split}[;{chat}]]
+        — split (13th field, 2026-09-27, `_cost_split_field`) is present
+        only for a run served by more than one model, or by one model other
+        than the MODEL field, which is the model the run ENDED on;
+        — chat (14th field, 2026-10-07) is the stem of the chat files the
+        run's transcript is saved under — <chat>.json + .txt in CHATS_DIR,
+        the saved_chats folder of the OneDrive share since 2026-10-08 (every
+        machine's runs in one folder, so the file this names opens anywhere),
+        the "Save Chat as" name, which every MyAgent run has since the same
+        day (chat_mixin._name_run_chat) — whitespace-collapsed with any ';'
+        turned into ',' like the instruction. When it is written the 13th
+        field is ALWAYS present, blank for a one-model run, so a chat name
+        can never be read as a split; a blank / None chat (SelfBot's caller,
+        a bare host) keeps the 12-/13-field shapes exactly → the viewers'
+        CHAT column, rightmost after INSTRUCTION;
+        — params is the compact _get_model_param_summary() string
+        (comma-joined), so the log records the thinking/temperature settings
+        the run used alongside its cost; secs (6th field, 2026-08-12) is the
+        run's wall-clock duration in whole seconds — minus any time the run
+        sat waiting on user input (user_prompt / confirmation dialogs, since
+        2026-08-13), so it measures the agent working, not the user's
+        response latency — blank when duration_secs is None; instruction
+        (7th field, 2026-08-16) is the name of the saved Agent Instruction
+        the run was launched from (agent_instruction_name, snapshotted at
+        run start — blank for an ad-hoc run), whitespace-collapsed and with
+        any ';' turned into ',' so a name can never split the line; calls
+        (8th field, 2026-08-16) is the run's API-call count — the "Call #N"
+        counter in the output window, one per round-trip of the agentic loop,
+        so every call after the first is a tool-use round-trip — blank when
+        None. tokens (9th-12th fields, 2026-09-14) is the run's cumulative
+        (input, output, cache_write, cache_read) token counts — the same four
+        buckets _get_pricing rates, summed over every call of the agentic
+        loop; they were already accumulated for the output window's running
+        totals and merely discarded at log time, which left the log unable to
+        answer "what is my blended $/MTok for this model?" (cost alone can't
+        separate a 5x rate from a 40x cache-read discount). Written as plain
+        integers, blank when tokens is None (SelfBot's caller, and any run
+        whose provider returned no usage). input_tokens is the NON-cached
+        count and the cache buckets are disjoint for EVERY provider — each
+        normalizer subtracts a subset-style cache hit before emitting
+        (OpenAI/Gemini since 2026-07-31, xAI/Kimi since 2026-09-15, when the
+        gross pass-through was caught double-counting here), and Ollama's
+        counts are summed although it is unpriced — so in+cache_write+cache_read
+        is the run's true billed input volume — do not add input to a cache
+        total expecting a subtotal. Older 4-/5-/6-/8-field lines stay valid
+        and render blank PARAMETERS / TIME(sec) / INSTRUCTION / CALLS /
+        TOKENS columns in the viewers.
+        total_cost is the last cost displayed in the output window.
+        Ollama runs are deliberately free but still logged (cost 0.0000) when
+        at least one call returned usage (had_usage) — local activity shows in
+        the viewers without inflating any spend total. Other zero-cost runs
+        (a paid provider's unmatched model prefix, or a STOP before the first
+        API result) stay skipped: a false $0.0000 line for a PAID provider
+        would claim the run was free when the truth is the price is unknown.
+        The log
+        (APICOST_LOG_FILE via datapaths.resolve_costlog) is
+        APICostLog_<machine>.txt in the OneDrive share — per-machine files
+        never conflict-fork, yet every machine's spend syncs everywhere for
+        the viewers to aggregate — falling back to repo-root APICostLog.txt
+        on solo machines. Best-effort: any I/O failure is reported but never
+        interrupts the run. Returns True when a line was written.
+        provider / model / params / timestamp (2026-10-08) override the
+        live fields for a line written on behalf of ANOTHER run — the
+        in-progress record a killed instance left behind
+        (_run_progress_fold_in): the record's own provider and model, its
+        raw parameter summary (joined here like the live one) and the time
+        of its last completed call, never this process's. None = the live
+        value, so every existing caller writes exactly what it wrote."""
+        provider = provider or self.provider
+        model = model or self.model
         if not total_cost or total_cost <= 0:
-            return
+            if not (provider == "Ollama" and had_usage):
+                q = getattr(self, "queue", None)
+                if had_usage and q is not None:
+                    # A paid provider's run that made calls but could price
+                    # none of them (no pricing row — the 2026-09-23 gpt-6-sol
+                    # report): say so where the user looks for the line,
+                    # rather than skipping in silence.
+                    q.put({"type": "warning", "content": (
+                        f"⚠ Run NOT written to the API cost log: {model} has no "
+                        f"row in the {provider} pricing table, so its cost is "
+                        f"unknown (a $0.0000 line would claim it was free). Add the "
+                        f"row in myagent/constants.py.\n")})
+                return False
+            total_cost = 0.0
         try:
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            params = ", ".join(self._get_model_param_summary().split())
-            prompt = " ".join(str(getattr(self, "system_prompt_name", "") or "")
-                              .split()).replace(";", ",")
-            calls = getattr(self, "_session_calls", 0)
-            # The 14th field (MyAgent's CHAT column, 2026-10-07; here 2026-10-14):
-            # the stem of the chat file the close auto-saved — written with a
-            # blank 13th (MyAgent's per-model split, which a self-chat never
-            # has), so the viewers' rightmost column names the transcript.
-            chat = " ".join(str(getattr(self, "_last_saved_chat_name", "") or "")
-                            .split()).replace(";", ",")
-            line = (f"{timestamp};Anthropic;{self.model};{total_cost:.4f};{params};;"
-                    f"{prompt};{calls};"
-                    f"{self._session_tokens_in};{self._session_tokens_out};"
-                    f"{self._session_tokens_cache_write};"
-                    f"{self._session_tokens_cache_read}"
-                    + (f";;{chat}" if chat else "") + "\n")
+            timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # 5th field: the title-bar parameter summary (e.g. "mode=Adaptive",
+            # "reasoning=Medium temp=1"), comma-joined for log readability —
+            # parts never contain ';' or ',' so the field can't split.
+            summary = self._get_model_param_summary() if params is None else params
+            params = ", ".join(str(summary).split())
+            secs = "" if duration_secs is None else f"{duration_secs:.0f}"
+            # 7th field: the instruction name is user-typed free text —
+            # collapse whitespace (a stray newline would end the record
+            # early) and neutralise the one character that could split it.
+            instr = " ".join(str(instruction or "").split()).replace(";", ",")
+            calls_s = "" if calls is None else f"{int(calls)}"
+            # 9th-12th fields: the run's cumulative token buckets. All four
+            # are blank together when tokens is None — a partially-filled
+            # TOKENS group would read as "zero tokens billed" in the viewers
+            # rather than "not recorded".
+            tok_s = (";;;" if not tokens
+                     else ";".join(f"{int(t)}" for t in tokens))
+            # 13th field: the per-model split, only for a run more than one
+            # model served (or one model other than the MODEL field) — a line
+            # its MODEL field describes keeps its 12 fields exactly.
+            split_s = self._cost_split_field(split, model)
+            # 14th field (2026-10-07): the chat file stem, sanitised like the
+            # instruction. It forces the 13th out, blank or not, so a reader
+            # finds the split at 13 and the chat at 14 whatever the run did.
+            chat_s = " ".join(str(chat or "").split()).replace(";", ",")
+            if chat_s:
+                tail = f";{split_s};{chat_s}"
+            else:
+                tail = f";{split_s}" if split_s else ""
+            # ';' delimiter (not ',') so a comma inside a model name, the
+            # params field or an instruction name can't be misread as a
+            # field separator.
+            line = (f"{timestamp};{provider};{model};"
+                    f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
+                    f"{tok_s}{tail}\n")
             rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
             with open(APICOST_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line)
-        except Exception:
-            pass
+            self._tool_info(f"Logged API cost to {APICOST_LOG_FILE}: {line}")
+            return True
+        except Exception as e:
+            self.queue.put({"type": "warning",
+                            "content": f"⚠ Could not write the API cost log "
+                                       f"({APICOST_LOG_FILE}): {e}\n"})
+            return False
 
+    def _run_progress_path(self):
+        """selfbot_run_<1|2>.json for this instance — None on a host without
+        a state file (the bare test hosts), which therefore never writes
+        one: the real App always has _state_file, and a test harness run
+        beside a live instance must not touch that instance's record."""
+        if not getattr(self, "_state_file", None):
+            return None
+        num = 2 if getattr(self, "_is_second_instance", False) else 1
+        return f"{SELFBOT_RUN_PREFIX}{num}.json"
+
+    def _run_progress_write(self, total_cost, had_usage, duration_secs,
+                            instruction="", calls=None, tokens=None, split=None,
+                            chat=None):
+        """Rewrite this instance's in-progress cost record: the exact
+        arguments _log_run would hand _log_api_cost if the run ended now,
+        plus the live provider / model / parameter summary and the time, so
+        the line can be written later by a process that knows nothing else
+        about the run. stream_worker calls it after every call's cost
+        accounting (on the worker — file IO only, no Tk), and _end_run
+        removes the record after the real line on both tails, so a record
+        found at launch means its instance died with a run in flight: a
+        reboot while parked at an Agent Request (the 2026-10-08 case — a
+        US$7.77 run with a complete transcript and no line), a taskkill, a
+        power cut. Atomic (mkstemp + os.replace) so a kill mid-write leaves
+        the previous record, never a torn one. Best-effort: a failure is
+        reported once per run and never interrupts it."""
+        path = self._run_progress_path()
+        if path is None:
+            return
+        try:
+            record = {
+                "version": 1,
+                "written": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "provider": self.provider,
+                "model": self.model,
+                "params": self._get_model_param_summary(),
+                "total_cost": total_cost,
+                "had_usage": bool(had_usage),
+                "duration_secs": duration_secs,
+                "instruction": instruction or "",
+                "calls": calls,
+                "tokens": list(tokens) if tokens else None,
+                "split": split or {},
+                "chat": chat or "",
+            }
+            fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".",
+                                       suffix=".tmp", dir=os.path.dirname(path))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(record, f, ensure_ascii=False)
+                os.replace(tmp, path)
+            except BaseException:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+        except Exception as e:
+            if not getattr(self, "_run_progress_warned", False):
+                self._run_progress_warned = True
+                self.queue.put({"type": "warning", "content": (
+                    f"⚠ Could not write the in-progress cost record ({path}): {e}\n")})
+
+    def _run_progress_clear(self):
+        """Remove this instance's in-progress record: the run ended and
+        _log_run has written (or deliberately skipped) its line. Called by
+        stream_worker's _end_run on both tails, AFTER _log_run."""
+        self._run_progress_warned = False
+        path = self._run_progress_path()
+        if path is None:
+            return
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            self.queue.put({"type": "warning", "content": (
+                f"⚠ Could not remove the in-progress cost record ({path}): {e}\n")})
+
+    def _run_progress_fold_in(self):
+        """At launch, once this process knows its instance slot (SelfBot's
+        __init__): a record the slot's previous owner left behind means that
+        instance died with a run in flight — killed from outside, since both
+        loop-end tails remove the record after the line — so its cost line is
+        written NOW from the record: under the record's own provider / model
+        / parameters, stamped with the time of its last completed call, with
+        `unfinished@call<N>` appended to PARAMETERS (the viewers show it in
+        that column; the cost counts, it was spent). The zero-cost gate
+        applies as it would have at the run's end. The record is removed
+        whatever happens (an unreadable one is reported, not retried at every
+        launch). Returns True when a line was written."""
+        path = self._run_progress_path()
+        if path is None or not os.path.exists(path):
+            return False
+        written = False
+        try:
+            with open(path, encoding="utf-8") as f:
+                rec = json.load(f)
+            if not isinstance(rec, dict):
+                raise ValueError("not a JSON object")
+            calls = rec.get("calls")
+            marker = f"unfinished@call{int(calls)}" if calls else "unfinished"
+            summary = str(rec.get("params") or "")
+            tokens = rec.get("tokens")
+            written = self._log_api_cost(
+                float(rec.get("total_cost") or 0.0), bool(rec.get("had_usage")),
+                rec.get("duration_secs"),
+                instruction=rec.get("instruction") or "", calls=calls,
+                tokens=tuple(tokens) if tokens else None,
+                split=rec.get("split") or None, chat=rec.get("chat") or "",
+                provider=rec.get("provider") or None,
+                model=rec.get("model") or None,
+                params=f"{summary} {marker}".strip(),
+                timestamp=rec.get("written") or None)
+            if written:
+                self.queue.put({"type": "warning", "content": (
+                    f"⚠ The previous session of this SelfBot instance ended without "
+                    f"its cost line (it was killed with calls unlogged — chat "
+                    f"{rec.get('chat') or '?'}): logged now as {marker}.\n")})
+        except Exception as e:
+            self.queue.put({"type": "warning", "content": (
+                f"⚠ Could not fold in the in-progress cost record ({path}): {e}\n")})
+        self._run_progress_clear()
+        return written
     def _ensure_newline(self):
         """Ensure the chat display ends with a newline so the next insert starts on a fresh line."""
         end_pos = self.chat_display.index("end-1c")
@@ -6733,11 +7127,18 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                     if cr:
                         parts.append(f"cache_read:{cr:,}")
                     token_str = "  ".join(parts)
-                    # Magnitude-dependent precision: sub-cent totals show 4 decimals.
-                    total_str = f"{total_cost:.4f}" if total_cost < 0.01 else f"{total_cost:.2f}"
-                    self._chat_insert(
-                        (f"  ${call_cost:.4f} this call  |  ${total_str} session  ({token_str})\n",
-                         "cost_info"))
+                    if call_cost is None:
+                        # An unpriced call (no pricing row for the model): the
+                        # tokens alone, in MyAgent's words.
+                        self._chat_insert(
+                            (f"  unpriced this call  |  no pricing row  ({token_str})\n",
+                             "cost_info"))
+                    else:
+                        # Magnitude-dependent precision: sub-cent totals show 4 decimals.
+                        total_str = f"{total_cost:.4f}" if total_cost < 0.01 else f"{total_cost:.2f}"
+                        self._chat_insert(
+                            (f"  ${call_cost:.4f} this call  |  ${total_str} session  ({token_str})\n",
+                             "cost_info"))
                 elif msg["type"] == "ensure_newline":
                     self.chat_display.config(state="normal")
                     self._ensure_newline()

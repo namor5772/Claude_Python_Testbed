@@ -43,6 +43,8 @@ selfbot.lock
 agent_lock_*.lock
 agent_run_*.json
 agent_run_*.json.*.tmp
+selfbot_run_*.json
+selfbot_run_*.json.*.tmp
 
 # SelfBot runtime IPC files (cross-instance message passing; created/deleted at runtime)
 selfbot_auto_msg.json
