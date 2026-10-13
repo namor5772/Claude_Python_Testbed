@@ -170,25 +170,81 @@ static void testGeometryState() {
     writeText(f, "{\n  \"geometry\": \"1064x550+1008+70\",\n  \"filter_done\": \"active\",\n"
                  "  \"filter_priority\": \"High\",\n  \"filter_category\": \"Work\",\n"
                  "  \"sort_col\": null,\n  \"sort_reverse\": false\n}");
-    UiState s = loadState(f);
-    CHECK(s.geometry == "1064x550+1008+70" && s.filterDone == "active" &&
+    UiState s = loadState(f, "k");
+    CHECK(s.geometry == "1064x550+1008+70" && s.layoutGeometry.empty() && s.filterDone == "active" &&
               s.filterPriority == "High" && s.filterCategory == "Work" && s.sortCol.empty() &&
               !s.sortReverse,
-          "load Python-written state");
+          "load Python-written state (no per-layout entry yet)");
 
     s.sortCol = "due";
     s.sortReverse = true;
-    CHECK(saveState(f, s), "save state");
-    UiState s2 = loadState(f);
-    CHECK(s2.sortCol == "due" && s2.sortReverse && s2.filterDone == "active",
-          "state round-trip");
+    CHECK(saveState(f, s, "k"), "save state");
+    UiState s2 = loadState(f, "k");
+    CHECK(s2.sortCol == "due" && s2.sortReverse && s2.filterDone == "active" &&
+              s2.layoutGeometry == "1064x550+1008+70",
+          "state round-trip, the geometry filed under this layout's key");
     s2.sortCol = "";
-    saveState(f, s2);
+    saveState(f, s2, "k");
     CHECK(readText(f).find("null") != std::string::npos, "empty sort_col saved as JSON null");
 
-    UiState d = loadState(pathJoin(dir, "missing.json"));
-    CHECK(d.filterDone == "all" && d.filterPriority == "All" && d.geometry.empty(),
+    UiState d = loadState(pathJoin(dir, "missing.json"), "k");
+    CHECK(d.filterDone == "all" && d.filterPriority == "All" && d.geometry.empty() &&
+              d.layoutGeometry.empty(),
           "missing state file yields defaults");
+
+    // ── window placement (2026-10-13, TodoList.py's rule) ──
+    const std::vector<MonitorRect> LAPTOP{{0, 0, 1707, 1067}};
+    const std::vector<MonitorRect> DOCKED{{0, 0, 1707, 1067}, {2541, 0, 4461, 1080}};
+    const std::string SAVED_DOCKED = "1920x1009+2541+17";
+    CHECK(layoutKey(LAPTOP) == "0,0,1707,1067", "layout key: one screen");
+    CHECK(layoutKey({{2541, 0, 4461, 1080}, {0, 0, 1707, 1067}}) == "0,0,1707,1067|2541,0,4461,1080",
+          "layout key: sorted, TodoList.py's format");
+    CHECK(!geometryVisible(SAVED_DOCKED, LAPTOP), "the docked position is off the undocked laptop");
+    CHECK(geometryVisible(SAVED_DOCKED, DOCKED), "and on the docked layout");
+    CHECK(geometryVisible("800x600+1657+0", LAPTOP), "50 px of the title strip on screen is enough");
+    CHECK(!geometryVisible("800x600+1658+0", LAPTOP), "49 px is not");
+    CHECK(geometryVisible("800x600+0+-20", LAPTOP), "10 px of the title strip is enough");
+    CHECK(!geometryVisible("800x600+0+-21", LAPTOP), "9 px is not");
+    CHECK(!geometryVisible("800x600+0+1060", LAPTOP), "below the bottom edge");
+    CHECK(!geometryVisible("900x550", LAPTOP), "a size alone is no position");
+    CHECK(!geometryVisible(SAVED_DOCKED, {}), "no screens known");
+    MonitorRect p = primaryRect({{-2560, 0, 0, 1440}, {0, 0, 2560, 1440}});
+    CHECK(p.left == 0 && p.right == 2560, "the primary is the screen holding the origin");
+    p = primaryRect({{100, 100, 900, 700}});
+    CHECK(p.left == 100 && p.top == 100, "else the first");
+    CHECK(centredGeometry(1000, 620, {0, 0, 1707, 1067}) == "1000x620+353+223", "centred on a screen");
+    CHECK(centredGeometry(3000, 2000, {0, 0, 1707, 1067}) == "1707x1067+0+0", "shrunk to fit");
+    CHECK(restoreGeometry("900x600+100+50", SAVED_DOCKED, LAPTOP) == "900x600+100+50",
+          "this layout's own entry first");
+    CHECK(restoreGeometry("", SAVED_DOCKED, DOCKED) == SAVED_DOCKED,
+          "docked again, the last used position comes back");
+    CHECK(restoreGeometry("", SAVED_DOCKED, LAPTOP) == "1707x1009+0+29",
+          "undocked: the saved SIZE shrunk to the panel and centred - TodoList.py's exact answer");
+    CHECK(restoreGeometry("", "", LAPTOP) == "900x550+403+258", "nothing saved: the default centred on the primary");
+    CHECK(restoreGeometry("", "900x550", LAPTOP) == "900x550+403+258", "a size-only value is not a position");
+    CHECK(restoreGeometry("", "1x1+0+0", LAPTOP) == "900x550+403+258", "a junk size is not kept");
+    CHECK(restoreGeometry("300x200+5+5", "1200x800+9000+5", LAPTOP) == "1200x800+253+133",
+          "the first usable size wins the fallback");
+
+    // Per-layout memory shared with TodoList.py: this layout's entry loads, a
+    // save keeps the other layouts' entries, the flat key and unknown keys.
+    const std::string DOCKED_KEY = layoutKey(DOCKED), LAPTOP_KEY = layoutKey(LAPTOP);
+    std::string f2 = pathJoin(dir, "layouts.json");
+    writeText(f2, "{\"geometry\": \"" + SAVED_DOCKED + "\", \"geometries\": {\"" + DOCKED_KEY + "\": \"" +
+                      SAVED_DOCKED + "\"}, \"filter_done\": \"all\", \"future_key\": [1, 2]}");
+    UiState l = loadState(f2, DOCKED_KEY);
+    CHECK(l.layoutGeometry == SAVED_DOCKED && l.geometry == SAVED_DOCKED, "this layout's entry loads");
+    CHECK(loadState(f2, LAPTOP_KEY).layoutGeometry.empty(), "no entry for a layout not seen yet");
+    l.geometry = "900x600+100+50";
+    CHECK(saveState(f2, l, LAPTOP_KEY), "save under the undocked key");
+    CHECK(loadState(f2, LAPTOP_KEY).layoutGeometry == "900x600+100+50" &&
+              loadState(f2, DOCKED_KEY).layoutGeometry == SAVED_DOCKED,
+          "each layout keeps its own entry");
+    CHECK(loadState(f2, "other").geometry == "900x600+100+50", "the flat key is the last used position");
+    id doc = jsonRead(f2);
+    CHECK([doc isKindOfClass:[NSDictionary class]] && [doc[@"geometries"] count] == 2 &&
+              doc[@"future_key"] != nil && [doc count] == 8,
+          "both layouts, the app's keys and the unknown key kept");
 }
 
 // ── loadData / writeDataFile contract ─────────────────────────────────

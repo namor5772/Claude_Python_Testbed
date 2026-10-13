@@ -480,7 +480,8 @@ static std::vector<VisibleRow> visibleRows(NSArray *todos, const std::string &fi
 // ── Per-machine UI state (todo_state.json — same schema as the .py) ───
 
 struct UiState {
-    std::string geometry;         // Tk-style "WxH+X+Y" ("" = none saved)
+    std::string geometry;         // Tk-style "WxH+X+Y", the last used position ("" = none saved)
+    std::string layoutGeometry;   // this monitor layout's entry in "geometries" ("" = none)
     std::string filterDone = "all";
     std::string filterPriority = "All";
     std::string filterCategory = "All";
@@ -488,7 +489,7 @@ struct UiState {
     bool sortReverse = false;
 };
 
-static UiState loadState(const std::string &path) {
+static UiState loadState(const std::string &path, const std::string &layoutKey) {
     UiState s;
     id data = jsonRead(path);
     if (![data isKindOfClass:[NSDictionary class]]) return s;
@@ -498,6 +499,11 @@ static UiState loadState(const std::string &path) {
         return [v isKindOfClass:[NSString class]] ? cstr(v) : fallback;
     };
     s.geometry = str(@"geometry", "");
+    id map = d[@"geometries"];
+    if ([map isKindOfClass:[NSDictionary class]]) {
+        id g = ((NSDictionary *)map)[nstr(layoutKey)];
+        if ([g isKindOfClass:[NSString class]]) s.layoutGeometry = cstr(g);
+    }
     s.filterDone = str(@"filter_done", "all");
     s.filterPriority = str(@"filter_priority", "All");
     s.filterCategory = str(@"filter_category", "All");
@@ -507,15 +513,28 @@ static UiState loadState(const std::string &path) {
     return s;
 }
 
-static bool saveState(const std::string &path, const UiState &s) {
-    NSDictionary *doc = @{
-        @"geometry" : nstr(s.geometry),
-        @"filter_done" : nstr(s.filterDone),
-        @"filter_priority" : nstr(s.filterPriority),
-        @"filter_category" : nstr(s.filterCategory),
-        @"sort_col" : s.sortCol.empty() ? (id)[NSNull null] : (id)nstr(s.sortCol),
-        @"sort_reverse" : s.sortReverse ? @YES : @NO,
-    };
+// TodoList.py's state_for_save: "geometry" is the last used position (the one
+// key every earlier build read and wrote), this layout's entry is filed in
+// "geometries" with every other layout's kept, the app's own keys follow, and
+// any key the file held that this build does not know stays as it was
+// (NSJSONSerialization orders the keys its own way; the schema is the same).
+static bool saveState(const std::string &path, const UiState &s, const std::string &layoutKey) {
+    id existing = jsonRead(path);
+    NSMutableDictionary *doc = [existing isKindOfClass:[NSDictionary class]]
+                                   ? [(NSDictionary *)existing mutableCopy]
+                                   : [NSMutableDictionary dictionary];
+    id map = doc[@"geometries"];
+    NSMutableDictionary *geometries = [map isKindOfClass:[NSDictionary class]]
+                                          ? [(NSDictionary *)map mutableCopy]
+                                          : [NSMutableDictionary dictionary];
+    geometries[nstr(layoutKey)] = nstr(s.geometry);
+    doc[@"geometry"] = nstr(s.geometry);
+    doc[@"geometries"] = geometries;
+    doc[@"filter_done"] = nstr(s.filterDone);
+    doc[@"filter_priority"] = nstr(s.filterPriority);
+    doc[@"filter_category"] = nstr(s.filterCategory);
+    doc[@"sort_col"] = s.sortCol.empty() ? (id)[NSNull null] : (id)nstr(s.sortCol);
+    doc[@"sort_reverse"] = s.sortReverse ? @YES : @NO;
     NSData *data = [NSJSONSerialization dataWithJSONObject:doc
                                                    options:NSJSONWritingPrettyPrinted
                                                      error:nil];
@@ -551,6 +570,90 @@ static std::string formatGeometry(long w, long h, long x, long y) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%ldx%ld+%ld+%ld", w, h, x, y);
     return buf;
+}
+
+// ── Window placement (TodoList.py's rule, 2026-10-13) ────────────────
+//
+// The window's geometry is remembered PER MONITOR LAYOUT and a saved position
+// is applied only when a connected screen shows it: TodoList.py restored a
+// position saved on a docked second monitor verbatim after the undock and
+// opened entirely off-screen, and this port did the same. todo_state.json's
+// "geometries" map (layout key -> geometry) is shared with TodoList.py, whose
+// helpers these mirror; a MonitorRect is a screen in the geometry string's
+// own units — points from the primary's top-left, see monitorRects.
+
+struct MonitorRect { long left, top, right, bottom; };
+
+static const long DEFAULT_W = 900, DEFAULT_H = 550;  // with nothing saved, centred on the primary
+static const long MIN_W = 700, MIN_H = 400;          // the minsize; a smaller SAVED size is junk
+// A saved position is usable only if enough of the window's title bar lands
+// on a connected screen to grab it (MyAgent's rule): at least
+// GEOMETRY_VISIBLE_W px wide, and at least GEOMETRY_TITLE_VISIBLE_H px of the
+// window's top GEOMETRY_TITLE_STRIP px.
+static const long GEOMETRY_VISIBLE_W = 50, GEOMETRY_TITLE_STRIP = 30, GEOMETRY_TITLE_VISIBLE_H = 10;
+
+// The state file's key for a monitor layout: every rect, sorted, joined —
+// TodoList.py's layout_key, so both builds share one entry per layout.
+static std::string layoutKey(std::vector<MonitorRect> rects) {
+    std::sort(rects.begin(), rects.end(), [](const MonitorRect &a, const MonitorRect &b) {
+        if (a.left != b.left) return a.left < b.left;
+        if (a.top != b.top) return a.top < b.top;
+        if (a.right != b.right) return a.right < b.right;
+        return a.bottom < b.bottom;
+    });
+    std::string key;
+    for (const MonitorRect &r : rects) {
+        char buf[96];
+        snprintf(buf, sizeof(buf), "%s%ld,%ld,%ld,%ld", key.empty() ? "" : "|", r.left, r.top,
+                 r.right, r.bottom);
+        key += buf;
+    }
+    return key;
+}
+
+// True when enough of the window's title strip lies on SOME screen to grab
+// it — per screen, not the virtual desktop's bounding box, whose dead
+// corners on an L-shaped layout would pass.
+static bool geometryVisible(const std::string &geo, const std::vector<MonitorRect> &rects) {
+    auto g = parseGeometry(geo);
+    if (!g) return false;
+    for (const MonitorRect &r : rects) {
+        long overlapW = std::min(g->x + g->w, r.right) - std::max(g->x, r.left);
+        long overlapH = std::min(g->y + GEOMETRY_TITLE_STRIP, r.bottom) - std::max(g->y, r.top);
+        if (overlapW >= GEOMETRY_VISIBLE_W && overlapH >= GEOMETRY_TITLE_VISIBLE_H) return true;
+    }
+    return false;
+}
+
+// The screen holding the origin (the primary), else the first.
+static MonitorRect primaryRect(const std::vector<MonitorRect> &rects) {
+    for (const MonitorRect &r : rects)
+        if (r.left <= 0 && 0 < r.right && r.top <= 0 && 0 < r.bottom) return r;
+    return rects.empty() ? MonitorRect{0, 0, DEFAULT_W, DEFAULT_H} : rects.front();
+}
+
+// w x h shrunk to fit r and centred in it, as a geometry string.
+static std::string centredGeometry(long w, long h, const MonitorRect &r) {
+    w = std::min(w, r.right - r.left);
+    h = std::min(h, r.bottom - r.top);
+    return formatGeometry(w, h, r.left + (r.right - r.left - w) / 2, r.top + (r.bottom - r.top - h) / 2);
+}
+
+// The geometry to open with: this layout's saved one when a screen still
+// shows it, else the last used one (the flat "geometry" every build writes)
+// when one does; otherwise the saved SIZE — the user's resize survives, only
+// the position is lost — or the default, centred on the primary screen.
+static std::string restoreGeometry(const std::string &layoutGeo, const std::string &lastGeo,
+                                   const std::vector<MonitorRect> &rects) {
+    long w = DEFAULT_W, h = DEFAULT_H;
+    bool sized = false;
+    for (const std::string &geo : {layoutGeo, lastGeo}) {
+        auto g = parseGeometry(geo);
+        if (!g || g->w < MIN_W || g->h < MIN_H) continue;
+        if (geometryVisible(geo, rects)) return formatGeometry(g->w, g->h, g->x, g->y);
+        if (!sized) { w = g->w; h = g->h; sized = true; }
+    }
+    return centredGeometry(w, h, primaryRect(rects));
 }
 
 // ── Globals (computed once in main, injected by tests) ────────────────
@@ -598,6 +701,23 @@ static NSColor *hexColor(unsigned rgb) {
                                NSTableViewDataSource, NSTableViewDelegate>
 @end
 
+// Every connected screen's rect in the geometry string's units — points from
+// the primary screen's top-left, y downward (Cocoa's y runs upward from its
+// bottom-left) — the frame TodoList.py reads from CoreGraphics, so both
+// builds compute the same layout key and share todo_state.json's entries.
+static std::vector<MonitorRect> monitorRects() {
+    std::vector<MonitorRect> rects;
+    NSArray<NSScreen *> *screens = [NSScreen screens];
+    CGFloat screenTop = screens.count ? NSMaxY(screens.firstObject.frame) : 0;
+    for (NSScreen *s in screens) {
+        NSRect f = s.frame;
+        long left = (long)f.origin.x, top = (long)(screenTop - NSMaxY(f));
+        rects.push_back(MonitorRect{left, top, left + (long)f.size.width, top + (long)f.size.height});
+    }
+    if (rects.empty()) rects.push_back(MonitorRect{0, 0, DEFAULT_W, DEFAULT_H});
+    return rects;
+}
+
 @implementation TodoApp {
     NSWindow *_window;
     NSTextField *_entryText, *_entryDue, *_statusLabel;
@@ -615,7 +735,6 @@ static NSColor *hexColor(unsigned rgb) {
     Mtime _dataMtime;
     bool _modalOpen;   // edit dialog open — pause the sync auto-reload
     bool _stateSaved;  // close/quit both save; only the first wins
-    bool _geometryApplied;
     NSDictionary *_editCtx;  // widgets of the (single) open edit dialog
 }
 
@@ -1198,7 +1317,6 @@ static NSColor *hexColor(unsigned rgb) {
 - (void)applyGeometry:(const std::string &)geo {
     auto g = parseGeometry(geo);
     if (!g) return;
-    _geometryApplied = true;
     [_window setContentSize:NSMakeSize(g->w, g->h)];
     // Tk offsets are from the primary screen's top-left, y downward; Cocoa's
     // origin is its bottom-left, y upward
@@ -1217,8 +1335,11 @@ static NSColor *hexColor(unsigned rgb) {
 }
 
 - (void)loadUiState {
-    UiState s = loadState(gStateFile);
-    if (!s.geometry.empty()) [self applyGeometry:s.geometry];
+    std::vector<MonitorRect> rects = monitorRects();
+    UiState s = loadState(gStateFile, layoutKey(rects));
+    // This layout's saved position where a screen shows it, else the last
+    // used one, else the saved size centred on the primary — never off-screen
+    [self applyGeometry:restoreGeometry(s.layoutGeometry, s.geometry, rects)];
     _filterDone = s.filterDone;
     _filterPriority = s.filterPriority;
     _filterCategory = s.filterCategory;
@@ -1243,7 +1364,7 @@ static NSColor *hexColor(unsigned rgb) {
     s.filterCategory = _filterCategory;
     s.sortCol = _sortCol;
     s.sortReverse = _sortReverse;
-    saveState(gStateFile, s);
+    saveState(gStateFile, s, layoutKey(monitorRects()));
 }
 
 // Deliberately NO data save on close: every action already saves
@@ -1282,7 +1403,6 @@ static NSColor *hexColor(unsigned rgb) {
                                                 userInfo:nil
                                                  repeats:YES];
 
-    if (!_geometryApplied) [_window center];
     [_window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 }

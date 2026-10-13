@@ -118,9 +118,9 @@ DEFAULT_CATEGORIES = ["General", "Work", "Personal", "Errands"]
 # saved on the laptop's docked second monitor was restored verbatim after the
 # undock and the window opened entirely off-screen. `monitors` is a list of
 # (left, top, right, bottom) rects, `state` the state file's dict. The native
-# ports (TodoList.cpp / .mm) read and write the flat `geometry` alone — the
-# last used position, which both builds keep writing — and rewrite the file
-# from scratch on close, so the per-layout map lives only between their saves.
+# ports (TodoList.cpp / .mm) carry the same rule and share the `geometries`
+# map — their entry lands under the same key, verified on Windows — and the
+# flat `geometry` stays the last used position every build writes.
 
 DEFAULT_SIZE = (900, 550)  # the window with nothing saved, centred on the primary monitor
 MIN_SIZE = (700, 400)  # the window's minsize; a smaller SAVED size is junk and falls back to DEFAULT_SIZE
