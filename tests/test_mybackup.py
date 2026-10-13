@@ -5,8 +5,9 @@ whatever TO holds that FROM does not, the engine is kept pure (no Tk) and
 pinned here on real temp trees: the setup file round trip, every row-level
 safety rule and the cross-row TO clash, the plan (size + mtime comparison,
 type swaps, deepest-first directory deletes, deletions suppressed after an
-incomplete FROM scan), the execution (read-only files on Windows, links left
-alone, cancellation), run_rows's one confirmation and per-row independence,
+incomplete FROM scan), the execution (read-only files on Windows, immutable files on macOS, a copy
+that carries no file flags or extended attributes, links left alone,
+cancellation), run_rows's one confirmation and per-row independence,
 the headless entry point's exit codes, and the shared line formatting.
 
 MyBackup is importable in-process: the module builds no Tk root (App is only
@@ -15,6 +16,7 @@ constructed in main()), like SelfBot.
 
 import contextlib
 import csv
+import errno
 import io
 import json
 import os
@@ -86,6 +88,19 @@ def can_symlink(base):
     return True
 
 
+def clear_flags(base):
+    """Drop every BSD file flag under base: an immutable file or folder a test
+    left behind would otherwise survive the temp directory's cleanup."""
+    if not hasattr(os, "chflags"):
+        return
+    for dirpath, dirnames, filenames in os.walk(base):
+        for name in dirnames + filenames:
+            try:
+                os.chflags(os.path.join(dirpath, name), 0)
+            except OSError:
+                pass
+
+
 class TempTreeCase(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -95,6 +110,7 @@ class TempTreeCase(unittest.TestCase):
         os.makedirs(self.src)
 
     def tearDown(self):
+        clear_flags(self.base)
         for dirpath, _dirnames, filenames in os.walk(self.base):
             for name in filenames:
                 try:
@@ -373,6 +389,48 @@ class ExecuteTests(TempTreeCase):
         self.assertEqual(result.errors, [])
         self.assertEqual(read_tree(self.dst), {"ro.txt": "new content"})
 
+    def test_a_copy_carries_data_mode_and_time_but_no_flags_or_attributes(self):
+        """2026-10-14, the Mac mirroring OneDrive onto an exFAT drive: copy2's last
+        step stamped the source's "tracked" flag on the copy and exFAT refused it
+        ("Invalid argument") AFTER the data and the time had landed — 1,291 copies
+        reported as failed; and copyfile's macOS fast path carried the extended
+        attributes, which exFAT keeps as `._name` sidecars the next run deletes.
+        So a copy is a plain read / write loop plus mode and utime, and neither
+        copy2, copyfile nor chflags is ever called."""
+        make_tree(self.src, {"a.txt": "alpha"})
+        set_mtime(os.path.join(self.src, "a.txt"), time.time() - 1000)
+        os.chmod(os.path.join(self.src, "a.txt"), stat.S_IREAD)
+        refuse = mock.Mock(side_effect=OSError(errno.EINVAL, "Invalid argument"))
+        with mock.patch.object(os, "chflags", refuse, create=True), \
+                mock.patch.object(shutil, "copy2", refuse), mock.patch.object(shutil, "copyfile", refuse):
+            plan, result = self.mirror()
+        self.assertEqual(result.errors, [])
+        refuse.assert_not_called()
+        self.assertEqual(read_tree(self.dst), {"a.txt": "alpha"})
+        src_stat = os.stat(os.path.join(self.src, "a.txt"))
+        dst_stat = os.stat(os.path.join(self.dst, "a.txt"))
+        self.assertAlmostEqual(src_stat.st_mtime, dst_stat.st_mtime, delta=mb.MTIME_TOLERANCE,
+                               msg="the modification time comes along: it is the basis of the next comparison")
+        self.assertFalse(dst_stat.st_mode & stat.S_IWRITE, "the mode bits come along: a read-only source, a read-only copy")
+
+    @unittest.skipUnless(hasattr(os, "chflags"), "file flags are a BSD / macOS matter")
+    def test_immutable_files_and_folders_are_deleted_and_overwritten(self):
+        """macOS shows an exFAT read-only attribute as the immutable flag (`uchg`),
+        which chmod does not clear: the 853 git objects a Windows clone had
+        written read-only refused every delete and overwrite on 2026-10-14."""
+        make_tree(self.src, {"ro.txt": "new content"})
+        make_tree(self.dst, {"ro.txt": "old", "stale.txt": "x", "stale_dir/": None})
+        set_mtime(os.path.join(self.dst, "ro.txt"), time.time() - 500)
+        for name in ("ro.txt", "stale.txt", "stale_dir"):
+            try:
+                os.chflags(os.path.join(self.dst, name), stat.UF_IMMUTABLE)
+            except OSError as exc:
+                self.skipTest(f"this filesystem takes no immutable flag: {exc}")
+        plan, result = self.mirror()
+        self.assertEqual(result.errors, [])
+        self.assertEqual(read_tree(self.dst), {"ro.txt": "new content"})
+        self.assertEqual((result.copied, result.deleted_files, result.deleted_dirs), (1, 1, 1))
+
     def test_cancel_before_copying_leaves_the_destination_alone(self):
         make_tree(self.src, {"a.txt": "a", "b.txt": "b"})
         cancel = threading.Event()
@@ -429,14 +487,14 @@ class ExecuteTests(TempTreeCase):
 
     def test_errors_are_recorded_per_item_and_the_run_goes_on(self):
         make_tree(self.src, {"a.txt": "a", "b.txt": "b"})
-        real_copy2 = shutil.copy2
+        real_copy = mb._copy_contents
 
-        def failing_copy2(src, dst, **kw):
+        def failing_copy(src, dst):
             if src.endswith("a.txt"):
                 raise PermissionError(32, "The process cannot access the file because it is being used")
-            return real_copy2(src, dst, **kw)
+            return real_copy(src, dst)
 
-        with mock.patch("shutil.copy2", new=failing_copy2):
+        with mock.patch.object(mb, "_copy_contents", new=failing_copy):
             plan, result = self.mirror()
         self.assertEqual(result.copied, 1)
         self.assertEqual(len(result.errors), 1)

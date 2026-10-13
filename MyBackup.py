@@ -56,6 +56,7 @@ DEFAULT_SETUP_FILE = os.path.join(CONFIG_DIR, "backup_setup.csv")
 LOG_FILE = os.path.join(CONFIG_DIR, "mybackup.log")
 LOG_MAX_BYTES = 1_000_000  # one-slot rotation to mybackup.log.1, like the suite's other runtime logs
 MTIME_TOLERANCE = 2.0  # seconds: FAT32 keeps modification times to 2 s (exFAT to 10 ms, NTFS to 100 ns)
+COPY_BUFFER = 1 << 20  # bytes per read in a copy — a plain loop on purpose, see _copy_contents
 MAX_ERROR_LINES = 50  # per row, in the log pane and file — the error COUNT is always exact
 DEFAULT_SIZE = (1000, 620)  # the window with nothing saved, centred on the primary monitor
 MIN_SIZE = (720, 460)  # the window's minsize; a smaller SAVED size is junk and falls back to DEFAULT_SIZE
@@ -353,17 +354,32 @@ def plan_mirror(src, dst, row=0):
     return plan
 
 
+def _make_writable(path):
+    """Clear what stops a delete or an overwrite. First the immutable flag,
+    where the platform has one: macOS shows the read-only attribute of an
+    exFAT (or NTFS) file as `uchg`, which chmod does not touch — the 853 git
+    objects a Windows clone had written read-only refused every delete and
+    overwrite with "Operation not permitted" on 2026-10-14. Then the read-only
+    mode bits, which is all Windows needs."""
+    if hasattr(os, "chflags"):
+        try:
+            os.chflags(path, 0)
+        except OSError:
+            pass
+    os.chmod(path, stat.S_IWRITE)
+
+
 def _remove_file(path):
     """Remove a file or a link (never a link's target). Windows refuses a
     plain remove on a read-only file and on a link to a directory, which it
-    removes with rmdir instead."""
+    removes with rmdir instead; macOS refuses one on an immutable file."""
     try:
         os.remove(path)
     except PermissionError:
         if os.path.islink(path) or _isjunction(path):
             os.rmdir(path)
             return
-        os.chmod(path, stat.S_IWRITE)
+        _make_writable(path)
         os.remove(path)
 
 
@@ -371,20 +387,39 @@ def _remove_dir(path):
     try:
         os.rmdir(path)
     except PermissionError:
-        os.chmod(path, stat.S_IWRITE)
+        _make_writable(path)
         os.rmdir(path)
+
+
+def _copy_contents(src, dst):
+    """src's bytes, mode bits and timestamps onto dst — and nothing else.
+    Not shutil.copy2: its last step stamps the source's BSD file flags on the
+    copy, and a flag the destination cannot hold fails the whole copy AFTER
+    the data and the time have landed (OneDrive marks every synced file
+    "tracked"; exFAT answers "Invalid argument", which copystat does not
+    forgive — 1,291 such false failures on the Mac, 2026-10-14). Not
+    shutil.copyfile either: on macOS its fcopyfile fast path carries the
+    extended attributes too, which exFAT keeps as a `._name` sidecar beside
+    the copy — an extra the next run deletes and the run after re-creates.
+    A mirror compares size and mtime; flags and attributes are the source
+    machine's business."""
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        shutil.copyfileobj(fsrc, fdst, COPY_BUFFER)
+    st = os.stat(src)
+    os.chmod(dst, stat.S_IMODE(st.st_mode))
+    os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
 
 
 def _copy_file(src, dst):
     try:
-        shutil.copy2(src, dst)
+        _copy_contents(src, dst)
     except PermissionError:
         if not os.path.isfile(dst):
             raise
-        # copy2 keeps the read-only bit, so an earlier copy of a read-only file
-        # cannot be overwritten until the bit is cleared.
-        os.chmod(dst, stat.S_IWRITE)
-        shutil.copy2(src, dst)
+        # The copy keeps the read-only bit (Windows: the attribute), so an
+        # earlier copy of a read-only file cannot be overwritten until cleared.
+        _make_writable(dst)
+        _copy_contents(src, dst)
 
 
 def execute_plan(plan, report=None, cancel=None):
