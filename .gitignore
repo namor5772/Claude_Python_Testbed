@@ -49,6 +49,7 @@ selfbot_run_*.json.*.tmp
 # SelfBot runtime IPC files (cross-instance message passing; created/deleted at runtime)
 selfbot_auto_msg.json
 selfbot_inject.txt
+selfbot_busy_*.flag
 
 # Error logs
 launch_err.txt

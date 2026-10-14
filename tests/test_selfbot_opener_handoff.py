@@ -54,8 +54,13 @@ class _FakeText:
         self.text = ""
         self.inserts = []           # (text, tag) in order
 
-    def get(self, *_index):
+    def get(self, *index):
+        if index == ("end-2c", "end-1c"):   # _ensure_newline's last character
+            return self.text[-1:]
         return self.text
+
+    def index(self, _index):
+        return "2.0" if self.text else "1.0"
 
     def insert(self, _index, text, tag=None):
         self.text += text
@@ -102,6 +107,9 @@ def _host(instance2=False, pid=1, label="Shaun", auto=True):
     app._my_pid = pid
     app._response_count = 0
     app._first_message_text = ""
+    app._held_for_partner = False
+    app._stashed_draft = ""
+    app._pass_pending = False
     app._current_response_text = ""
     app._current_thinking_text = ""
     app._pending_injection = False
@@ -145,18 +153,24 @@ def _finish_reply(app, text, friend):
 
 
 class _SharedFiles(unittest.TestCase):
-    """Each test gets its own handoff and auto-message files, and send_message
-    starts no streaming thread."""
+    """Each test gets its own handoff, auto-message and busy-mark files (never
+    the repo's), and send_message starts no streaming thread."""
 
     def setUp(self):
         stack = ExitStack()
         self.addCleanup(stack.close)
         d = stack.enter_context(tempfile.TemporaryDirectory())
+        self.dir = d
         self.inject = os.path.join(d, "selfbot_inject.txt")
         self.auto_msg = os.path.join(d, "selfbot_auto_msg.json")
         stack.enter_context(mock.patch.object(SelfBot, "INJECT_FILE", self.inject))
         stack.enter_context(mock.patch.object(SelfBot, "AUTO_MSG_FILE", self.auto_msg))
+        stack.enter_context(mock.patch.object(
+            SelfBot, "DUO_BUSY_PREFIX", os.path.join(d, "selfbot_busy_"), create=True))
         stack.enter_context(mock.patch.object(SelfBot.threading, "Thread"))
+
+    def _busy(self, instance):
+        return os.path.join(self.dir, f"selfbot_busy_{instance}.flag")
 
     def _write(self, data):
         with open(self.inject, "w", encoding="utf-8") as f:

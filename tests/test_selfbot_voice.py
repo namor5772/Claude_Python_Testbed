@@ -12,6 +12,7 @@ over `_place_dialog`. The Enter rule of the dialog applies to the message
 box: Enter while recording ends the recording, while transcribing is
 swallowed.
 """
+import gc
 import inspect
 import time
 import tkinter as tk
@@ -62,6 +63,12 @@ def _find(widget, cls, text):
 @_needs_selfbot
 class RowTests(unittest.TestCase):
     def setUp(self):
+        # A dictation transcribes on a worker thread, and a garbage collection
+        # that thread triggers would finalise any Tk object an earlier test
+        # left in a cycle THERE — "main thread is not in main loop", then
+        # Tcl_AsyncDelete aborts the whole run (it did, 2026-10-14, once two
+        # new modules shifted the collector's timing). Collect it here first.
+        gc.collect()
         try:
             self.root = tk.Tk()
         except tk.TclError as exc:  # headless box, no display
@@ -74,6 +81,8 @@ class RowTests(unittest.TestCase):
         _VoiceDictation.live = 0
         for app in self.apps:        # drop the BooleanVar on the Tk thread (test_voice's note)
             app.dictation_auto_send = None
+        self.apps = []
+        gc.collect()                 # this test's cycles, on the main thread, before the root goes
         self.root.destroy()
 
     def build(self, **kw):
@@ -237,6 +246,7 @@ class SetupDialogTests(unittest.TestCase):
 
     def tearDown(self):
         _VoiceDictation.live = 0
+        gc.collect()                 # the dialog's cycles, on the main thread, before the root goes
         self.root.destroy()
 
     def test_the_dialog_opens_centred_through_place_dialog_and_cancel_closes_it(self):

@@ -1033,6 +1033,9 @@ class _UnreadableStore(dict):
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot.lock")
 INJECT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_inject.txt")
 AUTO_MSG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_auto_msg.json")
+# A duo window's busy mark while it answers a message its partner waits for
+# (_set_busy): selfbot_busy_1.flag for instance 1, selfbot_busy_2.flag for 2.
+DUO_BUSY_PREFIX = os.path.join(os.path.dirname(os.path.abspath(__file__)), "selfbot_busy_")
 
 
 
@@ -1336,6 +1339,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                     pass
         self._response_count = 0
         self._first_message_text = ""
+        self._held_for_partner = False  # a typed message waits in the box for the partner's answer
+        self._stashed_draft = ""        # a draft set aside while an arriving message is sent
+        self._pass_pending = False      # this window's reply is on its way to the partner
         self._current_response_text = ""
         self._current_thinking_text = ""
         self._duo_mode = "--no-geometry" in sys.argv
@@ -1367,6 +1373,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         # blocks launch (no-op without mcp_servers.json / the mcp package).
         if _HAS_MYAGENT_TOOLS and _HAS_MCP:
             self.root.after(100, self._connect_mcp_servers)
+        # A busy mark a killed predecessor left in this slot would keep the
+        # partner holding every message typed there (_awaiting_partner).
+        self._set_busy(False)
         # Either instance: poll for the opener the partner window's human typed
         # (_write_inject_file) — the conversation may be opened in either window
         self.root.after(500, self._poll_inject_file)
@@ -3783,6 +3792,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.messages = []
         self._thinking_drops_noted = None  # a fresh conversation: the notice may be said again
         self._file_read_paths = set()      # and the file tools' read-before-edit memory starts over
+        self._held_for_partner = False     # a message in the box is a plain draft again
         self.pending_images.clear()
         self.update_attach_label()
         self.chat_display.config(state="normal")
@@ -3916,8 +3926,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         """What Enter does once the Shift and dictation rules have passed — and
         what the Auto-send box does the moment a transcript lands (the row's
         `send`): the duo's send delay, which parks the message for editing or
-        cancellation, else the send itself."""
-        if self._send_delay > 0:
+        cancellation, else the send itself. Not parked while the partner is
+        still answering: send_message then keeps it in the box, to go in with
+        that answer."""
+        if self._send_delay > 0 and not self._awaiting_partner():
             # Delay before processing to allow editing/cancellation
             self.input_field.config(state="disabled")
             self._send_timer = self.root.after(self._send_delay, self._delayed_send)
@@ -3941,6 +3953,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.input_field.delete("1.0", tk.END)
             self._new_chat()
             return
+
+        # A message typed while the partner is still answering waits in the box
+        # and goes in with that answer (_poll_auto_msg) — the user's choice,
+        # 2026-10-14: sent now, it crossed that answer in the shared message
+        # file and one of the two was lost.
+        if not from_peer and self._awaiting_partner():
+            if not self._held_for_partner:
+                self._held_for_partner = True
+                self._chat_insert((
+                    "⏸ Waiting for the other window's answer — your message stays "
+                    "in the box and is sent with it.\n", "tool_info"))
+            return
+        self._held_for_partner = False
 
         # The conversation's opener, for the partner window (_write_inject_file)
         # — only one typed HERE, in either instance. When the partner opened
@@ -3986,6 +4011,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
 
         # Add to conversation history and start streaming
         self.messages.append({"role": "user", "content": content})
+        if self._auto_chat.get():
+            self._set_busy(True)   # the partner waits for this answer
 
         thread = threading.Thread(
             target=self.stream_worker, args=(list(self.messages),), daemon=True
@@ -4468,6 +4495,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._send_delay = 0
         if on and self._pending_injection and not self.streaming:
             self._pending_injection = False
+            self._pass_pending = True
+            self._set_busy(True)           # the partner waits for it until it is handed over
             if self._response_count == 1:
                 self._write_inject_file()  # the held reply is the first: its opener goes first
             self.root.after(1000, self._inject_response_to_other)
@@ -4520,6 +4549,30 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self._delay_seconds = val
         self._delay_var.set(val)
         if self._auto_chat.get():
+            self._send_delay = val * 1000
+        # Saved now, not at the next periodic save: the second window follows
+        # this spinner through this window's state file (_sync_delay_from_first).
+        try:
+            self._save_last_state()
+        except Exception:
+            pass
+
+    def _sync_delay_from_first(self):
+        """Instance 2: follow the first window's Delay(s) spinner, the one pause
+        that paces both windows — each turn waits for the RECEIVING window's
+        pause, and the second window has no spinner of its own, so until
+        2026-10-14 every other turn ran on whatever its own state file held.
+        Read from the first window's state file, which saves the spinner at
+        once; a file that cannot be read (absent, half-written) keeps the
+        current pause."""
+        try:
+            with open(APP_STATE_FILE, encoding="utf-8") as f:
+                val = int(json.load(f)["delay_seconds"])
+        except (OSError, ValueError, TypeError, KeyError):
+            return
+        val = max(0, min(30, val))
+        self._delay_seconds = val
+        if self._send_delay > 0:
             self._send_delay = val * 1000
 
     def _macos_peer_pids(self):
@@ -4582,6 +4635,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         else:
             peers = []
         has_peer = len(peers) > 0
+        if has_peer and self._is_second_instance:
+            self._sync_delay_from_first()   # before the pairing below reads it
         was_paired = self._auto_chat.get()
         if has_peer:
             self._ever_had_peer = True
@@ -4620,21 +4675,80 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                     return
         self.root.after(2000, self._poll_for_peer)
 
+    # ── Duo turn-taking (2026-10-14) ──────────────────────────────────────
+    # One message is in flight at a time. A window is BUSY (its mark file) from
+    # taking a message until its answer is handed over; a message the human
+    # sends meanwhile in the other window stays in that box and goes in with
+    # the answer — sent at once, it crossed the answer in the one shared
+    # message file and one of the two was lost.
+
+    def _busy_file(self, partner=False):
+        """This window's busy mark — or, with `partner`, the other window's."""
+        mine = 2 if self._is_second_instance else 1
+        return f"{DUO_BUSY_PREFIX}{3 - mine if partner else mine}.flag"
+
+    def _set_busy(self, on):
+        """Set or clear this window's busy mark: set from taking a message
+        whose answer the partner waits for until that answer is handed over
+        (_inject_response_to_other), cleared too when a turn ends with nothing
+        to hand over, at close, and at launch (a killed predecessor's)."""
+        path = self._busy_file()
+        try:
+            if on:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(str(self._my_pid))
+            else:
+                os.remove(path)
+        except OSError:
+            pass
+
+    def _awaiting_partner(self):
+        """True while this window waits for its partner's answer, so a message
+        typed here must wait for it (send_message): paired, and the partner is
+        answering (its busy mark), or a message is in the shared file (the
+        partner's answer for us, or ours on its way to it), or this window's
+        own reply is about to be handed over (the 1 s before
+        _inject_response_to_other). Never in a solo window — nor when the
+        partner's turn ended with nothing to hand over, so nothing waits on a
+        reply that will not come."""
+        auto = getattr(self, "_auto_chat", None)
+        if auto is None or not auto.get():
+            return False
+        if getattr(self, "_pass_pending", False):
+            return True
+        if os.path.exists(self._busy_file(partner=True)):
+            return True
+        try:
+            with open(AUTO_MSG_FILE, encoding="utf-8") as f:
+                return bool(str(json.load(f).get("text", "")).strip())
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    def _restore_draft(self):
+        """Put a draft _poll_auto_msg set aside back in the message box, once
+        the arriving message has been sent."""
+        draft, self._stashed_draft = self._stashed_draft, ""
+        if draft:
+            self.input_field.insert("1.0", draft)
+
     def _inject_response_to_other(self):
         """After a reply completes, write response to shared file for the other instance to pick up."""
         self._pending_injection = False
+        self._pass_pending = False
         text = self._current_response_text.strip()
-        if not text:
-            return
-        try:
-            payload = {"from_pid": self._my_pid, "text": text}
-            thinking = self._current_thinking_text.strip()
-            if thinking:
-                payload["thinking"] = thinking
-            with open(AUTO_MSG_FILE, "w", encoding="utf-8") as f:
-                json.dump(payload, f)
-        except OSError:
-            pass
+        if text:
+            try:
+                payload = {"from_pid": self._my_pid, "text": text}
+                thinking = self._current_thinking_text.strip()
+                if thinking:
+                    payload["thinking"] = thinking
+                with open(AUTO_MSG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(payload, f)
+            except OSError:
+                pass
+        # Handed over (the message is in the file first, so the partner never
+        # sees neither) — or nothing to hand over: the turn is the partner's.
+        self._set_busy(False)
 
     def _poll_auto_msg(self):
         """Poll for a message file written by the other instance and send it after delay."""
@@ -4647,6 +4761,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 from_pid = data.get("from_pid")
                 text = data.get("text", "").strip()
                 if from_pid != self._my_pid and text and not self.streaming:
+                    if self._auto_chat.get():
+                        self._set_busy(True)   # before the message leaves the file
                     os.remove(AUTO_MSG_FILE)
                     # Display the peer's thinking block (display-only, not in conversation)
                     thinking = data.get("thinking", "").strip()
@@ -4656,6 +4772,15 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                         self.chat_display.insert(tk.END, thinking + "\n\n", "thinking")
                         self.chat_display.see(tk.END)
                         self.chat_display.config(state="disabled")
+                    # What the human has in the box: a message held for this
+                    # answer (send_message) goes in with it; a draft is set
+                    # aside and put back once this message is sent.
+                    typed = self.input_field.get("1.0", "end-1c").strip()
+                    if typed and self._held_for_partner:
+                        text = f"{text}\n\n{typed}"
+                    elif typed:
+                        self._stashed_draft = typed
+                    self._held_for_partner = False
                     self.input_field.delete("1.0", tk.END)
                     self.input_field.insert("1.0", text)
                     self.input_field.see("end")
@@ -4666,6 +4791,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                         self.root.after(delay, self._auto_msg_delayed_send)
                     else:
                         self.send_message(from_peer=True)
+                        self._restore_draft()
                     self.root.after(max(delay, 500), self._poll_auto_msg)
                     return
             except (OSError, json.JSONDecodeError):
@@ -4678,6 +4804,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         if getattr(self, '_closing', False):
             return
         self.send_message(from_peer=True)
+        self._restore_draft()
 
     def _auto_save_on_close(self):
         """Silently save the current chat (like pressing SAVE) before closing."""
@@ -4913,8 +5040,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 os.remove(LOCK_FILE)
             except OSError:
                 pass
-        # Either instance may have written the opener file (_write_inject_file)
-        for shared_file in (INJECT_FILE, AUTO_MSG_FILE):
+        # Either instance may have written the opener file (_write_inject_file);
+        # each removes its own busy mark (_set_busy)
+        for shared_file in (INJECT_FILE, AUTO_MSG_FILE, self._busy_file()):
             try:
                 os.remove(shared_file)
             except OSError:
@@ -7339,20 +7467,23 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                     self.streaming = False
                     self._response_count += 1
                     # Inject response body into the other instance's input
-                    if self._current_response_text.strip():
-                        if self._auto_chat.get():
-                            self._pending_injection = False
-                            # The first reply takes the opener typed here
-                            # along, just ahead of it (either instance).
-                            if self._response_count == 1:
-                                self._write_inject_file()
-                            self.root.after(1000, self._inject_response_to_other)
-                        else:
-                            self._pending_injection = True
+                    if self._current_response_text.strip() and self._auto_chat.get():
+                        self._pending_injection = False
+                        self._pass_pending = True   # on its way: a message typed here waits
+                        # The first reply takes the opener typed here
+                        # along, just ahead of it (either instance).
+                        if self._response_count == 1:
+                            self._write_inject_file()
+                        self.root.after(1000, self._inject_response_to_other)
+                    else:
+                        if self._current_response_text.strip():
+                            self._pending_injection = True   # Auto off: held for its release
+                        self._set_busy(False)   # nothing goes to the partner now
                     self._focus_for_reply(bell=True)
                 elif msg["type"] == "error":
                     self._chat_insert((f"Error: {msg['content']}\n\n", "error"))
                     self.streaming = False
+                    self._set_busy(False)   # the turn ended with no answer to hand over
                     self._focus_for_reply(bell=True)
         except queue.Empty:
             pass

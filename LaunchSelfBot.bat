@@ -7,7 +7,7 @@ taskkill /F /IM python.exe >nul 2>&1
 ping -n 2 127.0.0.1 >nul
 
 echo Cleaning up stale files...
-del /q selfbot.lock selfbot_auto_msg.json selfbot_inject.txt >nul 2>&1
+del /q selfbot.lock selfbot_auto_msg.json selfbot_inject.txt selfbot_busy_1.flag selfbot_busy_2.flag >nul 2>&1
 
 echo Launching Instance 1...
 start "" .venv\Scripts\pythonw.exe SelfBot.py --no-geometry
