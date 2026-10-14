@@ -585,6 +585,7 @@ FALLBACK_MODELS = [
     "claude-opus-4-8",
     "claude-fable-5-1",
     "claude-fable-5",
+    "claude-sonnet-5-5",    # the current Sonnet (live 2026-09-28): $2/$10, cache reads 0.05x, Off = between_tools — see _is_sonnet_55
     "claude-sonnet-5",
     "claude-sonnet-4-6",
     "claude-haiku-5-5",
@@ -610,11 +611,15 @@ CACHE_CONTROL = {"type": "ephemeral"}
 # Deprecated / soon-to-be-retired model id prefixes hidden from the picker.
 # _fetch_available_models filters the live models.list() against these, so newer
 # models appear automatically and only the retiring ones drop out. Opus 4.5 /
-# Sonnet 4.5 stay — still active. The dated 4.0 ids are claude-opus-4-20250514 /
+# Haiku 4.5 stay — still active. The dated 4.0 ids are claude-opus-4-20250514 /
 # claude-sonnet-4-20250514, matched by the "-4-20" prefix (a real "-4-20" minor
-# is implausible — minors run 5, 6, 7, 8…).
+# is implausible — minors run 5, 6, 7, 8…). The policy (2026-07-27): a model
+# leaves the picker the day its retirement is ANNOUNCED, not when it arrives —
+# the Models API's `lifecycle` field still said "active" for Sonnet 4.5 two
+# weeks after the deprecations page listed it.
 DEPRECATED_MODEL_PREFIXES = (
-    "claude-opus-4-1",       # Opus 4.1 — deprecated (retires 2026-08-05)
+    "claude-sonnet-4-5",     # Sonnet 4.5 — deprecated 2026-09-30, retires 2026-11-30 (→ claude-sonnet-5-5); the 2026-10-14 audit
+    "claude-opus-4-1",       # Opus 4.1 — retired 2026-08-05
     "claude-opus-4-0",       # Opus 4.0 alias
     "claude-opus-4-20",      # Opus 4.0 dated id (claude-opus-4-20250514)
     "claude-sonnet-4-0",     # Sonnet 4.0 alias
@@ -628,7 +633,7 @@ ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5-5", "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-                            "claude-sonnet-5", "claude-sonnet-4-6",
+                            "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6",
                             "claude-haiku-5-5"}
 # Claude 5 Mythos-class (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is ALWAYS ON —
 # the API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400,
@@ -1968,6 +1973,34 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         version = self._parse_claude_major_minor(mid, ("claude-haiku-",))
         return version is not None and version >= (5, 0)
 
+    def _is_sonnet_55(self, model_id=None):
+        """True for Claude Sonnet 5.5 (claude-sonnet-5-5, live 2026-09-28) and
+        any later Sonnet — version-parsed as Sonnet (5, 5) or above, a dated
+        snapshot's date in the minor slot not counting — the Sonnet that
+        changed the off switch. Probed live for SelfBot on 2026-10-14 (the
+        Models API tree says thinking.types.disabled is unsupported, then a
+        15-request matrix): an explicit disable is HTTP 400 ('To turn thinking
+        off on this model, send "thinking": {"type": "between_tools"}'), and
+        `between_tools` — no extended thinking, the short notes between tool
+        calls back as thinking blocks — is accepted at effort high or below
+        only (400 at xhigh / max) and with NO other field inside `thinking`
+        (display, budget_tokens, block_binding: each a 400, the binding's
+        beta HEADER alone tolerated); adaptive thinking takes the
+        preserved-thinking binding and the summarized display; `fallbacks:
+        "default"` is accepted beside either shape while a model LIST is
+        refused; the budget form and any temperature but 1 are 400; the
+        20260209 server-tool triple is accepted. Read by
+        _apply_thinking_params (the Off shape) and _fable_features (the
+        binding and the fallbacks); the Off rung stays in the picker."""
+        mid = model_id or self.model or ""
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        if version is None:
+            return False
+        major, minor = version
+        if minor >= 100:
+            minor = 0   # claude-sonnet-5-20260629: a date, not a minor
+        return (major, minor) >= (5, 5)
+
     def _is_adaptive_model(self, model_id=None):
         """Adaptive-thinking models — Opus/Sonnet 4.6+, Haiku 5+ and the
         always-on Mythos class. Version-parsed so dated snapshots and future
@@ -1984,7 +2017,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         be sent as an explicit thinking={"type": "disabled"} or the model
         silently thinks, billed, with the Show Thinking pane dark. (Opus 5 and
         Haiku 5.5 accept the explicit disable only at effort high or below —
-        satisfied, "Off" sends no effort.)"""
+        satisfied, "Off" sends no effort. Sonnet 5.5+ refuses the disable
+        outright: its Off is `between_tools` — _is_sonnet_55.)"""
         mid = model_id or self.model or ""
         if self._is_always_on_thinking(mid) or self._is_haiku_5(mid):
             return True
@@ -4952,7 +4986,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         adaptive); adaptive thinking asks for display="summarized" so the Show
         Thinking pane isn't blank on Fable / Opus 4.7+ (their default became
         "omitted"); Sonnet 5+ "Off" is an explicit disable (omitting `thinking`
-        runs adaptive there); and Opus 4.7+ / Sonnet 5+ / Fable reject
+        runs adaptive there) — on Sonnet 5.5+ a bare `between_tools`, the only
+        off switch that model takes (_is_sonnet_55); and Opus 4.7+ / Sonnet 5+ / Fable reject
         temperature (HTTP 400), so it's skipped for them. The Fable/Mythos
         class also carries Fable 5.1's `thinking.block_binding` (preserved
         thinking) and a `fallbacks` value (server-side refusal fallbacks) —
@@ -4976,7 +5011,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 kwargs["thinking"] = {"type": "enabled", "budget_tokens": self.thinking_budget}
         else:
             if self._thinking_on_by_default():
-                kwargs["thinking"] = {"type": "disabled"}
+                # Sonnet 5.5+ refuses the explicit disable; its off switch is
+                # between_tools, sent bare (display or the binding beside it
+                # is a 400) and with no effort ("Off" never sends one, and
+                # between_tools takes high or below only). See _is_sonnet_55.
+                kwargs["thinking"] = ({"type": "between_tools"} if self._is_sonnet_55()
+                                      else {"type": "disabled"})
             if not self._rejects_temperature() and self.model not in self._no_temperature:
                 kwargs["temperature"] = self.temperature
         if fable and fable["fallbacks"]:
@@ -5939,20 +5979,25 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         surface this process has already seen the API reject
         (`_anthropic_unsupported`, filled by the stream_worker 400 rungs)."""
         always_on = self._is_always_on_thinking()
+        sonnet55 = self._is_sonnet_55()
         # Haiku 5.5+ (2026-10-08) runs the preserved-thinking check too — the
         # binding is accepted beside adaptive thinking and refused beside a
         # disable, which is why _apply_thinking_params adds it in the adaptive
         # branch only (and stream_worker keeps its beta header off a disabled
         # call) — but it has NO server-side fallback: a list is a 400 and
         # "default" is accepted and does nothing. Probed live for MyAgent.
-        if not (always_on or self._is_haiku_5()):
+        # Sonnet 5.5+ (2026-10-14, probed live for SelfBot) takes both: the
+        # binding beside adaptive thinking (refused beside between_tools —
+        # the same adaptive-branch rule) and `fallbacks: "default"` beside
+        # either shape; a model list is refused there.
+        if not (always_on or sonnet55 or self._is_haiku_5()):
             return None
         unsupported = getattr(self, "_anthropic_unsupported", set())
         features = {"betas": [], "block_binding": None, "fallbacks": None}
         if "block_binding" not in unsupported:
             features["betas"].append(ANTHROPIC_THINKING_BINDING_BETA)
             features["block_binding"] = dict(ANTHROPIC_THINKING_BLOCK_BINDING)
-        if always_on and "fallbacks" not in unsupported:
+        if (always_on or sonnet55) and "fallbacks" not in unsupported:
             features["betas"].append(ANTHROPIC_SERVER_FALLBACK_BETA)
             features["fallbacks"] = ANTHROPIC_SERVER_FALLBACKS
         return features
@@ -6214,9 +6259,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 if "fallbacks" in api_kwargs:
                     api_kwargs["extra_body"] = {"fallbacks": api_kwargs.pop("fallbacks")}
                 betas = ANTHROPIC_BETAS + server_betas + (fable["betas"] if fable else [])
-                if api_kwargs.get("thinking", {}).get("type") == "disabled":
-                    # Haiku 5.5's explicit disable refuses the binding field (the
-                    # builder keeps it off that branch); its beta header goes too.
+                if api_kwargs.get("thinking", {}).get("type") in ("disabled", "between_tools"):
+                    # Haiku 5.5's explicit disable and Sonnet 5.5's between_tools
+                    # refuse the binding field (the builder keeps it off that
+                    # branch); its beta header goes too.
                     betas = [b for b in betas if b != ANTHROPIC_THINKING_BINDING_BETA]
                 stripped_thinking = False  # one-shot guard for the signature-400 rung
                 stop_details = None

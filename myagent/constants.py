@@ -1450,6 +1450,7 @@ FALLBACK_MODELS = [
     "claude-opus-4-8",
     "claude-fable-5-1",
     "claude-fable-5",
+    "claude-sonnet-5-5",    # the current Sonnet (live 2026-09-28): $2/$10, cache reads 0.05x; its Off is between_tools — SelfBot's _is_sonnet_55 since 2026-10-14, MyAgent's wiring still open
     "claude-sonnet-5",
     "claude-sonnet-4-6",
     "claude-haiku-5-5",    # Haiku 5.5 (live 2026-10-07): $0.10/$0.50, adaptive-only thinking — see _is_anthropic_haiku_5
@@ -1497,12 +1498,16 @@ ANTHROPIC_MAX_OUTPUT_DEFAULT = 128000
 # Deprecated / soon-to-be-retired Anthropic id prefixes hidden from the model
 # picker (2026-07 audit; same filter SelfBot has carried). _fetch_available_models
 # drops live models.list() entries matching these, so new models appear
-# automatically and only retiring ones fall out. Opus/Sonnet/Haiku 4.5 stay —
-# still active. The dated 4.0 ids are claude-(opus|sonnet)-4-20250514, matched
+# automatically and only retiring ones fall out. Opus/Haiku 4.5 stay — still
+# active. The dated 4.0 ids are claude-(opus|sonnet)-4-20250514, matched
 # by the "-4-20" prefix (a real "-4-20" minor is implausible — minors run
 # 5, 6, 7, 8…). A pinned instruction can still RUN a hidden id until Anthropic
-# actually shuts it down; this only removes them from the picker.
+# actually shuts it down; this only removes them from the picker. The policy
+# (2026-07-27): a model leaves the day its retirement is ANNOUNCED — the
+# deprecations page, not the Models API, whose `lifecycle` field still read
+# "active" for Sonnet 4.5 two weeks after the page listed it (2026-10-14 audit).
 ANTHROPIC_DEPRECATED_MODEL_PREFIXES = (
+    "claude-sonnet-4-5",     # Sonnet 4.5 — deprecated 2026-09-30, retires 2026-11-30 (→ claude-sonnet-5-5)
     "claude-opus-4-1",       # Opus 4.1 — retired 2026-08-05 (gone from models.list())
     "claude-opus-4-0",       # Opus 4.0 alias — retired 2026-06-15
     "claude-opus-4-20",      # Opus 4.0 dated id (claude-opus-4-20250514)
@@ -1515,7 +1520,7 @@ ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5", "claude-opus-5-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
-                            "claude-sonnet-5", "claude-sonnet-4-6",
+                            "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6",
                             "claude-haiku-5-5"}
 # Claude 5 Mythos-class models (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is
 # ALWAYS ON. The API rejects thinking={"type": "disabled"} and budget_tokens with
@@ -3552,8 +3557,18 @@ ANTHROPIC_PRICING = {
     # $2/$10 rate "is now the standard price" and that the September 1
     # increase "will not occur", so this entry is permanent: do NOT flip it.
     "claude-sonnet-5":     (2.00, 10.00, 2.50, 0.20),
+    # Sonnet 5.5 (live 2026-09-28; row added 2026-10-14, the SelfBot model
+    # audit — pricing page read that day): Sonnet 5's $2 / $10 and $2.50
+    # writes, but cache reads at 0.05x input ($0.10/MTok, the Opus 5.5
+    # discount — footnote 2 of the pricing page names both). Its own row:
+    # for sixteen days it longest-prefix-matched the claude-sonnet-5 row,
+    # 2x over on every cache read.
+    "claude-sonnet-5-5":   (2.00, 10.00, 2.50, 0.10),
     "claude-sonnet-4-6":   (3.00, 15.00, 3.75, 0.30),
-    "claude-sonnet-4-5":   (3.00, 15.00, 3.75, 0.30),
+    # Sonnet 4.5 (claude-sonnet-4-5-20250929) left the table 2026-10-14:
+    # deprecated 2026-09-30, retires 2026-11-30 → claude-sonnet-5-5 (the
+    # retirement policy — unpriced and picker-hidden from the announcement;
+    # its thinking / output-cap wiring stays for a pinned instruction).
     # Haiku 5.5 (live 2026-10-07, row added 2026-10-08 — pricing page and the
     # migration guide read that day): $0.10 / $0.50 for a prompt of 100K
     # tokens or fewer — cache reads 0.1x ($0.01), 5-minute writes 1.25x

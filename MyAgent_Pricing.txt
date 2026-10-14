@@ -15,8 +15,10 @@
   Anthropic models include prompt caching pricing (5-minute cache writes
   and cache reads). Cache writes cost 1.25x base input; cache reads cost
   0.1x base input — except Claude Fable 5.1 and Mythos 5.1 (0.025x) and
-  Claude Opus 5.5 (0.05x). Every row re-verified against
-  platform.claude.com/docs/en/about-claude/pricing on 2026-09-23.
+  Claude Opus 5.5 and Claude Sonnet 5.5 (0.05x). Every row re-verified
+  against platform.claude.com/docs/en/about-claude/pricing on 2026-09-23
+  and again on 2026-10-14 (the SelfBot model audit: the Sonnet 5.5 row
+  added, Sonnet 4.5 removed on its deprecation).
 
   Server-side web_search additionally bills a FLAT $10 per 1,000 executed
   searches (ANTHROPIC_WEB_SEARCH_FEE — counted into the cost line and cost
@@ -66,9 +68,17 @@
   claude-opus-4-7        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-6        $5.00    $25.00   $6.25        $0.50
   claude-opus-4-5        $5.00    $25.00   $6.25        $0.50
+  claude-sonnet-5-5      $2.00    $10.00   $2.50        $0.10   (live 2026-09-28,
+                                                                 row added 2026-10-14:
+                                                                 Sonnet 5's rates with
+                                                                 cache reads 0.05x;
+                                                                 Off = between_tools)
   claude-sonnet-5        $2.00    $10.00   $2.50        $0.20
   claude-sonnet-4-6      $3.00    $15.00   $3.75        $0.30
-  claude-sonnet-4-5      $3.00    $15.00   $3.75        $0.30
+
+  (claude-sonnet-4-5 — $3/$15, cache $3.75/$0.30 — left the table on
+   2026-10-14: deprecated 2026-09-30, retires 2026-11-30, replacement
+   claude-sonnet-5-5; a pinned run is unpriced and warned, by policy.)
 
   (claude-sonnet-5 launched at $2/$10 as an INTRO price through 2026-08-31;
    on 2026-08-25 the pricing page stated that rate "is now the standard

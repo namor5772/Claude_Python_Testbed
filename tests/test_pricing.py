@@ -67,9 +67,19 @@ class TestGetPricing(unittest.TestCase):
             "input": 0.10 / 1_000_000, "output": 0.50 / 1_000_000,
             "cache_write": 0.125 / 1_000_000, "cache_read": 0.01 / 1_000_000},
         ("Anthropic", "claude-haiku-5-6"): None,
-        # Retired generations were dropped from the table (2026-07 audit)
+        # Sonnet 5.5 (live 2026-09-28, row added 2026-10-14): Sonnet 5's rates
+        # but cache reads at 0.05x input ($0.10/MTok) — its own row, or the
+        # claude-sonnet-5 prefix would bill every cache read 2x over.
+        ("Anthropic", "claude-sonnet-5-5"): {
+            "input": 2.00 / 1_000_000, "output": 10.00 / 1_000_000,
+            "cache_write": 2.50 / 1_000_000, "cache_read": 0.10 / 1_000_000},
+        # Retired generations were dropped from the table (2026-07 audit);
+        # Sonnet 4.5 the day its retirement was announced (deprecated
+        # 2026-09-30, retires 2026-11-30 — the policy, applied 2026-10-14)
         ("Anthropic", "claude-3-haiku-20240307"): None,
         ("Anthropic", "claude-opus-4-1"): None,
+        ("Anthropic", "claude-sonnet-4-5"): None,
+        ("Anthropic", "claude-sonnet-4-5-20250929"): None,
         ("Anthropic", "totally-unknown-xyz"): None,
         # OpenAI/Gemini gained a cache_read key on 2026-07-31 (their caching is
         # automatic, so the discount was always billed — it just wasn't
