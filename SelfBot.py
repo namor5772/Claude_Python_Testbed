@@ -649,7 +649,6 @@ ALWAYS_ON_OPUS_MIN = (5, 5)
 # claude-3-5-sonnet is deliberately excluded: extended thinking arrived with
 # 3.7 / 4, so a thinking block to a 3.5 model is HTTP 400.
 MANUAL_THINKING_PREFIXES = ("claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-5")
-EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"]
 BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768}
 # Static superset for the combobox placeholder; _anthropic_mode_values() builds
 # the real per-model list (drops "Off" for always-on models, gates Xhigh/Max).
@@ -1425,44 +1424,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self._model_combo.pack(side=tk.LEFT, padx=(0, 10))
         self._model_combo.bind("<<ComboboxSelected>>", self._on_model_selected)
 
-        self._temp_label = tk.Label(model_toolbar, text="Temp", font=("Arial", 10))
-        self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
-        self._temp_var = tk.DoubleVar(value=self.temperature)
-        self._temp_spin = tk.Spinbox(
-            model_toolbar, textvariable=self._temp_var,
-            from_=0.0, to=1.0, increment=0.1,
-            width=5, font=("Arial", 10), format="%.1f",
-            command=self._on_temp_changed,
-        )
-        self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
-        self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
-        self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
-
-        self._thinking_var = tk.BooleanVar(value=False)
-        self._thinking_check = tk.Checkbutton(
-            model_toolbar, text="Thinking", variable=self._thinking_var,
-            font=("Arial", 10), command=self._on_thinking_toggled,
-        )
-        self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
-
-        self._thinking_strength_var = tk.StringVar(value="high")
-        self._thinking_strength_combo = ttk.Combobox(
-            model_toolbar, textvariable=self._thinking_strength_var, state="disabled",
-            font=("Arial", 9), width=6,
-        )
-        self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
-        self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
-
-        # Adaptive thinking mode combobox (hidden by default, shown for adaptive models)
-        self._thinking_mode_var = tk.StringVar(value="Off")
-        self._thinking_mode_label = tk.Label(model_toolbar, text="Thinking", font=("Arial", 10))
-        self._thinking_mode_combo = ttk.Combobox(
-            model_toolbar, textvariable=self._thinking_mode_var, state="readonly",
-            font=("Arial", 9), width=8,
-        )
-        self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
-        self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
-        # Not packed yet — _on_model_selected() will show/hide as needed
+        # The model's parameter controls — created here, packed only by
+        # _layout_model_params (below, once the right-hand buttons are in).
+        self._build_model_param_widgets(model_toolbar)
 
         # The main window's seven plain buttons (DELETE / NEW CHAT here, SAVE on
         # row 2, the four on the button bar) are a "last pressed" group with one
@@ -1474,6 +1438,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.new_chat_button.pack(side=tk.RIGHT, padx=(5, 0))
         self.delete_chat_button = tk.Button(model_toolbar, text="DELETE", width=8, font=toolbar_font)
         self.delete_chat_button.pack(side=tk.RIGHT, padx=(10, 5))
+        # The controls the starting model uses — also on a first launch, where
+        # _load_last_state finds no file and never reaches _on_model_selected.
+        self._apply_model_params()
 
         # Names toolbar (row 0)
         names_toolbar = tk.Frame(self.root)
@@ -1868,14 +1835,52 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             if self._model_display_names.get(mid, mid) == selected_display:
                 self.model = mid
                 break
-        # Update thinking controls for new model
+        self._apply_model_params()
+        self._save_last_state()
+
+    def _build_model_param_widgets(self, toolbar):
+        """The model toolbar's parameter controls: the Thinking checkbox and
+        budget combobox (manual-thinking models), the Thinking-mode combobox
+        (adaptive models) and the Temp spinbox. None is packed here —
+        _layout_model_params shows the ones the current model and thinking
+        setting use. Created in the order they are shown (thinking first,
+        Temp after), because creation order is Tab order."""
+        self._thinking_var = tk.BooleanVar(master=toolbar, value=False)
+        self._thinking_check = tk.Checkbutton(
+            toolbar, text="Thinking", variable=self._thinking_var,
+            font=("Arial", 10), command=self._on_thinking_toggled,
+        )
+        self._thinking_strength_var = tk.StringVar(master=toolbar, value="high")
+        self._thinking_strength_combo = ttk.Combobox(
+            toolbar, textvariable=self._thinking_strength_var, state="readonly",
+            font=("Arial", 9), width=6,
+        )
+        self._thinking_strength_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_strength_changed())
+        self._thinking_mode_var = tk.StringVar(master=toolbar, value="Off")
+        self._thinking_mode_label = tk.Label(toolbar, text="Thinking", font=("Arial", 10))
+        self._thinking_mode_combo = ttk.Combobox(
+            toolbar, textvariable=self._thinking_mode_var, state="readonly",
+            font=("Arial", 9), width=8,
+        )
+        self._thinking_mode_combo["values"] = ADAPTIVE_MODE_VALUES
+        self._thinking_mode_combo.bind("<<ComboboxSelected>>", lambda e: self._on_thinking_mode_changed())
+        self._temp_label = tk.Label(toolbar, text="Temp", font=("Arial", 10))
+        self._temp_var = tk.DoubleVar(master=toolbar, value=self.temperature)
+        self._temp_spin = tk.Spinbox(
+            toolbar, textvariable=self._temp_var,
+            from_=0.0, to=1.0, increment=0.1,
+            width=5, font=("Arial", 10), format="%.1f",
+            command=self._on_temp_changed,
+        )
+        self._temp_spin.bind("<Return>", lambda e: self._on_temp_changed())
+        self._temp_spin.bind("<FocusOut>", lambda e: self._on_temp_changed())
+
+    def _apply_model_params(self):
+        """Bring the thinking state into line with the current model, then
+        show the controls it uses (_layout_model_params). No save — setup_ui
+        calls it before the state file has been read."""
         support = self._model_supports_thinking()
         if support == "adaptive":
-            # Hide checkbox + strength, show mode combobox
-            self._thinking_check.pack_forget()
-            self._thinking_strength_combo.pack_forget()
-            self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
-            self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
             # Per-model values: always-on models (Fable/Mythos 5) drop "Off";
             # Xhigh needs Opus 4.7+ / Sonnet 5+, Max needs Opus 4.6+ / Sonnet 4.6+.
             values = self._anthropic_mode_values()
@@ -1885,35 +1890,45 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 # Xhigh/Max coerces down to High.
                 coerced = "Adaptive" if self._thinking_mode_var.get() == "Off" else "High"
                 self._thinking_mode_var.set(coerced)
-            self._on_thinking_mode_changed()
+            self._sync_thinking_mode()
         elif support == "manual":
-            # Hide mode combobox, show checkbox + strength
-            self._thinking_mode_label.pack_forget()
-            self._thinking_mode_combo.pack_forget()
-            self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
-            self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
-            self._thinking_check.config(state="normal")
+            # The box shows what is sent: thinking_enabled is the truth (an
+            # adaptive model's mode combobox may have just changed it).
+            self._thinking_var.set(self.thinking_enabled)
             self._update_thinking_strength_options()
-            if self.thinking_enabled:
-                self._on_thinking_toggled()
-            else:
-                self._temp_label.config(state="normal")
-                self._temp_spin.config(state="normal")
-                self._thinking_strength_combo.config(state="disabled")
         else:
-            # Non-thinking model — hide mode combobox, show checkbox + strength disabled
-            self._thinking_mode_label.pack_forget()
-            self._thinking_mode_combo.pack_forget()
-            self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
-            self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+            # No thinking control: thinking off, and nothing to show but Temp.
             self._thinking_var.set(False)
             self.thinking_enabled = False
             self.thinking_mode = "off"
-            self._thinking_check.config(state="disabled")
-            self._thinking_strength_combo.config(state="disabled")
-            self._temp_label.config(state="normal")
-            self._temp_spin.config(state="normal")
-        self._save_last_state()
+        self._layout_model_params()
+
+    def _layout_model_params(self):
+        """Pack the parameter controls the current model and thinking setting
+        USE, and no others — MyAgent's rule (_forget_all_model_widgets): a
+        control that cannot apply is hidden, never shown dimmed. All are
+        forgotten first and the visible ones re-packed in one fixed order,
+        thinking first and Temp after, so the control just changed stays put
+        and Temp comes and goes to its right:
+          adaptive         Thinking [mode]          (+ Temp while Off, where taken)
+          manual (budget)  [x] Thinking [budget]    or  [ ] Thinking  Temp
+          no thinking      Temp
+        Temp is shown exactly when the request carries it (_sends_temperature)."""
+        for w in (self._thinking_check, self._thinking_strength_combo,
+                  self._thinking_mode_label, self._thinking_mode_combo,
+                  self._temp_label, self._temp_spin):
+            w.pack_forget()
+        support = self._model_supports_thinking()
+        if support == "adaptive":
+            self._thinking_mode_label.pack(side=tk.LEFT, padx=(10, 2))
+            self._thinking_mode_combo.pack(side=tk.LEFT, padx=(0, 10))
+        elif support == "manual":
+            self._thinking_check.pack(side=tk.LEFT, padx=(10, 2))
+            if self.thinking_enabled:
+                self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
+        if self._sends_temperature():
+            self._temp_label.pack(side=tk.LEFT, padx=(10, 5))
+            self._temp_spin.pack(side=tk.LEFT, padx=(0, 10))
 
     def _on_temp_changed(self):
         try:
@@ -2048,6 +2063,19 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
         return version is not None and version >= (5, 0)
 
+    def _sends_temperature(self):
+        """True when the current request carries `temperature` — the ONE rule
+        behind the request builder (_apply_thinking_params), the Temp box's
+        visibility (_layout_model_params) and the cost log's params string
+        (_get_model_param_summary), so the three cannot drift: thinking off
+        (an always-on model never is; temperature does not go beside
+        thinking) on a model that still takes sampling params — neither one
+        _rejects_temperature names nor one a 400 taught this session
+        (_no_temperature)."""
+        if self.thinking_enabled or self._is_always_on_thinking():
+            return False
+        return not self._rejects_temperature() and self.model not in self._no_temperature
+
     def _supports_max_effort(self, model_id=None):
         """'max' thinking effort — Opus 4.6+, Sonnet 4.6+ (incl. Sonnet 5),
         Haiku 5+ and the always-on Mythos class."""
@@ -2080,11 +2108,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             values.append("Max")
         return values
 
-    def _set_temp_state(self, state):
-        """Enable ('normal') or disable the temperature label + spinbox together."""
-        self._temp_label.config(state=state)
-        self._temp_spin.config(state=state)
-
     def _model_supports_thinking(self, model_id=None):
         mid = model_id or self.model
         # Exact-match set catches undated aliases; the version-parsed helper
@@ -2097,66 +2120,60 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         return None
 
     def _on_thinking_toggled(self):
+        """The manual (budget) models' Thinking box: the budget combobox
+        appears beside a ticked box, Temp beside an unticked one."""
         self.thinking_enabled = self._thinking_var.get()
+        # The mode follows the box as the restore paths derive it, so a prompt
+        # saved now carries a thinking_mode that agrees with thinking_enabled.
+        self.thinking_mode = self.thinking_effort if self.thinking_enabled else "off"
         if self.thinking_enabled:
-            self._temp_label.config(state="disabled")
-            self._temp_spin.config(state="disabled")
             self._update_thinking_strength_options()
-            self._thinking_strength_combo.config(state="readonly")
-        else:
-            self._temp_label.config(state="normal")
-            self._temp_spin.config(state="normal")
-            self._thinking_strength_combo.config(state="disabled")
+        self._layout_model_params()
         self._save_last_state()
 
-    def _on_thinking_mode_changed(self):
+    def _sync_thinking_mode(self):
+        """The thinking fields from the Thinking-mode combobox (adaptive
+        models), with the manual Thinking box kept in step — a later switch
+        to a budget model then shows the state that is sent."""
         val = self._thinking_mode_var.get()
         if val == "Off":
             self.thinking_enabled = False
             self.thinking_mode = "off"
-            # Opus 4.7+, Sonnet 5+, and Fable/Mythos reject temperature even with
-            # thinking off — keep the spinbox disabled for them (it's never sent).
-            self._set_temp_state("disabled" if self._rejects_temperature() else "normal")
         elif val == "Adaptive":
             self.thinking_enabled = True
             self.thinking_mode = "adaptive"
             self.thinking_effort = "adaptive"
-            self._set_temp_state("disabled")
         else:
             self.thinking_enabled = True
             self.thinking_mode = val.lower()
             self.thinking_effort = val.lower()
-            self._set_temp_state("disabled")
+        self._thinking_var.set(self.thinking_enabled)
+
+    def _on_thinking_mode_changed(self):
+        # Temp appears beside Off on a model that takes it and goes for any
+        # thinking rung — _layout_model_params decides.
+        self._sync_thinking_mode()
+        self._layout_model_params()
         self._save_last_state()
 
     def _update_thinking_strength_options(self):
-        support = self._model_supports_thinking()
-        if support == "adaptive":
-            values = list(EFFORT_LEVELS)
-            self._thinking_strength_combo["values"] = values
-            if self._thinking_strength_var.get() not in values:
-                self._thinking_strength_var.set(self.thinking_effort if self.thinking_effort in values else "high")
-        elif support == "manual":
-            values = list(BUDGET_PRESETS.keys())
-            self._thinking_strength_combo["values"] = values
-            # Find matching preset for current budget
-            current = self._thinking_strength_var.get()
-            if current not in values:
-                # Find closest preset
-                for k, v in BUDGET_PRESETS.items():
-                    if v == self.thinking_budget:
-                        self._thinking_strength_var.set(k)
-                        break
-                else:
-                    self._thinking_strength_var.set("8K")
+        """The budget combobox (manual-thinking models — the only ones it is
+        shown for) shows the budget that is SENT: thinking_budget's preset.
+        A budget no preset names — manage_prompts takes any integer, a prompt
+        file can be edited by hand — snaps to the nearest preset, which is
+        then what goes on the wire, so the box never shows one budget while
+        the request carries another."""
+        self._thinking_strength_combo["values"] = list(BUDGET_PRESETS)
+        try:
+            budget = int(self.thinking_budget)
+        except (TypeError, ValueError):
+            budget = BUDGET_PRESETS["8K"]
+        label = min(BUDGET_PRESETS, key=lambda k: (abs(BUDGET_PRESETS[k] - budget), BUDGET_PRESETS[k]))
+        self.thinking_budget = BUDGET_PRESETS[label]
+        self._thinking_strength_var.set(label)
 
     def _on_thinking_strength_changed(self):
-        val = self._thinking_strength_var.get()
-        support = self._model_supports_thinking()
-        if support == "adaptive":
-            self.thinking_effort = val
-        elif support == "manual":
-            self.thinking_budget = BUDGET_PRESETS.get(val, 8192)
+        self.thinking_budget = BUDGET_PRESETS.get(self._thinking_strength_var.get(), 8192)
         self._save_last_state()
 
     def _get_user_label(self):
@@ -5173,7 +5190,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 # between_tools takes high or below only). See _is_sonnet_55.
                 kwargs["thinking"] = ({"type": "between_tools"} if self._is_sonnet_55()
                                       else {"type": "disabled"})
-            if not self._rejects_temperature() and self.model not in self._no_temperature:
+            if self._sends_temperature():
                 kwargs["temperature"] = self.temperature
         if fable and fable["fallbacks"]:
             kwargs["fallbacks"] = fable["fallbacks"]
@@ -6534,6 +6551,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                             # sampling param — cache it, drop temperature, and retry.
                             self._no_temperature.add(self.model)
                             api_kwargs.pop("temperature", None)
+                            # The Temp box goes with it (it would set nothing now);
+                            # laid out on the Tk thread, the worker never touches widgets.
+                            root = getattr(self, "root", None)
+                            if root is not None:
+                                root.after(0, self._layout_model_params)
                             self.queue.put({
                                 "type": "tool_info",
                                 "content": "Model rejected temperature — retrying without it...\n",
@@ -6953,7 +6975,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         log's params field. Adaptive models report their thinking mode (a stale
         "off" on an always-on Fable/Mythos model reports Adaptive, matching
         what _apply_thinking_params sends); manual models report the budget
-        label; temperature appears only when it is actually sent."""
+        label; temperature appears only when it is actually sent
+        (_sends_temperature, the rule the builder and the Temp box use)."""
         parts = []
         support = self._model_supports_thinking()
         mode = (self.thinking_mode or "").lower()
@@ -6962,8 +6985,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 parts.append("mode=Adaptive")
             else:
                 parts.append(f"mode={mode.capitalize() or 'Off'}")
-                if mode == "off" and not self._rejects_temperature():
-                    parts.append(f"temp={self.temperature:g}")
         elif support == "manual" and self.thinking_enabled:
             label = next(
                 (k for k, v in BUDGET_PRESETS.items() if v == self.thinking_budget),
@@ -6972,8 +6993,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             parts.append(f"thinking={label}")
         else:
             parts.append("thinking=off")
-            if not self._rejects_temperature():
-                parts.append(f"temp={self.temperature:g}")
+        if self._sends_temperature():
+            parts.append(f"temp={self.temperature:g}")
         return " ".join(parts)
 
     # ── The cost log — MyAgent's collection, per session (2026-10-14) ──────
