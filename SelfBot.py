@@ -1367,9 +1367,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         # blocks launch (no-op without mcp_servers.json / the mcp package).
         if _HAS_MYAGENT_TOOLS and _HAS_MCP:
             self.root.after(100, self._connect_mcp_servers)
-        # Instance 2: start polling for injected chat content
+        # Either instance: poll for the opener the partner window's human typed
+        # (_write_inject_file) — the conversation may be opened in either window
+        self.root.after(500, self._poll_inject_file)
         if self._is_second_instance:
-            self.root.after(500, self._poll_inject_file)
             # Retry loading names if they came up empty (race with instance 1)
             self.root.after(2000, self._retry_load_names)
         # Poll for peer instance to enable/disable auto-chat and send delay
@@ -3927,7 +3928,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.input_field.config(state="normal")
         self.send_message()
 
-    def send_message(self):
+    def send_message(self, from_peer=False):
         if self.streaming:
             return
 
@@ -3941,8 +3942,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._new_chat()
             return
 
-        # Capture the first message for injection
-        if not self._is_second_instance and self._response_count == 0:
+        # The conversation's opener, for the partner window (_write_inject_file)
+        # — only one typed HERE, in either instance. When the partner opened
+        # the conversation, its reply arrives as this window's first message
+        # (from_peer, _poll_auto_msg); the partner shows that text already,
+        # and handing it back made the partner show its own reply twice.
+        if self._response_count == 0 and not from_peer:
             self._first_message_text = user_text
 
         # Clear input and disable send
@@ -4395,11 +4400,23 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             return f"Error reading CSV: {e}"
 
     def _write_inject_file(self):
-        """Instance 1: write the first sent message (with user label) to the shared inject file."""
+        """Hand the opener typed in this window to the partner window, which
+        shows it above the first reply it receives: the partner's own
+        conversation starts with this window's reply, so the human's opening
+        line would never appear there. Either instance — the human may open
+        the conversation in either window. Written once, with the
+        conversation's first reply and just ahead of it (check_queue's
+        `complete` writes the reply 1 s later; the partner polls both files
+        every 0.5 s). Nothing to write when the partner opened the
+        conversation (send_message captures no opener then)."""
+        text, self._first_message_text = self._first_message_text, ""
+        if not text:
+            return
         try:
             data = {
+                "from_pid": self._my_pid,
                 "label": self._get_user_label(),
-                "text": self._first_message_text,
+                "text": text,
             }
             with open(INJECT_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f)
@@ -4407,25 +4424,36 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             pass
 
     def _poll_inject_file(self):
-        """Instance 2: poll for the inject file and load its contents into chat_display."""
+        """Poll for the partner window's opener (_write_inject_file) and show
+        it at the top of this window's conversation. A file this instance
+        wrote is the partner's to take and is left alone. The opener is taken
+        once and shown only into a conversation not yet started — once this
+        window has messages of its own it was typed here, or is stale.
+        Polling ends at the first reply this window completes: an opener
+        always arrives before it, or not at all."""
+        if getattr(self, '_closing', False) or self._response_count:
+            return
         if os.path.exists(INJECT_FILE):
             try:
                 with open(INJECT_FILE, encoding="utf-8") as f:
                     data = json.load(f)
-                os.remove(INJECT_FILE)
+            except (OSError, ValueError):
+                data = None  # mid-write, or taken meanwhile: look again
+            if isinstance(data, dict) and data.get("from_pid") != self._my_pid:
+                try:
+                    os.remove(INJECT_FILE)
+                except OSError:
+                    pass
                 label = data.get("label", "You")
                 text = data.get("text", "")
-                if text:
+                if text and not self.messages:
                     self.chat_display.config(state="normal")
                     self.chat_display.insert(tk.END, f"{label}: ", "assistant_label")
                     self.chat_display.insert(tk.END, text + "\n\n", "assistant")
                     self.chat_display.see(tk.END)
                     self.chat_display.config(state="disabled")
-            except (OSError, json.JSONDecodeError):
-                pass
-        else:
-            # Keep polling every 500ms until found
-            self.root.after(500, self._poll_inject_file)
+                return
+        self.root.after(500, self._poll_inject_file)
 
     def _toggle_auto_chat(self):
         """Toggle the auto-chat loop on/off."""
@@ -4440,6 +4468,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._send_delay = 0
         if on and self._pending_injection and not self.streaming:
             self._pending_injection = False
+            if self._response_count == 1:
+                self._write_inject_file()  # the held reply is the first: its opener goes first
             self.root.after(1000, self._inject_response_to_other)
 
     def do_exit_conversation(self, reason=""):
@@ -4635,7 +4665,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                         self.input_field.config(state="disabled")
                         self.root.after(delay, self._auto_msg_delayed_send)
                     else:
-                        self.send_message()
+                        self.send_message(from_peer=True)
                     self.root.after(max(delay, 500), self._poll_auto_msg)
                     return
             except (OSError, json.JSONDecodeError):
@@ -4647,7 +4677,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.input_field.config(state="normal")
         if getattr(self, '_closing', False):
             return
-        self.send_message()
+        self.send_message(from_peer=True)
 
     def _auto_save_on_close(self):
         """Silently save the current chat (like pressing SAVE) before closing."""
@@ -4883,14 +4913,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 os.remove(LOCK_FILE)
             except OSError:
                 pass
+        # Either instance may have written the opener file (_write_inject_file)
+        for shared_file in (INJECT_FILE, AUTO_MSG_FILE):
             try:
-                os.remove(INJECT_FILE)
+                os.remove(shared_file)
             except OSError:
                 pass
-        try:
-            os.remove(AUTO_MSG_FILE)
-        except OSError:
-            pass
         self._cleanup_browser()
         self.root.destroy()
 
@@ -7310,13 +7338,14 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                     self.chat_display.config(state="disabled")
                     self.streaming = False
                     self._response_count += 1
-                    # First instance: after first response, inject chat into instance 2
-                    if not self._is_second_instance and self._response_count == 1:
-                        self._write_inject_file()
                     # Inject response body into the other instance's input
                     if self._current_response_text.strip():
                         if self._auto_chat.get():
                             self._pending_injection = False
+                            # The first reply takes the opener typed here
+                            # along, just ahead of it (either instance).
+                            if self._response_count == 1:
+                                self._write_inject_file()
                             self.root.after(1000, self._inject_response_to_other)
                         else:
                             self._pending_injection = True
