@@ -318,5 +318,63 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn("_HAS_MICROPHONE:", src)
 
 
+# ── 6. the hands-free loop: Mike holds the focus after every answer ───────
+
+class _Var:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+@_needs_selfbot
+class FocusForReplyTests(unittest.TestCase):
+    """With the Auto-send box ticked, a reply's end puts the focus on Mike so
+    Enter or Space starts the next dictation (the user's request, later on
+    2026-10-14) — unless something is already typed, where Enter must keep
+    meaning send; unticked, the message box takes it as before."""
+
+    def _app(self, ticked, typed="", mike=True):
+        app = _bare()
+        app.focused = []
+        app.dictation_auto_send = _Var(ticked)
+        app.input_field = SimpleNamespace(get=lambda *a: typed,
+                                          focus_set=lambda: app.focused.append("box"))
+        if mike:
+            app.mike_button = SimpleNamespace(focus_set=lambda: app.focused.append("mike"))
+        return app
+
+    def test_ticked_and_nothing_typed_mike_takes_the_focus(self):
+        app = self._app(True)
+        self.assertTrue(app._focus_for_reply())
+        self.assertEqual(app.focused, ["mike"])
+
+    def test_ticked_but_text_already_typed_the_box_keeps_it(self):
+        app = self._app(True, typed="Shaun, ")
+        self.assertFalse(app._focus_for_reply())
+        self.assertEqual(app.focused, ["box"])
+
+    def test_unticked_the_box_takes_it_as_before(self):
+        app = self._app(False)
+        self.assertFalse(app._focus_for_reply())
+        self.assertEqual(app.focused, ["box"])
+
+    def test_without_the_row_the_box_takes_it(self):
+        app = self._app(True, mike=False)
+        self.assertFalse(app._focus_for_reply())
+        self.assertEqual(app.focused, ["box"])
+
+    def test_the_reply_tails_and_the_launch_restore_go_through_it(self):
+        src = inspect.getsource(SelfBot.App.check_queue)
+        complete = src.index('elif msg["type"] == "complete":')
+        error = src.index('elif msg["type"] == "error":')
+        self.assertIn("self._focus_for_reply()", src[complete:error])
+        self.assertIn("self._focus_for_reply()", src[error:error + 400])
+        self.assertNotIn("self.input_field.focus_set()", src[complete:error])
+        load = inspect.getsource(SelfBot.App._load_last_state)
+        self.assertIn("self.dictation_auto_send.set(True)\n            self._focus_for_reply()", load)
+
+
 if __name__ == "__main__":
     unittest.main()
