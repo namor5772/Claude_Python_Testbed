@@ -414,7 +414,7 @@ SELFBOT_META_TOOLS = [
                 "outlook": {"type": "boolean", "description": "Bundle Outlook tools ON (default false on create)"},
                 "excel": {"type": "boolean", "description": "Bundle the Excel live-workbook tools ON (default false on create)"},
                 "physical": {"type": "boolean", "description": "Bundle the Physical tools (camera_capture, microphone_listen) ON (default false on create)"},
-                "pause": {"type": "boolean", "description": "Bundle the pause_conversation (rest the self-chat) tool ON (default false on create)"},
+                "exit": {"type": "boolean", "description": "Bundle the exit_conversation (close this chatbot instance) tool ON (default false on create)"},
                 "dictation_auto_send": {"type": "boolean", "description": "Bundle the Mike button's Auto-send box ON — a dictated message is sent the moment its transcript lands (default false on create)"},
                 "skill_modes": {
                     "type": "object",
@@ -429,33 +429,36 @@ SELFBOT_META_TOOLS = [
     },
 ]
 
-# Pause/rest tool — the duo's hang-up button that isn't a shutdown. Auto-chat
-# re-injects every completed turn into the peer forever, so without this the only
-# way a self-chat could genuinely END was killing a process (taskkill). Gated by
-# the Pause checkbox (wired like MyAgent's Convo toggle: a per-environment
-# behavioural affordance, persisted in app_state.json and the prompt bundle).
-# The description is kept neutral — it states what the tool does, not when to
-# prefer it — so duo runs measure the model's own choice of exit.
-PAUSE_TOOLS = [
+# Exit tool — the duo's way out that IS a shutdown (2026-10-14; it replaced the
+# pause / rest tool, which switched auto-chat off and left both windows open).
+# Auto-chat re-injects every completed turn into the peer forever, so the only way
+# a self-chat could genuinely END was killing a process — and, given run_command,
+# duo chats always ended in a model-driven taskkill. This tool is that exit done
+# properly: the model-callable [X] (the chat saved, the cost logged, the peer
+# closed with it). Gated by the Exit checkbox (wired like MyAgent's Convo toggle:
+# a per-environment behavioural affordance, persisted in app_state.json and the
+# prompt bundle). The description states what the tool does, not when to use it,
+# so a duo's end stays the model's own choice.
+EXIT_TOOLS = [
     {
-        "name": "pause_conversation",
+        "name": "exit_conversation",
         "description": (
-            "Let the conversation rest. Switches this instance's auto-chat OFF, so "
-            "anything you write after this call appears in your own window but is "
-            "NOT delivered to your conversation partner — the chat simply goes "
-            "quiet. Both windows stay open; the human can read the chats or close "
-            "them at leisure. The rest holds until new traffic arrives: a fresh "
-            "message from the human or your partner (or the human clicking "
-            "'Auto: ON') resumes the conversation automatically. No process is "
-            "terminated. If no partner is connected, this just switches auto-chat "
-            "off."
+            "End the conversation by closing this chatbot instance — your own "
+            "process. When the current turn ends, this instance saves its chat, "
+            "logs its API cost and closes its window; the process exits. A "
+            "connected partner instance is closed the same way (a duo always "
+            "shuts down as a pair), so the conversation is over for both. "
+            "Anything you write after this call is kept in the saved chat but is "
+            "NOT delivered to your partner. There is no resume: the human would "
+            "have to start a new session. With no partner connected, this closes "
+            "this window alone."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "reason": {
                     "type": "string",
-                    "description": "Optional short note on why the conversation is resting (shown to the human).",
+                    "description": "Optional short note on why the conversation is ending (shown to the human).",
                 }
             },
         },
@@ -1201,9 +1204,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.google_enabled = tk.BooleanVar(value=False)
         self.proton_enabled = tk.BooleanVar(value=False)
         self.outlook_enabled = tk.BooleanVar(value=False)
-        # SelfBot-native Pause/rest tool (see PAUSE_TOOLS) — lets the model end a
-        # self-chat by going quiet instead of killing a process.
-        self.pause_enabled = tk.BooleanVar(value=False)
+        # SelfBot-native Exit tool (see EXIT_TOOLS) — lets the model end a
+        # self-chat by closing its own instance, the way [X] does.
+        self.exit_enabled = tk.BooleanVar(value=False)
         # Confirm-bypass set — command regex patterns (checked in _check_command_safety)
         # AND mail tool names (read by the mail mixins' confirm_action). Managed via the
         # Safety dialog; empty = every risky command / mail action confirms.
@@ -1475,7 +1478,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self._ever_had_peer = False  # set True when a peer is first detected; arms the duo-shutdown watchdog
         self._peer_gone_polls = 0  # consecutive peer-less polls once armed (watchdog debounce)
         self._pending_injection = False  # True when a response completed but wasn't injected (Auto was OFF)
-        self._model_paused = False  # True after pause_conversation; lifted by new traffic or a manual Auto toggle
         self._send_delay = 0  # 0 when solo, delay_seconds*1000 when paired
         self._delay_seconds = 5  # default, overwritten by persisted value in _load_last_state
         if not self._is_second_instance:
@@ -1721,8 +1723,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
 
         # Tool row (below the Debug/display-toggle row) — Desktop / Browser plus the
         # MyAgent-style subsystems Meta / MCP / Google / IMAP / Outlook and the
-        # SelfBot-native Pause (rest-the-self-chat) tool. Anthropic-only; each is
-        # disabled when its optional libraries are absent (Meta and Pause need none).
+        # SelfBot-native Exit (close-this-instance) tool. Anthropic-only; each is
+        # disabled when its optional libraries are absent (Meta and Exit need none).
         # Proton is labelled IMAP. Left-aligned (sticky="w") to match the Debug row above.
         tools_frame = tk.Frame(self.root)
         tools_frame.grid(row=8, column=0, columnspan=2, sticky="w", pady=(0, 5))
@@ -1802,10 +1804,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.physical_enabled.set(False)
             self.physical_toggle.config(state=tk.DISABLED)
 
-        self.pause_toggle = tk.Checkbutton(
-            tools_frame, text="Pause", variable=self.pause_enabled, font=("Arial", 9),
+        self.exit_toggle = tk.Checkbutton(
+            tools_frame, text="Exit", variable=self.exit_enabled, font=("Arial", 9),
         )
-        self.pause_toggle.pack(side=tk.LEFT, padx=(5, 0))
+        self.exit_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         # Attachment indicator (hidden until an image is attached)
         self.attach_label = tk.Label(
@@ -2204,8 +2206,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.physical_enabled.set(True)
         if state.get("diag_enabled"):
             self.diag_enabled.set(True)
-        if state.get("pause_enabled"):
-            self.pause_enabled.set(True)
+        # `pause_enabled` is the key's name until 2026-10-14 (the Pause box), read once more.
+        if state.get("exit_enabled", state.get("pause_enabled")):
+            self.exit_enabled.set(True)
         if state.get("dictation_auto_send"):
             self.dictation_auto_send.set(True)
             self._focus_for_reply()      # hands-free from the first message: Mike holds the focus
@@ -2388,7 +2391,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             "excel_enabled": self.excel_enabled.get(),
             "physical_enabled": self.physical_enabled.get(),
             "diag_enabled": self.diag_enabled.get(),
-            "pause_enabled": self.pause_enabled.get(),
+            "exit_enabled": self.exit_enabled.get(),
             "dictation_auto_send": self.dictation_auto_send.get(),
         }
         state["disabled_confirm_patterns"] = sorted(self._disabled_confirm_patterns)
@@ -2545,7 +2548,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             "outlook": self.outlook_enabled.get(),
             "excel": self.excel_enabled.get(),
             "physical": self.physical_enabled.get(),
-            "pause": self.pause_enabled.get(),
+            "exit": self.exit_enabled.get(),
             "dictation_auto_send": self.dictation_auto_send.get(),
             "skill_modes": {n: s.get("mode", "disabled") for n, s in self.skills.items()},
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
@@ -2606,8 +2609,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.excel_enabled.set(bool(entry["excel"]))
         if "physical" in entry and _HAS_MYAGENT_TOOLS and _HAS_PHYSICAL:
             self.physical_enabled.set(bool(entry["physical"]))
-        if "pause" in entry:
-            self.pause_enabled.set(bool(entry["pause"]))
+        if "exit" in entry:
+            self.exit_enabled.set(bool(entry["exit"]))
+        elif "pause" in entry:      # the key's name until 2026-10-14 (the Pause box), honoured until the prompt is re-saved
+            self.exit_enabled.set(bool(entry["pause"]))
         if "dictation_auto_send" in entry:
             self.dictation_auto_send.set(bool(entry["dictation_auto_send"]))
         if "disabled_confirm_patterns" in entry:
@@ -3906,11 +3911,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         if not self._is_second_instance and self._response_count == 0:
             self._first_message_text = user_text
 
-        # A new message (typed here or injected by the peer — _poll_auto_msg also
-        # sends through this method) lifts a model-initiated pause; a manual
-        # Auto: OFF is never overridden (checked inside).
-        self._resume_from_model_pause()
-
         # Clear input and disable send
         self.input_field.delete("1.0", tk.END)
         self.streaming = True
@@ -4398,7 +4398,6 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         on = not self._auto_chat.get()
         self._auto_chat.set(on)
         self._auto_chat_user_off = not on
-        self._model_paused = False  # human took manual control either way
         if on:
             self._auto_chat_btn.config(text="Auto: ON", bg="#2e7d32", fg="white")
             self._send_delay = self._delay_seconds * 1000
@@ -4409,77 +4408,43 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self._pending_injection = False
             self.root.after(1000, self._inject_response_to_other)
 
-    def do_pause_conversation(self, reason=""):
-        """Let the self-chat rest — the model-callable analog of clicking Auto: OFF.
+    def do_exit_conversation(self, reason=""):
+        """Close this instance — the model-callable analog of pressing [X].
 
-        Gives the duo an exit that isn't killing a process: auto-chat re-injects
-        every completed turn into the peer forever, so before this tool the only
-        way a conversation could genuinely end was taskkill. Runs on the streaming
-        worker thread, so all Tk work (the _auto_chat BooleanVar, the button) is
-        marshalled onto the main loop; it runs well before the turn's `complete`
-        event is processed, so the reply that finishes after this call is held as
-        _pending_injection instead of being delivered. The pause holds only until
-        fresh traffic arrives: _resume_from_model_pause (via send_message) lifts
-        it on the next human-typed or peer-injected message, and Auto: ON lifts
-        it manually. _auto_chat_user_off stops _poll_for_peer instantly re-arming
-        the loop, and the peer keeps running (the duo-shutdown watchdog only
-        fires when a window disappears). _current_response_text is reset so a
-        silent pause (model writes no closing text) can't leave the PREVIOUS
-        reply latched as a pending injection — a later Auto: ON would re-send
-        that stale text to the peer as a duplicate (observed live 2026-07-13).
+        The duo's exit that IS a shutdown (2026-10-14; it replaced the pause /
+        rest tool, which switched auto-chat off and left both windows open).
+        Runs on the streaming worker thread, so the close is handed to the Tk
+        loop: `_on_close` is the [X] handler itself — it latches `_closing`
+        (the peer poll and the auto-message poll stop at once, so no new
+        message can start a reply), switches auto-chat off, removes the shared
+        message file, and WAITS for `self.streaming` to clear before
+        `_finish_close` saves the chat, logs the session's cost line, removes
+        the in-progress record, closes the peer (WM_CLOSE / SIGTERM — its own
+        graceful close) and destroys the window. The wait is what gives the
+        model its closing note: the tool result goes back to it, the final API
+        round streams into the window, and the `complete` event — `streaming =
+        False` — lets the close proceed; auto-chat being off by then, that
+        closing reply is never injected into the peer (the chat is over for
+        both). The ⏻ notice is queued ahead of the model's final text, so it
+        lands first.
         """
-        def _pause():
-            self._auto_chat.set(False)
-            self._auto_chat_user_off = True
-            self._model_paused = True
-            self._send_delay = 0
-            self._current_response_text = ""
-            if not self._is_second_instance:
-                self._auto_chat_btn.config(text="Auto: OFF", bg="#c62828", fg="white")
-        self.root.after(0, _pause)
-        note = f" — {reason.strip()}" if reason and reason.strip() else ""
+        self.root.after(0, self._on_close)
+        reason = str(reason or "").strip()
+        if reason and reason[-1] not in ".!?…":
+            reason += "."
+        note = f" — {reason}" if reason else "."
         self.queue.put({
             "type": "warning",
-            "content": f"⏸ Conversation paused by the model{note}. Auto-chat is OFF; "
-                       "the closing reply stays in this window (a new message or "
-                       "Auto: ON resumes).\n",
+            "content": f"⏻ Conversation ended by the model{note} This instance closes "
+                       "when this reply ends — the chat is saved and the cost logged "
+                       "first; a connected partner closes with it.\n",
         })
         return (
-            "Conversation paused — auto-chat is now OFF. Anything you write after "
-            "this stays in your own window; it is NOT sent to your partner. Both "
-            "windows remain open for the human. The conversation resumes "
-            "automatically if a new message arrives (from the human or your "
-            "partner), or when the human clicks Auto: ON. You may leave a short "
-            "closing note or simply end your turn."
+            "Closing — this instance (and its partner, if one is connected) closes "
+            "when this turn ends; the chat is saved first. Anything you write now "
+            "is a closing note kept in the saved chat, not delivered to your "
+            "partner. End your turn to let the close proceed."
         )
-
-    def _resume_from_model_pause(self):
-        """Re-arm auto-chat when new traffic arrives after a pause_conversation.
-
-        A new message — typed by the human OR injected by the peer (both paths
-        funnel through send_message) — is an unambiguous continue signal, so a
-        model-initiated pause holds only until fresh traffic arrives. Without
-        this the pause was a one-way latch: instance 2 has no Auto button, so a
-        model-pause there left the duo unresumable (each new message got one
-        reply that was composed but never delivered back). A HUMAN's manual
-        Auto: OFF (_auto_chat_user_off without _model_paused) is deliberately
-        never auto-resumed. The held closing reply is dropped, not flushed:
-        AUTO_MSG_FILE is single-slot, and the fresh reply is what should carry
-        the conversation forward. Main thread only (like _toggle_auto_chat).
-        """
-        if not self._model_paused:
-            return
-        self._model_paused = False
-        self._pending_injection = False
-        self._auto_chat_user_off = False
-        self._auto_chat.set(True)
-        self._send_delay = self._delay_seconds * 1000
-        if not self._is_second_instance:
-            self._auto_chat_btn.config(text="Auto: ON", bg="#2e7d32", fg="white")
-        self.queue.put({
-            "type": "warning",
-            "content": "▶ New message — conversation resumed (auto-chat back ON).\n",
-        })
 
     def _on_delay_changed(self):
         """Update the send delay when the user changes the spinbox value."""
@@ -5239,8 +5204,8 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 if "account" in props:
                     props["account"]["enum"] = names
             tools.extend(outlook_tools)
-        if self.pause_enabled.get():
-            tools.extend(copy.deepcopy(PAUSE_TOOLS))
+        if self.exit_enabled.get():
+            tools.extend(copy.deepcopy(EXIT_TOOLS))
         # Add get_skill tool if any on-demand skills exist
         od_names = [n for n, s in self.skills.items() if s.get("mode") == "on_demand"]
         if od_names:
@@ -5289,9 +5254,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         if block.name == "manage_prompts":
             self._tool_info(f"manage_prompts: {inp.get('action', '')}\n")
             return self.do_manage_prompts(inp)
-        if block.name == "pause_conversation":
-            self._tool_info("pause_conversation\n")
-            return self.do_pause_conversation((inp or {}).get("reason", ""))
+        if block.name == "exit_conversation":
+            self._tool_info("exit_conversation\n")
+            if not self.exit_enabled.get():     # unticked since the call began
+                return "exit_conversation is not enabled — the Exit box is unticked."
+            return self.do_exit_conversation((inp or {}).get("reason", ""))
         if block.name == "run_command":
             cmd = inp.get("command", "")
             try:
@@ -5762,7 +5729,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
     _PROMPT_MODEL_KEYS = ("model", "temperature", "thinking_enabled", "thinking_effort",
                           "thinking_budget", "thinking_mode")
     _PROMPT_TOGGLE_KEYS = ("desktop", "browser", "meta", "mcp", "google", "proton", "outlook",
-                           "excel", "physical", "pause", "dictation_auto_send")
+                           "excel", "physical", "exit", "dictation_auto_send")
     _PROMPT_NAME_KEYS = ("my_name", "my_friend")
 
     def do_manage_prompts(self, params):

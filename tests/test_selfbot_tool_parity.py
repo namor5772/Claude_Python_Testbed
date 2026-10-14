@@ -61,7 +61,7 @@ MYAGENT_SETS = (c.TOOLS, c.FILE_TOOLS, c.DESKTOP_TOOLS, c.BROWSER_TOOLS,
                 c.EXCEL_TOOLS, c.PHYSICAL_TOOLS, c.META_TOOLS)
 MYAGENT_NAMES = {t["name"] for s in MYAGENT_SETS for t in s}
 TOGGLES = ("desktop", "browser", "meta", "mcp", "google", "proton", "outlook",
-           "excel", "physical", "pause")
+           "excel", "physical", "exit")
 ALL_FLAGS = {"_HAS_DESKTOP": True, "_HAS_EXCEL": True, "_HAS_PHYSICAL": True,
              "_HAS_CAMERA": True, "_HAS_MICROPHONE": True}
 
@@ -134,13 +134,13 @@ def _source():
 @_needs_selfbot
 class CatalogueTests(unittest.TestCase):
     def test_every_myagent_tool_an_anthropic_chat_can_use_is_offered(self):
-        app = _app(desktop=True, browser=True, excel=True, physical=True, meta=True, pause=True)
+        app = _app(desktop=True, browser=True, excel=True, physical=True, meta=True, exit=True)
         with _flags():
             names = _names(app)
         missing = (MYAGENT_NAMES - NOT_FOR_SELFBOT) - names
         self.assertEqual(missing, set(), f"MyAgent tools SelfBot does not offer: {sorted(missing)}")
         self.assertNotIn("find_element", names)
-        self.assertTrue({"manage_prompts", "pause_conversation"} <= names)   # SelfBot's own
+        self.assertTrue({"manage_prompts", "exit_conversation"} <= names)   # SelfBot's own
 
     def test_the_file_and_document_tools_need_no_checkbox(self):
         with _flags():
