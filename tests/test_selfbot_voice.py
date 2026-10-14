@@ -337,7 +337,8 @@ class FocusForReplyTests(unittest.TestCase):
 
     def _app(self, ticked, typed="", mike=True):
         app = _bare()
-        app.focused = []
+        app.focused, app.rang = [], []
+        app.root = SimpleNamespace(bell=lambda: app.rang.append(1))
         app.dictation_auto_send = _Var(ticked)
         app.input_field = SimpleNamespace(get=lambda *a: typed,
                                           focus_set=lambda: app.focused.append("box"))
@@ -345,32 +346,37 @@ class FocusForReplyTests(unittest.TestCase):
             app.mike_button = SimpleNamespace(focus_set=lambda: app.focused.append("mike"))
         return app
 
-    def test_ticked_and_nothing_typed_mike_takes_the_focus(self):
+    def test_ticked_and_nothing_typed_mike_takes_the_focus_with_the_bell(self):
+        app = self._app(True)
+        self.assertTrue(app._focus_for_reply(bell=True))
+        self.assertEqual((app.focused, app.rang), (["mike"], [1]))
+
+    def test_the_launch_restore_moves_the_focus_without_ringing(self):
         app = self._app(True)
         self.assertTrue(app._focus_for_reply())
-        self.assertEqual(app.focused, ["mike"])
+        self.assertEqual((app.focused, app.rang), (["mike"], []))
 
-    def test_ticked_but_text_already_typed_the_box_keeps_it(self):
+    def test_ticked_but_text_already_typed_the_box_keeps_it_silently(self):
         app = self._app(True, typed="Shaun, ")
-        self.assertFalse(app._focus_for_reply())
-        self.assertEqual(app.focused, ["box"])
+        self.assertFalse(app._focus_for_reply(bell=True))
+        self.assertEqual((app.focused, app.rang), (["box"], []))
 
     def test_unticked_the_box_takes_it_as_before(self):
         app = self._app(False)
-        self.assertFalse(app._focus_for_reply())
-        self.assertEqual(app.focused, ["box"])
+        self.assertFalse(app._focus_for_reply(bell=True))
+        self.assertEqual((app.focused, app.rang), (["box"], []))
 
     def test_without_the_row_the_box_takes_it(self):
         app = self._app(True, mike=False)
-        self.assertFalse(app._focus_for_reply())
-        self.assertEqual(app.focused, ["box"])
+        self.assertFalse(app._focus_for_reply(bell=True))
+        self.assertEqual((app.focused, app.rang), (["box"], []))
 
-    def test_the_reply_tails_and_the_launch_restore_go_through_it(self):
+    def test_the_reply_tails_ring_and_the_launch_restore_does_not(self):
         src = inspect.getsource(SelfBot.App.check_queue)
         complete = src.index('elif msg["type"] == "complete":')
         error = src.index('elif msg["type"] == "error":')
-        self.assertIn("self._focus_for_reply()", src[complete:error])
-        self.assertIn("self._focus_for_reply()", src[error:error + 400])
+        self.assertIn("self._focus_for_reply(bell=True)", src[complete:error])
+        self.assertIn("self._focus_for_reply(bell=True)", src[error:error + 400])
         self.assertNotIn("self.input_field.focus_set()", src[complete:error])
         load = inspect.getsource(SelfBot.App._load_last_state)
         self.assertIn("self.dictation_auto_send.set(True)\n            self._focus_for_reply()", load)

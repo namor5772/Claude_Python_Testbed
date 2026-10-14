@@ -4772,7 +4772,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         return (f"{name} is NOT set: {provider} cannot transcribe until it is "
                 "(set the environment variable, then restart SelfBot)."), True
 
-    def _focus_for_reply(self):
+    def _focus_for_reply(self, bell=False):
         """The focus once a reply has ended (check_queue's complete and error
         tails) and at a launch that restores the box ticked: with the Auto-send
         box ticked - the hands-free mode - the Mike button, so Enter or Space
@@ -4780,14 +4780,21 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         MyAgent's Agent Request dialog opens on Mike the same way), unless
         something is already typed in the message box, where Enter must keep
         meaning send; otherwise the message box, as before. True when Mike
-        took it. Tolerates a host without the row (no package, a bare test
-        host)."""
+        took it. With `bell` - the reply tails, not the launch restore - Mike
+        taking the focus also rings the display bell (Windows Default Beep,
+        the Mac alert sound; nothing where system sounds are muted): the cue
+        to press Space and speak, as MyAgent's dialog rings it when it opens
+        on Mike (the user's request, later the same day). Tolerates a host
+        without the row (no package, a bare test host)."""
         mike = getattr(self, "mike_button", None)
         box = getattr(self, "input_field", None)
         try:
             typed = box.get("1.0", "end-1c").strip() if box is not None else ""
             if mike is not None and self.dictation_auto_send.get() and not typed:
                 mike.focus_set()
+                root = getattr(self, "root", None)
+                if bell and root is not None:
+                    root.bell()
                 return True
             if box is not None:
                 box.focus_set()
@@ -7300,11 +7307,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                             self.root.after(1000, self._inject_response_to_other)
                         else:
                             self._pending_injection = True
-                    self._focus_for_reply()
+                    self._focus_for_reply(bell=True)
                 elif msg["type"] == "error":
                     self._chat_insert((f"Error: {msg['content']}\n\n", "error"))
                     self.streaming = False
-                    self._focus_for_reply()
+                    self._focus_for_reply(bell=True)
         except queue.Empty:
             pass
         self.root.after(50, self.check_queue)
