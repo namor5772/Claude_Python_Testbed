@@ -182,7 +182,12 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(host()._upgrade_target(), UPGRADE_DEFAULT_TARGETS["Anthropic"])
         self.assertEqual(host(provider="OpenAI", model="gpt-5.6-terra")._upgrade_target(),
                          {"model": "gpt-6-astra", "level": "Max"})
-        self.assertIsNone(host(provider="Google", model="gemini-3.8-flash")._upgrade_target())
+        # Google's default since 2026-10-17: Gemini 4 Argon at High, the top of its ladder
+        self.assertEqual(host(provider="Google", model="gemini-3.8-flash")._upgrade_target(),
+                         {"model": "gemini-4-argon", "level": "High"})
+        self.assertEqual(UPGRADE_DEFAULT_TARGETS["Google"], {"model": "gemini-4-argon", "level": "High"})
+        # ...and a provider without a default gets None (the box stays disabled)
+        self.assertIsNone(host(provider="xAI", model="grok-4.3")._upgrade_target())
 
     def test_its_own_wins_and_an_explicit_none_means_no_upgrade(self):
         own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
@@ -243,7 +248,9 @@ class TargetTests(unittest.TestCase):
         none = {"provider": "Anthropic", "model": "", "level": ""}
         self.assertEqual(host(upgrade_target=none)._upgrade_setup_draft(), (none, "none"))
         self.assertEqual(host(provider="Google")._upgrade_setup_draft(),
-                         ({"provider": "Google", "model": "", "level": ""}, "none"))
+                         ({"provider": "Google", "model": "gemini-4-argon", "level": "High"}, "default"))
+        self.assertEqual(host(provider="xAI")._upgrade_setup_draft(),
+                         ({"provider": "xAI", "model": "", "level": ""}, "none"))
 
 
 class ManageInstructionsTests(unittest.TestCase):
@@ -360,6 +367,9 @@ class LevelTests(unittest.TestCase):
 
     def test_google_xai_moonshot_and_ollama(self):
         self.assertEqual(self.levels("Google", "gemini-3.8-flash"), ["Off", "Low", "Medium", "High"])
+        # the Google default's level is a rung Argon offers (its ladder is low / medium / high)
+        self.assertEqual(self.levels("Google", "gemini-4-argon"), ["Off", "Low", "Medium", "High"])
+        self.assertIn(UPGRADE_DEFAULT_TARGETS["Google"]["level"], self.levels("Google", "gemini-4-argon"))
         self.assertEqual(self.levels("xAI", "grok-4.7"), ["Low", "Medium", "High", "Xhigh"])
         self.assertEqual(self.levels("xAI", "grok-4.3")[0], "None")
         self.assertEqual(self.levels("xAI", "grok-4.20-0309-non-reasoning"), [])   # no knob
@@ -416,6 +426,8 @@ class ParamTests(unittest.TestCase):
         self.assertEqual((p["thinking_enabled"], p["thinking_effort"], p["thinking_mode"]),
                          (True, "high", "high"))
         self.assertFalse(self.params("Google", "gemini-3.8-flash", "Off")["thinking_enabled"])
+        a = self.params("Google", "gemini-4-argon", "High")   # the Google default, as the wire sees it
+        self.assertEqual((a["thinking_enabled"], a["thinking_effort"]), (True, "high"))
 
     def test_a_budget_preset_sets_the_budget(self):
         p = self.params("Anthropic", "claude-haiku-4-5-20251001", "16K")

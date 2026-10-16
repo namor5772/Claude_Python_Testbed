@@ -4118,10 +4118,14 @@ PROVIDERS =["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 # SAME provider from that reply on. Which model is a setting of the
 # INSTRUCTION ("upgrade_target", set in Model Setup, a button beside Voice
 # Setup); these are the provider defaults an instruction without one of its
-# own gets — the user's two examples — and the label Model Setup's model
-# picker offers for an explicit "no upgrade".
+# own gets — the user's two examples, and since 2026-10-17 Google's: Gemini 4
+# Argon at High, the top of the Gemini thinking_level ladder (the user's
+# choice, the day the audit found Argon served) — and the label Model Setup's
+# model picker offers for an explicit "no upgrade". xAI, Moonshot and Ollama
+# have none, so their Upgrade box stays disabled until Model Setup sets one.
 UPGRADE_DEFAULT_TARGETS = {"Anthropic": {"model": "claude-fable-5-1", "level": "Max"},
-                           "OpenAI": {"model": "gpt-6-astra", "level": "Max"}}
+                           "OpenAI": {"model": "gpt-6-astra", "level": "Max"},
+                           "Google": {"model": "gemini-4-argon", "level": "High"}}
 UPGRADE_NO_MODEL_LABEL = "(none — no upgrade for this instruction)"
 DEFAULT_GEOMETRY = "1050x930"
 MONO_FONT = "Consolas" if IS_WINDOWS else "Menlo"
