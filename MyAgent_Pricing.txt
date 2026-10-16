@@ -341,10 +341,13 @@
 
   Provider "Google" in MyAgent's picker (the company; the models are branded
   gemini-*). Gemini has a free tier (under rate limits). Prices below are
-  paid tier. Re-verified 2026-09-23 against ai.google.dev/gemini-api/docs/
-  pricing and the live catalog: every row matches, the 3.6 / 3.7 / 3.8 Flash
-  promo still reads "through December 31, 2026", the three -latest aliases
-  resolve where the rows say, and no text tier has shipped since 3.8.
+  paid tier. Re-verified 2026-10-17 against ai.google.dev/gemini-api/docs/
+  pricing, the deprecations page and the live catalog: Gemini 4 Argon has
+  shipped (stable, the flagship) at a launch rate of its own, 3.5 Flash and
+  3.7 Flash have left the pricing page (deprecated — rows kept, see below),
+  3.1 Flash-Lite has a shutdown date (2027-05-07), the 3.6 / 3.8 Flash promo
+  still reads "through December 31, 2026", the three -latest aliases resolve
+  where the rows say, and every other row matches.
 
   THINKING TOKENS bill at the OUTPUT rate but are NOT inside
   candidates_token_count — they are their own bucket, thoughts_token_count.
@@ -381,6 +384,22 @@
    Gemini tier ships. * = the 3.6/3.7/3.8 Flash launch PROMO through
    2026-12-31; sticker $1.50/$7.50/$0.15 from 2027-01-01, see below.)
 
+  Gemini 4 Family                          (added 2026-10-17)
+  ──────────────────────────────────────────────────────────────────────────
+  Model Prefix           Input    Output   Cached
+  ──────────────────────────────────────────────────────────────────────────
+  gemini-4-argon         $2.00†   $10.00†  $0.10†
+  (Gemini 4 Argon — stable, Google's flagship reasoning tier: a unified 1M
+   context shared by input, thinking and output, 65,536 max output on a
+   synchronous call, implicit caching only, not on the free tier. Probed
+   live 2026-10-17: thinking_level low / medium / high (minimal is a 400),
+   temperature and custom function calls accepted; the quiet ladder sends
+   thinking_budget=0 for "off" (0 thoughts). † LAUNCH RATE "through
+   November 30, 2026" — $4.00/$20.00/$0.20 "starting December 1, 2026".
+   Modelled as a second DatedPrice in constants.py. Deliberately NO bare
+   "gemini-4" catch-all row: a future 4.x tier is unpriced with a warning,
+   not priced at Argon's rate.)
+
   Gemini 3.8 Family                        (added 2026-09-16)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cached
@@ -402,11 +421,16 @@
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
   gemini-3.7-flash       $0.75*   $3.75*   $0.075*
-  (Stable 2026-08, now the Google default and the gemini-flash-latest target;
-   until this audit it fell through to the bare "gemini-3" entry at
-   $0.50/$3.00. * PROMO "through December 31, 2026" — $1.50/$7.50/$0.15
-   "starting January 1, 2027". Modelled as a DatedPrice in constants.py, so
-   _get_pricing flips on New Year's Day by itself.)
+  (Stable 2026-08, the Google default and gemini-flash-latest target until
+   3.8; until the 2026-08-25 audit it fell through to the bare "gemini-3"
+   entry at $0.50/$3.00. * PROMO "through December 31, 2026" —
+   $1.50/$7.50/$0.15 "starting January 1, 2027". Modelled as a DatedPrice
+   in constants.py, so _get_pricing flips on New Year's Day by itself.
+   DEPRECATED 2026-10-17: Google's deprecations page replaces it with
+   3.8-flash (no shutdown date) and the pricing page no longer lists it —
+   hidden from MyAgent's picker; the row STAYS while the API serves it,
+   because deleting a Google row routes a pinned run to the bare "gemini-3"
+   catch-all at $0.50/$3.00 — mispriced, not unpriced.)
 
   Gemini 3.6 Family                        (added 2026-07-31)
   ──────────────────────────────────────────────────────────────────────────
@@ -423,7 +447,9 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
-  gemini-3.5-flash       $1.50    $9.00    $0.15
+  gemini-3.5-flash       $1.50    $9.00    $0.15   (DEPRECATED 2026-10-17 →
+                                                    3.6-flash; picker-hidden,
+                                                    row kept — see 3.7)
   gemini-3.5-flash-lite  $0.30    $2.50    $0.03
   (-lite is the LONGER prefix and must stay listed, or it would match the
    pricier gemini-3.5-flash entry.)
@@ -433,19 +459,25 @@
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
   gemini-3.1-pro         $2.00    $12.00   $0.20   (doubles above 200k input
-                                                    tokens; table keeps ≤200k)
-  gemini-3.1-flash-lite  $0.25    $1.50    $0.025
+                                                    tokens; table keeps ≤200k;
+                                                    -customtools prices here)
+  gemini-3.1-flash-lite  $0.25    $1.50    $0.025  (DEPRECATED 2026-10-17 →
+                                                    3.5-flash-lite, shutdown
+                                                    2027-05-07; picker-hidden,
+                                                    row kept — see 3.7)
 
   Gemini 3 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
-  gemini-3-pro           $2.00    $12.00   $0.20
-  gemini-3-pro-image     $2.00    $12.00   $0.20
-  gemini-3-flash         $0.50    $3.00    $0.05
+  gemini-3-flash         $0.50    $3.00    $0.05   (3-flash-preview, still a
+                                                    current preview)
   gemini-3  (fallback)   $0.50    $3.00    $0.05
+  (The gemini-3-pro / gemini-3-pro-image rows left 2026-10-17: 3-pro-preview
+   shut down 2026-03-09, and 3-pro-image is an image model MyAgent's picker
+   never offered.)
 
-  Gemini 2.5 Family
+  Gemini 2.5 Family                        (legacy — picker-hidden, unpriced)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────

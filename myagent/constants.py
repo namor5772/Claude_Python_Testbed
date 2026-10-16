@@ -1672,25 +1672,30 @@ OPENAI_RESPONSES_PREFIXES = ("gpt-4.1", "gpt-5", "gpt-6")
 OPENAI_DEPRECATED_MODEL_PREFIXES = ("gpt-5-mini", "gpt-5-nano", "gpt-5-chat",
                                     "gpt-5-codex", "gpt-5-2025", "gpt-5.1-chat")
 OPENAI_DEPRECATED_MODEL_IDS = {"gpt-5", "gpt-5.1-codex"}
-# Gemini 2.5 is scheduled for shutdown (no earlier than 2026-10-16; Google
-# will give 6 months' notice once Gemini 3 is GA) and is replaced by the 3.x
-# tiers — per the retiring-models-removed-early policy it is dropped from the
-# picker (_fetch_gemini_models) and unpriced, and the fallback list carries
-# only current 3.x models. The 2.5 thinking_budget PARAM wiring stays
+# Gemini 2.5 is the legacy generation — Google's deprecations page (read
+# 2026-10-17) now says it is "not deprecated" and served "until further
+# notice" to accounts that used it, with 3.x / 4 for new work; it had been
+# "shutdown no earlier than 2026-10-16" — and per the retiring-models-
+# removed-early policy it stays out of the picker (_fetch_gemini_models) and
+# unpriced since the 2026-07 audit. The 2.5 thinking_budget PARAM wiring stays
 # (GEMINI_THINKING_PREFIXES + _gemini_uses_thinking_level) so a pinned
 # instruction that still names a 2.5 id keeps working until Google pulls it.
 # gemini-3.8-flash (stable 2026-09-02) leads: the current Flash tier — what the
-# floating gemini-flash-latest alias resolves to (verified live 2026-09-16 via
-# response.model_version; it was 3.7-flash on 2026-08-25) — at the same
-# promo/sticker rate as 3.6 / 3.7 and Google's own pick for "long-horizon
-# software engineering, autonomous agents"; it accepts thinking_level
-# low/medium/high like the rest of 3.x (probed live 2026-09-16) and still
-# tolerates the temperature MyAgent sends, although its release notes say to
-# strip temperature / top_p / top_k. 3.7-flash and 3.5-flash stay listed
-# because instructions were pinned to each while it was the default;
-# gemini-flash-lite-latest resolves to 3.5-flash-lite.
-GEMINI_FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash",
-                          "gemini-3.1-pro-preview", "gemini-3.5-flash",
+# floating gemini-flash-latest alias resolves to (verified live 2026-09-16 and
+# again 2026-10-17 via response.model_version; it was 3.7-flash on 2026-08-25)
+# — at the same promo/sticker rate as 3.6 / 3.7 and Google's own pick for
+# "long-horizon software engineering, autonomous agents"; it accepts
+# thinking_level low/medium/high like the rest of 3.x (probed live 2026-09-16)
+# and still tolerates the temperature MyAgent sends, although its release
+# notes say to strip temperature / top_p / top_k. gemini-4-argon (Gemini 4
+# Argon, stable, found served 2026-10-17): the flagship reasoning tier — 1M
+# shared context, thinking_level low/medium/high, temperature and custom
+# function calls probed live — at $2/$10 launch pricing. 3.7-flash and
+# 3.5-flash left the list 2026-10-17 (deprecated — see
+# GEMINI_DEPRECATED_MODEL_PREFIXES / _IDS) for 3.6-flash, the stable Flash
+# tier before 3.8; gemini-flash-lite-latest resolves to 3.5-flash-lite.
+GEMINI_FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-4-argon",
+                          "gemini-3.1-pro-preview", "gemini-3.6-flash",
                           "gemini-3.5-flash-lite"]
 GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 # Models that support thinking via ThinkingConfig. EVERY current Gemini text
@@ -1703,8 +1708,12 @@ GEMINI_DEFAULT_MODEL = GEMINI_FALLBACK_MODELS[0]
 # so no version-pinned prefix matches them — all three are listed explicitly so
 # their thinking UI isn't hidden. Whether the config ships as the legacy
 # thinking_budget (2.5) or thinking_level (3+) is decided per-model by
-# _gemini_uses_thinking_level.
-GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3", "gemini-pro-latest",
+# _gemini_uses_thinking_level. "gemini-4" joined 2026-10-17, the day Gemini 4
+# Argon was found served: it takes thinking_level low / medium / high (minimal
+# is a 400, probed live) — and without the prefix the Thinking checkbox was
+# hidden and every call went out with no config, the model thinking at its
+# default, unshown and billed at the output rate.
+GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3", "gemini-4", "gemini-pro-latest",
                             "gemini-flash-latest", "gemini-flash-lite-latest")
 # What the wire carries for a thinking-capable Gemini model when MyAgent's
 # Thinking checkbox is OFF (2026-09-23 audit). Sending NO thinking_config —
@@ -1718,12 +1727,16 @@ GEMINI_THINKING_PREFIXES = ("gemini-2.5", "gemini-3", "gemini-pro-latest",
 # (GeminiMixin._gemini_quiet_style; a 400 steps down one rung):
 #   "minimal"  thinking_level=minimal — 0 thoughts on 3.6 / 3.5 / 3.5-lite /
 #              3.1-lite / 3-flash-preview; HTTP 400 "Thinking level MINIMAL
-#              is not supported for this model" on 3.8, 3.7 and 3.1-pro
+#              is not supported for this model" on 3.8, 3.7, 3.1-pro and
+#              4-argon (probed 2026-10-17)
 #   "budget0"  thinking_budget=0 — the legacy disable: 0 thoughts on 3.6 /
 #              3.5 / 3.1-lite / 3-flash; on 3.8 / 3.7 ACCEPTED but ~50
-#              thoughts remain (their floor); 400 on 3.5-flash-lite ("Request
-#              contains an invalid argument") and on 3.1-pro ("Budget 0 is
-#              invalid. This model only works in thinking mode.")
+#              thoughts remain (their floor); on 4-argon accepted, 0 thoughts
+#              (its default is adaptive — 0 on a short ask against 38 at
+#              medium and 204 at high, probed 2026-10-17); 400 on
+#              3.5-flash-lite ("Request contains an invalid argument") and on
+#              3.1-pro ("Budget 0 is invalid. This model only works in
+#              thinking mode.")
 #   "low"      thinking_level=low — the floor of a tier that cannot stop
 #              (3.1-pro: 174 thoughts against 295 at its default)
 #   "none"     no thinking_config at all — the old behaviour, the last resort
@@ -1734,6 +1747,7 @@ GEMINI_QUIET_STYLES = ("minimal", "budget0", "low", "none")
 # -latest aliases are seeded at their CURRENT target's rung, like their
 # pricing rows: re-verify when an alias moves.
 GEMINI_QUIET_STYLE_PREFIXES = {
+    "gemini-4-argon": "budget0",          # minimal is a 400; budget 0 accepted, 0 thoughts (2026-10-17)
     "gemini-3.8-flash": "budget0",
     "gemini-3.7-flash": "budget0",
     "gemini-flash-latest": "budget0",     # -> gemini-3.8-flash
@@ -1760,6 +1774,23 @@ GEMINI_NON_AGENTIC_SUBSTRINGS = (
     "nano-banana", "lyria", "veo", "-live", "-audio", "omni", "gemma",
     "robotics", "computer-use", "deep-research", "antigravity", "transcribe",
 )
+# Text tiers Google's deprecations page names as deprecated (2026-10-17
+# audit) — hidden from the picker per the retiring-models-removed-early
+# policy while the API still serves them: a pinned instruction keeps running
+# on one, with the "hidden from the model picker" warning, until the real
+# shutdown (_fetch_gemini_models keeps them in the served set). Prefixes:
+# gemini-3.1-flash-lite (shutdown 2027-05-07, replaced by 3.5-flash-lite; the
+# prefix also takes its -preview, shut down 2026-05-25 and still listed),
+# gemini-3.7-flash (replaced by 3.8-flash, no date, gone from the pricing
+# page) and gemini-3-pro-preview (shut down 2026-03-09). gemini-3.5-flash
+# (replaced by 3.6-flash, no date, gone from the pricing page) must be an
+# EXACT id — a prefix would take the still-current gemini-3.5-flash-lite.
+# Their PRICING rows stay (see GEMINI_PRICING): Google's bare "gemini-3"
+# catch-all would otherwise price a pinned run, wrongly, instead of
+# leaving it unpriced.
+GEMINI_DEPRECATED_MODEL_PREFIXES = ("gemini-3.1-flash-lite", "gemini-3.7-flash",
+                                    "gemini-3-pro-preview")
+GEMINI_DEPRECATED_MODEL_IDS = {"gemini-3.5-flash"}
 # Ollama (local inference) — no API key needed; availability probed at startup.
 # Order is the curated preference: [0] is OLLAMA_DEFAULT_MODEL (initial model,
 # instruction-create default, and the drift-fallback target when a saved model
@@ -3771,12 +3802,23 @@ OPENAI_PRICING = {
 # Day instead of overstating every Flash line by 2x until someone edits this.
 # Re-verified 2026-09-16: gemini-3.8-flash (stable 2026-09-02) bills the
 # identical promo/sticker pair, so the three Flash tiers share ONE object.
+# Re-verified 2026-10-17: Gemini 4 Argon (gemini-4-argon, stable, the
+# flagship) joins at a launch rate of its own — $2.00/$10.00 (cached $0.10)
+# "through November 30, 2026", $4.00/$20.00 ($0.20) from 2026-12-01 — a
+# second DatedPrice; 3.5 Flash and 3.7 Flash have left the pricing page
+# (deprecated, see GEMINI_DEPRECATED_MODEL_IDS / _PREFIXES — their rows stay,
+# see below) and every other row still matches.
 # (Context-cache STORAGE, $1.00/M tokens/hour, is not modelled — it applies to
 # EXPLICIT CachedContent objects, which MyAgent never creates.)
 _GEMINI_FLASH_PROMO = DatedPrice(
     until=datetime.date(2026, 12, 31),
     promo=(0.75, 3.75, 0.075),
     then=(1.50, 7.50, 0.15),
+)
+_GEMINI_ARGON_LAUNCH = DatedPrice(
+    until=datetime.date(2026, 11, 30),
+    promo=(2.00, 10.00, 0.10),
+    then=(4.00, 20.00, 0.20),
 )
 GEMINI_PRICING = {
     # Floating "-latest" aliases that models.list() returns. The version sits
@@ -3791,6 +3833,12 @@ GEMINI_PRICING = {
     "gemini-pro-latest":        (2.00, 12.00, 0.20),    # -> gemini-3.1-pro-preview
     "gemini-flash-latest":      _GEMINI_FLASH_PROMO,     # -> gemini-3.8-flash
     "gemini-flash-lite-latest": (0.30, 2.50, 0.03),     # -> gemini-3.5-flash-lite
+    # Gemini 4 (added 2026-10-17, the day the audit found it served): Argon,
+    # the flagship reasoning tier — 1M shared context, implicit caching only.
+    # Launch rate "through November 30, 2026", sticker from 2026-12-01. No
+    # "gemini-4" catch-all row on purpose: a future 4.x tier is unpriced with
+    # a warning, not priced at Argon's rate.
+    "gemini-4-argon":      _GEMINI_ARGON_LAUNCH,
     # Gemini 3.8 family (added 2026-09-16 — GA 2026-09-02, and for those two
     # weeks it fell through to the bare "gemini-3" entry at $0.50/$3.00, a
     # 1.5x under-report of every 3.8 line in the cost logs; the third Flash
@@ -3799,6 +3847,11 @@ GEMINI_PRICING = {
     "gemini-3.8-flash":    _GEMINI_FLASH_PROMO,
     # Gemini 3.7 family (added 2026-08-25 — until then it fell through to the
     # bare "gemini-3" entry at $0.50/$3.00). Same promo/sticker as 3.6.
+    # DEPRECATED 2026-10-17 (replaced by 3.8-flash, no shutdown date, off the
+    # pricing page) and picker-hidden; the row STAYS while Google serves it,
+    # because deleting a Google row does not unprice a model — the bare
+    # "gemini-3" catch-all below would price a pinned run at $0.50/$3.00
+    # instead. Delete it when the id leaves the listing.
     "gemini-3.7-flash":    _GEMINI_FLASH_PROMO,
     # Gemini 3.6 family (added 2026-07-31 at the $1.50/$7.50 sticker — the
     # bare "gemini-3" fallback had been pricing it at $0.50/$3.00; the
@@ -3810,14 +3863,20 @@ GEMINI_PRICING = {
     # the row was added; by 2026-09-23 it does — $0.03, the family's 1/10 —
     # so the slot the family rule had filled is now the published rate.
     "gemini-3.5-flash-lite": (0.30, 2.50, 0.03),
+    # gemini-3.5-flash: DEPRECATED 2026-10-17 (replaced by 3.6-flash, off the
+    # pricing page) and picker-hidden; the row stays while served, for the
+    # catch-all reason the 3.7 row gives.
     "gemini-3.5-flash":    (1.50, 9.00, 0.15),
     # Gemini 3.1 family  (3.1-pro doubles input above 200k tokens — the table
-    # keeps the ≤200k tier, matching the 2.5-pro entry's convention)
+    # keeps the ≤200k tier, matching the 2.5-pro entry's convention; the
+    # -customtools variant prices by the same prefix). 3.1-flash-lite:
+    # DEPRECATED 2026-10-17 (shutdown 2027-05-07, replaced by 3.5-flash-lite)
+    # and picker-hidden; the row stays until then — the catch-all reason.
     "gemini-3.1-flash-lite": (0.25, 1.50, 0.025),
     "gemini-3.1-pro":      (2.00, 12.00, 0.20),
-    # Gemini 3 family
-    "gemini-3-pro-image":  (2.00, 12.00, 0.20),
-    "gemini-3-pro":        (2.00, 12.00, 0.20),
+    # Gemini 3 family — 3-flash-preview is still a current, priced preview.
+    # The 3-pro-preview rows left 2026-10-17: shut down 2026-03-09, and
+    # 3-pro-image is an image model the picker never offered.
     "gemini-3-flash":      (0.50, 3.00, 0.05),
     "gemini-3":            (0.50, 3.00, 0.05),
     # Gemini 2.5 (sunset ≥ 2026-10-16) was unpriced in the 2026-07 audit —

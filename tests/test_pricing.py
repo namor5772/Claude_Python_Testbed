@@ -15,6 +15,11 @@ GEMINI_FLASH_PROMO = {"input": 0.75 / 1_000_000, "output": 3.75 / 1_000_000,
                       "cache_read": 0.075 / 1_000_000}
 GEMINI_FLASH_STICKER = {"input": 1.50 / 1_000_000, "output": 7.50 / 1_000_000,
                         "cache_read": 0.15 / 1_000_000}
+# Gemini 4 Argon's launch rate ("through November 30, 2026") and sticker.
+GEMINI_ARGON_LAUNCH = {"input": 2.00 / 1_000_000, "output": 10.00 / 1_000_000,
+                       "cache_read": 0.10 / 1_000_000}
+GEMINI_ARGON_STICKER = {"input": 4.00 / 1_000_000, "output": 20.00 / 1_000_000,
+                        "cache_read": 0.20 / 1_000_000}
 
 
 class TestGetPricing(unittest.TestCase):
@@ -142,14 +147,16 @@ class TestGetPricing(unittest.TestCase):
         ("OpenAI", "gpt-5-mini"): None,
         ("OpenAI", "o3"): None,
         ("OpenAI", "o4-mini"): None,
-        # Gemini 2.5 (sunset ≥ 2026-10-16) unpriced under the same policy
+        # Gemini 2.5 (legacy, picker-hidden) unpriced under the same policy
         ("Google", "gemini-2.5-pro"): None,
         # Gemini's cached rate is exactly 1/10 of input across the family
-        ("Google", "gemini-3-pro"): {"input": 2.00 / 1_000_000,
-                                     "output": 12.00 / 1_000_000,
-                                     "cache_read": 0.20 / 1_000_000},
+        ("Google", "gemini-3.1-pro-preview"): {"input": 2.00 / 1_000_000,
+                                               "output": 12.00 / 1_000_000,
+                                               "cache_read": 0.20 / 1_000_000},
         # gemini-3.5-flash must NOT prefix-match down to the cheaper
-        # "gemini-3" fallback entry.
+        # "gemini-3" fallback entry — and its row STAYS although the tier was
+        # deprecated 2026-10-17 (picker-hidden): deleting a Google row would
+        # route a pinned run to that catch-all, mispriced rather than unpriced.
         ("Google", "gemini-3.5-flash"): {"input": 1.5e-06, "output": 9e-06,
                                          "cache_read": 1.5e-07},
         # ...and gemini-3.5-flash-lite must not match gemini-3.5-flash (longer
@@ -234,6 +241,12 @@ class TestGetPricing(unittest.TestCase):
         ("Google", "gemini-3.7-flash", date(2027, 1, 1)): GEMINI_FLASH_STICKER,
         ("Google", "gemini-3.6-flash", date(2026, 12, 31)): GEMINI_FLASH_PROMO,
         ("Google", "gemini-3.6-flash", date(2027, 1, 1)): GEMINI_FLASH_STICKER,
+        # Gemini 4 Argon (found served 2026-10-17): its own launch rate,
+        # "through November 30, 2026", then the $4/$20 sticker — a second
+        # DatedPrice with a different boundary from the Flash promo's.
+        ("Google", "gemini-4-argon", date(2026, 10, 17)): GEMINI_ARGON_LAUNCH,
+        ("Google", "gemini-4-argon", date(2026, 11, 30)): GEMINI_ARGON_LAUNCH,
+        ("Google", "gemini-4-argon", date(2026, 12, 1)): GEMINI_ARGON_STICKER,
         # The floating alias resolves to 3.8-flash (verified live 2026-09-16;
         # it was 3.7-flash on 2026-08-25) and must NOT prefix-match the
         # cheaper bare "gemini-3" entry.

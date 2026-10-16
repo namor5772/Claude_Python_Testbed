@@ -98,7 +98,9 @@ class _Host(GeminiMixin, UIMixin, StreamingMixin):
 class QuietStyle(unittest.TestCase):
 
     def test_seeds(self):
-        for mid, expected in (("gemini-3.8-flash", "budget0"), ("gemini-3.7-flash", "budget0"),
+        for mid, expected in (("gemini-4-argon", "budget0"),   # minimal a 400, budget 0 accepted (2026-10-17)
+                              ("gemini-4-neon", "minimal"),     # an unlisted 4.x: starts at the top
+                              ("gemini-3.8-flash", "budget0"), ("gemini-3.7-flash", "budget0"),
                               ("gemini-flash-latest", "budget0"), ("gemini-3.1-pro-preview", "low"),
                               ("gemini-3.1-pro-preview-customtools", "low"), ("gemini-pro-latest", "low"),
                               ("gemini-3.6-flash", "minimal"), ("gemini-3.5-flash", "minimal"),

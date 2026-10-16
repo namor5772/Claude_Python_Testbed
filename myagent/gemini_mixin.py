@@ -7,6 +7,8 @@ import time
 from google.genai import types as genai_types
 
 from myagent.constants import (
+    GEMINI_DEPRECATED_MODEL_IDS,
+    GEMINI_DEPRECATED_MODEL_PREFIXES,
     GEMINI_FALLBACK_MODELS,
     GEMINI_NON_AGENTIC_SUBSTRINGS,
     GEMINI_QUIET_STYLE_PREFIXES,
@@ -847,11 +849,14 @@ class GeminiMixin:
         specialized output modalities (TTS, image/music/video generation),
         managed agents that live on the Interactions API (deep-research,
         antigravity), the computer-use preview (needs its own tool protocol),
-        gemma open models (no function calling), robotics previews, and
-        shut-down generations (2.0/1.x, which the API still lists). What
-        remains: the pro / flash / flash-lite text tiers, their dated
-        previews and variants (e.g. -customtools), and the floating -latest
-        aliases."""
+        gemma open models (no function calling), robotics previews, the
+        shut-down generations (2.0/1.x, which the API still lists), the
+        legacy 2.5 family and — since the 2026-10-17 audit — the 3.x tiers
+        Google's deprecations page names (GEMINI_DEPRECATED_MODEL_PREFIXES /
+        _IDS), which stay in the served set so a pinned instruction runs on
+        one until the real shutdown. What remains: Gemini 4 Argon, the pro /
+        flash / flash-lite text tiers, their dated previews and variants
+        (e.g. -customtools), and the floating -latest aliases."""
         if not self.gemini_client:
             note_served_models(self, "Google", None)
             return list(GEMINI_FALLBACK_MODELS)
@@ -871,9 +876,16 @@ class GeminiMixin:
                     continue
                 if any(skip in mid for skip in GEMINI_NON_AGENTIC_SUBSTRINGS):
                     continue
-                # 2.0/1.x are shut down; 2.5 is scheduled for sunset
-                # (≥ 2026-10-16) and picker-hidden ahead of it (2026-07 audit)
+                # 2.0/1.x are shut down; 2.5 is the legacy generation (served
+                # "until further notice" to accounts that used it, Google's
+                # page says — new work goes to 3.x / 4) and picker-hidden
+                # since the 2026-07 audit
                 if mid.startswith(("gemini-2.5", "gemini-2.0-", "gemini-1.")):
+                    continue
+                # ...and the 3.x tiers Google has deprecated (2026-10-17
+                # audit): picker-hidden, still in `served` above so a pinned
+                # instruction runs on one until the real shutdown
+                if mid in GEMINI_DEPRECATED_MODEL_IDS or mid.startswith(GEMINI_DEPRECATED_MODEL_PREFIXES):
                     continue
                 model_ids.append(mid)
             model_ids.sort()

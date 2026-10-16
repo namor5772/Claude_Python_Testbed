@@ -22,6 +22,7 @@ GEMINI = {
     "gemini-3.6-flash": True,
     "gemini-3.7-flash": True,   # stable 2026-08; low/medium/high probed live 2026-08-25
     "gemini-3.8-flash": True,   # stable 2026-09-02; low/medium probed live 2026-09-16
+    "gemini-4-argon": True,     # stable 2026-10; low/medium/high probed live 2026-10-17 (minimal a 400)
     "gemini-2.0-flash": False,
     "gemini-1.5-pro": False,
     "gemini-flash-latest": True,
@@ -43,6 +44,7 @@ GEMINI_LEVEL = {
     "gemini-3.6-flash": True,
     "gemini-3.7-flash": True,
     "gemini-3.8-flash": True,
+    "gemini-4-argon": True,
     "gemini-flash-latest": True,
     "gemini-flash-lite-latest": True,
     "gemini-pro-latest": True,
