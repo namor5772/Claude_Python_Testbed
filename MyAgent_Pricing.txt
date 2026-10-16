@@ -465,8 +465,10 @@
   OpenAI SDK at https://api.x.ai/v1 with XAI_API_KEY.
 
   Current Catalog — verified LIVE 2026-07-17 (re-verified 2026-08-18,
-  2026-08-25 and 2026-09-23 — the last added grok-4.7 and moved the floating
-  grok-latest alias on to it) against the listing's own price fields
+  2026-08-25, 2026-09-23 — which added grok-4.7 and moved the floating
+  grok-latest alias on to it — and 2026-10-17: unchanged, no retirement
+  notice for any language model on docs.x.ai) against the listing's own
+  price fields
   (/v1/language-models, unit = $1/10000 per MTok; grok-4.3 reports
   12500/25000 = $1.25/$2.50, grok-4.5, grok-4.6 and grok-4.7 all report
   20000/60000 = $2/$6)
@@ -476,7 +478,9 @@
   grok-4.3               $1.25    $2.50    (alias: grok-4.3-latest; was
                                             also grok-latest until 2026-08)
   grok-4.5               $2.00    $6.00    (500K context, reasoning
-                                            low..xhigh always-on; aliases:
+                                            low..xhigh always-on — xhigh
+                                            runs as high per xAI's
+                                            reasoning guide; aliases:
                                             grok-4.5-latest,
                                             grok-build-latest)
   grok-4.6               $2.00    $6.00    (2026-08-12 flagship, 500K
@@ -673,7 +677,9 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
+  Last updated: October 17, 2026 (xAI audit: catalog, ladders and rates re-verified
+                against /v1/language-models and docs.x.ai — no change, no retirement)
+  Before that:  September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
                 OpenAI audit: gpt-6-sol / gpt-6-luna rows; Gemini audit: re-verified;
                 Anthropic audit: claude-opus-5-5 + claude-mythos-5-1 rows; Moonshot: re-verified)
 ================================================================================

@@ -1816,7 +1816,12 @@ OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
 # + default_reasoning_effort), its input modalities and its aliases — so a
 # new tier gets its Reasoning combobox the day it appears instead of waiting
 # for the tables below, which are now the OFFLINE fallback (a failed fetch,
-# or an id the listing does not carry).
+# or an id the listing does not carry). Re-audited 2026-10-17: the same
+# eight served ids, every ladder and price field as below, no retirement
+# notice on docs.x.ai for any language model, and every picker id plus the
+# grok-latest / grok-build-latest / grok-4.20 aliases run through the REAL
+# _stream_xai_call again — a client-side tool call, then the answer — with
+# zero downgrade notices (tests/test_xai_*.py pin the contract).
 XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1"
 XAI_FALLBACK_MODELS = ["grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7",
                        "grok-4.20-0309-reasoning",
@@ -1833,8 +1838,10 @@ XAI_NON_AGENTIC_SUBSTRINGS = ("-image", "imagine", "embed", "-video", "-tts")
 # like grok-4.3 minus a capabilities block), so this is a verified list:
 # 2026-09-30, every listed model was run through the real _stream_xai_call —
 # a client-side function call, then an answer from its result — and the seven
-# others passed. MyAgent always declares client-side tools (run_command,
-# user_prompt, …), so a model that refuses them can do nothing here.
+# others passed (re-run 2026-10-17 on the same eight served ids: the same
+# result, and docs.x.ai names no retirement for any language model). MyAgent
+# always declares client-side tools (run_command, user_prompt, …), so a model
+# that refuses them can do nothing here.
 # "multi-agent" is the class xAI's own error names, so a later multi-agent
 # tier is covered too. The knob (XAI_REASONING_EFFORT) and price (XAI_PRICING)
 # rows stay: should the account get the beta, deleting the entry re-enables it.
@@ -1853,7 +1860,10 @@ XAI_UNRUNNABLE_SUBSTRINGS = {
 # disables reasoning, xhigh appeared in the listing by 2026-09-23 and is
 # accepted live. grok-4.5: low/medium/high/xhigh — always-reasoning, "none"
 # is HTTP 400 (verified live 2026-07-17; aliases grok-4.5-latest +
-# grok-build-latest). grok-4.6 (the 2026-08 flagship, 500K context, vision,
+# grok-build-latest) — and xAI's reasoning guide (read 2026-10-17) says 4.5
+# runs xhigh AS high; the listing still publishes the rung and a live call
+# accepts it, so it stays offered, the cost log then naming xhigh for what
+# ran at high. grok-4.6 (the 2026-08 flagship, 500K context, vision,
 # no aliases of its own): the same low..xhigh always-reasoning matrix —
 # "none" is HTTP 400 "This model does not support `reasoning_effort` value
 # `none`", every other value accepted, verified live 2026-08-18. grok-4.7
