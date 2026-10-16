@@ -505,7 +505,11 @@
   grok-4.20              $1.25    $2.50    (all three 4.20 variants:
                                             -reasoning / -non-reasoning /
                                             -multi-agent, + bare grok-4.20
-                                            alias -> the reasoning variant)
+                                            alias -> the reasoning variant;
+                                            only -reasoning is in the picker
+                                            — -multi-agent hidden since
+                                            2026-09-30, -non-reasoning since
+                                            2026-10-17, both still priced)
   grok-build-latest      $2.00    $6.00    (re-aliased to grok-4.5 in the
                                             2026-07 catalog — the longer
                                             prefix wins over grok-build)

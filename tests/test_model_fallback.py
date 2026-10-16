@@ -3,8 +3,10 @@
 _restore_model_params falls back to _default_model_for_provider() when a
 saved model isn't in the current provider's list. It must be the curated
 default, never available_models[0]: fetched lists are sorted, and xAI's
-sorts to grok-4.20-0309-non-reasoning — which is what a Heartbeat-launched
-FNE run (2026-07-25) silently ended up on when MOONSHOT_API_KEY was absent.
+sorted to grok-4.20-0309-non-reasoning — which is what a Heartbeat-launched
+FNE run (2026-07-25) silently ended up on when MOONSHOT_API_KEY was absent
+(that id left the picker 2026-10-17; the pinned grok-4.20 reasoning variant
+sorts first now, still ahead of the grok-4.3 default).
 """
 import unittest
 

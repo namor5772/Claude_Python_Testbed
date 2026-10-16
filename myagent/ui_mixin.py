@@ -998,8 +998,10 @@ class UIMixin:
         elif self.available_models:
             # Fall back to the provider's curated default, not available_models[0]:
             # fetched lists are sorted, and lexicographic-first can be a terrible
-            # pick (xAI's sorts to grok-4.20-0309-non-reasoning, which is how the
-            # 2026-07-25 FNE run ended up on a pinned non-reasoning variant).
+            # pick (xAI's sorted to grok-4.20-0309-non-reasoning, which is how the
+            # 2026-07-25 FNE run ended up on a pinned non-reasoning variant — that
+            # id left the picker 2026-10-17, and the pinned grok-4.20 reasoning
+            # variant sorts first now).
             fallback = self._default_model_for_provider(self.provider)
             if fallback not in self.available_models:
                 fallback = self.available_models[0]

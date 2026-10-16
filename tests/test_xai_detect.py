@@ -16,8 +16,10 @@ TestUnrunnableModels), and everything else — the pinned -reasoning/-non-reason
 variants, grok-build, and the aliases (bare grok-4.20, grok-latest — which
 floats: grok-4.3 until 2026-08, grok-4.6 then, grok-4.7 since 2026-09) —
 has no client-side knob. LISTING is a trimmed copy of the real 2026-09-23
-/v1/language-models body (the multi-agent entry included — the live listing
-still serves it) plus two entries the filter must drop."""
+/v1/language-models body (the multi-agent and non-reasoning entries included
+— the live listing still serves both, and the picker drops them: multi-agent
+since 2026-09-30, non-reasoning since 2026-10-17, see TestUnrunnableModels)
+plus two entries the filter must drop."""
 import copy
 import unittest
 
@@ -52,8 +54,10 @@ LISTING = {"models": [
     {"id": "imagine-image-3", "input_modalities": ["text"], "aliases": []},
 ]}
 # What the picker offers: every served chat model that can run MyAgent's loop
-# (verified live 2026-09-30) — the multi-agent entry above is dropped.
-LIVE_IDS = ["grok-4.20-0309-non-reasoning", "grok-4.20-0309-reasoning",
+# (verified live 2026-09-30 and 2026-10-17) — the multi-agent entry above is
+# dropped (it refuses client-side tools) and, since 2026-10-17, the
+# non-reasoning one (it looped 253 run_command calls on a four-step task).
+LIVE_IDS = ["grok-4.20-0309-reasoning",
             "grok-4.3", "grok-4.5", "grok-4.6", "grok-4.7", "grok-build-0.1"]
 
 
@@ -104,6 +108,13 @@ class TestParseLanguageModels(unittest.TestCase):
         self.assertNotIn("grok-4.20-multi-agent-0309", ids)
         self.assertNotIn("grok-4.20-multi-agent-0309", caps)
         self.assertNotIn("grok-4.20-multi-agent", caps)
+        # ...and since 2026-10-17 the non-reasoning tier the same way — while
+        # its reasoning twin and the bare grok-4.20 alias stay
+        self.assertNotIn("grok-4.20-0309-non-reasoning", ids)
+        self.assertNotIn("grok-4.20-0309-non-reasoning", caps)
+        self.assertNotIn("grok-4.20-non-reasoning", caps)
+        self.assertIn("grok-4.20-0309-reasoning", ids)
+        self.assertIn("grok-4.20", caps)
 
     def test_ladder_is_ordered_quietest_first(self):
         listing = {"models": [_entry("grok-9", ladder=["XHIGH", "low", "high", "none", "medium"])]}
@@ -398,10 +409,18 @@ class TestUnrunnableModels(unittest.TestCase):
     call, then an answer from its result: seven passed; grok-4.20-multi-agent
     -0309 answered HTTP 400 "Client-side tools for multi-agent models require
     beta access", and MyAgent always declares client-side tools. The listing
-    carries no field telling such a model apart, hence the verified list."""
+    carries no field telling such a model apart, hence the verified list.
+    2026-10-17 (the user's decision after a head-to-head on MyAgent itself):
+    that one-call vetting is necessary, not sufficient — on a four-step coding
+    task grok-4.20-0309-non-reasoning alternated cd / Get-Location for 253
+    run_command calls without writing a file (each run_command is a fresh
+    PowerShell; without reasoning it never revised the assumption), while the
+    four reasoning tiers finished in 4–5 calls — so "non-reasoning" joined the
+    list, the class rule like "multi-agent"."""
 
     def test_every_entry_says_why(self):
         self.assertIn("multi-agent", XAI_UNRUNNABLE_SUBSTRINGS)
+        self.assertIn("non-reasoning", XAI_UNRUNNABLE_SUBSTRINGS)
         for sub, why in XAI_UNRUNNABLE_SUBSTRINGS.items():
             with self.subTest(sub=sub):
                 self.assertIsInstance(why, str)
@@ -418,6 +437,19 @@ class TestUnrunnableModels(unittest.TestCase):
         self.assertEqual(ids, ["grok-5"])
         self.assertEqual(set(caps), {"grok-5", "grok-5-latest"})
 
+    def test_a_later_non_reasoning_tier_is_dropped_but_not_its_reasoning_twin(self):
+        # The class rule (2026-10-17): "non-reasoning" names the tier that
+        # looped, so a future one is hidden with its aliases — and the
+        # substring never matches a "-reasoning" id, so the twin and the bare
+        # alias stay.
+        listing = {"models": [
+            _entry("grok-5-0101-reasoning", ["grok-5", "grok-5-reasoning"]),
+            _entry("grok-5-0101-non-reasoning", ["grok-5-non-reasoning", "grok-5-nr-latest"]),
+        ]}
+        ids, caps = XAIMixin._parse_xai_language_models(listing)
+        self.assertEqual(ids, ["grok-5-0101-reasoning"])
+        self.assertEqual(set(caps), {"grok-5-0101-reasoning", "grok-5", "grok-5-reasoning"})
+
     def test_the_offline_fallback_offers_none(self):
         for mid in XAI_FALLBACK_MODELS:
             with self.subTest(model=mid):
@@ -432,6 +464,8 @@ class TestUnrunnableModels(unittest.TestCase):
         served = obj._served_model_ids["xAI"]
         self.assertNotIn("grok-4.20-multi-agent-0309", served)
         self.assertNotIn("grok-4.20-multi-agent", served)
+        self.assertNotIn("grok-4.20-0309-non-reasoning", served)
+        self.assertNotIn("grok-4.20-non-reasoning", served)
         # ...while a runnable model's alias stays served (the retirement rule)
         self.assertIn("grok-build-latest", served)
         self.assertIn("grok-4.20", served)
