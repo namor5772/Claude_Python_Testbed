@@ -8,6 +8,7 @@ from google.genai import types as genai_types
 
 from myagent.constants import (
     GEMINI_DEPRECATED_MODEL_IDS,
+    GEMINI_BUDGET0_SILENT_PREFIXES,
     GEMINI_DEPRECATED_MODEL_PREFIXES,
     GEMINI_FALLBACK_MODELS,
     GEMINI_NON_AGENTIC_SUBSTRINGS,
@@ -458,11 +459,16 @@ class GeminiMixin:
         return None
 
     @staticmethod
-    def _gemini_quiet_describe(style):
-        """One line on what a quiet-ladder rung does to the model."""
+    def _gemini_quiet_describe(style, model_id=""):
+        """One line on what a quiet-ladder rung does to the model — budget 0
+        worded per tier (2026-10-17): 3.8 / 3.7 keep ~50 thoughts at it, Argon
+        and the 2.5 family none (GEMINI_BUDGET0_SILENT_PREFIXES)."""
+        if style == "budget0":
+            if str(model_id or "").startswith(GEMINI_BUDGET0_SILENT_PREFIXES):
+                return "thinking_budget=0 (no thinking tokens on this tier)"
+            return "thinking_budget=0 (this tier's floor — a few thinking tokens remain)"
         return {
             "minimal": "thinking_level=minimal (no thinking tokens)",
-            "budget0": "thinking_budget=0 (this tier's floor — a few thinking tokens remain)",
             "low": "thinking_level=low (this tier cannot stop thinking)",
             "none": "no thinking config (the model thinks at its default)",
         }.get(style, style)
@@ -497,7 +503,7 @@ class GeminiMixin:
         if queue is not None:
             queue.put({"type": "tool_info", "content": (
                 f"Thinking is off: {self.model} is sent "
-                f"{self._gemini_quiet_describe(style)}.\n")})
+                f"{self._gemini_quiet_describe(style, self.model)}.\n")})
 
     def _stream_gemini_call(self, messages, max_retries, label_emitted):
         """Execute one Gemini API call with streaming and retry logic.
@@ -680,7 +686,7 @@ class GeminiMixin:
                     self.queue.put({
                         "type": "tool_info",
                         "content": (f"⚠ {self.model} rejected the thinking-off setting — retrying with "
-                                    f"{self._gemini_quiet_describe(quiet_style)} "
+                                    f"{self._gemini_quiet_describe(quiet_style, self.model)} "
                                     f"(attempt {attempt + 1}/{max_retries})...\n"),
                     })
                     full_text = ""

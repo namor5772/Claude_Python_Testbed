@@ -146,6 +146,24 @@ class LiveCallLadder(unittest.TestCase):
         h.call()
         self.assertEqual(h.infos(), [])
 
+    def test_budget0_wording_is_per_tier(self):
+        # Argon idles at 0 thoughts on budget 0 (probed 2026-10-17), 3.8 keeps
+        # ~50: the same rung, two true sentences. Found the day Argon was
+        # checked end to end — its notice wore the 3.8 floor wording.
+        h = _Host(model="gemini-4-argon")
+        h.call()
+        self.assertEqual(h.gemini_client.models.sent, ["budget0"])
+        self.assertEqual(h.infos(), ["Thinking is off: gemini-4-argon is sent thinking_budget=0 "
+                                     "(no thinking tokens on this tier).\n"])
+        describe = GeminiMixin._gemini_quiet_describe
+        self.assertIn("a few thinking tokens remain", describe("budget0", "gemini-3.8-flash"))
+        self.assertIn("a few thinking tokens remain", describe("budget0"))
+        self.assertIn("no thinking tokens on this tier", describe("budget0", "gemini-2.5-flash"))
+        self.assertIn("no thinking tokens on this tier", describe("budget0", "gemini-4-argon-20261013"))
+        # The Debug dump reads the same words
+        self.assertEqual(h._gemini_quiet_describe("budget0", h.model),
+                         "thinking_budget=0 (no thinking tokens on this tier)")
+
     def test_unlisted_tier_learns_from_the_400(self):
         h = _Host(model="gemini-3.9-flash", reject={"minimal"})
         h.call()

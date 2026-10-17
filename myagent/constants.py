@@ -1757,6 +1757,11 @@ GEMINI_QUIET_STYLE_PREFIXES = {
     "gemini-2.5-pro": "none",             # 2.5 Pro cannot stop thinking and knows no thinking_level
     "gemini-2.5": "budget0",              # 2.5 Flash / Flash-Lite: the budget IS the knob
 }
+# Tiers where thinking_budget=0 leaves NO thinking tokens (probed: 4-argon
+# 2026-10-17; the 2.5 family 2026-07 — the budget is its one knob), so the
+# thinking-off Activity line says so instead of the floor wording 3.8 / 3.7
+# earn (~50 thoughts remain there). Wording only: the rung sent is the same.
+GEMINI_BUDGET0_SILENT_PREFIXES = ("gemini-4-argon", "gemini-2.5")
 # models.list() entries that can't serve MyAgent's agentic loop (text chat +
 # custom function declarations on generateContent), dropped by substring in
 # _fetch_gemini_models. Groups: wrong output modality (TTS, image generation —

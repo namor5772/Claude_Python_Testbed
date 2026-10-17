@@ -458,7 +458,7 @@ class StreamingMixin:
                 payload["thinking_config"] = thinking_config.model_dump(
                     mode="json", exclude_none=True)
             if quiet_style is not None:
-                payload["thinking_off"] = self._gemini_quiet_describe(quiet_style)
+                payload["thinking_off"] = self._gemini_quiet_describe(quiet_style, self.model)
             payload["tools"] = [{"function_declarations": [
                 d.model_dump(mode="json", exclude_none=True)
                 for d in self._tools_to_gemini(tools)]}] if tools else []
