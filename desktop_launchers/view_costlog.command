@@ -257,21 +257,22 @@ rollups() {
   done
   if awk -F';' -v W="$W" 'NF>=W { found=1 } END { exit !found }' "$MERGED"; then
     # The today row's tail (2026-10-19): the run count behind today's figure
-    # and each machine's share of it, highest spend first (the machine name on
-    # a tie) — "(2 runs: LenovoAug23 $0.1593, Romans-Mac-mini.local $0.0173)"
-    # — so a figure this machine did not produce explains itself: the viewer
-    # sums EVERY machine's log, and one $0.0173 run on the Mac read as a
-    # $0.1766 today when the laptop had run the same instruction at 01:15.
-    # "(0 runs)" on a day without one; a machine's figure is its total for the
-    # day, its runs are in the FULL LOG below. The shares are ranked by sort,
-    # like bucket() (LC_ALL=C: the byte order the Windows twin's name
-    # tie-break agrees with on these names), and handed to the summary awk
-    # ready-made, like DAYS; the count comes from that awk's own pass over the
-    # rows day[TODAY] sums, so the two figures cannot disagree.
-    TODAY_SPLIT="$(awk -F';' -v TODAY="$TODAY" -v W="$W" 'NF>=W && substr($1,1,10)==TODAY { m[$W]+=$4 }
-      END { for (k in m) printf "%.4f\t%s\n", m[k], k }' "$MERGED" \
-      | LC_ALL=C sort -t $'\t' -k1,1rn -k2,2 \
-      | awk -F'\t' '{ s = s (NR>1 ? ", " : "") $2 " $" $1 } END { printf "%s", s }')"
+    # and each machine's share of it, highest spend first — ranked on the
+    # 4-place figure shown, so two machines that print alike are a tie
+    # whatever the float noise in their sums (0.1 + 0.2 is not 0.3), the
+    # machine name on a tie — "(2 runs: LenovoAug23 $0.1593,
+    # Romans-Mac-mini.local $0.0173)" — so a figure this machine did not
+    # produce explains itself: the viewer sums EVERY machine's log, and one
+    # $0.0173 run on the Mac read as a $0.1766 today when the laptop had run
+    # the same instruction at 01:15. "(0 runs)" on a day without one; a
+    # machine's figure is its total for the day, its runs are in the FULL LOG
+    # below. Count and shares are taken in the summary awk's own pass, on the
+    # day key day[] uses, so they are those of the rows day[TODAY] sums by
+    # construction, and ranked in its END block — a handful of names, where
+    # bucket() ranks MANY keys through sort; awk compares strings by byte,
+    # the order LC_ALL=C sort gave, which the Windows twin's name tie-break
+    # agrees with on these names. The Windows twin renders the same tail by
+    # the same rule.
     # The weekday takes the slot "today" has, padded to its width, so the
     # eight dates stack in one column. ONE money column for those rows and
     # "this month": the amount, "$" included, is right-aligned to end where a
@@ -279,11 +280,11 @@ rollups() {
     # when a day runs past $10, and a < $10 today row is byte-identical to
     # what it was up to that column (its tail follows it). Fixed widths, not
     # printf "*" (see bucket()).
-    awk -F';' -v TODAY="$TODAY" -v MONTH="$MONTH" -v DAYS="$DAYS" -v SPLIT="$TODAY_SPLIT" -v W="$W" '
+    awk -F';' -v TODAY="$TODAY" -v MONTH="$MONTH" -v DAYS="$DAYS" -v W="$W" '
       NF>=W {
         c=$4+0; total+=c; n++;
         d=substr($1,1,10); day[d]+=c;
-        if (d==TODAY) tn++;
+        if (d==TODAY) { tn++; tm[$W]+=c }
         if (substr($1,1,7)==MONTH) month+=c;
         if (n==1) first=$1;
         last=$1;
@@ -291,8 +292,17 @@ rollups() {
       END {
         printf "  %d runs · $%.4f total\n", n, total;
         printf "  span: %s  →  %s\n", first, last;
+        # The machines of today, ranked: a selection sort over nm names on the
+        # 4-place figure, highest first, the name (byte order) on a tie.
+        nm = 0; for (k in tm) { nm++; name[nm] = k; amt[nm] = sprintf("%.4f", tm[k]) }
+        for (i = 1; i <= nm; i++) for (j = i + 1; j <= nm; j++)
+          if (amt[j]+0 > amt[i]+0 || (amt[j]+0 == amt[i]+0 && name[j] < name[i])) {
+            t = name[i]; name[i] = name[j]; name[j] = t;
+            t = amt[i]; amt[i] = amt[j]; amt[j] = t;
+          }
+        shares = ""; for (i = 1; i <= nm; i++) shares = shares (i > 1 ? ", " : ": ") name[i] " $" amt[i];
         printf "  %-5s (%s):%13s  (%d run%s%s)\n", "today", TODAY, sprintf("$%.4f", day[TODAY]+0), \
-          tn, (tn==1 ? "" : "s"), (SPLIT=="" ? "" : ": " SPLIT);
+          tn, (tn==1 ? "" : "s"), shares;
         nd = split(DAYS, dd, ";");
         for (i=1; i<=nd; i++) {
           if (dd[i]=="") continue;

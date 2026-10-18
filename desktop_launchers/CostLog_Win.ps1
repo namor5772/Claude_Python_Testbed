@@ -286,10 +286,16 @@ try {
         $monthSum = [double]($monthRows | Measure-Object Cost -Sum).Sum
         # Spend per calendar day in ONE pass (2026-09-22): today's row and the
         # seven days under it all read from it -- a Where-Object pipeline per
-        # day would walk the merged logs eight times.
-        $byDay = @{}
+        # day would walk the merged logs eight times. The same pass counts
+        # today's rows and sums them per machine for the today row's tail
+        # (below), on the day key $byDay uses, so the tail's count and shares
+        # are those of the rows $byDay[$today] summed, by construction.
+        $byDay = @{}; $todayByMachine = @{}; $todayRuns = 0
         foreach ($r in $rows) {
-            if ($r.Time.Length -ge 10) { $byDay[$r.Time.Substring(0, 10)] += $r.Cost }
+            if ($r.Time.Length -lt 10) { continue }
+            $dayKey = $r.Time.Substring(0, 10)
+            $byDay[$dayKey] += $r.Cost
+            if ($dayKey -eq $today) { $todayByMachine[$r.Machine] += $r.Cost; $todayRuns++ }
         }
         $out += ('  {0} runs - ${1:N4} total' -f $rows.Count, $total)
         $out += ('  span: {0}  ->  {1}' -f $rows[0].Time, $rows[-1].Time)
@@ -305,22 +311,22 @@ try {
         # is 10 characters for a date, 7 for a month.)
         $dayFmt = '  {0,-5} ({1}):{2,13}'
         # The today row's tail (2026-10-19): the run count behind today's
-        # figure and each machine's share of it, highest spend first (the
-        # machine name on a tie) -- "(2 runs: LenovoAug23 $0.1593,
+        # figure and each machine's share of it, highest spend first -- ranked
+        # on the 4-place figure shown, so two machines that print alike are a
+        # tie whatever the float noise in their sums (0.1 + 0.2 is not 0.3),
+        # the machine name on a tie -- "(2 runs: LenovoAug23 $0.1593,
         # Romans-Mac-mini.local $0.0173)" -- so a figure this machine did not
         # produce explains itself: the viewer sums EVERY machine's log, and one
         # $0.0173 run on the Mac read as a $0.1766 today when the laptop had run
         # the same instruction at 01:15. "(0 runs)" on a day without one; a
         # machine's figure is its total for the day, its runs are in the FULL
-        # LOG below. The rows are the ones $byDay[$today] summed, so the two
-        # figures cannot disagree. The macOS twin renders the same tail.
-        $todayRows = @($rows | Where-Object { $_.Time.Length -ge 10 -and $_.Time.Substring(0, 10) -eq $today })
-        $shares = @($todayRows | Group-Object Machine |
-            ForEach-Object { [pscustomobject]@{ Name = $_.Name; Cost = ($_.Group | Measure-Object Cost -Sum).Sum } } |
-            Sort-Object -Property @{ Expression = 'Cost'; Descending = $true }, @{ Expression = 'Name'; Descending = $false } |
-            ForEach-Object { '{0} ${1:N4}' -f $_.Name, $_.Cost })
-        $runWord = if ($todayRows.Count -eq 1) { 'run' } else { 'runs' }
-        $todayTail = if ($shares.Count -gt 0) { '  ({0} {1}: {2})' -f $todayRows.Count, $runWord, ($shares -join ', ') } else { '  (0 runs)' }
+        # LOG below. Count and shares come from the $byDay pass above; the
+        # macOS twin renders the same tail by the same rule.
+        $shares = @($todayByMachine.GetEnumerator() |
+            Sort-Object @{ Expression = { [Math]::Round($_.Value, 4) }; Descending = $true }, Name |
+            ForEach-Object { '{0} ${1:N4}' -f $_.Name, $_.Value })
+        $runWord = if ($todayRuns -eq 1) { 'run' } else { 'runs' }
+        $todayTail = if ($todayRuns -eq 0) { '  (0 runs)' } else { '  ({0} {1}: {2})' -f $todayRuns, $runWord, ($shares -join ', ') }
         $out += (($dayFmt -f 'today', $today, ('${0:N4}' -f [double]$byDay[$today])) + $todayTail)
         foreach ($back in 1..7) {
             $day = $now.Date.AddDays(-$back)

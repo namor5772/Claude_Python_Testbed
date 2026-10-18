@@ -8,10 +8,12 @@ weekday in the slot `today` has, and the amounts of those rows and of
 column 34, where a single-digit `today` always ended — so decimal points line
 up when a day passes $10. Since 2026-10-19 the `today` row runs on past that
 column with its run count and each machine's share of the figure, highest
-spend first and the machine name on a tie — "(2 runs: LenovoAug23 $0.1593,
-Romans-Mac-mini.local $0.0173)", "(1 run: …)", "(0 runs)" — because the
-viewers sum EVERY machine's log: one $0.0173 run on the Mac read as a $0.1766
-today when the laptop had run the same instruction at 01:15.
+spend first — ranked on the 4-place figure shown, so totals that print alike
+are a tie whatever the float noise in their sums — and the machine name on a
+tie — "(2 runs: LenovoAug23 $0.1593, Romans-Mac-mini.local $0.0173)",
+"(1 run: …)", "(0 runs)" — because the viewers sum EVERY machine's log: one
+$0.0173 run on the Mac read as a $0.1766 today when the laptop had run the
+same instruction at 01:15.
 
 This runs the REAL viewer for the platform the suite runs on — CostLog_Win.ps1
 under Windows PowerShell, view_costlog.command under bash on macOS (so the Mac
@@ -53,7 +55,7 @@ def month_sum(rows, today):
                if (today - datetime.timedelta(days=back)).strftime("%Y-%m") == month)
 
 
-def expected_block(today, by_days_back, month_total, today_tail="  (0 runs)"):
+def expected_block(today, by_days_back, month_total, today_tail):
     """The nine lines: today (its tail past the money column), the seven days
     before it, this month."""
     lines = []
@@ -61,8 +63,8 @@ def expected_block(today, by_days_back, month_total, today_tail="  (0 runs)"):
         day = today - datetime.timedelta(days=back)
         label = "today" if back == 0 else WEEKDAYS[day.weekday()]
         amount = "$%.4f" % by_days_back.get(back, 0.0)
-        line = f"  {label:<5} ({day.isoformat()}):{amount:>13}"
-        lines.append(line + today_tail if back == 0 else line)
+        tail = today_tail if back == 0 else ""
+        lines.append(f"  {label:<5} ({day.isoformat()}):{amount:>13}{tail}")
     lines.append(f"  this month ({today.strftime('%Y-%m')}):{'$%.4f' % month_total:>11}")
     return lines
 
@@ -184,12 +186,12 @@ class DayRowTests(_ViewerCase):
     def test_a_week_without_a_run_is_eight_zero_rows(self):
         def build(today):
             self.write_log("MACHINE-A", [(200, "12:00:00", "5.0000")], today)
-            return expected_block(today, {}, 0.0)
+            return expected_block(today, {}, 0.0, "  (0 runs)")
 
         expected, block, _lines = self.day_block(build)
         self.assertEqual(block, expected)
-        self.assertEqual([line[27:34] for line in block], ["$0.0000"] * 9)
-        self.assertTrue(block[0].endswith("$0.0000  (0 runs)"), block[0])
+        # Nine $0.0000 amounts, each ending at column 34 (the today row's tail past it).
+        self.assertEqual([line[:34][-7:] for line in block], ["$0.0000"] * 9)
 
     def test_one_run_today_reads_in_the_singular(self):
         rows = [(0, "12:00:00", "5.0000"), (1, "12:00:00", "1.0000")]
@@ -203,13 +205,19 @@ class DayRowTests(_ViewerCase):
         self.assertEqual(block, expected)
 
     def test_machines_tied_on_spend_are_listed_by_name(self):
+        # A tie as the reader sees it: B's two runs sum to 0.30000000000000004
+        # in floating point, A's one run to 0.3 -- the same $0.3000 shown, so
+        # the name decides, A before B, although B outspends A by an ulp and
+        # B's runs came first by the clock (the one order the viewers see:
+        # file order is sorted away by timestamp on both platforms).
+        rows_b = [(0, "09:00:00", "0.1000"), (0, "09:30:00", "0.2000")]
+        rows_a = [(0, "10:00:00", "0.3000")]
+
         def build(today):
-            # B's file is written first and its run came first; the tie is
-            # still broken by name, A before B, on both platforms.
-            self.write_log("MACHINE-B", [(0, "09:00:00", "0.0100")], today)
-            self.write_log("MACHINE-A", [(0, "10:00:00", "0.0100")], today)
-            return expected_block(today, {0: 0.02}, 0.02,
-                                  "  (2 runs: MACHINE-A $0.0100, MACHINE-B $0.0100)")
+            self.write_log("MACHINE-B", rows_b, today)
+            self.write_log("MACHINE-A", rows_a, today)
+            return expected_block(today, {0: 0.6}, month_sum(rows_a + rows_b, today),
+                                  "  (3 runs: MACHINE-A $0.3000, MACHINE-B $0.3000)")
 
         expected, block, _lines = self.day_block(build)
         self.assertEqual(block, expected)

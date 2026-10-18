@@ -166,10 +166,10 @@ syncs them all everywhere — see `myagent/datapaths.py`), so
 repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
 `awk -F';'` builds a spend summary — grand total, today (since 2026-10-19
 with its run count and each machine's share of the figure after the money
-column, highest spend first, the name on a tie — the shares ranked by `sort`
-like `bucket()`, under `LC_ALL=C`, and handed to the summary awk with `-v`
-like `DAYS`; the count from that awk's own pass over the rows `day[TODAY]`
-sums, so the two cannot disagree), then (since
+column, highest spend first on the 4-place figure shown, the name on a tie —
+count and shares taken in the summary awk's own pass, on the day key
+`day[TODAY]` sums by, and ranked in its END block, a handful of names in the
+byte order `LC_ALL=C sort` would give), then (since
 2026-09-22, the user's request) **one row per day for the last seven days**
 under it — every calendar day counting back from yesterday, a day without a
 run as `$0.0000`, the weekday (`Mon`, `Sun`, …) in the slot `today` occupies so
@@ -480,8 +480,9 @@ events first via `-notmatch 'nothing found'`, then the full log);
 `APICostLog_<machine>.txt` from `<OneDrive>\MyAppShare` (plus any unmigrated
 repo-root `APICostLog.txt`) into a spend summary (grand total, today — since
 2026-10-19 with its run count and each machine's share of the figure after the
-money column, the day's rows grouped by machine and sorted by cost then name,
-the macOS twin's tail byte for byte — and, since 2026-09-22, a row for each of
+money column, counted and summed per machine in the same single pass that
+builds `$byDay`, ranked by the 4-place figure shown then by name, the macOS
+twin's tail byte for byte — and, since 2026-09-22, a row for each of
 the last seven days under it, all read
 from one `$byDay` hashtable built in a single pass over the rows rather than a
 `Where-Object` pipeline per day, with every date taken from one `$now`; the
