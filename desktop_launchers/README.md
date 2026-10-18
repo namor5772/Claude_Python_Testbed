@@ -24,7 +24,7 @@ affected either way — launchd runs the venv python directly.)
 | `My Agent.app` | `MyAgent_launcher.applescript` | `icon_myagent_master.png` (blue robot face — googly eyes, gold-tipped antenna) | Launches `MyAgent.py` detached. No launch-or-focus: MyAgent is multi-instance by design (each claims the lowest free lock number), so every double-click starts a fresh agent |
 | `SelfBot.app` | `SelfBot_launcher.applescript` | `icon_selfbot_master.png` (anxious cross-eyed googly robot; its thought bubble holds a smaller copy of itself, and *its* bubble a smaller copy again — a self-referential Droste recursion) | Launches a NEW `SelfBot.py` instance each time (solo). No launch-or-focus: SelfBot is a two-instance app (the second self-chats with the first), so double-click twice for the pair — SelfBot.py cascades the 2nd window so they don't stack. The auto-positioned side-by-side duo layout is `LaunchSelfBot.bat`'s job |
 | `Heartbeat Log.app` | `HeartbeatLog.applescript` (+ `view_heartbeat.command`) | `icon_heartbeat_master.png` (EKG monitor with a googly-eyed heart) | Opens `~/Library/Logs/myagent/heartbeat.log` in a Terminal pager — meaningful events first (idle `nothing found` ticks hidden), then the full log; scrollable & searchable in `less`. A *viewer*, not a runner |
-| `API Cost Log.app` | `CostLog.applescript` (+ `view_costlog.command`) | `icon_costlog_master.png` (gold `$` coin with googly eyes on money-green, rising cost bars) | Opens the API cost log in a Terminal pager — aggregating every machine's `APICostLog_<machine>.txt` from `<OneDrive>/MyAppShare` (plus any unmigrated repo-root `APICostLog.txt`): a spend summary first (grand total, today and — since 2026-09-22 — each of the last seven days, this month, by machine, by provider, by model, by instruction — each rollup over all history and again for the current month only), then every run most-recent-first. A *viewer*, not a runner |
+| `API Cost Log.app` | `CostLog.applescript` (+ `view_costlog.command`) | `icon_costlog_master.png` (gold `$` coin with googly eyes on money-green, rising cost bars) | Opens the API cost log in a Terminal pager — aggregating every machine's `APICostLog_<machine>.txt` from `<OneDrive>/MyAppShare` (plus any unmigrated repo-root `APICostLog.txt`): a spend summary first (grand total, today — since 2026-10-19 with its run count and each machine's share of the figure — and, since 2026-09-22, each of the last seven days, this month, by machine, by provider, by model, by instruction — each rollup over all history and again for the current month only), then every run most-recent-first. A *viewer*, not a runner |
 | `TodoList.app` | `TodoList_launcher.applescript` | `icon_todolist_master.png` (clipboard with a googly-eyed pencil ticking the last urgent item) | Launches `TodoList.py` detached; launch-or-focus like CSVEditor — TodoList's `todos.json` is OneDrive-synced, so a second local instance would race the first's 5-second sync poll |
 | `TodoList (Native).app` | `TodoListNative_launcher.applescript` | `icon_todolist_native_master.png` (the same clipboard with a deep-blue `C++` badge top-left, derived by `make_todolist_native_icon.py`) | Launches `TodoList.exe` — the native C++/Cocoa port built from `TodoList.mm` by `./build_todolist_native.sh` (repo root; run it once per machine, the binary is gitignored). Launch-or-focus across BOTH implementations: it focuses a running `TodoList.exe` *or* `TodoList.py` before launching, since either pair would race the shared 5-second sync poll. Shows a "build it first" dialog if the exe is missing |
 | `MyBackup.app` | `MyBackup_launcher.applescript` | `icon_mybackup_master.png` (the family's one sober design, by request: two drive slabs on a slate-blue tile, the TO drive's light green, a broad down-arrow between them — the one-way mirror; from `make_mybackup_icon.py`) | Launches `MyBackup.py` detached; launch-or-focus like CSVEditor — and load-bearing here, since two instances could mirror into the same TO directory at the same time |
@@ -164,7 +164,12 @@ Since 2026-08-03 each machine writes its own `APICostLog_<machine>.txt` into
 syncs them all everywhere — see `myagent/datapaths.py`), so
 `view_costlog.command` merges EVERY machine's file (plus any unmigrated
 repo-root `APICostLog.txt`) into machine-tagged rows sorted by timestamp, then
-`awk -F';'` builds a spend summary — grand total, today, then (since
+`awk -F';'` builds a spend summary — grand total, today (since 2026-10-19
+with its run count and each machine's share of the figure after the money
+column, highest spend first, the name on a tie — the shares ranked by `sort`
+like `bucket()`, under `LC_ALL=C`, and handed to the summary awk with `-v`
+like `DAYS`; the count from that awk's own pass over the rows `day[TODAY]`
+sums, so the two cannot disagree), then (since
 2026-09-22, the user's request) **one row per day for the last seven days**
 under it — every calendar day counting back from yesterday, a day without a
 run as `$0.0000`, the weekday (`Mon`, `Sun`, …) in the slot `today` occupies so
@@ -473,8 +478,11 @@ hidden task. `HeartbeatLog_Win.ps1` pages `<repo>\heartbeat.log` (meaningful
 events first via `-notmatch 'nothing found'`, then the full log);
 `CostLog_Win.ps1` aggregates every machine's `;`-delimited
 `APICostLog_<machine>.txt` from `<OneDrive>\MyAppShare` (plus any unmigrated
-repo-root `APICostLog.txt`) into a spend summary (grand total, today and —
-since 2026-09-22 — a row for each of the last seven days under it, all read
+repo-root `APICostLog.txt`) into a spend summary (grand total, today — since
+2026-10-19 with its run count and each machine's share of the figure after the
+money column, the day's rows grouped by machine and sorted by cost then name,
+the macOS twin's tail byte for byte — and, since 2026-09-22, a row for each of
+the last seven days under it, all read
 from one `$byDay` hashtable built in a single pass over the rows rather than a
 `Where-Object` pipeline per day, with every date taken from one `$now`; the
 layout is the macOS twin's, byte for byte — this
