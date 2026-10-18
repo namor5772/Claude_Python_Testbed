@@ -153,6 +153,10 @@ class ModelUpgradeMixin:
         probe._xai_caps = dict(getattr(self, "_xai_caps", None) or {})
         probe._kimi_caps = dict(getattr(self, "_kimi_caps", None) or {})
         probe._anthropic_unsupported = set(getattr(self, "_anthropic_unsupported", ()))
+        # The Ollama capability cache too (2026-10-18): the thinking helper
+        # reads it before the name prefixes, and a probe without it would
+        # offer a capability-only thinking model (Gemma 4) no level at all.
+        probe._ollama_model_caps = dict(getattr(self, "_ollama_model_caps", None) or {})
         probe.thinking_effort = "high"
         probe.thinking_mode = "adaptive"
         return probe
@@ -185,7 +189,10 @@ class ModelUpgradeMixin:
             return ["Off", "On"]                            # k2.6 / k2.5 toggle
         if provider == "Google":
             return ["Off", "Low", "Medium", "High"]
-        return ["Off", "On"]                                # Ollama's boolean think
+        levels = probe._ollama_think_levels()               # Ollama: gpt-oss's rungs,
+        if levels:                                          # else the boolean think
+            return ["Off"] + [lv.capitalize() for lv in levels]
+        return ["Off", "On"]
 
     def _upgrade_level_for(self, provider, model, level):
         """`level` if the model offers it (case-insensitively), else the

@@ -9,7 +9,7 @@ from myagent.constants import (
     OLLAMA_DEFAULT_MODEL, ADAPTIVE_THINKING_MODELS, STORES_SYNCED,
     ALWAYS_ON_THINKING_PREFIXES,
     ANTHROPIC_ALWAYS_ON_OPUS_MIN, MANUAL_THINKING_PREFIXES, EFFORT_LEVELS,
-    BUDGET_PRESETS, GEMINI_THINKING_PREFIXES, OLLAMA_THINKING_PREFIXES,
+    BUDGET_PRESETS, GEMINI_THINKING_PREFIXES,
 )
 from myagent.helpers import note_served_models
 from myagent.keyboard import (
@@ -594,7 +594,14 @@ class UIMixin:
                 self._thinking_check.config(state="normal")
                 self._update_thinking_strength_options()
                 if self.thinking_enabled:
-                    if self.provider not in ("Ollama", "Moonshot"):
+                    # The strength combo is hidden for the boolean kinds —
+                    # Kimi k2.6 / k2.5's enabled / disabled, Ollama's bool
+                    # `think` — and shown for an Ollama LEVEL model (gpt-oss:
+                    # low / medium / high on the wire, 2026-10-18).
+                    boolean_kind = (self.provider == "Moonshot"
+                                    or (self.provider == "Ollama"
+                                        and not self._ollama_think_levels()))
+                    if not boolean_kind:
                         self._thinking_strength_combo.pack(side=tk.LEFT, padx=(0, 10))
                         self._thinking_strength_combo.config(state="readonly")
                     if self.provider in ("Google", "Ollama"):
@@ -677,11 +684,13 @@ class UIMixin:
                 return "extended"
             return "manual" if self._kimi_thinking_toggleable(mid) else None
         if self.provider == "Ollama":
-            # Qwen3 / DeepSeek-R1 / gpt-oss get the manual checkbox+strength UI.
-            # Strength is display-only for now — Ollama's `think` flag is
-            # boolean-only; all effort levels map to think=True until upstream
-            # exposes a per-request budget.
-            return "manual" if any(mid.startswith(p) for p in OLLAMA_THINKING_PREFIXES) else None
+            # The checkbox kind — the strength combo stays hidden, Ollama's
+            # `think` flag being boolean on the models here. WHICH models get
+            # it is the server's own word: /api/show's `thinking` capability,
+            # cached by the model fetch, with the name prefixes behind it for
+            # a model the server has not described (2026-10-18 audit — the
+            # prefix table alone knew nothing of Gemma 4 or Nemotron).
+            return "manual" if self._is_ollama_thinking_model(mid) else None
         # Exact-match set catches the undated aliases; the version-parsed helper
         # backstops dated snapshots (claude-sonnet-4-6-20260101) and future
         # Opus/Sonnet 4.6+ minors the set doesn't list yet.
@@ -1104,6 +1113,17 @@ class UIMixin:
             # boolean-toggle kinds never send it.)
             if self.provider in ("OpenAI", "Google") and self.thinking_effort not in values:
                 self.thinking_effort = self._thinking_strength_var.get()
+        elif support == "manual" and self.provider == "Ollama":
+            # An Ollama level model: the combo shows the rung the request
+            # builder sends for the saved effort (its nearest-rung rule), and
+            # thinking_effort follows, so a SAVE keeps what is sent. A boolean
+            # Ollama model never shows the combo; nothing to fill.
+            levels = self._ollama_think_levels()
+            if levels:
+                self._thinking_strength_combo["values"] = list(levels)
+                wire = self._ollama_nearest_level(self.thinking_effort, levels)
+                self._thinking_strength_var.set(wire)
+                self.thinking_effort = wire
         elif support == "manual":
             values = list(BUDGET_PRESETS.keys())
             self._thinking_strength_combo["values"] = values
@@ -1119,8 +1139,8 @@ class UIMixin:
     def _on_thinking_strength_changed(self):
         val = self._thinking_strength_var.get()
         support = self._model_supports_thinking()
-        if support == "adaptive":
-            self.thinking_effort = val
+        if support == "adaptive" or self.provider == "Ollama":
+            self.thinking_effort = val      # Ollama level models: the `think` rung
         elif support == "manual":
             self.thinking_budget = BUDGET_PRESETS.get(val, 8192)
         self._update_title()
@@ -1233,7 +1253,10 @@ class UIMixin:
             parts.append(f"reasoning={wire.capitalize()}")
         elif support is not None:
             if self.thinking_enabled:
-                if self.provider in ("Ollama", "Moonshot"):
+                if self.provider == "Ollama" and self._ollama_think_levels():
+                    # A level model: the rung the request builder sends.
+                    parts.append(f"thinking={self._ollama_think_value()}")
+                elif self.provider in ("Ollama", "Moonshot"):
                     # Boolean thinking toggles — no strength knob (Ollama's
                     # `think` flag; Kimi k2.6/k2.5's enabled/disabled).
                     parts.append("thinking=on")

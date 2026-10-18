@@ -463,6 +463,20 @@ class StreamingMixin:
                 d.model_dump(mode="json", exclude_none=True)
                 for d in self._tools_to_gemini(tools)]}] if tools else []
             payload["contents"] = display_msgs
+        elif self.provider == "Ollama":
+            # Ollama — mirror _stream_ollama_call (2026-10-18; until then
+            # Ollama fell through to the Anthropic-shaped dump below, whose
+            # max_tokens / thinking keys it never sees): the very request the
+            # live call sends, from the ONE builder — model, options
+            # (temperature, the capped num_ctx), keep_alive, the OpenAI-style
+            # function list where the model's capabilities allow tools,
+            # `think` where they allow thinking — with the messages in
+            # Ollama's shape and their base64 images truncated. The ctx guard
+            # and the tools-less warning are the live call's alone.
+            payload = self._ollama_request_kwargs(messages, announce=False)
+            for msg in payload["messages"]:
+                if msg.get("images"):
+                    msg["images"] = [img[:40] + "...[truncated]" for img in msg["images"]]
         else:
             tools = self._get_tools()
             if self.provider == "Anthropic":

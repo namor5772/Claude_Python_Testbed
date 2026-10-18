@@ -5,10 +5,13 @@ from myagent.constants import (
     OLLAMA_FALLBACK_MODELS,
     OLLAMA_THINKING_PREFIXES,
     OLLAMA_VISION_PREFIXES,
+    OLLAMA_UNSUITABLE_PREFIXES,
+    OLLAMA_THINK_LEVEL_PREFIXES,
+    OLLAMA_THINK_LEVELS,
     OLLAMA_NUM_CTX_CAP,
     OLLAMA_KEEP_ALIVE,
 )
-from myagent.helpers import camera_aware_hint, is_camera_result
+from myagent.helpers import camera_aware_hint, is_camera_result, note_served_models
 
 
 def _attr(obj, key, default=None):
@@ -178,13 +181,15 @@ class OllamaMixin:
 
         return out
 
-    def _stream_ollama_call(self, messages, max_retries, label_emitted):
-        """Execute one Ollama /api/chat streaming call with retry logic.
-
-        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict)
-        — same 6-tuple shape as the other provider callers so stream_worker's
-        dispatch stays uniform.
-        """
+    def _ollama_request_kwargs(self, messages, announce=True):
+        """The ONE builder of an /api/chat request — what `_stream_ollama_call`
+        sends and what the Debug dump shows (`_payload_for_display`, since
+        2026-10-18; until then Ollama fell through to the Anthropic-shaped
+        dump, whose `max_tokens` / `thinking` keys Ollama never sees), so the
+        dump cannot drift from the wire — the 2026-09-06 OpenAI pattern.
+        `announce=False` (the dump) skips the two side effects that belong to
+        a live call alone: the small-ctx warm-trap guard and the once-per-
+        model tools-less warning."""
         system_prompt = self._build_system_prompt()
         tools = self._get_tools()
         ollama_tools = self._tools_to_ollama(tools) if tools else None
@@ -204,7 +209,8 @@ class OllamaMixin:
             # is almost never needed for agent loops and triples the KV cache
             # footprint. Override via env var if you have bigger hardware.
             options["num_ctx"] = min(caps["context_length"], OLLAMA_NUM_CTX_CAP)
-            self._ollama_ctx_guard(options["num_ctx"])
+            if announce:
+                self._ollama_ctx_guard(options["num_ctx"])
 
         request_kwargs = {
             "model": self.model,
@@ -228,7 +234,7 @@ class OllamaMixin:
             tools_supported = (not caps["capabilities"]) or ("tools" in caps["capabilities"])
             if tools_supported:
                 request_kwargs["tools"] = ollama_tools
-            else:
+            elif announce:
                 if not hasattr(self, "_ollama_caps_warned"):
                     self._ollama_caps_warned = set()
                 if self.model not in self._ollama_caps_warned:
@@ -242,16 +248,27 @@ class OllamaMixin:
                         ),
                     })
 
-        # Qwen3 thinking mode via Ollama 0.5+ `think` flag. We pass the flag
-        # explicitly — true OR false — for any thinking-capable model, because
-        # OMITTING `think` falls back to the model's training default (which is
-        # thinking-ON for Qwen3). Only explicit false reliably suppresses it.
-        # Capability check protects against sending `think` to a non-reasoning
-        # model that would error on it.
-        if self._is_ollama_thinking_model() and (
-            not caps["capabilities"] or "thinking" in caps["capabilities"]
-        ):
-            request_kwargs["think"] = bool(self.thinking_enabled)
+        # Thinking via the `think` flag. We pass the flag explicitly — true OR
+        # false — for any thinking-capable model, because OMITTING `think`
+        # falls back to the model's training default (which is thinking-ON
+        # for Qwen3). Only explicit false reliably suppresses it. Which models
+        # are thinking-capable is the server's own word — /api/show's
+        # `thinking` capability, read into the cache by the caps query above
+        # — with the name prefixes behind it for a model it did not describe
+        # (`_is_ollama_thinking_model`), so a non-reasoning model is never
+        # sent the flag, which it would error on.
+        if self._is_ollama_thinking_model():
+            request_kwargs["think"] = self._ollama_think_value(announce=announce)
+        return request_kwargs
+
+    def _stream_ollama_call(self, messages, max_retries, label_emitted):
+        """Execute one Ollama /api/chat streaming call with retry logic.
+
+        Returns (stop_reason, content_blocks, full_text, had_thinking, label_emitted, usage_dict)
+        — same 6-tuple shape as the other provider callers so stream_worker's
+        dispatch stays uniform.
+        """
+        request_kwargs = self._ollama_request_kwargs(messages)
 
         full_text = ""
         thinking_text = ""
@@ -359,6 +376,19 @@ class OllamaMixin:
                     ec = _attr(last_chunk, "eval_count", None)
                     if pe or ec:
                         usage_dict = {"input_tokens": int(pe or 0), "output_tokens": int(ec or 0)}
+                    # No num_predict is sent, so "length" means the context
+                    # window filled while the model was still writing: the
+                    # reply (or a tool call) is cut off — say so, as the
+                    # cloud callers do on their max_tokens stop (2026-10-18).
+                    if _attr(last_chunk, "done_reason", None) == "length":
+                        self.queue.put({
+                            "type": "warning",
+                            "content": (
+                                f"⚠ {self.model} filled its context window (num_ctx "
+                                f"{request_kwargs['options'].get('num_ctx', 'server default')}) while "
+                                "replying — the reply is cut off\n"
+                            ),
+                        })
                 break  # success
             except Exception as e:
                 err_str = str(e).lower()
@@ -458,17 +488,129 @@ class OllamaMixin:
         except Exception:
             pass  # best-effort: a failed poke must never block the run
 
-    def _is_ollama_thinking_model(self, model_id=None):
+    def _ollama_known_capabilities(self, model_id=None):
+        """The capability set /api/show reported for a model — `completion`,
+        `tools`, `vision`, `thinking` — from the per-model cache
+        (`_get_ollama_model_caps`, filled by the model fetch for every
+        listed model and by each stream call), or None when nothing is known:
+        a bare host, a model the server never described, a query that
+        failed. Read-only on purpose: the detection helpers below run on the
+        Tk thread (the editor's controls, the title) and must never wait on
+        the server."""
         mid = model_id or self.model
+        cached = (getattr(self, "_ollama_model_caps", None) or {}).get(mid)
+        return (cached or {}).get("capabilities") or None
+
+    def _is_ollama_thinking_model(self, model_id=None):
+        """Thinking-capable, by the server's own word FIRST — /api/show's
+        `thinking` capability — and by the OLLAMA_THINKING_PREFIXES name
+        table only for a model it has not described (2026-10-18 audit:
+        the tables, written in April, knew nothing of Gemma 4, the Qwen 3.x
+        vision tiers or Nemotron, so such a model showed no Thinking
+        checkbox and was never sent `think`)."""
+        mid = model_id or self.model
+        known = self._ollama_known_capabilities(mid)
+        if known is not None:
+            return "thinking" in known
         return any(mid.startswith(p) for p in OLLAMA_THINKING_PREFIXES)
 
     def _is_ollama_vision_model(self, model_id=None):
+        """Takes image input, by /api/show's `vision` capability first and
+        OLLAMA_VISION_PREFIXES for an undescribed model (same audit: a
+        text-only warning from the name alone called Gemma 4 blind)."""
         mid = model_id or self.model
+        known = self._ollama_known_capabilities(mid)
+        if known is not None:
+            return "vision" in known
         return any(mid.startswith(p) for p in OLLAMA_VISION_PREFIXES)
 
+    def _ollama_think_levels(self, model_id=None):
+        """The `think` levels a model takes (quietest first), or None for a
+        model whose flag is boolean. Ollama's 0.40 line publishes them in
+        /api/show as `thinking.values` — kept in the capability cache as
+        `think_levels` where a server sends them — and the
+        OLLAMA_THINK_LEVEL_PREFIXES names answer behind that (gpt-oss, whose
+        levels a 0.32.9 server honours without publishing them)."""
+        mid = model_id or self.model
+        cached = (getattr(self, "_ollama_model_caps", None) or {}).get(mid) or {}
+        levels = cached.get("think_levels")
+        if levels:
+            return list(levels)
+        if any(mid.startswith(p) for p in OLLAMA_THINK_LEVEL_PREFIXES):
+            return list(OLLAMA_THINK_LEVELS)
+        return None
+
+    @staticmethod
+    def _ollama_nearest_level(effort, levels):
+        """The rung of `levels` nearest a saved thinking effort — the
+        OpenAI / xAI nearest-rung rule: a rung passes, `minimal` is the
+        quietest, `max` / `xhigh` the top, anything else (a Claude
+        `adaptive`, an empty value) the model's middle."""
+        effort = (effort or "").lower()
+        if effort in levels:
+            return effort
+        if effort == "minimal":
+            return levels[0]
+        if effort in ("max", "xhigh"):
+            return levels[-1]
+        return levels[len(levels) // 2]
+
+    def _ollama_think_value(self, announce=False):
+        """What the `think` field carries for a thinking-capable model. A
+        boolean model: True / False from the checkbox (False IS the off
+        switch). A level model (`_ollama_think_levels`): the saved effort's
+        nearest rung with Thinking on, and the QUIETEST rung with it off —
+        such a model cannot stop thinking, so `false` would leave it
+        reasoning at its default, unshown; `announce` posts that once per
+        model per session, as the Gemini quiet rung is announced."""
+        levels = self._ollama_think_levels()
+        if levels is None:
+            return bool(self.thinking_enabled)
+        if self.thinking_enabled:
+            return self._ollama_nearest_level(self.thinking_effort, levels)
+        if announce:
+            noted = getattr(self, "_ollama_quiet_noted", None)
+            if noted is None:
+                noted = self._ollama_quiet_noted = set()
+            if self.model not in noted:
+                noted.add(self.model)
+                self.queue.put({
+                    "type": "tool_info",
+                    "content": (f"Thinking is off: {self.model} is sent think={levels[0]} "
+                                "(this model cannot stop thinking — its quietest level)\n"),
+                })
+        return levels[0]
+
+    def _ollama_runs_agent_loop(self, model_id):
+        """Whether a listed model can run MyAgent's loop: its capabilities
+        name `tools` (MyAgent declares client-side tools on every call and a
+        model without them can only talk), or are unknown — a failed query
+        keeps the model listed, as before — and its name is not one the live
+        audit found unfit despite the capability (OLLAMA_UNSUITABLE_PREFIXES,
+        constants.py, with the reason)."""
+        if any(model_id.startswith(p) for p in OLLAMA_UNSUITABLE_PREFIXES):
+            return False
+        caps = self._get_ollama_model_caps(model_id)["capabilities"]
+        return (not caps) or ("tools" in caps)
+
     def _fetch_ollama_models(self):
-        """List installed models from the local Ollama server via /api/tags."""
+        """List the local server's models (/api/tags) and offer the ones that
+        can run the agent loop.
+
+        Every listed id is recorded as served (`note_served_models`) and its
+        /api/show capabilities read into the per-model cache — one local
+        call each — which is what the thinking / vision detection and the
+        request builder then read. A model whose capabilities lack `tools`
+        leaves the picker (2026-10-18 audit): MyAgent declares client-side
+        tools on every call, and such a model — the stock qwen2.5vl:32b and
+        gemma3:27b — runs with no tools at all behind a warning, so it can
+        answer but never act; a pinned instruction still runs it (served,
+        hidden — the retirement rule, with `_restore_model_params`' hidden-
+        model note), a model whose query failed stays listed as before, and
+        if nothing passes the whole list is offered rather than ids that are
+        not installed. The fallback list serves a failed fetch alone."""
         if not getattr(self, "ollama_client", None):
+            note_served_models(self, "Ollama", None)
             return list(OLLAMA_FALLBACK_MODELS)
         try:
             resp = self.ollama_client.list()
@@ -482,11 +624,18 @@ class OllamaMixin:
                 if name:
                     names.append(name)
             names.sort()
-            self._ollama_model_display_names = {n: n for n in names}
-            return names if names else list(OLLAMA_FALLBACK_MODELS)
         except Exception:
             self._ollama_model_display_names = {}
+            note_served_models(self, "Ollama", None)
             return list(OLLAMA_FALLBACK_MODELS)
+        if not names:
+            self._ollama_model_display_names = {}
+            note_served_models(self, "Ollama", None)
+            return list(OLLAMA_FALLBACK_MODELS)
+        note_served_models(self, "Ollama", names)
+        picker = [n for n in names if self._ollama_runs_agent_loop(n)] or names
+        self._ollama_model_display_names = {n: n for n in picker}
+        return picker
 
     def _get_ollama_model_caps(self, model_id=None):
         """Query and cache Ollama model capabilities + context length.
@@ -518,6 +667,15 @@ class OllamaMixin:
                         if k.endswith(".context_length") and isinstance(v, int):
                             caps["context_length"] = v
                             break
+                # The 0.40 line's `thinking` block: `values` lists the
+                # `think` levels a model takes ("low" / "medium" / "high";
+                # `[false]` for no thinking, booleans skipped here) and
+                # `default` the one an omitted flag means. A 0.32.9 server
+                # sends no block, so the name table decides there.
+                think_meta = _attr(resp, "thinking", None)
+                values = _attr(think_meta, "values", None) if think_meta is not None else None
+                if isinstance(values, (list, tuple)):
+                    caps["think_levels"] = [v for v in values if isinstance(v, str)]
                 # Cache only a SUCCESSFUL query. Caching a transient failure
                 # used to pin empty caps for the whole session: every later
                 # call then omitted num_ctx, so the server-default small load

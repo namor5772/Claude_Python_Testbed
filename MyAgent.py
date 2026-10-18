@@ -38,7 +38,7 @@ from myagent.constants import (
     DEFAULT_GEOMETRY, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
     OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL,
     XAI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL, KIMI_DEFAULT_BASE_URL,
-    OLLAMA_DEFAULT_MODEL,
+    OLLAMA_DEFAULT_MODEL, OLLAMA_READ_TIMEOUT,
     OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA, _HAS_MCP, AGENT_STATE_FILE, _BASE_DIR,
     PERIODIC_SAVE_MS,
 )
@@ -170,12 +170,15 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             base_url=KIMI_DEFAULT_BASE_URL,
             timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
         ) if self._has_kimi else None
-        # 300s read timeout (max silent gap between stream chunks): tolerates a
-        # cold model load, but a request stuck in Ollama's queue behind a wedged
-        # instance raises instead of blocking forever (default is no timeout).
+        # Read timeout = the longest silent gap between stream chunks
+        # (OLLAMA_READ_TIMEOUT, 900 s by default — constants.py says why the
+        # 300 s it was until 2026-10-18 cut a 32B model's prompt prefill
+        # short on this hardware): tolerates a cold load and a long prefill,
+        # while a request stuck in Ollama's queue behind a wedged instance
+        # still raises instead of blocking forever (the SDK default).
         self.ollama_client = ollama.Client(
             host=self._ollama_base_url,
-            timeout=httpx.Timeout(300.0, connect=10.0),
+            timeout=httpx.Timeout(OLLAMA_READ_TIMEOUT, connect=10.0),
         ) if self._has_ollama else None
         if self._has_anthropic:
             self.provider = "Anthropic"

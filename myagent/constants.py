@@ -1800,11 +1800,16 @@ GEMINI_DEPRECATED_MODEL_IDS = {"gemini-3.5-flash"}
 # Order is the curated preference: [0] is OLLAMA_DEFAULT_MODEL (initial model,
 # instruction-create default, and the drift-fallback target when a saved model
 # is missing from the live list); the full list is served only when the model
-# fetch fails. muse-glimmer first per the 2026-08-14 live-fire audit (only
-# all-four-capability model, fastest, reliable tool parse); qwen3 is the
-# text-only second. Ollama is used on macOS only, so defaulting to the
-# Apple-Silicon MLX build is safe.
-OLLAMA_FALLBACK_MODELS = ["muse-glimmer:30b-mlx", "qwen3:32b-q4_K_M"]
+# fetch fails. muse-glimmer first per the 2026-08-14 live-fire audit (all
+# four capabilities, reliable tool parse) and the user's choice; the
+# 2026-10-18 audit put gemma4:26b-a4b second — Google's 26B mixture-of-
+# experts, 4B active, all four capabilities, every check passed on the
+# 0.32.9 server, and five to eight times the others' speed on the base M4
+# (285 tokens/s prefill, 50 generating) — and the text-only qwen3 third.
+# Ollama is used on macOS only, so defaulting to the Apple-Silicon MLX build
+# is safe.
+OLLAMA_FALLBACK_MODELS = ["muse-glimmer:30b-mlx", "gemma4:26b-a4b-it-q4_K_M",
+                          "qwen3:32b-q4_K_M"]
 OLLAMA_DEFAULT_MODEL = OLLAMA_FALLBACK_MODELS[0]
 OLLAMA_DEFAULT_BASE_URL = "http://localhost:11434"
 # Pragmatic ceiling on num_ctx for Ollama calls. Without this we'd pass the
@@ -1824,21 +1829,65 @@ OLLAMA_NUM_CTX_CAP = int(os.environ.get("OLLAMA_NUM_CTX_CAP", "32768"))
 # nothing (server default applies) — a pinned 21 GB model is a real RAM
 # trade-off on 32 GB machines. Reclaim manually with `ollama stop <model>`.
 OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "")
-# Models that accept `think: true` on /api/chat and emit reasoning in the
-# separate `thinking` stream field. Ollama's `think` flag is boolean-only
-# today — all effort levels (low/medium/high) map to `think: true`.
-OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss", "muse-glimmer")
-# Vision-capable local models. When a non-vision Ollama model is paired with
-# the Desktop/Browser tool checkboxes, the weak-combo warning surfaces.
+# The read timeout of the Ollama client MyAgent.py builds — the longest
+# silent gap between two stream chunks, in seconds (connect stays 10 s).
+# Before the first chunk the whole prompt is being processed, and on a base
+# M4 Mac Mini a dense 32B Q4 model does that at a few dozen tokens per
+# second (measured 2026-10-18 on qwen3:32b — see docs/ollama-model-audit.md),
+# four to five minutes for the ~9K-token system prompt + tool catalogue a
+# MyAgent call carries. The 300 s this was until that day cut two of that
+# morning's three Weather calls during their prefill and retried them (a
+# 5m0s HTTP 500 each in the server log). 900 s covers a prompt filling the
+# whole 32K window at that rate, while a request stuck in the server's queue
+# behind a wedged instance still raises instead of blocking forever.
+OLLAMA_READ_TIMEOUT = float(os.environ.get("OLLAMA_READ_TIMEOUT", "900"))
+# Name-prefix FALLBACKS for the two capability questions — since the
+# 2026-10-18 audit /api/show's own capability list decides for every model
+# the server has described (`_is_ollama_thinking_model` /
+# `_is_ollama_vision_model` read the cache the model fetch fills), and these
+# tables answer only for a model it has not (a failed query, a bare host).
+# Thinking: models that accept `think: true` on /api/chat and emit reasoning
+# in the separate `thinking` stream field. The flag is boolean on every
+# model installed here; "qwen3" covers the 3.5 / 3.6 / 3.8 tiers too.
+OLLAMA_THINKING_PREFIXES = ("qwen3", "deepseek-r1", "gpt-oss", "muse-glimmer",
+                            "gemma4", "nemotron")
+# Local models the 2026-10-18 live audit found unfit for the agent loop
+# although their capabilities say `tools` — hidden from the picker by name
+# prefix (still served, so a pinned instruction runs them with the hidden-
+# model note), the xAI XAI_UNRUNNABLE_SUBSTRINGS rule. A name here is a
+# user-created graft, so the list is this repo's own: "qwen2.5vl-tools"
+# (Qwen25VL-tools.Modelfile, retired that day) — its tool call parsed, but a
+# screenshot handed to it the way the desktop tools deliver one (hoisted out
+# of a screenshot tool_result) came back "black" where the stock qwen2.5vl,
+# muse-glimmer and gemma3-tools read the same red square, and the 2026-08-14
+# audit had already seen it wrap a tool call in the wrong tag; the one job a
+# vision graft exists for is the one it fails. Delete the entry if a re-run
+# of tests/check_ollama_models_live.py clears it.
+OLLAMA_UNSUITABLE_PREFIXES = ("qwen2.5vl-tools",)
+# Models whose `think` field takes a LEVEL and cannot stop thinking — probed
+# live 2026-10-18 on gpt-oss:20b (Ollama 0.32.9): `think: false` still came
+# back with 165 chars of reasoning, while "low" gave 59 chars / 43 output
+# tokens and "high" 1,070 chars / 289 on the same question. Such a model
+# shows the editor's strength combo (Low / Medium / High) beside the
+# Thinking checkbox, and an unticked box sends the quietest rung with a
+# once-per-session notice — the Gemini rule for a tier that cannot stop.
+# Ollama's 0.40 line publishes a model's levels in /api/show as
+# `thinking.values`; `_ollama_think_levels` reads them where present and
+# falls back to these names (a 0.32.9 server publishes none).
+OLLAMA_THINK_LEVEL_PREFIXES = ("gpt-oss",)
+OLLAMA_THINK_LEVELS = ("low", "medium", "high")
+# Vision: image-input models. A non-vision Ollama model paired with the
+# Desktop / Browser / Physical checkboxes gets the text-only warning.
 # Ollama's library uses no dash between the base name and "vl" (e.g.
 # "qwen2.5vl:32b"), but some external references use a dash — both covered.
 # "gemma3" covers the family incl. the -tools graft; caveat: upstream
 # gemma3:1b is text-only, so its warning would be wrongly suppressed if
-# that variant were ever pulled.
+# that variant were ever pulled — which is what the capability list fixes.
 OLLAMA_VISION_PREFIXES = ("qwen2.5vl", "qwen2.5-vl", "qwen3vl", "qwen3-vl",
+                          "qwen3.5", "qwen3.6", "qwen3.8",
                           "llava", "llama3.2-vision", "bakllava",
                           "moondream", "minicpm-v", "granite3.2-vision",
-                          "muse-glimmer", "gemma3")
+                          "muse-glimmer", "gemma3", "gemma4", "nemotron3")
 # ── xAI (Grok) ────────────────────────────────────────────────────────────────
 # Reached with the openai SDK pointed at XAI_DEFAULT_BASE_URL (the API is
 # OpenAI-compatible; the primary surface is the Responses endpoint, same

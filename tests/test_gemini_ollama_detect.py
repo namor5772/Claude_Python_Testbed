@@ -50,7 +50,9 @@ GEMINI_LEVEL = {
     "gemini-pro-latest": True,
 }
 
-# model -> (thinking, vision)
+# model -> (thinking, vision) — the name-prefix FALLBACK: these stubs carry no
+# capability cache, so the server's own word (/api/show, read first since the
+# 2026-10-18 audit — tests/test_ollama_caps.py) is unknown and the tables answer.
 OLLAMA = {
     "qwen3": (True, False),
     "qwen3:8b": (True, False),
