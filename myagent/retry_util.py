@@ -7,7 +7,16 @@ server-error (HTTP 5xx, including Anthropic's 529 overload) wait that caps at
 the API, or the stream broke under it; the SDK's own two quick retries have
 already failed by the time the caller sees one) waits on the 429 schedule.
 Ollama uses a different schedule and keeps its own inline math.
+
+The OpenAI, xAI and Kimi callers also share the "Waiting for model response"
+ticker that runs while an attempt has produced no visible output yet
+(`start_waiting_ticker`; the numbers are constants.FIRST_CONTENT_TIMEOUT /
+WAITING_MSG_INTERVAL).
 """
+import threading
+import time
+
+from myagent.constants import WAITING_MSG_INTERVAL
 
 
 def rate_limit_backoff(attempt):
@@ -28,3 +37,18 @@ def connection_error_backoff(attempt):
     Exponential from 5s, capped at 60s: a network blip clears in seconds
     and an outage is no better served by a longer wait."""
     return min(2 ** attempt * 5, 60)
+
+
+def start_waiting_ticker(first_content, started, post):
+    """Post "Waiting for model response... (Ns elapsed)" through `post` every
+    WAITING_MSG_INTERVAL seconds until the attempt's first-content Event is
+    set — by the first visible output, or on every exit of the call. Both
+    `first_content` and `started` are zero-argument callables, looked up at
+    each tick as the callers' original closures did: a call re-armed after a
+    first-content timeout binds a NEW Event and start time, and a ticker
+    already running follows them. The thread is a daemon; this returns at
+    once."""
+    def _tick():
+        while not first_content().wait(timeout=WAITING_MSG_INTERVAL):
+            post(f"Waiting for model response... ({int(time.time() - started())}s elapsed)\n")
+    threading.Thread(target=_tick, daemon=True).start()

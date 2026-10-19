@@ -25,17 +25,14 @@ from myagent.constants import (
     AGENT_RUN_PREFIX,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
-                             responses_replay_refused, rotate_log_if_needed)
+                             responses_replay_refused, rotate_log_if_needed, screenshot_hint)
+from myagent.pane_notes import PaneNotesMixin
 
 if _HAS_DESKTOP:
     import pyautogui
 
 
-class StreamingMixin:
-
-    def _tool_info(self, message):
-        """Post a tool_info activity line to the GUI queue (shared by all mixins)."""
-        self.queue.put({"type": "tool_info", "content": message})
+class StreamingMixin(PaneNotesMixin):
 
     def _tools_to_responses(self, tools):
         """Convert Anthropic tool schemas to OpenAI Responses API format."""
@@ -118,24 +115,11 @@ class StreamingMixin:
                         # Send deferred images as a user message so the model
                         # processes them through its normal vision pipeline
                         if deferred_images:
-                            # Extract dimensions from the tool output text
-                            dims_hint = ""
-                            for item in reversed(result):
-                                out = item.get("output", "")
-                                if isinstance(out, str):
-                                    m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", out)
-                                    if m:
-                                        w, h = m.group(1), m.group(2)
-                                        dims_hint = f" ({w}x{h} pixels)"
-                                        break
-                            hint_text = (
-                                f"Below is the screenshot image{dims_hint} returned by the "
-                                "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
-                                "is (0, 0), X increases rightward, Y increases downward. "
-                                "When calling mouse_click, use the pixel (x, y) coordinates "
-                                "as they appear in THIS image — they are automatically "
-                                "scaled to actual screen coordinates."
-                            )
+                            # The screenshot's size, read from the newest tool
+                            # output that carries one (helpers.py)
+                            hint_text = screenshot_hint(
+                                item.get("output", "") for item in reversed(result)
+                                if isinstance(item.get("output", ""), str))
                             # A camera photo is no click surface (helpers.py)
                             hint_text = camera_aware_hint(hint_text, deferred_from_camera)
                             result.append({
@@ -265,12 +249,10 @@ class StreamingMixin:
                 api_kwargs["include"] = kept
             else:
                 del api_kwargs["include"]
-        self.queue.put({
-            "type": "warning",
-            "content": f"⚠ {self.provider} refused the replayed reasoning / output items "
-                       "— resending without them. For the rest of this session the "
-                       "model's reasoning is not carried between calls.\n",
-        })
+        self._warn(
+            f"⚠ {self.provider} refused the replayed reasoning / output items "
+            "— resending without them. For the rest of this session the "
+            "model's reasoning is not carried between calls.\n")
         return True
 
     def _make_serializable(self, obj):
@@ -684,8 +666,7 @@ class StreamingMixin:
         try:
             return self._execute_tool(block)
         except Exception as e:
-            self.queue.put({"type": "warning", "content":
-                f"⚠ {block.name} raised {type(e).__name__}: {e}\n"})
+            self._warn(f"⚠ {block.name} raised {type(e).__name__}: {e}\n")
             return (f"Error executing {block.name}: {type(e).__name__}: {e}. "
                     "Check the argument types against the tool's schema and retry.")
 
@@ -705,9 +686,9 @@ class StreamingMixin:
         # refused regardless of model compliance. The refusal is firm so the
         # model moves on instead of retry-looping.
         if block.name in getattr(self, "_blocked_tools", ()):
-            self.queue.put({"type": "warning", "content":
+            self._warn(
                 f"⚠ Blocked tool call refused: {block.name} "
-                f"(per-instruction blocked_tools)\n"})
+                f"(per-instruction blocked_tools)\n")
             return (f"Tool '{block.name}' is HARD-BLOCKED for this instruction "
                     "(blocked_tools). This action is not permitted under any "
                     "circumstances — do not attempt it again; continue the task "
@@ -1652,8 +1633,7 @@ class StreamingMixin:
                     "final_text": self._final_assistant_text(messages),
                 }, f, ensure_ascii=False, indent=1)
         except Exception as e:
-            self.queue.put({"type": "warning",
-                            "content": f"⚠ Could not write result file: {e}\n"})
+            self._warn(f"⚠ Could not write result file: {e}\n")
 
     def stream_worker(self, messages):
         # Initialized before the try so the except path can log whatever cost
@@ -1769,10 +1749,7 @@ class StreamingMixin:
             weak_warning = (self._weak_desktop_combo_warning()
                             or self._blind_camera_warning())
             if weak_warning:
-                self.queue.put({
-                    "type": "tool_info",
-                    "content": f"⚠ {weak_warning}\n",
-                })
+                self._tool_info(f"⚠ {weak_warning}\n")
 
             # ...and when the model is priced by a family catch-all row rather
             # than one of its own (a new Gemini Flash tier before its row is
@@ -1781,8 +1758,7 @@ class StreamingMixin:
             # (always shown, Activity or not), not Activity-gated tool_info.
             generic_pricing = self._generic_pricing_warning(self.provider, self.model)
             if generic_pricing:
-                self.queue.put({"type": "warning",
-                                "content": f"⚠ {generic_pricing}\n"})
+                self._warn(f"⚠ {generic_pricing}\n")
             # ...and when a paid provider's model has NO row at all (a new
             # tier before its row is added — gpt-6-sol ran nine days that
             # way): no cost line and no cost-log line would follow, in
@@ -1795,7 +1771,7 @@ class StreamingMixin:
             unpriced = self._unpriced_model_warning(self.provider, self.model,
                                                     fast=fast_run)
             if unpriced:
-                self.queue.put({"type": "warning", "content": f"⚠ {unpriced}\n"})
+                self._warn(f"⚠ {unpriced}\n")
 
             # Re-post provider/model drift warnings from the last instruction
             # restore: _start_agent wipes the output window, so anything queued
@@ -1803,7 +1779,7 @@ class StreamingMixin:
             # Without this, an unattended run that silently substituted its
             # model leaves no trace in the window or the saved transcript.
             for drift in getattr(self, "_model_drift_warnings", []):
-                self.queue.put({"type": "warning", "content": drift})
+                self._warn(drift)
 
             # MCP servers connect in the background (mcp_mixin): a run that
             # offers their tools waits here, on the worker, until they are up —
@@ -1939,13 +1915,13 @@ class StreamingMixin:
                         if (pricing and pricing.get("long_context")
                                 and not long_context_noted):
                             long_context_noted = True
-                            self.queue.put({"type": "warning", "content": (
+                            self._warn(
                                 f"⚠ Prompt of {call_prompt:,} tokens (input plus cache) — over "
                                 f"the {pricing['long_context']:,}-token line where {served} "
                                 f"moves to its second rate card: this call, and the rest of "
                                 f"the run while prompts stay this long, are priced at "
                                 f"${pricing['input'] * 1e6:.2f} / ${pricing['output'] * 1e6:.2f} "
-                                f"per MTok instead of the base rates.\n")})
+                                f"per MTok instead of the base rates.\n")
                         self.queue.put({
                             "type": "cost_update",
                             "call_cost": call_cost,
@@ -2032,9 +2008,9 @@ class StreamingMixin:
                     why = (f"it filled the whole {cap:,}-token output window {self.model} "
                            "allows per call (thinking included)" if cap
                            else "it filled the whole output window the call allows")
-                    self.queue.put({"type": "warning", "content":
-                                    f"⚠ {truncated_note[0].upper()}{truncated_note[1:]}: "
-                                    f"{why}. The turn ends here — ask for smaller steps.\n"})
+                    self._warn(
+                        f"⚠ {truncated_note[0].upper()}{truncated_note[1:]}: "
+                        f"{why}. The turn ends here — ask for smaller steps.\n")
 
                 if stop_reason == "tool_use":
                     messages.append({"role": "assistant", "content": content_blocks})

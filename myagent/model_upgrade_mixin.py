@@ -55,6 +55,7 @@ from myagent.constants import (
     BUDGET_PRESETS, PROVIDERS, UPGRADE_DEFAULT_TARGETS, UPGRADE_NO_MODEL_LABEL,
 )
 from myagent.keyboard import bind_mnemonics
+from myagent.pane_notes import PaneNotesMixin
 
 UPGRADE_MUTED_FG = "#555555"
 UPGRADE_ERROR_FG = "#b00020"
@@ -69,7 +70,7 @@ UPGRADE_NOTE = ("Ticked in an Agent Request dialog, the upgrade model answers fr
                 "upgraded-from part.")
 
 
-class ModelUpgradeMixin:
+class ModelUpgradeMixin(PaneNotesMixin):
 
     # ── The instruction's setting (pure: no Tk, no network) ────────────
 
@@ -262,12 +263,12 @@ class ModelUpgradeMixin:
         for field, value in params.items():
             setattr(self, field, value)
         level = self._upgrade_level_for(self.provider, self.model, target.get("level"))
-        self.queue.put({"type": "warning", "content": (
+        self._warn(
             f"⬆ Model upgraded for the rest of this run: {original['model']} → "
             f"{self.model}{f' ({level})' if level else ''}, from call "
-            f"#{original['call'] + 1} on.\n")})
+            f"#{original['call'] + 1} on.\n")
         for note in self._upgrade_pricing_warnings():
-            self.queue.put({"type": "warning", "content": f"⚠ {note}\n"})
+            self._warn(f"⚠ {note}\n")
         root = getattr(self, "root", None)
         if root is not None:
             root.after(0, self._update_title)

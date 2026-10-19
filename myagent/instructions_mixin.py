@@ -1,4 +1,7 @@
-import os, json, threading, tkinter as tk
+import os
+import json
+import threading
+import tkinter as tk
 from tkinter import font as tkfont, messagebox, ttk
 
 from myagent.constants import (
@@ -1054,6 +1057,22 @@ class InstructionsMixin:
         dlg.wait_window()
         return result[0]
 
+    def _commit_editor_state(self):
+        """Copy the editor's draft onto the live state — the attached images
+        and the ten tool toggles — the step SAVE (which then writes the store)
+        and Apply (which does not) share."""
+        self.pending_images = list(self._editor_images)
+        self.desktop_enabled.set(self._editor_desktop.get())
+        self.browser_enabled.set(self._editor_browser.get())
+        self.excel_enabled.set(self._editor_excel.get())
+        self.physical_enabled.set(self._editor_physical.get())
+        self.meta_enabled.set(self._editor_meta.get())
+        self.mcp_enabled.set(self._editor_mcp.get())
+        self.google_enabled.set(self._editor_google.get())
+        self.proton_enabled.set(self._editor_proton.get())
+        self.outlook_enabled.set(self._editor_outlook.get())
+        self.conversational_enabled.set(self._editor_conversational.get())
+
     def _save_instruction(self):
         name = self._instr_name_entry.get().strip()
         if not name:
@@ -1076,17 +1095,7 @@ class InstructionsMixin:
                     icon="warning", default="no", parent=self.instruction_editor_window):
                 return
         # Commit editor state to live
-        self.pending_images = list(self._editor_images)
-        self.desktop_enabled.set(self._editor_desktop.get())
-        self.browser_enabled.set(self._editor_browser.get())
-        self.excel_enabled.set(self._editor_excel.get())
-        self.physical_enabled.set(self._editor_physical.get())
-        self.meta_enabled.set(self._editor_meta.get())
-        self.mcp_enabled.set(self._editor_mcp.get())
-        self.google_enabled.set(self._editor_google.get())
-        self.proton_enabled.set(self._editor_proton.get())
-        self.outlook_enabled.set(self._editor_outlook.get())
-        self.conversational_enabled.set(self._editor_conversational.get())
+        self._commit_editor_state()
         self.agent_instruction = text
         self.agent_instruction_name = name
         # Persist to disk. The entry is rebuilt from the editor, so the two
@@ -1322,17 +1331,7 @@ class InstructionsMixin:
             messagebox.showwarning("Empty", "The instruction text is empty.", parent=self.instruction_editor_window)
             return
         # Commit editor state to live (no disk write)
-        self.pending_images = list(self._editor_images)
-        self.desktop_enabled.set(self._editor_desktop.get())
-        self.browser_enabled.set(self._editor_browser.get())
-        self.excel_enabled.set(self._editor_excel.get())
-        self.physical_enabled.set(self._editor_physical.get())
-        self.meta_enabled.set(self._editor_meta.get())
-        self.mcp_enabled.set(self._editor_mcp.get())
-        self.google_enabled.set(self._editor_google.get())
-        self.proton_enabled.set(self._editor_proton.get())
-        self.outlook_enabled.set(self._editor_outlook.get())
-        self.conversational_enabled.set(self._editor_conversational.get())
+        self._commit_editor_state()
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
         # Restore skill modes from whichever instruction is loaded in editor

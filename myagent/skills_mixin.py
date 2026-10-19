@@ -1,4 +1,12 @@
-import os, re, sys, json, subprocess, tempfile, threading, time, tkinter as tk
+import os
+import re
+import sys
+import json
+import subprocess
+import tempfile
+import threading
+import time
+import tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, CHATS_DIR, MONO_FONT,
@@ -10,6 +18,7 @@ from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
                                skill_resource_path)
 from myagent.keyboard import bind_mnemonics
 from myagent.ui_mixin import list_title_band
+from myagent.pane_notes import PaneNotesMixin
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
 # absorb OneDrive conflict forks on disk, + the spawn itself) so several
@@ -19,7 +28,7 @@ from myagent.ui_mixin import list_title_band
 _SPAWN_LOCK = threading.Lock()
 
 
-class SkillsMixin:
+class SkillsMixin(PaneNotesMixin):
 
     def _load_skills(self):
         # Per-skill SKILL.md tree (frontmatter: name/description/mode). Runs
@@ -451,7 +460,7 @@ class SkillsMixin:
             self._model_drift_warnings[:] = [
                 w for w in self._model_drift_warnings if "skill_modes snapshot" not in w]
             self._model_drift_warnings.append(drift)
-            self.queue.put({"type": "warning", "content": drift})
+            self._warn(drift)
         # Session-only: applying an instruction's saved skill modes updates the
         # live session (self.skills drives _build_system_prompt) but never the
         # skills tree, the sticky global store — changed only by explicit

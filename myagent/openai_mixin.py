@@ -1,4 +1,3 @@
-import json
 import re
 import time
 import threading
@@ -6,6 +5,7 @@ import threading
 import openai
 
 from myagent.constants import (
+    FIRST_CONTENT_TIMEOUT,
     OPENAI_ALWAYS_REASONING_PREFIXES,
     OPENAI_DEPRECATED_MODEL_IDS,
     OPENAI_DEPRECATED_MODEL_PREFIXES,
@@ -17,11 +17,14 @@ from myagent.constants import (
     _HAS_DESKTOP,
     resolve_price,
 )
-from myagent.helpers import note_served_models, responses_output_items, responses_usage_dict
-from myagent.retry_util import rate_limit_backoff, server_error_backoff
+from myagent.helpers import (note_served_models, responses_output_items, responses_usage_dict,
+                             tool_use_blocks)
+from myagent.retry_util import (rate_limit_backoff, server_error_backoff,
+                                start_waiting_ticker)
+from myagent.pane_notes import PaneNotesMixin
 
 
-class OpenAIMixin:
+class OpenAIMixin(PaneNotesMixin):
 
     @staticmethod
     def _openai_usage_dict(usage, cache_write_billed=False):
@@ -184,18 +187,7 @@ class OpenAIMixin:
         content_blocks = []
         if full_text:
             content_blocks.append({"type": "text", "text": full_text})
-        for idx in sorted(tool_calls_acc.keys()):
-            tc = tool_calls_acc[idx]
-            try:
-                parsed_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-            except json.JSONDecodeError:
-                parsed_args = {"_raw": tc["arguments"]}
-            content_blocks.append({
-                "type": "tool_use",
-                "id": tc["call_id"],
-                "name": tc["name"],
-                "input": parsed_args,
-            })
+        content_blocks.extend(tool_use_blocks(tool_calls_acc, lambda tc, idx: tc["call_id"]))
 
         # Extract usage for cost tracking, and this turn's output items for the
         # next call to replay (_messages_to_responses)
@@ -566,23 +558,12 @@ class OpenAIMixin:
             self._tool_info(notice)
         api_kwargs.update(params)
 
-        FIRST_CONTENT_TIMEOUT = 180
-        WAITING_MSG_INTERVAL = 15
-
         self._oai_first_content = threading.Event()
         self._oai_stream_start = time.time()
         self._oai_first_content_timeout = FIRST_CONTENT_TIMEOUT
-
-        # Background thread posts elapsed-time messages every 15s until content arrives
-        def _waiting_ticker():
-            while not self._oai_first_content.wait(timeout=WAITING_MSG_INTERVAL):
-                elapsed = int(time.time() - self._oai_stream_start)
-                self.queue.put({
-                    "type": "tool_info",
-                    "content": f"Waiting for model response... ({elapsed}s elapsed)\n",
-                })
-        ticker = threading.Thread(target=_waiting_ticker, daemon=True)
-        ticker.start()
+        # posts the elapsed time every 15 s until content arrives (retry_util)
+        start_waiting_ticker(lambda: self._oai_first_content,
+                             lambda: self._oai_stream_start, self._tool_info)
 
         last_bad_request = None
         for attempt in range(max_retries):
@@ -610,10 +591,7 @@ class OpenAIMixin:
                 # Some models reject temperature — retry without it
                 if "temperature" in err_str and "temperature" in api_kwargs:
                     del api_kwargs["temperature"]
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": "Model does not support temperature — retrying without it...\n",
-                    })
+                    self._tool_info("Model does not support temperature — retrying without it...\n")
                     continue
                 # Some models reject specific server-side tools (e.g. gpt-5.2-pro
                 # rejects code_interpreter). Parse the rejected tool name out of the
@@ -632,10 +610,8 @@ class OpenAIMixin:
                     ]
                     after_count = len(api_kwargs["tools"])
                     if after_count < before_count:
-                        self.queue.put({
-                            "type": "tool_info",
-                            "content": f"Model '{self.model}' does not support tool '{bad_tool}' — retrying without it (cached for this session)...\n",
-                        })
+                        self._tool_info(
+                            f"Model '{self.model}' does not support tool '{bad_tool}' — retrying without it (cached for this session)...\n")
                         continue
                 # A model the table doesn't know rejected the reasoning.effort
                 # value. Parse the supported values out of the error and retry
@@ -650,10 +626,8 @@ class OpenAIMixin:
                             old_effort = api_kwargs["reasoning"].get("effort", "?")
                             new_effort = self._openai_nearest_effort(old_effort, supported)
                             api_kwargs["reasoning"]["effort"] = new_effort
-                            self.queue.put({
-                                "type": "tool_info",
-                                "content": f"Model '{self.model}' rejected reasoning.effort='{old_effort}' — retrying with '{new_effort}' (supported: {', '.join(supported)})...\n",
-                            })
+                            self._tool_info(
+                                f"Model '{self.model}' rejected reasoning.effort='{old_effort}' — retrying with '{new_effort}' (supported: {', '.join(supported)})...\n")
                             continue
                 # Unrecognised BadRequestError — propagate
                 raise
@@ -661,32 +635,26 @@ class OpenAIMixin:
                 # Reset timer for next attempt
                 self._oai_first_content = threading.Event()
                 self._oai_stream_start = time.time()
-                ticker = threading.Thread(target=_waiting_ticker, daemon=True)
-                ticker.start()
+                start_waiting_ticker(lambda: self._oai_first_content,
+                                     lambda: self._oai_stream_start, self._tool_info)
                 if attempt < max_retries - 1:
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Stream timeout (no content from model within 180s) — retrying (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Stream timeout (no content from model within {FIRST_CONTENT_TIMEOUT}s) — retrying (attempt {attempt + 1}/{max_retries})...\n")
                 else:
                     raise
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
                     wait = rate_limit_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                 else:
                     raise
             except openai.APIError as e:
                 if attempt < max_retries - 1 and getattr(e, 'status_code', 0) >= 500:
                     wait = server_error_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                 else:
                     raise

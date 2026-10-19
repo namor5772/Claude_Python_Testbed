@@ -11,7 +11,8 @@ from myagent.constants import (
     OLLAMA_NUM_CTX_CAP,
     OLLAMA_KEEP_ALIVE,
 )
-from myagent.helpers import camera_aware_hint, is_camera_result, note_served_models
+from myagent.helpers import camera_aware_hint, is_camera_result, note_served_models, screenshot_hint
+from myagent.pane_notes import PaneNotesMixin
 
 
 def _attr(obj, key, default=None):
@@ -26,7 +27,7 @@ def _attr(obj, key, default=None):
     return getattr(obj, key, default)
 
 
-class OllamaMixin:
+class OllamaMixin(PaneNotesMixin):
 
     def _tools_to_ollama(self, tools):
         """Convert Anthropic tool schemas to Ollama's OpenAI-style function list.
@@ -110,21 +111,7 @@ class OllamaMixin:
                         # silently drop the images, which is fine: the weak-combo
                         # warning tells the user why desktop tools won't work.
                         if deferred_images:
-                            dims_hint = ""
-                            import re
-                            for tp in deferred_text_hints:
-                                m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", tp)
-                                if m:
-                                    dims_hint = f" ({m.group(1)}x{m.group(2)} pixels)"
-                                    break
-                            hint_text = (
-                                f"Below is the screenshot image{dims_hint} returned by the "
-                                "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
-                                "is (0, 0), X increases rightward, Y increases downward. "
-                                "When calling mouse_click, use the pixel (x, y) coordinates "
-                                "as they appear in THIS image — they are automatically scaled "
-                                "to actual screen coordinates."
-                            )
+                            hint_text = screenshot_hint(deferred_text_hints)
                             # A camera photo is no click surface (helpers.py)
                             hint_text = camera_aware_hint(hint_text, deferred_from_camera)
                             out.append({
@@ -239,14 +226,10 @@ class OllamaMixin:
                     self._ollama_caps_warned = set()
                 if self.model not in self._ollama_caps_warned:
                     self._ollama_caps_warned.add(self.model)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": (
-                            f"⚠ {self.model} does not advertise the 'tools' capability — "
-                            "tool calls will be skipped. Only completion + vision (if any) "
-                            "will work. Use qwen3 or another tool-capable model for agent tasks.\n"
-                        ),
-                    })
+                    self._tool_info(
+                        f"⚠ {self.model} does not advertise the 'tools' capability — "
+                        "tool calls will be skipped. Only completion + vision (if any) "
+                        "will work. Use qwen3 or another tool-capable model for agent tasks.\n")
 
         # Thinking via the `think` flag. We pass the flag explicitly — true OR
         # false — for any thinking-capable model, because OMITTING `think`
@@ -381,14 +364,10 @@ class OllamaMixin:
                     # reply (or a tool call) is cut off — say so, as the
                     # cloud callers do on their max_tokens stop (2026-10-18).
                     if _attr(last_chunk, "done_reason", None) == "length":
-                        self.queue.put({
-                            "type": "warning",
-                            "content": (
-                                f"⚠ {self.model} filled its context window (num_ctx "
-                                f"{request_kwargs['options'].get('num_ctx', 'server default')}) while "
-                                "replying — the reply is cut off\n"
-                            ),
-                        })
+                        self._warn(
+                            f"⚠ {self.model} filled its context window (num_ctx "
+                            f"{request_kwargs['options'].get('num_ctx', 'server default')}) while "
+                            "replying — the reply is cut off\n")
                 break  # success
             except Exception as e:
                 err_str = str(e).lower()
@@ -406,10 +385,8 @@ class OllamaMixin:
                     ) from e
                 if is_timeout and attempt < max_retries - 1:
                     wait = min(2 ** attempt * 2, 30)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Ollama stream timed out — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Ollama stream timed out — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                     full_text = ""
                     thinking_text = ""
@@ -477,14 +454,10 @@ class OllamaMixin:
             return
         try:
             self.ollama_client.generate(model=self.model, prompt="", keep_alive=0)
-            self.queue.put({
-                "type": "warning",
-                "content": (
-                    f"⚠ {self.model} was warm at {loaded} ctx but this run needs "
-                    f"{num_ctx} — dropped the small instance so it reloads at "
-                    f"{num_ctx} (small-ctx warm trap; see README)\n"
-                ),
-            })
+            self._warn(
+                f"⚠ {self.model} was warm at {loaded} ctx but this run needs "
+                f"{num_ctx} — dropped the small instance so it reloads at "
+                f"{num_ctx} (small-ctx warm trap; see README)\n")
         except Exception:
             pass  # best-effort: a failed poke must never block the run
 
@@ -574,11 +547,9 @@ class OllamaMixin:
                 noted = self._ollama_quiet_noted = set()
             if self.model not in noted:
                 noted.add(self.model)
-                self.queue.put({
-                    "type": "tool_info",
-                    "content": (f"Thinking is off: {self.model} is sent think={levels[0]} "
-                                "(this model cannot stop thinking — its quietest level)\n"),
-                })
+                self._tool_info(
+                    f"Thinking is off: {self.model} is sent think={levels[0]} "
+                    "(this model cannot stop thinking — its quietest level)\n")
         return levels[0]
 
     def _ollama_runs_agent_loop(self, model_id):

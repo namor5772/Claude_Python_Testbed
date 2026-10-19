@@ -15,11 +15,12 @@ from myagent.constants import (
     GEMINI_QUIET_STYLE_PREFIXES,
     GEMINI_QUIET_STYLES,
 )
-from myagent.helpers import camera_aware_hint, is_camera_result, note_served_models
+from myagent.helpers import camera_aware_hint, is_camera_result, note_served_models, screenshot_dims_hint
 from myagent.retry_util import rate_limit_backoff, server_error_backoff
+from myagent.pane_notes import PaneNotesMixin
 
 
-class GeminiMixin:
+class GeminiMixin(PaneNotesMixin):
 
     @staticmethod
     def _gemini_usage_dict(um):
@@ -311,14 +312,7 @@ class GeminiMixin:
                             # knows to use its pixel coordinates for mouse_click.
                             # Include image dimensions so the model has the
                             # coordinate space right next to the image.
-                            dims_hint = ""
-                            dims_w, dims_h = "", ""
-                            for tp in all_text_parts:
-                                m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", tp)
-                                if m:
-                                    dims_w, dims_h = m.group(1), m.group(2)
-                                    dims_hint = f" ({dims_w}x{dims_h} pixels)"
-                                    break
+                            dims_hint = screenshot_dims_hint(all_text_parts)
                             hint = genai_types.Part.from_text(
                                 # A camera photo is no click surface (helpers.py)
                                 text=camera_aware_hint(
@@ -632,29 +626,23 @@ class GeminiMixin:
                 is_bad_request = status == 400 or (
                     not known and ("400" in err_str or "invalid_argument" in err_low))
                 if is_timeout and attempt < max_retries - 1:
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Gemini stream timed out — retrying (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Gemini stream timed out — retrying (attempt {attempt + 1}/{max_retries})...\n")
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []
                 elif is_rate_limit and attempt < max_retries - 1:
                     wait = rate_limit_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []
                 elif is_server_error and attempt < max_retries - 1:
                     wait = server_error_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                     full_text = ""
                     thinking_text = ""
@@ -683,12 +671,10 @@ class GeminiMixin:
                     else:
                         config_kwargs["thinking_config"] = quiet_cfg
                     config = genai_types.GenerateContentConfig(**config_kwargs)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": (f"⚠ {self.model} rejected the thinking-off setting — retrying with "
-                                    f"{self._gemini_quiet_describe(quiet_style, self.model)} "
-                                    f"(attempt {attempt + 1}/{max_retries})...\n"),
-                    })
+                    self._tool_info(
+                        f"⚠ {self.model} rejected the thinking-off setting — retrying with "
+                        f"{self._gemini_quiet_describe(quiet_style, self.model)} "
+                        f"(attempt {attempt + 1}/{max_retries})...\n")
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []
@@ -708,10 +694,8 @@ class GeminiMixin:
                     new_style = "budget" if was_level else "level"
                     config_kwargs["thinking_config"] = self._gemini_thinking_config(style=new_style)
                     config = genai_types.GenerateContentConfig(**config_kwargs)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"⚠ Gemini rejected the thinking config — retrying with thinking_{new_style} (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"⚠ Gemini rejected the thinking config — retrying with thinking_{new_style} (attempt {attempt + 1}/{max_retries})...\n")
                     full_text = ""
                     thinking_text = ""
                     tool_calls = []

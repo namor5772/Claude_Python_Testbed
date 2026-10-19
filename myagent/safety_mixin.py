@@ -1,4 +1,10 @@
-import os, re, signal, subprocess, sys, threading, tkinter as tk
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import tkinter as tk
 from tkinter import messagebox
 
 from myagent.constants import (
@@ -9,6 +15,7 @@ from myagent.constants import (
 )
 from myagent.helpers import extract_text_from_html, input_wait_timer
 from myagent.keyboard import bind_mnemonics, link_embedded_checkbuttons
+from myagent.pane_notes import PaneNotesMixin
 
 from ddgs import DDGS
 import httpx
@@ -21,7 +28,7 @@ _PS_UTF8_OUTPUT = ("try { [Console]::OutputEncoding = "
                    "New-Object System.Text.UTF8Encoding $false } catch {}")
 
 
-class SafetyMixin:
+class SafetyMixin(PaneNotesMixin):
 
     # ── Agent Start / Stop ──────────────────────────────────────────────
 
@@ -161,19 +168,26 @@ class SafetyMixin:
 
         cbs = []  # every embedded checkbutton, in display order (keyboard traversal)
 
-        # Section 1: shell command patterns (regex-based, matched in _check_command_safety)
-        shell_label ="── PowerShell command patterns ──" if IS_WINDOWS else "── Shell command patterns ──"
-        text_widget.insert("end", shell_label + "\n")
-        for pattern in COMMAND_CONFIRM:
+        def add_checkbox(pattern, label=None):
+            """One embedded checkbox: ticked = confirm required. Its command
+            binds the STORED pattern, whatever `label` shows (the IMAP tools
+            display as IMAP_* while their proton_* names are what the bypass
+            list holds)."""
             var = tk.BooleanVar(value=pattern not in self._disabled_confirm_patterns)
             cb = tk.Checkbutton(
-                text_widget, text=pattern, variable=var, font=(MONO_FONT, 9),
-                anchor="w", bg="white", activebackground="white",
+                text_widget, text=pattern if label is None else label, variable=var,
+                font=(MONO_FONT, 9), anchor="w", bg="white", activebackground="white",
                 command=lambda p=pattern, v=var: self._toggle_confirm_pattern(p, v),
             )
             text_widget.window_create("end", window=cb, stretch=True)
             text_widget.insert("end", "\n")
             cbs.append(cb)
+
+        # Section 1: shell command patterns (regex-based, matched in _check_command_safety)
+        shell_label ="── PowerShell command patterns ──" if IS_WINDOWS else "── Shell command patterns ──"
+        text_widget.insert("end", shell_label + "\n")
+        for pattern in COMMAND_CONFIRM:
+            add_checkbox(pattern)
 
         # Section 2: Gmail destructive tools (tool-name match, checked in _confirm_gmail_action).
         # Only shown when google support is available — keeps the dialog clean
@@ -181,15 +195,7 @@ class SafetyMixin:
         if _HAS_GOOGLE:
             text_widget.insert("end", "\n── Gmail destructive tools ──\n")
             for tool_name in GMAIL_CONFIRM_TOOLS:
-                var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
-                cb = tk.Checkbutton(
-                    text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
-                    anchor="w", bg="white", activebackground="white",
-                    command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
-                )
-                text_widget.window_create("end", window=cb, stretch=True)
-                text_widget.insert("end", "\n")
-                cbs.append(cb)
+                add_checkbox(tool_name)
 
         # Section 3: IMAP mail destructive tools (Proton Bridge, WebCentral,
         # any IMAP/SMTP account) — same checkbox pattern, checked in
@@ -206,16 +212,7 @@ class SafetyMixin:
         if _HAS_PROTONMAIL:
             text_widget.insert("end", "\n── IMAP mail destructive tools ──\n")
             for tool_name in PROTON_CONFIRM_TOOLS:
-                var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
-                display_label = tool_name.replace("proton_", "IMAP_", 1)
-                cb = tk.Checkbutton(
-                    text_widget, text=display_label, variable=var, font=(MONO_FONT, 9),
-                    anchor="w", bg="white", activebackground="white",
-                    command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
-                )
-                text_widget.window_create("end", window=cb, stretch=True)
-                text_widget.insert("end", "\n")
-                cbs.append(cb)
+                add_checkbox(tool_name, tool_name.replace("proton_", "IMAP_", 1))
 
         # Section 4: Outlook / Microsoft 365 destructive tools (Microsoft Graph)
         # — same checkbox + per-instruction bypass pattern, checked in
@@ -223,15 +220,7 @@ class SafetyMixin:
         if _HAS_OUTLOOK:
             text_widget.insert("end", "\n── Outlook destructive tools ──\n")
             for tool_name in OUTLOOK_CONFIRM_TOOLS:
-                var = tk.BooleanVar(value=tool_name not in self._disabled_confirm_patterns)
-                cb = tk.Checkbutton(
-                    text_widget, text=tool_name, variable=var, font=(MONO_FONT, 9),
-                    anchor="w", bg="white", activebackground="white",
-                    command=lambda p=tool_name, v=var: self._toggle_confirm_pattern(p, v),
-                )
-                text_widget.window_create("end", window=cb, stretch=True)
-                text_widget.insert("end", "\n")
-                cbs.append(cb)
+                add_checkbox(tool_name)
 
         text_widget.configure(state="disabled")
 
@@ -411,9 +400,9 @@ class SafetyMixin:
         with input_wait_timer(self):
             event.wait()
         if failure:
-            self.queue.put({"type": "warning", "content":
-                            f"⚠ The command confirmation dialog failed "
-                            f"({failure[0]}) — the command was denied.\n"})
+            self._warn(
+                f"⚠ The command confirmation dialog failed "
+                f"({failure[0]}) — the command was denied.\n")
         return result_holder[0]
 
     def _abandon_dialog(self, attr):
@@ -676,9 +665,9 @@ class SafetyMixin:
             # "" stops the run on both callers (the user_prompt tool and Convo
             # mode); any text would be a reply nobody gave and, in Convo mode,
             # would loop on a dialog that cannot open.
-            self.queue.put({"type": "warning", "content":
-                            f"⚠ The Agent Request dialog could not be shown "
-                            f"({failure[0]}) — stopping the run.\n"})
+            self._warn(
+                f"⚠ The Agent Request dialog could not be shown "
+                f"({failure[0]}) — stopping the run.\n")
             return ""
         if response and response != "[User dismissed the dialog without responding]":
             echo = response
@@ -777,7 +766,7 @@ class SafetyMixin:
         if safety == "blocked":
             return info
         if safety == "skipped":
-            self.queue.put({"type": "warning", "content": f"\u26a0 Confirm bypassed (pattern: {info})\n"})
+            self._warn(f"\u26a0 Confirm bypassed (pattern: {info})\n")
         elif safety == "confirm" and not self._request_confirmation(command, info):
             return "Command was rejected by the user."
         try:

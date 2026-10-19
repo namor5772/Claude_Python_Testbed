@@ -538,6 +538,64 @@ def camera_aware_hint(screen_hint, from_camera):
             "file for mouse_click.")
 
 
+_SCREENSHOT_DIMS_RE = re.compile(r"\((\d+)x(\d+)(?:\s+pixels)?\)")
+
+
+def screenshot_dims_hint(texts):
+    """" (WxH pixels)" from the first of `texts` that carries a screenshot's
+    parenthesised size — the shape do_screenshot's result text writes and a
+    camera photo's / view_image's deliberately never does — else "". The
+    caller orders `texts`: the Responses and Kimi translators walk their wire
+    list newest first, Ollama and Gemini this turn's text parts in order."""
+    for text in texts:
+        m = _SCREENSHOT_DIMS_RE.search(text)
+        if m:
+            return f" ({m.group(1)}x{m.group(2)} pixels)"
+    return ""
+
+
+def screenshot_hint(texts):
+    """The sentence the Responses, Kimi and Ollama translators put before the
+    screenshot images they hoist out of a tool_result into a follow-up user
+    message (Gemini words its own — gemini_mixin), with the screenshot's size
+    from `screenshot_dims_hint(texts)`. Word for word the text each translator
+    carried before 2026-10-19; `camera_aware_hint` rewords it over a photo or
+    an image file."""
+    dims_hint = screenshot_dims_hint(texts)
+    return (
+        f"Below is the screenshot image{dims_hint} returned by the "
+        "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
+        "is (0, 0), X increases rightward, Y increases downward. "
+        "When calling mouse_click, use the pixel (x, y) coordinates "
+        "as they appear in THIS image — they are automatically "
+        "scaled to actual screen coordinates."
+    )
+
+
+def tool_use_blocks(tool_calls_acc, block_id):
+    """The function calls one streamed turn accumulated, as the Anthropic-style
+    tool_use blocks the loop executes, in output order. `tool_calls_acc` maps an
+    output index to the call's record — `name`, the streamed `arguments` JSON
+    text (parsed here; text that is not JSON rides along as {"_raw": ...}, so
+    the model sees what it sent) and whichever id field its API uses, which
+    `block_id(record, index)` reads: Responses carries `call_id`, Chat
+    Completions `id` (Kimi falls back to a synthesised one)."""
+    blocks = []
+    for idx in sorted(tool_calls_acc.keys()):
+        tc = tool_calls_acc[idx]
+        try:
+            parsed_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
+        except json.JSONDecodeError:
+            parsed_args = {"_raw": tc["arguments"]}
+        blocks.append({
+            "type": "tool_use",
+            "id": block_id(tc, idx),
+            "name": tc["name"],
+            "input": parsed_args,
+        })
+    return blocks
+
+
 _DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 

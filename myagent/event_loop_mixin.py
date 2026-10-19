@@ -1,4 +1,9 @@
-import os, io, sys, time, queue, tkinter as tk
+import os
+import io
+import sys
+import time
+import queue
+import tkinter as tk
 
 from myagent.constants import CHATS_DIR
 

@@ -1,4 +1,11 @@
-import os, re, json, io, time, base64, threading, tkinter as tk
+import os
+import re
+import json
+import io
+import time
+import base64
+import threading
+import tkinter as tk
 from tkinter import filedialog, messagebox
 
 from myagent.constants import CHATS_DIR, LOCAL_CHATS_DIR, IS_WINDOWS

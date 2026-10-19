@@ -70,14 +70,13 @@ Architecture notes:
 import email
 import imaplib
 import json
-import mimetypes
 import os
 import re
 import smtplib
 import ssl
 from email.message import EmailMessage
 from email.utils import formatdate, getaddresses, make_msgid, parseaddr
-from myagent.mail_common import confirm_action
+from myagent.mail_common import attach_files, confirm_action
 
 from myagent.helpers import extract_text_from_html, normalize_save_path
 
@@ -491,35 +490,10 @@ class ProtonMailMixin:
     @staticmethod
     def _attach_proton_files(msg, attachments):
         """Attach files to an EmailMessage. Returns (ok, summary_or_error).
-        Matches Gmail's ``_attach_files`` semantics."""
-        if not attachments:
-            return True, ""
-        if isinstance(attachments, str):
-            attachments = [attachments]
-        total = 0
-        info = []
-        attached_blobs = []
-        for path in attachments:
-            if not os.path.isfile(path):
-                return False, f"attachment not found or not a file: {path}"
-            size = os.path.getsize(path)
-            total += size
-            if total > MAX_ATTACHMENT_BYTES_TOTAL:
-                return False, (
-                    f"attachments exceed {MAX_ATTACHMENT_BYTES_TOTAL // (1024*1024)} MB combined "
-                    f"raw size (SMTP limit is ~25 MB after base64 encoding)"
-                )
-            with open(path, "rb") as f:
-                data = f.read()
-            mime_type, _ = mimetypes.guess_type(path)
-            if not mime_type:
-                mime_type = "application/octet-stream"
-            maintype, _, subtype = mime_type.partition("/")
-            attached_blobs.append((data, maintype, subtype or "octet-stream", os.path.basename(path)))
-            info.append(f"{os.path.basename(path)} ({size} bytes)")
-        for data, maintype, subtype, filename in attached_blobs:
-            msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
-        return True, "[" + ", ".join(info) + "]"
+        Matches Gmail's ``_attach_files`` semantics — the same body,
+        mail_common.attach_files, with the SMTP wording of the size cap."""
+        return attach_files(msg, attachments, MAX_ATTACHMENT_BYTES_TOTAL,
+                            "SMTP limit is ~25 MB after base64 encoding")
 
     @staticmethod
     def _quote_mailbox(name):

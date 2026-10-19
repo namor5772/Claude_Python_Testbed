@@ -2,10 +2,13 @@
 
 These three integrations mirror each other's tool surface but deliberately keep
 provider-specific behavior (folder-vs-label models, attachment caps, per-tool
-dialog text). This module holds only the genuinely identical scaffolding —
-currently the destructive-action confirmation dialog — so it lives in one place
-instead of being copy-pasted three times.
+dialog text). This module holds only the genuinely identical scaffolding — the
+destructive-action confirmation dialog, the per-id batch runner and the
+EmailMessage attachment builder — so it lives in one place instead of being
+copy-pasted three times.
 """
+import mimetypes
+import os
 from tkinter import messagebox
 
 from myagent.helpers import input_wait_timer
@@ -60,3 +63,44 @@ def run_per_id(ids, act):
         except Exception as e:
             failed.append({"id": item, "error": f"{type(e).__name__}: {e}"})
     return results, failed
+
+
+def attach_files(msg, attachments, max_total_bytes, limit_note):
+    """Add one or more files to an EmailMessage — the body Gmail's
+    `_attach_files` and the IMAP mixin's `_attach_proton_files` share (Outlook
+    builds Graph attachment dicts instead). Returns (True, "[a.pdf (12345
+    bytes), b.png (67890 bytes)]") once every file is attached, or (False,
+    "error text") — a path that is not a file, or a combined raw size over
+    `max_total_bytes` — with `msg` untouched: every check runs before the
+    first add_attachment, so a bad third file never leaves the first two on
+    the message. `limit_note` is the provider's own wording of the ceiling,
+    closing the over-size sentence."""
+    if not attachments:
+        return True, ""
+    if isinstance(attachments, str):
+        attachments = [attachments]
+    total = 0
+    info = []
+    attached_blobs = []
+    for path in attachments:
+        if not os.path.isfile(path):
+            return False, f"attachment not found or not a file: {path}"
+        size = os.path.getsize(path)
+        total += size
+        if total > max_total_bytes:
+            return False, (
+                f"attachments exceed {max_total_bytes // (1024*1024)} MB combined "
+                f"raw size ({limit_note})"
+            )
+        with open(path, "rb") as f:
+            data = f.read()
+        mime_type, _ = mimetypes.guess_type(path)
+        if not mime_type:
+            mime_type = "application/octet-stream"
+        maintype, _, subtype = mime_type.partition("/")
+        attached_blobs.append((data, maintype, subtype or "octet-stream", os.path.basename(path)))
+        info.append(f"{os.path.basename(path)} ({size} bytes)")
+    # All checks passed — actually mutate msg
+    for data, maintype, subtype, filename in attached_blobs:
+        msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+    return True, "[" + ", ".join(info) + "]"

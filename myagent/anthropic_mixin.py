@@ -13,6 +13,7 @@ from myagent.helpers import (parse_output_cap, parse_overflow_counts, strip_old_
                              trim_history_for_context)
 from myagent.retry_util import (connection_error_backoff, rate_limit_backoff,
                                 server_error_backoff)
+from myagent.pane_notes import PaneNotesMixin
 
 
 _CACHE_CONTROL = {"type": "ephemeral"}
@@ -22,7 +23,7 @@ _CACHE_CONTROL = {"type": "ephemeral"}
 _BASE_BETAS = ["web-search-2025-03-05", "code-execution-2025-08-25", "files-api-2025-04-14"]
 
 
-class AnthropicMixin:
+class AnthropicMixin(PaneNotesMixin):
 
     @staticmethod
     def _anthropic_cache_system(system_text):
@@ -440,15 +441,13 @@ class AnthropicMixin:
                     del api_kwargs["speed"]
                     betas = [b for b in betas if b != ANTHROPIC_FAST_MODE_BETA]
                     fast_requested = False
-                    self.queue.put({"type": "warning", "content": note})
+                    self._warn(note)
                     full_text = ""
                     continue
                 if attempt < max_retries - 1:
                     wait = rate_limit_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                     full_text = ""
                 else:
@@ -462,10 +461,7 @@ class AnthropicMixin:
                 if "temperature" in msg and "temperature" in api_kwargs:
                     del api_kwargs["temperature"]
                     self._anthropic_no_temperature.add(self.model)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": "Model does not support temperature — retrying without it...\n",
-                    })
+                    self._tool_info("Model does not support temperature — retrying without it...\n")
                     full_text = ""
                     continue
                 # Fast mode refused (a model outside the research preview —
@@ -479,10 +475,10 @@ class AnthropicMixin:
                     del api_kwargs["speed"]
                     betas = [b for b in betas if b != ANTHROPIC_FAST_MODE_BETA]
                     fast_requested = False
-                    self.queue.put({"type": "warning", "content":
+                    self._warn(
                         "⚠ Fast mode is not available here (model outside the research "
                         "preview, or this API key has no access) — retrying at standard "
-                        "speed; this run bills at standard rates.\n"})
+                        "speed; this run bills at standard rates.\n")
                     full_text = ""
                     continue
                 # Claude Fable 5.1's preserved-thinking check: a replayed thinking
@@ -499,10 +495,10 @@ class AnthropicMixin:
                     stripped_thinking = True
                     removed = strip_thinking_blocks(messages)
                     if removed:
-                        self.queue.put({"type": "warning", "content":
+                        self._warn(
                             f"⚠ The API rejected {removed} replayed thinking block(s) — earlier "
                             "history changed since they were produced. Retrying without them; "
-                            "the model continues without that reasoning.\n"})
+                            "the model continues without that reasoning.\n")
                         full_text = ""
                         continue
                 # A Fable beta surface this API key isn't enrolled in (the 400
@@ -576,10 +572,10 @@ class AnthropicMixin:
                     rep_tok, rep_max = parse_overflow_counts(msg)
                     removed = trim_history_for_context(messages, rep_tok, rep_max)
                     if removed > 0:
-                        self.queue.put({"type": "warning", "content":
+                        self._warn(
                             f"⚠ Context exceeded the model's limit — dropped the {removed} "
                             f"oldest message(s) and retried; earlier history is no longer "
-                            f"in context.\n"})
+                            f"in context.\n")
                         full_text = ""
                         continue
                     # Only the last two rounds remain and they still overflow —
@@ -590,14 +586,14 @@ class AnthropicMixin:
                     # finishing — and return end_turn, so a waited parent's
                     # result file said "completed".)
                     detail = getattr(e, "message", "") or str(e)
-                    self.queue.put({"type": "warning", "content":
+                    self._warn(
                         f"⚠ Context window exceeded on {self.model}:\n  {detail}\n"
                         "  Even the most recent exchanges alone are larger than this model "
                         "can hold. 200K-window models (Haiku 4.5, Opus 4.5) cannot run "
                         "very long tasks — switch this instruction to a 1M-context model "
                         "(claude-opus-5, claude-fable-5-1, claude-sonnet-5, claude-sonnet-4-6, or "
                         "claude-opus-4-8/4.7/4.6), or "
-                        "split the task into smaller parts.\n"})
+                        "split the task into smaller parts.\n")
                     raise RuntimeError(
                         f"Context window exceeded on {self.model} — nothing left to trim") from None
                 raise
@@ -615,19 +611,19 @@ class AnthropicMixin:
                 if e.status_code == 413:
                     removed = strip_old_images(messages)
                     if removed:
-                        self.queue.put({"type": "warning", "content":
+                        self._warn(
                             f"⚠ The request grew past the API's size limit (HTTP 413) — "
                             f"removed the {removed} oldest screenshot/image(s) from the "
                             "history and retried; the newest ones and all the text stay. "
-                            "The prompt cache is rebuilt once.\n"})
+                            "The prompt cache is rebuilt once.\n")
                         full_text = ""
                         continue
                     removed = trim_history_for_context(messages)
                     if removed > 0:
-                        self.queue.put({"type": "warning", "content":
+                        self._warn(
                             f"⚠ The request grew past the API's size limit (HTTP 413) with "
                             f"no images to drop — dropped the {removed} oldest message(s) "
-                            "and retried; earlier history is no longer in context.\n"})
+                            "and retried; earlier history is no longer in context.\n")
                         full_text = ""
                         continue
                     raise RuntimeError(
@@ -635,10 +631,8 @@ class AnthropicMixin:
                         "remove") from None
                 if e.status_code == 529 and attempt < max_retries - 1:
                     wait = server_error_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"API overloaded — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                     full_text = ""
                 else:
@@ -657,11 +651,9 @@ class AnthropicMixin:
                 if attempt < max_retries - 1:
                     wait = connection_error_backoff(attempt)
                     detail = (getattr(e, "message", "") or str(e) or "Connection error").strip()
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"{detail} — retrying in {wait}s "
-                                   f"(attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"{detail} — retrying in {wait}s "
+                        f"(attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                     full_text = ""
                 else:
@@ -706,10 +698,10 @@ class AnthropicMixin:
             for it in iterations)
         content_blocks = strip_pre_fallback_blocks(list(final_message.content))
         if fallback_ran and final_message.stop_reason != "refusal":
-            self.queue.put({"type": "warning", "content":
+            self._warn(
                 f"⚠ {self.model} declined this request (safety classifier) — served by "
                 f"{served_model} via server-side fallback; this call bills at "
-                f"{served_model} rates.\n"})
+                f"{served_model} rates.\n")
 
         # Fable safety classifiers can decline a request with HTTP 200 and
         # stop_reason="refusal" — pre-output refusals carry an EMPTY content
@@ -718,8 +710,8 @@ class AnthropicMixin:
         # any non-tool_use stop_reason as end of turn, which is the right exit.
         # With fallbacks on, a refusal here means the whole chain declined.
         if final_message.stop_reason == "refusal":
-            self.queue.put({"type": "warning", "content": self._refusal_note(
-                stop_details, fallbacks_requested=bool(fable and fable["fallbacks"]))})
+            self._warn(self._refusal_note(
+                stop_details, fallbacks_requested=bool(fable and fable["fallbacks"])))
 
         # Extract usage for cost tracking
         usage_dict = None

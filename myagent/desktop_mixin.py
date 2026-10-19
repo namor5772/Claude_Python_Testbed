@@ -8,6 +8,7 @@ import subprocess
 import tkinter as tk
 
 from myagent.constants import IS_WINDOWS, _HAS_DESKTOP, _SUBPROCESS_NOWND
+from myagent.pane_notes import PaneNotesMixin
 
 if _HAS_DESKTOP:
     import pyautogui
@@ -20,7 +21,7 @@ if IS_WINDOWS:
         pass
 
 
-class DesktopMixin:
+class DesktopMixin(PaneNotesMixin):
 
     def do_csv_search(self, file_path, search_value, column=None, match_mode="contains", max_results=50, delimiter=None):
         try:
@@ -135,10 +136,10 @@ class DesktopMixin:
             if not rects or display_index >= len(rects):
                 return None, 0, 0
             # Use API order: display 0 = primary (origin 0,0)
-            l, t, r, b = rects[display_index]
-            w, h = r - l, b - t
+            left, top, right, bottom = rects[display_index]
+            w, h = right - left, bottom - top
             # Capture just this display's region
-            cg_rect = Quartz.CGRectMake(l, t, w, h)
+            cg_rect = Quartz.CGRectMake(left, top, w, h)
             cg_img = Quartz.CGWindowListCreateImage(
                 cg_rect,
                 Quartz.kCGWindowListOptionOnScreenOnly,
@@ -151,7 +152,7 @@ class DesktopMixin:
             ih = Quartz.CGImageGetHeight(cg_img)
             cf_data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg_img))
             img = Image.frombytes("RGBA", (iw, ih), cf_data, "raw", "BGRA")
-            return img.convert("RGB"), l, t
+            return img.convert("RGB"), left, top
         except Exception:
             return None, 0, 0
 
@@ -211,7 +212,8 @@ class DesktopMixin:
             try:
                 _diag_rects = self._get_display_rects()
                 _diag_all_rects_str = ", ".join(
-                    f"#{i}=({l},{t},{r-l}x{b-t})" for i, (l, t, r, b) in enumerate(_diag_rects)
+                    f"#{i}=({left},{top},{right-left}x{bottom-top})"
+                    for i, (left, top, right, bottom) in enumerate(_diag_rects)
                 ) if _diag_rects else "(none)"
                 self._tool_info(
                     f"[DIAG capture] display_idx={display_idx} region={region} "
@@ -255,9 +257,9 @@ class DesktopMixin:
             # Windows: per-display capture via ImageGrab with all_screens
             rects = self._get_windows_display_rects()
             if rects and display_idx < len(rects):
-                l, t, r, b = rects[display_idx]
-                img = ImageGrab.grab(bbox=(l, t, r, b), all_screens=True)
-                self._screenshot_offset = (l, t)
+                left, top, right, bottom = rects[display_idx]
+                img = ImageGrab.grab(bbox=(left, top, right, bottom), all_screens=True)
+                self._screenshot_offset = (left, top)
             else:
                 img = pyautogui.screenshot()
                 self._screenshot_offset = (0, 0)
@@ -267,8 +269,8 @@ class DesktopMixin:
             rects = self._get_display_rects()
             if rects:
                 idx = min(display_idx, len(rects) - 1)
-                l, t, r, b = rects[idx]
-                log_w, log_h = r - l, b - t
+                left, top, right, bottom = rects[idx]
+                log_w, log_h = right - left, bottom - top
             else:
                 log_w, log_h = pyautogui.size()
             if phys_w != log_w and log_w:
@@ -663,7 +665,8 @@ class DesktopMixin:
                 result = asyncio.run(winocr.recognize_pil(img, lang="en"))
                 text = result.text.strip()
             else:
-                import objc, Quartz
+                import objc
+                import Quartz
                 # Load the Vision framework for its side effect: registering the
                 # VN* ObjC classes so Quartz.VNImageRequestHandler etc. resolve.
                 objc.loadBundle("Vision", bundle_path="/System/Library/Frameworks/Vision.framework",

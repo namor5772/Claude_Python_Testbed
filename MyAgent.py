@@ -35,10 +35,8 @@ import os
 import urllib.request
 
 from myagent.constants import (
-    DEFAULT_GEOMETRY, DEFAULT_MODEL, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
-    OPENAI_DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL,
-    XAI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL, KIMI_DEFAULT_BASE_URL,
-    OLLAMA_DEFAULT_MODEL, OLLAMA_READ_TIMEOUT,
+    DEFAULT_GEOMETRY, DEFAULT_SYSTEM_PROMPT, DEFAULT_INSTRUCTION,
+    XAI_DEFAULT_BASE_URL, KIMI_DEFAULT_BASE_URL, OLLAMA_READ_TIMEOUT,
     OLLAMA_DEFAULT_BASE_URL, _HAS_OLLAMA, _HAS_MCP, AGENT_STATE_FILE, _BASE_DIR,
     PERIODIC_SAVE_MS,
 )
@@ -72,6 +70,11 @@ from myagent.event_loop_mixin import EventLoopMixin
 
 if _HAS_OLLAMA:
     import ollama
+
+# One timeout for the three OpenAI-SDK clients (OpenAI, xAI, Moonshot): 600 s
+# for a whole request, 10 s to connect and 120 s between bytes, so a hung
+# stream raises instead of waiting for good.
+_SDK_TIMEOUT = httpx.Timeout(600.0, connect=10.0, read=120.0)
 
 
 # ── Main Application ────────────────────────────────────────────────────────
@@ -108,7 +111,8 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # Check for at least one API key
         self._has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
         self._has_openai = bool(os.environ.get("OPENAI_API_KEY"))
-        self._has_gemini = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"))
+        self._gemini_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        self._has_gemini = bool(self._gemini_api_key)
         self._has_xai = bool(os.environ.get("XAI_API_KEY"))
         # Moonshot's own docs use MOONSHOT_API_KEY; the platform's 2026 rebrand
         # to kimi.ai makes KIMI_API_KEY a natural alias — accept both.
@@ -149,26 +153,23 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
 
         # Initialize API clients for available providers
         self.client = anthropic.Anthropic() if self._has_anthropic else None
-        self.openai_client = openai.OpenAI(
-            timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
-        ) if self._has_openai else None
-        gemini_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        self.openai_client = openai.OpenAI(timeout=_SDK_TIMEOUT) if self._has_openai else None
         self.gemini_client = genai.Client(
-            api_key=gemini_key,
+            api_key=self._gemini_api_key,
             http_options={"timeout": 120_000},  # 120s read timeout to prevent hung streams
         ) if self._has_gemini else None
         # xAI is OpenAI-compatible — same SDK, different base URL and key.
         self.xai_client = openai.OpenAI(
             api_key=os.environ.get("XAI_API_KEY"),
             base_url=XAI_DEFAULT_BASE_URL,
-            timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
+            timeout=_SDK_TIMEOUT,
         ) if self._has_xai else None
         # Moonshot (Kimi) is OpenAI-compatible too, but Chat-Completions-only —
         # same SDK, its own base URL/key, and its own translators (kimi_mixin).
         self.kimi_client = openai.OpenAI(
             api_key=self._kimi_api_key,
             base_url=KIMI_DEFAULT_BASE_URL,
-            timeout=httpx.Timeout(600.0, connect=10.0, read=120.0),
+            timeout=_SDK_TIMEOUT,
         ) if self._has_kimi else None
         # Read timeout = the longest silent gap between stream chunks
         # (OLLAMA_READ_TIMEOUT, 900 s by default — constants.py says why the
@@ -180,18 +181,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
             host=self._ollama_base_url,
             timeout=httpx.Timeout(OLLAMA_READ_TIMEOUT, connect=10.0),
         ) if self._has_ollama else None
-        if self._has_anthropic:
-            self.provider = "Anthropic"
-        elif self._has_openai:
-            self.provider = "OpenAI"
-        elif self._has_gemini:
-            self.provider = "Google"
-        elif self._has_xai:
-            self.provider = "xAI"
-        elif self._has_kimi:
-            self.provider = "Moonshot"
-        else:
-            self.provider = "Ollama"
+        # The startup provider: the first with a key (or a server), in this order
+        self.provider = next(name for name, available in (
+            ("Anthropic", self._has_anthropic), ("OpenAI", self._has_openai),
+            ("Google", self._has_gemini), ("xAI", self._has_xai),
+            ("Moonshot", self._has_kimi), ("Ollama", True)) if available)
         self._openai_model_display_names = {}
         self._gemini_model_display_names = {}
         self._xai_model_display_names = {}
@@ -297,18 +291,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # The system prompt a run's calls send, frozen at START and let go at
         # its end (skills_mixin._freeze_system_prompt); None between runs.
         self._run_system_prompt = None
-        if self.provider == "Anthropic":
-            self.model = DEFAULT_MODEL
-        elif self.provider == "OpenAI":
-            self.model = OPENAI_DEFAULT_MODEL
-        elif self.provider == "Google":
-            self.model = GEMINI_DEFAULT_MODEL
-        elif self.provider == "xAI":
-            self.model = XAI_DEFAULT_MODEL
-        elif self.provider == "Moonshot":
-            self.model = KIMI_DEFAULT_MODEL
-        else:
-            self.model = OLLAMA_DEFAULT_MODEL
+        self.model = self._default_model_for_provider(self.provider)
         self.temperature = 1.0
         self.thinking_enabled = False
         self.thinking_effort = "high"

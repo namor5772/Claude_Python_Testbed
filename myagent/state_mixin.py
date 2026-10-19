@@ -1,4 +1,11 @@
-import os, re, json, time, tempfile, subprocess, ctypes, tkinter as tk
+import os
+import re
+import json
+import time
+import tempfile
+import subprocess
+import ctypes
+import tkinter as tk
 from tkinter import messagebox
 from myagent.constants import (IS_WINDOWS, AGENT_LOCK_PREFIX, DEFAULT_GEOMETRY, _BASE_DIR,
                                PERIODIC_SAVE_MS)
@@ -309,11 +316,11 @@ class StateMixin:
             rects = []
             for i in range(display_count.value):
                 bounds = cg.CGDisplayBounds(display_ids[i])
-                l = int(bounds.origin.x)
-                t = int(bounds.origin.y)
-                r = int(bounds.origin.x + bounds.size.width)
-                b = int(bounds.origin.y + bounds.size.height)
-                rects.append((l, t, r, b))
+                left = int(bounds.origin.x)
+                top = int(bounds.origin.y)
+                right = int(bounds.origin.x + bounds.size.width)
+                bottom = int(bounds.origin.y + bounds.size.height)
+                rects.append((left, top, right, bottom))
             return rects
         except Exception:
             return []

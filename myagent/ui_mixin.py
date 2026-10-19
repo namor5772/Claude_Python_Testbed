@@ -16,6 +16,7 @@ from myagent.keyboard import (
     bind_mnemonics, install_class_bindings, install_focus_ring_defaults,
     install_scrollbar_defaults,
 )
+from myagent.pane_notes import PaneNotesMixin
 
 
 # ── List title bands (2026-09-12) ───────────────────────────────────────
@@ -43,7 +44,7 @@ def list_title_band(parent, text):
                     background=LIST_TITLE_BG, padx=5, pady=4, borderwidth=0)
 
 
-class UIMixin:
+class UIMixin(PaneNotesMixin):
 
     # ── UI Setup ────────────────────────────────────────────────────────
 
@@ -727,6 +728,25 @@ class UIMixin:
             minor = 0   # claude-opus-5-20260724: a date, not a minor
         return (major, minor) >= ANTHROPIC_ALWAYS_ON_OPUS_MIN
 
+    def _anthropic_version_gate(self, model_id, *floors):
+        """The prelude the five Anthropic capability helpers below share:
+        False off the Anthropic provider; True for the always-on Claude 5
+        Mythos class and for Haiku 5+, which have every capability those
+        helpers ask about; else whether the model's family version reaches a
+        floor — each of `floors` a (family prefixes, (major, minor)) pair,
+        tried in order through `_parse_claude_major_minor`, so a dated
+        snapshot rides with its family."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        if self._is_anthropic_always_on_thinking(mid) or self._is_anthropic_haiku_5(mid):
+            return True
+        for families, floor in floors:
+            version = self._parse_claude_major_minor(mid, families)
+            if version is not None and version >= floor:
+                return True
+        return False
+
     def _anthropic_thinking_on_by_default(self, model_id=None):
         """True for Anthropic models that run ADAPTIVE thinking when the
         `thinking` parameter is omitted — Opus 5+, Sonnet 5+ and Haiku 5+ (a
@@ -738,15 +758,7 @@ class UIMixin:
         disable only at effort high or below — satisfied here, since "Off"
         never sends an effort.) The always-on models never reach the off
         branch (their disable is HTTP 400 and the UI drops "Off")."""
-        if self.provider != "Anthropic":
-            return False
-        mid = model_id or self.model or ""
-        if self._is_anthropic_always_on_thinking(mid):
-            return True
-        if self._is_anthropic_haiku_5(mid):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
-        return version is not None and version >= (5, 0)
+        return self._anthropic_version_gate(model_id, (("claude-opus-", "claude-sonnet-"), (5, 0)))
 
     @staticmethod
     def _parse_claude_major_minor(mid, families):
@@ -781,18 +793,8 @@ class UIMixin:
         Version-parsed per family so future releases are covered without a
         hardcoded list; the reactive cache in _stream_anthropic_call backstops
         anything this misses."""
-        if self.provider != "Anthropic":
-            return False
-        mid = model_id or self.model or ""
-        if self._is_anthropic_always_on_thinking(mid):
-            return True
-        if self._is_anthropic_haiku_5(mid):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
-        if version is not None and version >= (4, 7):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
-        return version is not None and version >= (5, 0)
+        return self._anthropic_version_gate(model_id, (("claude-opus-",), (4, 7)),
+                                            (("claude-sonnet-",), (5, 0)))
 
     def _anthropic_supports_max_effort(self, model_id=None):
         """True for Anthropic models that expose the 'max' thinking effort —
@@ -802,15 +804,7 @@ class UIMixin:
         High claiming the API 400s effort='max' for non-Opus — stale: the
         Models API capability tree reports max=True for claude-sonnet-4-6 and
         claude-sonnet-5, verified live 2026-07.)"""
-        if self.provider != "Anthropic":
-            return False
-        mid = model_id or self.model or ""
-        if self._is_anthropic_always_on_thinking(mid):
-            return True
-        if self._is_anthropic_haiku_5(mid):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
-        return version is not None and version >= (4, 6)
+        return self._anthropic_version_gate(model_id, (("claude-opus-", "claude-sonnet-"), (4, 6)))
 
     def _anthropic_supports_xhigh_effort(self, model_id=None):
         """True for Anthropic models that accept effort='xhigh' (between high
@@ -818,18 +812,8 @@ class UIMixin:
         verified live 2026-07 via the Models API capability tree; Sonnet 4.6
         reports xhigh=False), Haiku 5+ (its tree reports every level,
         2026-10-08), plus the Claude 5 Mythos class (Fable/Mythos)."""
-        if self.provider != "Anthropic":
-            return False
-        mid = model_id or self.model or ""
-        if self._is_anthropic_always_on_thinking(mid):
-            return True
-        if self._is_anthropic_haiku_5(mid):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
-        if version is not None and version >= (4, 7):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
-        return version is not None and version >= (5, 0)
+        return self._anthropic_version_gate(model_id, (("claude-opus-",), (4, 7)),
+                                            (("claude-sonnet-",), (5, 0)))
 
     def _anthropic_supports_fast_mode(self, model_id=None):
         """True for Anthropic models that serve fast mode (research preview:
@@ -911,16 +895,7 @@ class UIMixin:
         model. Mirrors the version parsing in _anthropic_supports_max_effort /
         _anthropic_rejects_temperature. Models < 4.6 (Opus/Sonnet 4.5) fall
         through to the MANUAL prefix check, exactly as before."""
-        if self.provider != "Anthropic":
-            return False
-        mid = model_id or self.model or ""
-        # Claude 5 Mythos-class (Fable/Mythos): adaptive-only, always-on thinking.
-        if self._is_anthropic_always_on_thinking(mid):
-            return True
-        if self._is_anthropic_haiku_5(mid):
-            return True
-        version = self._parse_claude_major_minor(mid, ("claude-opus-", "claude-sonnet-"))
-        return version is not None and version >= (4, 6)
+        return self._anthropic_version_gate(model_id, (("claude-opus-", "claude-sonnet-"), (4, 6)))
 
     def _is_gemini_thinking_model(self, model_id=None):
         # No "lite" carve-out: the Flash-Lite tiers are thinking-capable too
@@ -981,7 +956,7 @@ class UIMixin:
                          f"unavailable (API key not set in this environment?) — "
                          f"staying on {self.provider}\n")
                 self._model_drift_warnings.append(drift)
-                self.queue.put({"type": "warning", "content": drift})
+                self._warn(drift)
         # Restore model (fall back to the provider's curated default if the
         # saved model is neither in the picker nor served by the provider)
         model_key = "last_model" if state_file else "model"
@@ -1003,7 +978,7 @@ class UIMixin:
                         f"deprecated) but still served — running it as pinned; "
                         f"re-point this instruction before {self.provider} retires it\n")
                 self._model_drift_warnings.append(note)
-                self.queue.put({"type": "warning", "content": note})
+                self._warn(note)
         elif self.available_models:
             # Fall back to the provider's curated default, not available_models[0]:
             # fetched lists are sorted, and lexicographic-first can be a terrible
@@ -1018,7 +993,7 @@ class UIMixin:
                 drift = (f"⚠ Saved model {model} not available for {self.provider} — "
                          f"falling back to {fallback}\n")
                 self._model_drift_warnings.append(drift)
-                self.queue.put({"type": "warning", "content": drift})
+                self._warn(drift)
             self.model = fallback
             self._model_var.set(self._get_display_name(self.model))
         # Restore temperature

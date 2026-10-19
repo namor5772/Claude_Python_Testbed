@@ -1841,6 +1841,14 @@ OLLAMA_KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "")
 # whole 32K window at that rate, while a request stuck in the server's queue
 # behind a wedged instance still raises instead of blocking forever.
 OLLAMA_READ_TIMEOUT = float(os.environ.get("OLLAMA_READ_TIMEOUT", "900"))
+# The first-content watchdog of the OpenAI, xAI and Kimi streaming callers: an
+# attempt that has shown no visible output — thinking, text or a tool call —
+# within FIRST_CONTENT_TIMEOUT seconds of its start is cancelled and retried
+# (each attempt's clock starts at its own request, so a backoff sleep is not
+# the model being silent), and while one waits a ticker posts the elapsed time
+# every WAITING_MSG_INTERVAL seconds (retry_util.start_waiting_ticker).
+FIRST_CONTENT_TIMEOUT = 180
+WAITING_MSG_INTERVAL = 15
 # Name-prefix FALLBACKS for the two capability questions — since the
 # 2026-10-18 audit /api/show's own capability list decides for every model
 # the server has described (`_is_ollama_thinking_model` /

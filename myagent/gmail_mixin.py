@@ -33,11 +33,10 @@ Architecture notes:
 
 import base64
 import json
-import mimetypes
 import os
 import re
 from email.message import EmailMessage
-from myagent.mail_common import confirm_action, run_per_id
+from myagent.mail_common import attach_files, confirm_action, run_per_id
 
 from myagent.helpers import extract_text_from_html, normalize_save_path
 
@@ -210,36 +209,10 @@ class GmailMixin:
         (True, "[a.pdf (12345 bytes), b.png (67890 bytes)]"). On failure
         (missing file, oversize, total cap exceeded) returns (False, "error
         text") and leaves msg unmodified. Caller should bail out and surface
-        the error to the agent."""
-        if not attachments:
-            return True, ""
-        if isinstance(attachments, str):
-            attachments = [attachments]
-        total = 0
-        info = []
-        attached_blobs = []
-        for path in attachments:
-            if not os.path.isfile(path):
-                return False, f"attachment not found or not a file: {path}"
-            size = os.path.getsize(path)
-            total += size
-            if total > MAX_ATTACHMENT_BYTES_TOTAL:
-                return False, (
-                    f"attachments exceed {MAX_ATTACHMENT_BYTES_TOTAL // (1024*1024)} MB combined "
-                    f"raw size (Gmail limit is ~25 MB total per message after base64 encoding)"
-                )
-            with open(path, "rb") as f:
-                data = f.read()
-            mime_type, _ = mimetypes.guess_type(path)
-            if not mime_type:
-                mime_type = "application/octet-stream"
-            maintype, _, subtype = mime_type.partition("/")
-            attached_blobs.append((data, maintype, subtype or "octet-stream", os.path.basename(path)))
-            info.append(f"{os.path.basename(path)} ({size} bytes)")
-        # All checks passed — actually mutate msg
-        for data, maintype, subtype, filename in attached_blobs:
-            msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
-        return True, "[" + ", ".join(info) + "]"
+        the error to the agent. The body is mail_common.attach_files, shared
+        with the IMAP mixin; the over-size wording here is Gmail's."""
+        return attach_files(msg, attachments, MAX_ATTACHMENT_BYTES_TOTAL,
+                            "Gmail limit is ~25 MB total per message after base64 encoding")
 
     @staticmethod
     def _header(msg, name, default=""):

@@ -69,6 +69,7 @@ import threading
 import openai
 
 from myagent.constants import (
+    FIRST_CONTENT_TIMEOUT,
     KIMI_ALWAYS_THINKING_PREFIXES,
     KIMI_CACHE_HIT_PRICING,
     KIMI_FALLBACK_MODELS,
@@ -79,8 +80,10 @@ from myagent.constants import (
     MAX_TOKENS,
     MAX_TOKENS_THINKING,
 )
-from myagent.helpers import camera_aware_hint, is_camera_result
-from myagent.retry_util import rate_limit_backoff, server_error_backoff
+from myagent.helpers import camera_aware_hint, is_camera_result, screenshot_hint, tool_use_blocks
+from myagent.retry_util import (rate_limit_backoff, server_error_backoff,
+                                start_waiting_ticker)
+from myagent.pane_notes import PaneNotesMixin
 
 # Stale saved efforts from other providers' UIs coerced onto kimi-k3's SPARSE
 # none/low/high/max ladder (there is no medium). A Claude "off" becomes "none";
@@ -96,7 +99,7 @@ _KIMI_EFFORT_COERCE = {
 }
 
 
-class KimiMixin:
+class KimiMixin(PaneNotesMixin):
 
     def _kimi_reasoning_values(self, model_id=None):
         """Accepted reasoning_effort values for a Kimi model, or None when the
@@ -337,25 +340,12 @@ class KimiMixin:
                                     "content": str(tc_content) if tc_content else "",
                                 })
                         if deferred_images:
-                            # Extract dimensions from the tool output text
-                            dims_hint = ""
-                            for item in reversed(result):
-                                if item.get("role") != "tool":
-                                    continue
-                                out = item.get("content", "")
-                                if isinstance(out, str):
-                                    m = re.search(r"\((\d+)x(\d+)(?:\s+pixels)?\)", out)
-                                    if m:
-                                        dims_hint = f" ({m.group(1)}x{m.group(2)} pixels)"
-                                        break
-                            hint_text = (
-                                f"Below is the screenshot image{dims_hint} returned by the "
-                                "screenshot tool above. COORDINATE SYSTEM: the top-left pixel "
-                                "is (0, 0), X increases rightward, Y increases downward. "
-                                "When calling mouse_click, use the pixel (x, y) coordinates "
-                                "as they appear in THIS image — they are automatically "
-                                "scaled to actual screen coordinates."
-                            )
+                            # The screenshot's size, read from the newest tool
+                            # message that carries one (helpers.py)
+                            hint_text = screenshot_hint(
+                                item.get("content", "") for item in reversed(result)
+                                if item.get("role") == "tool"
+                                and isinstance(item.get("content", ""), str))
                             # A camera photo is no click surface (helpers.py)
                             hint_text = camera_aware_hint(hint_text, deferred_from_camera)
                             result.append({
@@ -576,10 +566,10 @@ class KimiMixin:
 
         stop_reason = "tool_use" if tool_calls_acc else "end_turn"
         if finish_reason == "length" and not tool_calls_acc:
-            self.queue.put({"type": "warning", "content":
-                            "⚠ Kimi hit the max_completion_tokens cap "
-                            "(finish_reason=length) — the answer may be "
-                            "truncated.\n"})
+            self._warn(
+                "⚠ Kimi hit the max_completion_tokens cap "
+                "(finish_reason=length) — the answer may be "
+                "truncated.\n")
 
         content_blocks = []
         if thinking_text:
@@ -590,18 +580,8 @@ class KimiMixin:
             content_blocks.append({"type": "thinking", "thinking": thinking_text})
         if full_text:
             content_blocks.append({"type": "text", "text": full_text})
-        for idx in sorted(tool_calls_acc.keys()):
-            tc = tool_calls_acc[idx]
-            try:
-                parsed_args = json.loads(tc["arguments"]) if tc["arguments"] else {}
-            except json.JSONDecodeError:
-                parsed_args = {"_raw": tc["arguments"]}
-            content_blocks.append({
-                "type": "tool_use",
-                "id": tc["id"] or f"kimi_call_{idx}",
-                "name": tc["name"],
-                "input": parsed_args,
-            })
+        content_blocks.extend(tool_use_blocks(
+            tool_calls_acc, lambda tc, idx: tc["id"] or f"kimi_call_{idx}"))
 
         return full_text, stop_reason, content_blocks, had_thinking, label_emitted, usage_dict
 
@@ -652,22 +632,12 @@ class KimiMixin:
         if extra_body:
             api_kwargs["extra_body"] = extra_body
 
-        FIRST_CONTENT_TIMEOUT = 180
-        WAITING_MSG_INTERVAL = 15
-
         self._kimi_first_content = threading.Event()
         self._kimi_stream_start = time.time()
         self._kimi_first_content_timeout = FIRST_CONTENT_TIMEOUT
-
-        def _waiting_ticker():
-            while not self._kimi_first_content.wait(timeout=WAITING_MSG_INTERVAL):
-                elapsed = int(time.time() - self._kimi_stream_start)
-                self.queue.put({
-                    "type": "tool_info",
-                    "content": f"Waiting for model response... ({elapsed}s elapsed)\n",
-                })
-        ticker = threading.Thread(target=_waiting_ticker, daemon=True)
-        ticker.start()
+        # posts the elapsed time every 15 s until content arrives (retry_util)
+        start_waiting_ticker(lambda: self._kimi_first_content,
+                             lambda: self._kimi_stream_start, self._tool_info)
 
         # stop_reason doubles as the success sentinel (xAI pattern): the
         # downgrade ladder retries via `continue`, so the loop can exhaust all
@@ -698,10 +668,7 @@ class KimiMixin:
                 # substring and is only ever sent for kimi-k3.
                 if "reasoning_effort" in err_str and "reasoning_effort" in eb:
                     del eb["reasoning_effort"]
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": "Model rejected reasoning_effort — retrying without it...\n",
-                    })
+                    self._tool_info("Model rejected reasoning_effort — retrying without it...\n")
                     continue
                 # reasoning_content round-trip refused: learn once per model,
                 # strip reasoning from the history, retry. The backstop for a
@@ -718,11 +685,9 @@ class KimiMixin:
                         rejected = self._kimi_reasoning_rejected = set()
                     rejected.add(self.model)
                     api_kwargs["messages"] = _build_messages(False)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": ("Model rejected reasoning_content round-trip — "
-                                    "retrying without sending reasoning back...\n"),
-                    })
+                    self._tool_info(
+                        "Model rejected reasoning_content round-trip — "
+                        "retrying without sending reasoning back...\n")
                     continue
                 # thinking param refused: drop keep first (a model that takes
                 # the toggle but not Preserved Thinking), then the whole param.
@@ -730,58 +695,46 @@ class KimiMixin:
                     if isinstance(eb["thinking"], dict) and "keep" in eb["thinking"]:
                         eb["thinking"] = {k: v for k, v in eb["thinking"].items()
                                           if k != "keep"}
-                        self.queue.put({
-                            "type": "tool_info",
-                            "content": ("Model rejected thinking.keep — retrying "
-                                        "with the plain thinking toggle...\n"),
-                        })
+                        self._tool_info(
+                            "Model rejected thinking.keep — retrying "
+                            "with the plain thinking toggle...\n")
                     else:
                         del eb["thinking"]
-                        self.queue.put({
-                            "type": "tool_info",
-                            "content": ("Model does not support the thinking "
-                                        "parameter — retrying without it...\n"),
-                        })
+                        self._tool_info(
+                            "Model does not support the thinking "
+                            "parameter — retrying without it...\n")
                     continue
                 # Legacy param name fallback.
                 if "max_completion_tokens" in err_str and "max_completion_tokens" in api_kwargs:
                     api_kwargs["max_tokens"] = api_kwargs.pop("max_completion_tokens")
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": ("Model rejected max_completion_tokens — "
-                                    "retrying with legacy max_tokens...\n"),
-                    })
+                    self._tool_info(
+                        "Model rejected max_completion_tokens — "
+                        "retrying with legacy max_tokens...\n")
                     continue
                 raise
             except openai.APITimeoutError:
                 self._kimi_first_content = threading.Event()
                 self._kimi_stream_start = time.time()
-                ticker = threading.Thread(target=_waiting_ticker, daemon=True)
-                ticker.start()
+                start_waiting_ticker(lambda: self._kimi_first_content,
+                                     lambda: self._kimi_stream_start, self._tool_info)
                 if attempt < max_retries - 1:
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Stream timeout (no content from model within {FIRST_CONTENT_TIMEOUT}s) — retrying (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Stream timeout (no content from model within {FIRST_CONTENT_TIMEOUT}s) — retrying (attempt {attempt + 1}/{max_retries})...\n")
                 else:
                     raise
             except openai.RateLimitError:
                 if attempt < max_retries - 1:
                     wait = rate_limit_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"Rate limited — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                 else:
                     raise
             except openai.APIError as e:
                 if attempt < max_retries - 1 and getattr(e, "status_code", 0) >= 500:
                     wait = server_error_backoff(attempt)
-                    self.queue.put({
-                        "type": "tool_info",
-                        "content": f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n",
-                    })
+                    self._tool_info(
+                        f"API error — retrying in {wait}s (attempt {attempt + 1}/{max_retries})...\n")
                     time.sleep(wait)
                 else:
                     raise
