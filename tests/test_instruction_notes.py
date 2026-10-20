@@ -198,6 +198,8 @@ class WiringTests(unittest.TestCase):
         self.assertRegex(body, r"self\._instr_notes = tk\.Text\(notes_frame, height=3, wrap=tk\.WORD, font=\(MONO_FONT, 10\)\)")
         self.assertRegex(body, r"self\._instr_text = tk\.Text\(text_pane, wrap=tk\.WORD, font=\(MONO_FONT, 10\)\)")   # the same font
         self.assertIn("notes_frame.grid(row=0,", body)
+        self.assertIn("notes_scrollbar = tk.Scrollbar(notes_frame, command=self._instr_notes.yview)", body)
+        self.assertIn("self._instr_notes.config(yscrollcommand=notes_scrollbar.set)", body)
         self.assertIn("self._instr_text.grid(row=1,", body)
         self.assertIn("text_pane.grid_rowconfigure(1, weight=1)", body)
         self.assertIn('"o": self._instr_notes', body)

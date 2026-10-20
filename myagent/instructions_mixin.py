@@ -534,6 +534,9 @@ class InstructionsMixin:
         tk.Label(notes_frame, text="Notes:").grid(row=0, column=0, sticky="nw", padx=(0, 5))
         self._instr_notes = tk.Text(notes_frame, height=3, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._instr_notes.grid(row=0, column=1, sticky="ew")
+        notes_scrollbar = tk.Scrollbar(notes_frame, command=self._instr_notes.yview)
+        notes_scrollbar.grid(row=0, column=2, sticky="ns")   # the text box's scrollbar, one row up
+        self._instr_notes.config(yscrollcommand=notes_scrollbar.set)
         self._instr_text = tk.Text(text_pane, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._instr_text.grid(row=1, column=0, sticky="nsew")
         instr_scrollbar = tk.Scrollbar(text_pane, command=self._instr_text.yview)
