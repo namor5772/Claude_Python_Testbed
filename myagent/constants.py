@@ -537,6 +537,10 @@ META_TOOLS = [
                     "type": "boolean",
                     "description": "The Agent Request dialog's Auto-send checkbox (right of its Mike button): when true, a reply dictated with Mike is sent the moment its transcript lands in the reply box, as if Enter had been pressed; when false the transcript waits to be edited and sent by hand. Default false on create.",
                 },
+                "notes": {
+                    "type": "string",
+                    "description": "Free-text notes about the instruction (what it is for, caveats, history) — stored with it and shown in the Instruction Editor's Notes box above the instruction text; NEVER part of the prompt the model receives. Optional on create / update; '' clears.",
+                },
                 "provider": {
                     "type": "string",
                     "enum": ["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"],

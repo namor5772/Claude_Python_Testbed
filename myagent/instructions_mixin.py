@@ -136,6 +136,7 @@ class InstructionsMixin:
             info = {
                 "name": name,
                 "text": entry.get("text", ""),
+                "notes": entry.get("notes", ""),
                 "desktop": entry.get("desktop", False),
                 "browser": entry.get("browser", False),
                 "excel": entry.get("excel", False),
@@ -171,6 +172,7 @@ class InstructionsMixin:
                 return "Error: 'text' is required when creating an instruction."
             entry = {
                 "text": text,
+                "notes": params.get("notes") or "",
                 "images": [],
                 "desktop": params.get("desktop", False),
                 "browser": params.get("browser", False),
@@ -206,7 +208,7 @@ class InstructionsMixin:
         if action == "update":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
-            updatable = ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
+            updatable = ("text", "notes", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
                          "proton", "outlook", "conversational", "dictation_auto_send", "upgrade_target",
                          "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
@@ -219,7 +221,7 @@ class InstructionsMixin:
                         + ", ".join(f"'{k}'" for k in updatable)
                         + " must be provided for update.")
             entry = instructions[name]
-            for key in ("text", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
+            for key in ("text", "notes", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
                         "proton", "outlook", "conversational", "dictation_auto_send", "provider",
                         "model", "temperature",
                         "thinking_enabled", "thinking_effort",
@@ -520,12 +522,22 @@ class InstructionsMixin:
         paned.add(text_pane, minsize=200)   # the stretchy pane (Tk stretches the last)
         self._build_instruction_list(list_pane)
 
-        text_pane.grid_rowconfigure(0, weight=1)
+        text_pane.grid_rowconfigure(1, weight=1)
         text_pane.grid_columnconfigure(0, weight=1)
+        # Notes (2026-10-20): a three-row box ABOVE the instruction text for
+        # general information about the instruction — stored in its entry as
+        # "notes", shown here and never sent to the model. Created before the
+        # text so the text stays the editor's last Tab stop.
+        notes_frame = tk.Frame(text_pane)
+        notes_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        notes_frame.grid_columnconfigure(1, weight=1)
+        tk.Label(notes_frame, text="Notes:").grid(row=0, column=0, sticky="nw", padx=(0, 5))
+        self._instr_notes = tk.Text(notes_frame, height=3, wrap=tk.WORD)
+        self._instr_notes.grid(row=0, column=1, sticky="ew")
         self._instr_text = tk.Text(text_pane, wrap=tk.WORD, font=(MONO_FONT, 10))
-        self._instr_text.grid(row=0, column=0, sticky="nsew")
+        self._instr_text.grid(row=1, column=0, sticky="nsew")
         instr_scrollbar = tk.Scrollbar(text_pane, command=self._instr_text.yview)
-        instr_scrollbar.grid(row=0, column=1, sticky="ns")
+        instr_scrollbar.grid(row=1, column=1, sticky="ns")
         self._instr_text.config(yscrollcommand=instr_scrollbar.set)
         # Ctrl+V with an image on the clipboard attaches it (text pastes normally)
         self._instr_text.bind("<Control-v>", self._on_editor_paste_image)
@@ -553,6 +565,7 @@ class InstructionsMixin:
             "p": self._provider_combo,
             "k": self.skills_button, "f": self.ps_safety_button,
             "i": attach_btn, "r": remove_btn,
+            "o": self._instr_notes,
             "e": self._instr_text,
         })
 
@@ -578,6 +591,7 @@ class InstructionsMixin:
         # copy, which is what _instr_shown_name guards (see
         # _on_instruction_selected).
         self._instr_text.insert("1.0", self.agent_instruction)
+        self._instr_notes.insert("1.0", getattr(self, "agent_instruction_notes", "") or "")
         self._instr_shown_name = self.agent_instruction_name
         if self.agent_instruction_name:
             self._instr_name_entry.insert(0, self.agent_instruction_name)
@@ -1082,6 +1096,7 @@ class InstructionsMixin:
         if not text:
             messagebox.showwarning("Empty", "The instruction text is empty.", parent=self.instruction_editor_window)
             return
+        notes = self._instr_notes.get("1.0", "end-1c").strip()
         # SAVE under the name of a DIFFERENT existing instruction replaces it
         # wholesale — text, images, settings — so it asks first, as DELETE
         # does (default No). Re-saving the page the editor shows asks nothing.
@@ -1098,6 +1113,7 @@ class InstructionsMixin:
         self._commit_editor_state()
         self.agent_instruction = text
         self.agent_instruction_name = name
+        self.agent_instruction_notes = notes
         # Persist to disk. The entry is rebuilt from the editor, so the two
         # list-layout keys (instruction_layout.py: "section" / "order") are
         # carried over from the existing entry; a NEW name is filed into the
@@ -1106,6 +1122,9 @@ class InstructionsMixin:
         existing = instructions.get(name)
         instructions[name] = {
             "text": text,
+            # General information about the instruction (the editor's Notes
+            # box) — stored with it, never part of the prompt.
+            "notes": notes,
             "images": [
                 {"data": d, "media_type": mt, "filename": fn}
                 for d, mt, fn in self.pending_images
@@ -1218,6 +1237,7 @@ class InstructionsMixin:
             return
         self._editor_env_replaced = True    # [X] puts the environment back
         self._instr_text.delete("1.0", tk.END)
+        self._instr_notes.delete("1.0", tk.END)
         self._instr_name_entry.delete(0, tk.END)
         self._instr_shown_name = ""
         self._select_instruction_row(None)
@@ -1296,6 +1316,8 @@ class InstructionsMixin:
             entry = instructions[name]
             self._instr_text.delete("1.0", tk.END)
             self._instr_text.insert("1.0", entry["text"])
+            self._instr_notes.delete("1.0", tk.END)
+            self._instr_notes.insert("1.0", entry.get("notes", "") or "")
             self._instr_name_entry.delete(0, tk.END)
             self._instr_name_entry.insert(0, name)
             # Load this instruction's saved images and tool toggles into editor
@@ -1334,6 +1356,7 @@ class InstructionsMixin:
         self._commit_editor_state()
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
+        self.agent_instruction_notes = self._instr_notes.get("1.0", "end-1c").strip()
         # Restore skill modes from whichever instruction is loaded in editor
         instructions = self._load_saved_instructions()
         instr_name = self.agent_instruction_name

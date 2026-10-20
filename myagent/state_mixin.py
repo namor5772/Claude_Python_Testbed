@@ -950,6 +950,7 @@ class StateMixin:
             "fast_mode": getattr(self, "fast_mode", False),
             "applied_instruction": {
                 "text": self.agent_instruction,
+                "notes": getattr(self, "agent_instruction_notes", "") or "",
                 "images": [
                     {"data": d, "media_type": mt, "filename": fn}
                     for d, mt, fn in getattr(self, "pending_images", [])
@@ -1116,6 +1117,7 @@ class StateMixin:
         """Load an instruction entry into live state. Returns True if model params were restored."""
         self.agent_instruction = entry["text"]
         self.agent_instruction_name = name
+        self.agent_instruction_notes = entry.get("notes", "") or ""
         self.pending_images = [
             (img["data"], img["media_type"], img["filename"])
             for img in entry.get("images", [])

@@ -334,6 +334,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # Agent instruction — the text injected as the first user message
         self.agent_instruction = DEFAULT_INSTRUCTION
         self.agent_instruction_name = ""
+        # The applied instruction's Notes (2026-10-20): general information
+        # about the instruction, stored in its entry as "notes" and shown in
+        # the editor's Notes box — never part of the prompt.
+        self.agent_instruction_notes = ""
         # The chat name _start_agent gave the previous run (chat_mixin: the
         # next START replaces it with a fresh one unless the user typed a
         # name) and the current run's chat file stem, the cost log's CHAT.
