@@ -532,7 +532,7 @@ class InstructionsMixin:
         notes_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         notes_frame.grid_columnconfigure(1, weight=1)
         tk.Label(notes_frame, text="Notes:").grid(row=0, column=0, sticky="nw", padx=(0, 5))
-        self._instr_notes = tk.Text(notes_frame, height=3, wrap=tk.WORD)
+        self._instr_notes = tk.Text(notes_frame, height=3, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._instr_notes.grid(row=0, column=1, sticky="ew")
         self._instr_text = tk.Text(text_pane, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._instr_text.grid(row=1, column=0, sticky="nsew")

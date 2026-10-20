@@ -195,7 +195,8 @@ class WiringTests(unittest.TestCase):
         notes = body.index("self._instr_notes = tk.Text(")
         text = body.index("self._instr_text = tk.Text(")
         self.assertLess(notes, text, "the text must stay the editor's last Tab stop")
-        self.assertRegex(body, r"self\._instr_notes = tk\.Text\(notes_frame, height=3")
+        self.assertRegex(body, r"self\._instr_notes = tk\.Text\(notes_frame, height=3, wrap=tk\.WORD, font=\(MONO_FONT, 10\)\)")
+        self.assertRegex(body, r"self\._instr_text = tk\.Text\(text_pane, wrap=tk\.WORD, font=\(MONO_FONT, 10\)\)")   # the same font
         self.assertIn("notes_frame.grid(row=0,", body)
         self.assertIn("self._instr_text.grid(row=1,", body)
         self.assertIn("text_pane.grid_rowconfigure(1, weight=1)", body)
