@@ -628,7 +628,7 @@ Every MyAgent window — the main window and all eight dialogs — can be driven
 | Alt+M | Model — the Model Setup dialog: the instruction's upgrade model, behind the Agent Request dialog's Upgrade box |
 | Alt+O | Other — the Other Setup dialog: the window background colour, for the main window and every dialog |
 
-**Instruction Editor** — opens with the focus in the instruction text, cursor at the end. Tab order: text → name → SAVE → DELETE → CLEAR → Apply → provider → model → the model-parameter controls (whichever the model shows) → the tool checkboxes → Skills → Safety → Attach Images → Remove Selected → image list → Instructions list → ▲ → ▼ → Section… → Notes → back to the text. Escape in the text lands on the name field (the text is the last stop, so it wraps); Shift+Tab from the name field gets back to the text.
+**Instruction Editor** — opens with the focus in the instruction text, cursor at the end. Tab order: text → name → SAVE → DELETE → CLEAR → Apply → provider → model → the model-parameter controls (whichever the model shows) → the tool checkboxes → Attach Images → Remove Selected → Skills → Safety → image list → Instructions list → ▲ → ▼ → Section… → Notes → back to the text. Escape in the text lands on the name field (the text is the last stop, so it wraps); Shift+Tab from the name field gets back to the text.
 
 | Key | Does |
 |---|---|
