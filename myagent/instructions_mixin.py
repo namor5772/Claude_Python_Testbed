@@ -18,7 +18,7 @@ from myagent.instruction_layout import (
     normalize_section, rename_section, renumber, rows, section_of, sections,
 )
 from myagent.keyboard import bind_mnemonics
-from myagent.ui_mixin import list_title_band
+from myagent.ui_mixin import SMALL_BUTTON_FONT, list_title_band
 
 
 class _UnreadableStore(dict):
@@ -279,16 +279,20 @@ class InstructionsMixin:
         self._instr_name_entry = tk.Entry(win, font=("Arial", 10), width=30)
         self._instr_name_entry.grid(row=0, column=1, padx=5, pady=(10, 5), sticky="ew")
 
-        save_btn = tk.Button(win, text="SAVE", command=self._save_instruction, width=6)
+        save_btn = tk.Button(win, text="SAVE", command=self._save_instruction, width=6,
+                             font=SMALL_BUTTON_FONT)
         save_btn.grid(row=0, column=2, padx=5, pady=(10, 5))
-        delete_btn = tk.Button(win, text="DELETE", command=self._delete_instruction, width=6)
+        delete_btn = tk.Button(win, text="DELETE", command=self._delete_instruction, width=6,
+                               font=SMALL_BUTTON_FONT)
         delete_btn.grid(row=0, column=3, padx=5, pady=(10, 5))
-        clear_btn = tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=6)
+        clear_btn = tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=6,
+                              font=SMALL_BUTTON_FONT)
         clear_btn.grid(row=0, column=4, padx=5, pady=(10, 5))
         # Apply ends the row (since 2026-09-11 — the Load Instruction row it
         # used to share with the old combobox became the list beside the text)
         _apply_btn = tk.Button(
-            win, text="Apply", command=self._apply_instruction, width=6
+            win, text="Apply", command=self._apply_instruction, width=6,
+            font=SMALL_BUTTON_FONT,
         )
         _apply_btn.grid(row=0, column=5, padx=(15, 10), pady=(10, 5))
 
@@ -469,13 +473,15 @@ class InstructionsMixin:
         buttons_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         self.skills_button = tk.Button(
-            buttons_frame, text="Skills", command=self.open_skills_editor, padx=10
+            buttons_frame, text="Skills", command=self.open_skills_editor, width=15,
+            font=SMALL_BUTTON_FONT,   # Attach Images' width (2026-10-23), one height
         )
         self.skills_button.pack(side=tk.LEFT, padx=(0, 5))
         self._update_skills_button()
 
         self.ps_safety_button = tk.Button(
-            buttons_frame, text="Safety", command=self._open_ps_safety_dialog, padx=10
+            buttons_frame, text="Safety", command=self._open_ps_safety_dialog, padx=10,
+            font=SMALL_BUTTON_FONT,
         )
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
         self._update_ps_safety_button()
@@ -487,11 +493,13 @@ class InstructionsMixin:
         img_frame.grid_columnconfigure(2, weight=1)
 
         attach_btn = tk.Button(
-            img_frame, text="Attach Images", command=self.attach_image, width=15
+            img_frame, text="Attach Images", command=self.attach_image, width=15,
+            font=SMALL_BUTTON_FONT,
         )
         attach_btn.grid(row=0, column=0, padx=(0, 5), sticky="nw")
         remove_btn = tk.Button(
-            img_frame, text="Remove Selected", command=self._remove_selected_images, width=15
+            img_frame, text="Remove Selected", command=self._remove_selected_images, width=15,
+            font=SMALL_BUTTON_FONT,
         )
         remove_btn.grid(row=1, column=0, padx=(0, 5), pady=(5, 0), sticky="nw")
 
@@ -796,14 +804,15 @@ class InstructionsMixin:
 
         btn_row = tk.Frame(pane)
         btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        up_btn = tk.Button(btn_row, text="▲", width=3,
+        up_btn = tk.Button(btn_row, text="▲", width=3, font=SMALL_BUTTON_FONT,
                            command=lambda: self._move_selected_instruction(-1))
         up_btn.pack(side=tk.LEFT)
-        down_btn = tk.Button(btn_row, text="▼", width=3,
+        down_btn = tk.Button(btn_row, text="▼", width=3, font=SMALL_BUTTON_FONT,
                              command=lambda: self._move_selected_instruction(1))
         down_btn.pack(side=tk.LEFT, padx=(3, 0))
         self._instr_section_btn = tk.Button(
-            btn_row, text="Section…", command=self._open_section_dialog, padx=6)
+            btn_row, text="Section…", command=self._open_section_dialog, padx=6,
+            font=SMALL_BUTTON_FONT)
         self._instr_section_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         tree.bind("<<TreeviewSelect>>", self._on_instruction_selected)

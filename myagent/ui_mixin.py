@@ -45,8 +45,12 @@ def list_title_band(parent, text):
 
 
 # The three setup buttons at the bottom left (Voice / Model / Other) share
-# one width, in characters of their font, so they are the same size.
+# one width, in characters of their font, so they are the same size — and
+# one font, which is what sets a tk.Button's height: since 2026-10-23 every
+# Instruction Editor button wears it too, so they stand as tall as Voice
+# (the default TkDefaultFont made them 7 px taller at 200 %).
 SETUP_BUTTON_WIDTH = 6
+SMALL_BUTTON_FONT = ("Arial", 9)
 
 
 class UIMixin(PaneNotesMixin):
@@ -237,19 +241,19 @@ class UIMixin(PaneNotesMixin):
         self.setup_buttons.grid(row=0, column=0, sticky="w", padx=(10, 0))
         self.voice_setup_button = tk.Button(
             self.setup_buttons, text="Voice", width=SETUP_BUTTON_WIDTH,
-            font=("Arial", 9),
+            font=SMALL_BUTTON_FONT,
             command=self._voice_setup_from_main,
         )
         self.voice_setup_button.pack(side=tk.LEFT)
         self.model_setup_button = tk.Button(
             self.setup_buttons, text="Model", width=SETUP_BUTTON_WIDTH,
-            font=("Arial", 9),
+            font=SMALL_BUTTON_FONT,
             command=self._upgrade_setup_from_main,
         )
         self.model_setup_button.pack(side=tk.LEFT, padx=(5, 0))
         self.other_setup_button = tk.Button(
             self.setup_buttons, text="Other", width=SETUP_BUTTON_WIDTH,
-            font=("Arial", 9),
+            font=SMALL_BUTTON_FONT,
             command=self._other_setup_from_main,
         )
         self.other_setup_button.pack(side=tk.LEFT, padx=(5, 0))
