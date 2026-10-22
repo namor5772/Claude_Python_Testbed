@@ -1016,6 +1016,14 @@ class StateMixin:
         state["collapsed_sections"] = sorted(getattr(self, "_collapsed_sections", None) or ())
         if getattr(self, "_instr_list_width", None):
             state["instruction_list_width"] = self._instr_list_width
+        # The Skills Manager's list pane width (2026-10-23), read off the
+        # open dialog — at its close and at every periodic save while it is
+        # open — else the last value kept
+        live = self._skills_list_width_live() if hasattr(self, "_skills_list_width_live") else None
+        if live:
+            self._skills_list_width = live
+        if getattr(self, "_skills_list_width", None):
+            state["skills_list_width"] = self._skills_list_width
         # Atomic — a temp file beside it, then os.replace — like the shared
         # stores: the file is rewritten every PERIODIC_SAVE_MS (10 s) and embeds the applied
         # instruction's images, and a process killed mid-write (taskkill /F is
@@ -1090,6 +1098,8 @@ class StateMixin:
             s for s in (state.get("collapsed_sections") or []) if isinstance(s, str)}
         width = state.get("instruction_list_width")
         self._instr_list_width = width if isinstance(width, int) and width > 0 else None
+        width = state.get("skills_list_width")
+        self._skills_list_width = width if isinstance(width, int) and width > 0 else None
         # The window, field and button colours (other_setup_mixin,
         # 2026-10-04): the saved colours, or the platform defaults when the
         # file has none. Guarded for the bare test hosts that predate the mixin.

@@ -583,6 +583,19 @@ class SkillsMixin(PaneNotesMixin):
             return getattr(self, "_ollama_model_display_names", {}).get(model_id, model_id)
         return self._model_display_names.get(model_id, model_id)
 
+    def _skills_list_width_live(self):
+        """The Skills Manager's list pane width — its sash position — while
+        the dialog is open and laid out, else None (a pane not yet mapped
+        reports 1). _save_last_state keeps the last value it gets."""
+        pane = getattr(self, "_skills_list_pane", None)
+        try:
+            if pane is not None and pane.winfo_exists():
+                width = pane.winfo_width()
+                return width if width > 1 else None
+        except tk.TclError:
+            pass
+        return None
+
     def open_skills_editor(self):
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
             self.skills_editor_window.lift()
@@ -600,8 +613,9 @@ class SkillsMixin(PaneNotesMixin):
 
         def _on_skills_close():
             self._remember_geometry("skills", win)
-            self._save_last_state()
+            self._save_last_state()      # reads the list pane's width while it exists
             win.destroy()
+            self._skills_list_pane = None
 
         win.protocol("WM_DELETE_WINDOW", _on_skills_close)
 
@@ -748,8 +762,20 @@ class SkillsMixin(PaneNotesMixin):
         desc_entry = tk.Text(desc_row, font=("Arial", 10), height=3, wrap="word", undo=True)
         desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
-        left = tk.Frame(win)
-        left.grid(row=2, column=0, sticky="nsew", padx=(10, 5), pady=(0, 10))
+        # The list and the skill text share a sash (2026-10-23 — the
+        # Instruction Editor's bottom row's twin): a PanedWindow whose list
+        # pane's width is remembered per instance in agent_state.json as
+        # skills_list_width (_save_last_state reads it off the pane while
+        # the dialog is open, so the close and the periodic save both keep
+        # it) and restored here; the first opening takes the 40-column
+        # list's natural width (tkinter drops a None option).
+        paned = tk.PanedWindow(win, orient=tk.HORIZONTAL, sashwidth=5,
+                               sashrelief="raised", bd=0)
+        paned.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
+        self._skills_list_pane = left = tk.Frame(paned)
+        right = tk.Frame(paned)
+        paned.add(left, width=getattr(self, "_skills_list_width", None), minsize=150)
+        paned.add(right, minsize=200)   # the stretchy pane (Tk stretches the last)
         left.grid_rowconfigure(2, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
@@ -828,8 +854,6 @@ class SkillsMixin(PaneNotesMixin):
         skill_listbox.bind("<space>", _cycle_on_space)
         toggle_btn.config(command=toggle_skill)
 
-        right = tk.Frame(win)
-        right.grid(row=2, column=1, sticky="nsew", padx=(5, 10), pady=(0, 10))
         right.grid_rowconfigure(0, weight=1)
         right.grid_columnconfigure(0, weight=1)
 
