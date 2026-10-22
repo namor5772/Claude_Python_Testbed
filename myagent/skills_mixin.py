@@ -608,7 +608,7 @@ class SkillsMixin(PaneNotesMixin):
         top = tk.Frame(win)
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=10, pady=(10, 5))
 
-        tk.Label(top, text="Skill Name", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Label(top, text="Skill", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
