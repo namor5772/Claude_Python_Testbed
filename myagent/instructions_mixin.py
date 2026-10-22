@@ -282,7 +282,7 @@ class InstructionsMixin:
         save_btn = tk.Button(win, text="SAVE", command=self._save_instruction, width=6,
                              font=SMALL_BUTTON_FONT)
         save_btn.grid(row=0, column=2, padx=5, pady=(10, 5))
-        delete_btn = tk.Button(win, text="DELETE", command=self._delete_instruction, width=6,
+        delete_btn = tk.Button(win, text="DELETE", command=self._delete_instruction, width=7,
                                font=SMALL_BUTTON_FONT)
         delete_btn.grid(row=0, column=3, padx=5, pady=(10, 5))
         clear_btn = tk.Button(win, text="CLEAR", command=self._clear_instruction_editor, width=6,
