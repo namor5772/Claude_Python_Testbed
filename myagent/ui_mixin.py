@@ -44,6 +44,11 @@ def list_title_band(parent, text):
                     background=LIST_TITLE_BG, padx=5, pady=4, borderwidth=0)
 
 
+# The three setup buttons at the bottom left (Voice / Model / Other) share
+# one width, in characters of their font, so they are the same size.
+SETUP_BUTTON_WIDTH = 6
+
+
 class UIMixin(PaneNotesMixin):
 
     # ── UI Setup ────────────────────────────────────────────────────────
@@ -225,21 +230,26 @@ class UIMixin(PaneNotesMixin):
         # before a run ever asks anything. All three sit in one frame in
         # the edge column, so the mirror column matches the row's width.
         # Created before the checkboxes: Tab order is creation order, and
-        # they sit to their left.
+        # they sit to their left. Since 2026-10-23 they read Voice / Model /
+        # Other — the "Setup" each carried was the row's only word — at one
+        # shared width in characters, so the three are the same size.
         self.setup_buttons = tk.Frame(bottom_row)
         self.setup_buttons.grid(row=0, column=0, sticky="w", padx=(10, 0))
         self.voice_setup_button = tk.Button(
-            self.setup_buttons, text="Voice Setup", font=("Arial", 9),
+            self.setup_buttons, text="Voice", width=SETUP_BUTTON_WIDTH,
+            font=("Arial", 9),
             command=self._voice_setup_from_main,
         )
         self.voice_setup_button.pack(side=tk.LEFT)
         self.model_setup_button = tk.Button(
-            self.setup_buttons, text="Model Setup", font=("Arial", 9),
+            self.setup_buttons, text="Model", width=SETUP_BUTTON_WIDTH,
+            font=("Arial", 9),
             command=self._upgrade_setup_from_main,
         )
         self.model_setup_button.pack(side=tk.LEFT, padx=(5, 0))
         self.other_setup_button = tk.Button(
-            self.setup_buttons, text="Other Setup", font=("Arial", 9),
+            self.setup_buttons, text="Other", width=SETUP_BUTTON_WIDTH,
+            font=("Arial", 9),
             command=self._other_setup_from_main,
         )
         self.other_setup_button.pack(side=tk.LEFT, padx=(5, 0))
@@ -325,8 +335,8 @@ class UIMixin(PaneNotesMixin):
 
     @staticmethod
     def _bottom_row_stacked(available, button_width, checkbox_width):
-        """Must the checkbox row go under the Voice Setup / Model Setup /
-        Other Setup buttons? Yes when the button row and the checkbox row do
+        """Must the checkbox row go under the Voice / Model / Other setup
+        buttons? Yes when the button row and the checkbox row do
         not fit side by side in `available` pixels. A width of 1 is a window
         that has not been laid out yet, not a narrow one."""
         return 1 < available < button_width + checkbox_width

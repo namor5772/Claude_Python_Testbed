@@ -1162,7 +1162,7 @@ class MainWindowTests(unittest.TestCase):
         voice, model, other = (self.app.voice_setup_button, self.app.model_setup_button,
                                self.app.other_setup_button)
         self.assertIs(other.master, self.app.setup_buttons)
-        self.assertEqual(other.cget("text"), "Other Setup")
+        self.assertEqual(other.cget("text"), "Other")
         self.assertGreaterEqual(model.winfo_x(), voice.winfo_x() + voice.winfo_width())
         self.assertGreaterEqual(other.winfo_x(), model.winfo_x() + model.winfo_width())
         self.assertEqual(other.winfo_y(), model.winfo_y())
@@ -1203,7 +1203,7 @@ class WiringTests(unittest.TestCase):
         self.assertLess(src.index("self.other_setup_button = tk.Button("),
                         src.index("self.debug_toggle = tk.Checkbutton("))
         creation = src[src.index("self.other_setup_button = tk.Button("):][:200]
-        self.assertIn('self.setup_buttons, text="Other Setup"', creation)   # the same frame
+        self.assertIn('self.setup_buttons, text="Other"', creation)   # the same frame
 
     def test_the_state_file_has_one_writer_and_one_reader(self):
         src = self.src("myagent", "state_mixin.py")
