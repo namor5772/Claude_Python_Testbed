@@ -294,7 +294,7 @@ class InstructionsMixin:
             win, text="Apply", command=self._apply_instruction, width=6,
             font=SMALL_BUTTON_FONT,
         )
-        _apply_btn.grid(row=0, column=5, padx=(15, 10), pady=(10, 5))
+        _apply_btn.grid(row=0, column=5, padx=(5, 10), pady=(10, 5))
 
         # Row 1: Model / provider controls
         model_frame = tk.Frame(win)
