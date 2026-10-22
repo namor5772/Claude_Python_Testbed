@@ -17,7 +17,7 @@ from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
                                save_skills_tree, skill_dir_for,
                                skill_resource_path)
 from myagent.keyboard import bind_mnemonics
-from myagent.ui_mixin import list_title_band
+from myagent.ui_mixin import SMALL_BUTTON_FONT, list_title_band
 from myagent.pane_notes import PaneNotesMixin
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
@@ -722,14 +722,19 @@ class SkillsMixin(PaneNotesMixin):
         # The three buttons hug the right edge (their frame packs RIGHT; the
         # name_entry above, fill=X + expand, absorbs the space in between) but
         # are created left-to-right INSIDE it, so Tab order matches the visual
-        # SAVE, DELETE, NEW — creation order is Tab order.
+        # SAVE, DELETE, NEW — creation order is Tab order. Their font is the
+        # Instruction Editor's top row's (SMALL_BUTTON_FONT, since 2026-10-23),
+        # so the two dialogs' buttons stand at one height.
         btn_row = tk.Frame(top)
         btn_row.pack(side=tk.RIGHT)
-        save_btn = tk.Button(btn_row, text="SAVE", command=save_skill, width=6)
+        save_btn = tk.Button(btn_row, text="SAVE", command=save_skill, width=6,
+                             font=SMALL_BUTTON_FONT)
         save_btn.pack(side=tk.LEFT, padx=2)
-        delete_btn = tk.Button(btn_row, text="DELETE", command=delete_skill, width=7)
+        delete_btn = tk.Button(btn_row, text="DELETE", command=delete_skill, width=7,
+                               font=SMALL_BUTTON_FONT)
         delete_btn.pack(side=tk.LEFT, padx=2)
-        new_btn = tk.Button(btn_row, text="NEW", command=new_skill, width=5)
+        new_btn = tk.Button(btn_row, text="NEW", command=new_skill, width=5,
+                            font=SMALL_BUTTON_FONT)
         new_btn.pack(side=tk.LEFT, padx=2)
 
         # Description row: the what+when trigger signal shown in the system
