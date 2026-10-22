@@ -759,7 +759,7 @@ class SkillsMixin(PaneNotesMixin):
         # Three word-wrapped rows so long what+when descriptions are readable
         # (they routinely run to two sentences); newlines a user types here
         # are normalized to spaces on SAVE — descriptions are single-line.
-        desc_entry = tk.Text(desc_row, font=("Arial", 10), height=3, wrap="word", undo=True)
+        desc_entry = tk.Text(desc_row, font=(MONO_FONT, 10), height=3, wrap="word", undo=True)
         desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         # The list and the skill text share a sash (2026-10-23 — the

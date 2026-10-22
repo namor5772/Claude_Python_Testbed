@@ -146,7 +146,10 @@ class UIMixin(PaneNotesMixin):
         # keyboard; the 1-px highlight ring is its only visible focus cue,
         # since a disabled Text shows no insertion cursor.
         self.chat_display = tk.Text(
-            self.root, wrap=tk.WORD, state="disabled", font=("Arial", 11),
+            # The output pane wears the Instruction Editor's text font since
+            # 2026-10-23 (every text box of MyAgent does — the user's request);
+            # its tags keep their weight and slant in the same face.
+            self.root, wrap=tk.WORD, state="disabled", font=(MONO_FONT, 10),
             takefocus=1, highlightthickness=1,
         )
         self.chat_display.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=10)
@@ -158,11 +161,11 @@ class UIMixin(PaneNotesMixin):
 
         # Text tags for styling
         self.chat_display.tag_config(
-            "user_label", foreground="#1a5fb4", font=("Arial", 11, "bold")
+            "user_label", foreground="#1a5fb4", font=(MONO_FONT, 10, "bold")
         )
         self.chat_display.tag_config("user", foreground="#1a5fb4")
         self.chat_display.tag_config(
-            "assistant_label", foreground="#2e7d32", font=("Arial", 11, "bold")
+            "assistant_label", foreground="#2e7d32", font=(MONO_FONT, 10, "bold")
         )
         self.chat_display.tag_config("assistant", foreground="#2e7d32")
         # The Agent Request dialog's message, shown under "Agent Request:".
@@ -171,13 +174,13 @@ class UIMixin(PaneNotesMixin):
         self.chat_display.tag_config("agent_request", foreground="#2e7d32")
         self.chat_display.tag_config("error", foreground="#c62828")
         self.chat_display.tag_config(
-            "tool_info", foreground="#757575", font=("Arial", 10, "italic")
+            "tool_info", foreground="#757575", font=(MONO_FONT, 10, "italic")
         )
         self.chat_display.tag_config(
-            "image_info", foreground="#6a1b9a", font=("Arial", 10, "italic")
+            "image_info", foreground="#6a1b9a", font=(MONO_FONT, 10, "italic")
         )
         self.chat_display.tag_config(
-            "warning", foreground="#e65100", font=("Arial", 10, "italic")
+            "warning", foreground="#e65100", font=(MONO_FONT, 10, "italic")
         )
         self.chat_display.tag_config(
             "debug", foreground="#b06000", font=(MONO_FONT, 9)
@@ -193,11 +196,11 @@ class UIMixin(PaneNotesMixin):
         )
         self.chat_display.tag_config(
             "call_counter", foreground="#ffffff", background="#d32f2f",
-            font=("Arial", 11, "bold")
+            font=(MONO_FONT, 10, "bold")
         )
         self.chat_display.tag_config(
             "call_counter_subtle", foreground="#ffffff", background="#b06000",
-            font=("Arial", 11, "bold")
+            font=(MONO_FONT, 10, "bold")
         )
         self.chat_display.tag_config(
             "thinking", foreground="#b8860b", background="#fffde7",

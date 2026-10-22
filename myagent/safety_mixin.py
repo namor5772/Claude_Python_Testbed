@@ -159,7 +159,7 @@ class SafetyMixin(PaneNotesMixin):
         scrollbar = tk.Scrollbar(text_frame, orient="vertical")
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         text_widget = tk.Text(
-            text_frame, wrap="none", cursor="arrow",
+            text_frame, wrap="none", cursor="arrow", font=(MONO_FONT, 10),
             yscrollcommand=scrollbar.set, highlightthickness=0,
             borderwidth=1, relief="sunken",
         )
