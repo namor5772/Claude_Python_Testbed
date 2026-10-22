@@ -252,9 +252,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.show_thinking = tk.BooleanVar(value=False)
         self.save_thinking = tk.BooleanVar(value=False)
         # Independent toggle for [DIAG] capture/click trace logging — separate
-        # from Debug (which shows the API JSON payload). Defaults ON for now;
-        # uncheck "Diag" in the main window to silence the diagnostic lines.
-        self.diag_enabled = tk.BooleanVar(value=True)
+        # from Debug (which shows the API JSON payload). Off by default since
+        # 2026-10-23, like Debug (it had been on); tick "Diag" in the main
+        # window for the coordinate trail.
+        self.diag_enabled = tk.BooleanVar(value=False)
         self.desktop_enabled = tk.BooleanVar(value=False)
         self.browser_enabled = tk.BooleanVar(value=False)
         self.excel_enabled = tk.BooleanVar(value=False)

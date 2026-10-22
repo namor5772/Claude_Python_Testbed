@@ -282,12 +282,6 @@ class UIMixin(PaneNotesMixin):
         arrange_bottom_row.stacked = False
         bottom_row.bind("<Configure>", arrange_bottom_row)
 
-        self.debug_toggle = tk.Checkbutton(
-            checkbox_frame, text="Debug", variable=self.debug_enabled,
-            font=("Arial", 9),
-        )
-        self.debug_toggle.pack(side=tk.LEFT, padx=(5, 0))
-
         self.tool_calls_toggle = tk.Checkbutton(
             checkbox_frame, text="Tool Calls", variable=self.tool_calls_enabled,
             font=("Arial", 9),
@@ -317,6 +311,15 @@ class UIMixin(PaneNotesMixin):
             font=("Arial", 9),
         )
         self.diag_toggle.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Debug ends the row, right of Diag, since 2026-10-23 (it opened it
+        # before): the two diagnostic boxes together, and created LAST, so
+        # Tab from Other reaches Tool Calls first.
+        self.debug_toggle = tk.Checkbutton(
+            checkbox_frame, text="Debug", variable=self.debug_enabled,
+            font=("Arial", 9),
+        )
+        self.debug_toggle.pack(side=tk.LEFT, padx=(5, 0))
 
         # Keyboard operation (2026-09-10, myagent/keyboard.py): the once-per-
         # root class bindings (Escape leaves any field, Return presses any

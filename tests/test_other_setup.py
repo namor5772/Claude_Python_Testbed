@@ -1169,7 +1169,7 @@ class MainWindowTests(unittest.TestCase):
 
     def test_tab_reaches_it_after_model_setup_and_before_the_checkboxes(self):
         self.assertIs(self.app.model_setup_button.tk_focusNext(), self.app.other_setup_button)
-        self.assertIs(self.app.other_setup_button.tk_focusNext(), self.app.debug_toggle)
+        self.assertIs(self.app.other_setup_button.tk_focusNext(), self.app.tool_calls_toggle)
 
     def test_pressing_it_opens_other_setup(self):
         self.app.other_setup_button.invoke()

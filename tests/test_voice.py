@@ -1213,13 +1213,15 @@ class MainWindowButtonTests(unittest.TestCase):
         app._other_setup_from_main = lambda: self.opened.append("other setup")
         app.setup_ui()
         self.app = app
-        self.button, self.debug, self.diag = (app.voice_setup_button, app.debug_toggle,
-                                              app.diag_toggle)
+        # The checkbox row reads Tool Calls … Diag, Debug since 2026-10-23 (Debug
+        # opened it before): its first and last box bound it.
+        self.button, self.first, self.last = (app.voice_setup_button, app.tool_calls_toggle,
+                                              app.debug_toggle)
         self.root.update()      # a Frame only knows its requested width after an idle pass
         # Since 2026-09-27 the Model Setup button shares the corner (in one
         # frame, right of Voice Setup): the pair's width is what the
         # checkboxes must fit beside.
-        self.need = app.setup_buttons.winfo_reqwidth() + 10 + self.debug.master.winfo_reqwidth()
+        self.need = app.setup_buttons.winfo_reqwidth() + 10 + self.first.master.winfo_reqwidth()
 
     def tearDown(self):
         self.root.destroy()
@@ -1236,12 +1238,12 @@ class MainWindowButtonTests(unittest.TestCase):
             self.skipTest(f"the display would not size the window to {width} px")
         left = self.root.winfo_rootx()
         return {"button": self.button.winfo_rootx() - left,
-                "debug": self.debug.winfo_rootx() - left,
-                "diag_end": self.diag.winfo_rootx() - left + self.diag.winfo_width(),
-                "below": self.debug.winfo_rooty() >= self.button.winfo_rooty()
+                "boxes": self.first.winfo_rootx() - left,
+                "boxes_end": self.last.winfo_rootx() - left + self.last.winfo_width(),
+                "below": self.first.winfo_rooty() >= self.button.winfo_rooty()
                 + self.button.winfo_height()}
 
-    def test_with_room_it_sits_left_of_debug_and_the_checkboxes_stay_centred(self):
+    def test_with_room_it_sits_left_of_the_checkboxes_and_they_stay_centred(self):
         width = self.need + 400
         at = self.lay_out(width)
         self.assertFalse(at["below"])
@@ -1251,15 +1253,15 @@ class MainWindowButtonTests(unittest.TestCase):
         self.assertGreater(model_setup.winfo_rootx() - self.root.winfo_rootx(),
                            at["button"] + self.button.winfo_width())
         self.assertLess(model_setup.winfo_rootx() - self.root.winfo_rootx()
-                        + model_setup.winfo_width(), at["debug"])
+                        + model_setup.winfo_width(), at["boxes"])
         # Centred on the WINDOW, as before the button existed (the mirror column).
-        self.assertAlmostEqual((at["debug"] + at["diag_end"]) / 2, width / 2, delta=6)
+        self.assertAlmostEqual((at["boxes"] + at["boxes_end"]) / 2, width / 2, delta=6)
 
     def test_a_narrow_window_puts_the_checkboxes_on_the_line_below(self):
         at = self.lay_out(self.need - 40)
         self.assertTrue(at["below"])
         self.assertEqual(at["button"], 10)
-        self.assertGreaterEqual(at["debug"], 0)
+        self.assertGreaterEqual(at["boxes"], 0)
         # ... and widening it again brings them back beside the button.
         self.assertFalse(self.lay_out(self.need + 400)["below"])
 
@@ -1277,7 +1279,8 @@ class MainWindowButtonTests(unittest.TestCase):
         # the one after, then the checkboxes.
         self.assertIs(after_pane.tk_focusNext(), self.app.model_setup_button)
         self.assertIs(self.app.model_setup_button.tk_focusNext(), self.app.other_setup_button)
-        self.assertIs(self.app.other_setup_button.tk_focusNext(), self.debug)
+        self.assertIs(self.app.other_setup_button.tk_focusNext(), self.first)
+        self.assertIs(self.app.diag_toggle.tk_focusNext(), self.last)       # Debug ends the row
         self.button.invoke()
         self.app.model_setup_button.invoke()
         self.app.other_setup_button.invoke()
