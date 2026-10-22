@@ -273,7 +273,7 @@ class InstructionsMixin:
         self.instruction_editor_window = win
 
         # Row 0: Save row
-        tk.Label(win, text="Save Instruction", font=("Arial", 10)).grid(
+        tk.Label(win, text="Instruction", font=("Arial", 10)).grid(
             row=0, column=0, padx=(10, 5), pady=(10, 5), sticky="w"
         )
         self._instr_name_entry = tk.Entry(win, font=("Arial", 10), width=30)

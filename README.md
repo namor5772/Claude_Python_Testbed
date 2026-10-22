@@ -632,7 +632,7 @@ Every MyAgent window — the main window and all eight dialogs — can be driven
 
 | Key | Does |
 |---|---|
-| Alt+N | Save Instruction name |
+| Alt+N | the Instruction name box |
 | Alt+S, Ctrl+S | SAVE (to the shared store) |
 | Alt+D | DELETE (asks first) |
 | Alt+C | CLEAR — empties the editor for a fresh instruction and resets the environment settings (model parameters, Safety bypasses, blocklist, Auto-send, upgrade model) at once |
