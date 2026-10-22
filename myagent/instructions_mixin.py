@@ -501,21 +501,6 @@ class InstructionsMixin:
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
         self._update_ps_safety_button()
 
-        # Row 4: the attached-images list, the full width, its scrollbar at
-        # the right (its buttons are in the row above since 2026-10-23).
-        img_frame = tk.Frame(win)
-        img_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 5))
-        img_frame.grid_columnconfigure(0, weight=1)
-
-        self._instr_image_listbox = tk.Listbox(
-            img_frame, height=3, font=("Arial", 9), foreground="#6a1b9a",
-            selectmode=tk.EXTENDED, exportselection=False,
-        )
-        self._instr_image_listbox.grid(row=0, column=0, sticky="ew")
-        img_list_scrollbar = tk.Scrollbar(img_frame, command=self._instr_image_listbox.yview)
-        img_list_scrollbar.grid(row=0, column=1, sticky="ns")
-        self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
-
         # Row 5: the bottom row (since 2026-09-10) and the only weighted one,
         # so resizing the window grows it alone. Since 2026-09-11 it is a
         # two-pane split — the Instructions list on the left (sections
@@ -532,7 +517,35 @@ class InstructionsMixin:
         paned.add(list_pane, width=getattr(self, "_instr_list_width", None) or 230,
                   minsize=150)
         paned.add(text_pane, minsize=200)   # the stretchy pane (Tk stretches the last)
-        self._build_instruction_list(list_pane)
+
+        # Each pane's first row (2026-10-23) is a box the sash divides with
+        # the two below it: the attached-images list over the Instructions
+        # list — as wide as the list, scrollbar included, whatever the sash
+        # position — and the Notes box over the instruction text. The two
+        # rows are held to one height (the taller box's, each stretched to
+        # it), so the INSTRUCTIONS band and the text box start level. Before
+        # it the images list was the window's own row at the full width and
+        # Notes the text pane's first row alone, a different height. The
+        # images list is created first: Tab order is creation order, and it
+        # runs image list → Instructions list → ▲ → ▼ → Section… → Notes →
+        # text, the text the editor's last stop.
+        list_pane.grid_rowconfigure(1, weight=1)
+        list_pane.grid_columnconfigure(0, weight=1)
+        img_frame = tk.Frame(list_pane)
+        img_frame.grid(row=0, column=0, sticky="nsew", pady=(0, 4))
+        img_frame.grid_rowconfigure(0, weight=1)
+        img_frame.grid_columnconfigure(0, weight=1)
+        self._instr_image_listbox = tk.Listbox(
+            img_frame, height=3, font=("Arial", 9), foreground="#6a1b9a",
+            selectmode=tk.EXTENDED, exportselection=False,
+        )
+        self._instr_image_listbox.grid(row=0, column=0, sticky="nsew")
+        img_list_scrollbar = tk.Scrollbar(img_frame, command=self._instr_image_listbox.yview)
+        img_list_scrollbar.grid(row=0, column=1, sticky="ns")
+        self._instr_image_listbox.config(yscrollcommand=img_list_scrollbar.set)
+        list_frame = tk.Frame(list_pane)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        self._build_instruction_list(list_frame)
 
         text_pane.grid_rowconfigure(1, weight=1)
         text_pane.grid_columnconfigure(0, weight=1)
@@ -541,14 +554,23 @@ class InstructionsMixin:
         # "notes", shown here and never sent to the model. Created before the
         # text so the text stays the editor's last Tab stop.
         notes_frame = tk.Frame(text_pane)
-        notes_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        notes_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, 4))
+        notes_frame.grid_rowconfigure(0, weight=1)
         notes_frame.grid_columnconfigure(1, weight=1)
         tk.Label(notes_frame, text="Notes:").grid(row=0, column=0, sticky="nw", padx=(0, 5))
         self._instr_notes = tk.Text(notes_frame, height=3, wrap=tk.WORD, font=(MONO_FONT, 10))
-        self._instr_notes.grid(row=0, column=1, sticky="ew")
+        self._instr_notes.grid(row=0, column=1, sticky="nsew")
         notes_scrollbar = tk.Scrollbar(notes_frame, command=self._instr_notes.yview)
         notes_scrollbar.grid(row=0, column=2, sticky="ns")   # the text box's scrollbar, one row up
         self._instr_notes.config(yscrollcommand=notes_scrollbar.set)
+        # One height for the two first rows: the taller of the two boxes
+        # (three lines of Arial 9 against three of the monospace 10) plus the
+        # 4 px under each, as a row minimum both panes carry.
+        win.update_idletasks()
+        top_row = max(self._instr_image_listbox.winfo_reqheight(),
+                      self._instr_notes.winfo_reqheight()) + 4
+        list_pane.grid_rowconfigure(0, minsize=top_row)
+        text_pane.grid_rowconfigure(0, minsize=top_row)
         self._instr_text = tk.Text(text_pane, wrap=tk.WORD, font=(MONO_FONT, 10))
         self._instr_text.grid(row=1, column=0, sticky="nsew")
         instr_scrollbar = tk.Scrollbar(text_pane, command=self._instr_text.yview)
