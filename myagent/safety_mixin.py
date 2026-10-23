@@ -16,6 +16,7 @@ from myagent.constants import (
 from myagent.helpers import extract_text_from_html, input_wait_timer
 from myagent.keyboard import bind_mnemonics, link_embedded_checkbuttons
 from myagent.pane_notes import PaneNotesMixin
+from myagent.speech import AGENT_REQUEST_ANNOUNCEMENT, speak
 
 from ddgs import DDGS
 import httpx
@@ -630,14 +631,16 @@ class SafetyMixin(PaneNotesMixin):
             # presses the focused button, so a hands-free reply is Enter →
             # speak → Enter, the second one ending the recording through
             # Mike's own toggle and the transcript sent as it lands.
-            # Shift+Tab is the reply box, for typing instead. And the bell
-            # (the display's: Windows' Default Beep, the Mac's alert sound),
-            # the cue to start speaking — a request can arrive while the
-            # user is looking elsewhere.
+            # Shift+Tab is the reply box, for typing instead. And the cue to
+            # start speaking — a request can arrive while the user is looking
+            # elsewhere: since 2026-10-23 the words "Agent Request", spoken
+            # through the platform's text-to-speech (the user's request; it
+            # was the display bell), with the bell kept for a machine that
+            # cannot speak.
             hands_free = self.dictation_auto_send.get()
             (mike_btn if hands_free else resp_text).focus_set()
             if hands_free:
-                dlg.bell()
+                self._announce_request(dlg)
 
         failure = []
 
@@ -689,6 +692,19 @@ class SafetyMixin(PaneNotesMixin):
             if result_holder[2] and response.strip() and not ends_run:
                 self._upgrade_apply(result_holder[2])
         return response
+
+    @staticmethod
+    def _announce_request(dlg):
+        """The Agent Request dialog's audible cue: say "Agent Request" aloud.
+
+        `speech.speak` hands the words to the platform's text-to-speech and
+        returns at once; where nothing on the machine can speak it returns
+        False and the display bell rings instead, as the dialog did before
+        2026-10-23 — so the cue is never silent. Called with the Auto-send
+        box ticked only, like the bell it replaced.
+        """
+        if not speak(AGENT_REQUEST_ANNOUNCEMENT):
+            dlg.bell()
 
     def _take_prompt_images(self):
         """Pop the images attached in the last Agent Request dialog."""

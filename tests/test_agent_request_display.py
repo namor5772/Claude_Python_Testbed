@@ -371,8 +371,11 @@ class DialogTests(unittest.TestCase):
         # dialog calls focus_set right after deiconify, while the toplevel is
         # not yet mapped, and Tk then defers the whole thing to the window's
         # VisibilityNotify (tkFocus.c, focusOnMapPtr): until that event
-        # -lastfor still names the toplevel, so the reader polls. The bell is
-        # patched out: counted, and the suite stays quiet.
+        # -lastfor still names the toplevel, so the reader polls. Since
+        # 2026-10-23 the cue is the spoken "Agent Request" (speech.speak),
+        # with the bell as the fallback where nothing can speak: speech is
+        # patched to say it could not, so the bell is what is counted — and
+        # the suite stays quiet either way.
         for ticked, expected in ((False, "reply"), (True, "Mike")):
             with self.subTest(auto_send=ticked):
                 seen = {}
@@ -395,10 +398,14 @@ class DialogTests(unittest.TestCase):
 
                     read()
 
-                with mock.patch.object(tk.Misc, "bell", autospec=True) as bell:
+                with mock.patch.object(tk.Misc, "bell", autospec=True) as bell, \
+                        mock.patch("myagent.safety_mixin.speak", return_value=False) as say:
                     self.run_dialog("Which account?", act, auto_send=ticked)
                 self.assertEqual(seen["focus"], expected)
-                # Once, on the dialog, with the box ticked; never without.
+                # Spoken once, with the box ticked; never without — and with
+                # speech unavailable the bell rings once, on the dialog.
+                self.assertEqual([c.args for c in say.call_args_list],
+                                 [("Agent Request",)] if ticked else [])
                 self.assertEqual([str(c.args[0]) for c in bell.call_args_list],
                                  [seen["dialog"]] if ticked else [])
 

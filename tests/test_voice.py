@@ -1381,14 +1381,17 @@ class WiringTests(unittest.TestCase):
         # The voice row is built before the image row: Tab order is creation order.
         self.assertLess(src.index("self._voice_build_row("), src.index("attach_btn = tk.Button("))
         # Initial focus (2026-09-30): Mike with Auto-send ticked, else the
-        # reply box — and the bell with it ticked — once the dialog is shown
-        # (the real dialog is pinned in tests/test_agent_request_display.py).
+        # reply box — and the spoken "Agent Request" with it ticked (the bell
+        # until 2026-10-23, kept as the fallback inside _announce_request) —
+        # once the dialog is shown (the real dialog is pinned in
+        # tests/test_agent_request_display.py, the cue in tests/test_speech.py).
         prompt = src[src.index("def do_user_prompt("):]
         focus = "(mike_btn if hands_free else resp_text).focus_set()"
         self.assertIn("hands_free = self.dictation_auto_send.get()", prompt)
         self.assertIn(focus, prompt)
         self.assertLess(prompt.index("dlg.deiconify()"), prompt.index(focus))
-        self.assertLess(prompt.index(focus), prompt.index("dlg.bell()"))
+        self.assertLess(prompt.index(focus), prompt.index("self._announce_request(dlg)"))
+        self.assertNotIn("dlg.bell()", prompt[:prompt.index("def _announce_request(")])
         # A tick mid-dialog moves the focus to Mike: the box's command is the
         # write-through, then the focus (the real row, AutoSendTests).
         voice = (REPO / "myagent" / "voice_mixin.py").read_text(encoding="utf-8")
