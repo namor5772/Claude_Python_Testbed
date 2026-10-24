@@ -1,5 +1,5 @@
-"""The API Cost Log viewers' day rows (2026-09-22) and the today row's tail
-(2026-10-19).
+"""The API Cost Log viewers' day rows (2026-09-22), the today row's tail
+(2026-10-19) and the FULL LOG's group rules (2026-10-25).
 
 Under the SUMMARY's `today` row both viewers list the seven days before it,
 most recent first: every calendar day (a day without a run reads $0.0000), the
@@ -14,6 +14,15 @@ tie — "(2 runs: LenovoAug23 $0.1593, Romans-Mac-mini.local $0.0173)",
 "(1 run: …)", "(0 runs)" — because the viewers sum EVERY machine's log: one
 $0.0173 run on the Mac read as a $0.1766 today when the laptop had run the
 same instruction at 01:15.
+
+Under the FULL LOG's heading a row of dashes follows every five runs (2026-10-25,
+the user's request): the table's full width — the widest of the heading and the
+rows, since a CHAT name runs past the heading — and all dashes, which tells it
+from the Windows heading's own rule of dashes AND spaces; before the 6th, 11th,
+16th … run and never after the last, so a table of five or fewer runs has none.
+The macOS viewer adds it AFTER `column -t` has laid the table out, because a
+dash row fed into `column -t` would be one field and widen DATE/TIME to its
+length.
 
 This runs the REAL viewer for the platform the suite runs on — CostLog_Win.ps1
 under Windows PowerShell, view_costlog.command under bash on macOS (so the Mac
@@ -382,6 +391,88 @@ class ChatColumnTests(_ViewerCase):
             [cost_row("claude-fable-5-1", 1.2, 2), cost_row("claude-sonnet-5", 0.85, 3),
              cost_row("gpt-6-luna", 0.0229, 2)])
         self.assertIn("  5 runs", "\n".join(lines))
+
+
+class GroupRuleTests(_ViewerCase):
+    """The FULL LOG's group rules (2026-10-25): a row of dashes after every
+    five runs, so the eye keeps its place in a long log. It is the table's
+    full width — the widest of the heading and the rows, since a CHAT name
+    runs past the heading — and all dashes, where the Windows heading's own
+    rule is dashes AND spaces; it goes before the 6th, 11th, 16th … run, so a
+    table of five or fewer runs has none and none trails the last run. Both
+    platforms are held to the one expectation."""
+
+    LONG_CHAT = "Rule_Test_2026-10-25_070000_a_chat_name_well_past_the_heading"
+
+    def write(self, today, runs, chat_at=()):
+        """`runs` runs on one day, an hour apart; those at the indexes in
+        `chat_at` carry a 14th field, a chat name longer than the heading."""
+        day = today.isoformat()
+        lines = []
+        for k in range(runs):
+            line = (f"{day} {k:02d}:00:00;Anthropic;claude-sonnet-5;0.1000;mode=Low;30;"
+                    f"Rule_Test;3;1000;200;0;5000")
+            if k in chat_at:
+                line += f";;{self.LONG_CHAT}"
+            lines.append(line)
+        (self.share / "APICostLog_MACHINE-A.txt").write_bytes(
+            ("\n".join(lines) + "\n").encode("utf-8"))
+
+    def full_log(self, runs, chat_at=()):
+        """The FULL LOG block of a render of `runs` runs: the heading to the
+        last non-blank line."""
+        for _attempt in range(2):          # a render crossing midnight retries
+            today = datetime.date.today()
+            self.write(today, runs, chat_at)
+            lines = self.run_viewer()
+            if datetime.date.today() == today:
+                break
+        starts = [i for i, line in enumerate(lines) if line.startswith("DATE/TIME")]
+        self.assertEqual(len(starts), 1, "\n".join(lines[-30:]))
+        block = lines[starts[0]:]
+        while block and not block[-1].strip():
+            block.pop()
+        return block
+
+    @staticmethod
+    def is_rule(line):
+        return bool(line) and set(line) == {"-"}
+
+    def shape(self, block):
+        """The lines under the heading as 'run' / 'rule' tokens. The only other
+        line allowed there is the Windows heading's own rule, dashes AND
+        spaces, which is neither and is skipped."""
+        tokens = []
+        for line in block[1:]:
+            if line[:4].isdigit():
+                tokens.append("run")
+            elif self.is_rule(line):
+                tokens.append("rule")
+            else:
+                self.assertEqual(set(line) - {"-", " "}, set(), line)
+        return tokens
+
+    def test_a_rule_after_every_fifth_run_as_wide_as_the_widest_line(self):
+        block = self.full_log(12, chat_at=(7,))
+        self.assertEqual(self.shape(block),
+                         ["run"] * 5 + ["rule"] + ["run"] * 5 + ["rule"] + ["run"] * 2)
+        others = [line for line in block if not self.is_rule(line)]
+        widest = max(len(line) for line in others)
+        # The premise that makes the width check mean "the widest ROW": the run
+        # carrying the long chat name is in the table and is wider than the
+        # heading, so a rule cut to the heading's width would fail here.
+        self.assertTrue(any(self.LONG_CHAT in line for line in others))
+        self.assertGreater(widest, len(block[0]))
+        self.assertEqual([len(line) for line in block if self.is_rule(line)], [widest, widest])
+
+    def test_a_last_group_of_exactly_five_runs_has_no_rule_after_it(self):
+        block = self.full_log(10)
+        self.assertEqual(self.shape(block), ["run"] * 5 + ["rule"] + ["run"] * 5)
+        self.assertTrue(block[-1][:4].isdigit())      # the table ends on a run
+
+    def test_five_runs_or_fewer_are_not_ruled(self):
+        block = self.full_log(5)
+        self.assertEqual(self.shape(block), ["run"] * 5)
 
 
 if __name__ == "__main__":

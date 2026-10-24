@@ -10,7 +10,9 @@
 # every logged run (most recent first) WITH its individual cost, in a
 # scrollable, searchable pager. The cost column sits before the model name so
 # a narrow terminal wraps only the model tail, never hides the cost (matching
-# the Windows twin, where Format-Table used to drop the trailing cost column).
+# the Windows twin, where Format-Table used to drop the trailing cost column);
+# since 2026-10-25 a row of dashes follows every five runs (RUNS_PER_GROUP),
+# so the eye keeps its place in a long log.
 #   ↑/↓ scroll · /text search · n next match · q to quit.
 #
 # Since 2026-08-03 each machine writes its OWN log file into the OneDrive
@@ -120,6 +122,9 @@ fi
 # last field ends in \r and the viewer shows ^M after every Windows row.
 W=15
 S=13
+# FULL LOG: a rule of dashes after every this many runs (2026-10-25). The
+# Windows twin's $runsPerGroup must match — the two viewers rule the same rows.
+RUNS_PER_GROUP=5
 MERGED="$(mktemp)"
 trap 'rm -f "$MERGED"' EXIT
 for i in "${!LOGS[@]}"; do
@@ -349,6 +354,15 @@ rollups() {
   # mid-row and an empty one renders "-" like the others (column -t would
   # otherwise pull the chat name left into its place); an empty chat is a
   # trailing field, which column -t simply leaves off.
+  # A rule of dashes after every RUNS_PER_GROUP runs (2026-10-25, the user's
+  # request), so the eye keeps its place in a long log — added by the last awk,
+  # AFTER column -t has laid the table out: a dash row fed INTO column -t would
+  # be one field, and widen DATE/TIME to its length. Every line is held, the
+  # rule is as wide as the widest (a CHAT name runs past the heading, and
+  # column -t leaves a row's last field unpadded, so lines differ in length),
+  # and it goes before the 6th, 11th, 16th … run — line 1 is the heading — so
+  # a table of five or fewer has none and none trails the last run. The
+  # Windows twin rules the same rows at the same width.
   { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;TOK-IN;TOK-OUT;CACHE-W;CACHE-R;MODEL;PARAMETERS;INSTRUCTION;CHAT"
     tail -r "$MERGED" | awk -F';' -v W="$W" "$TOK_FN"'
       NF>=W {
@@ -357,5 +371,14 @@ rollups() {
       print $1 ";" $W ";" $2 ";" $4 ";" t ";" k ";" \
             tok($9) ";" tok($10) ";" tok($11) ";" tok($12) ";" \
             $3 ";" p ";" n ";" $14 }'; } \
-    | column -t -s';'
+    | column -t -s';' \
+    | awk -v N="$RUNS_PER_GROUP" '{ line[NR] = $0; if (length($0) > w) w = length($0) }
+        END {
+          rule = ""; while (length(rule) < w) rule = rule "-"
+          for (i = 1; i <= NR; i++) {
+            r = i - 1
+            if (r > 1 && (r - 1) % N == 0) print rule
+            print line[i]
+          }
+        }'
 } | less -R

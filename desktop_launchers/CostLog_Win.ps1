@@ -8,7 +8,9 @@
 # heading), then every run most-recent-first WITH its individual cost -- the
 # per-run cost column is rendered with fixed-width format strings, placed
 # before the model name, so a narrow console can never drop it (see the FULL
-# LOG comment below). Since 2026-08-03 each machine
+# LOG comment below) -- ruled, since 2026-10-25, with a row of dashes after
+# every five runs ($runsPerGroup), so the eye keeps its place in a long log.
+# Since 2026-08-03 each machine
 # writes its OWN log file into the OneDrive share -- APICostLog_<machine>.txt in
 # <OneDrive>\MyAppShare (see myagent/datapaths.py: per-machine files never
 # conflict-fork, yet OneDrive syncs them all everywhere) -- so this viewer
@@ -57,6 +59,9 @@
 $repoDir = Split-Path -Parent $PSScriptRoot
 $Host.UI.RawUI.WindowTitle = 'API Cost Log'
 $inv = [Globalization.CultureInfo]::InvariantCulture
+# FULL LOG: a rule of dashes after every this many runs (2026-10-25). The macOS
+# twin's RUNS_PER_GROUP must match -- the two viewers rule the same rows.
+$runsPerGroup = 5
 # Widen a narrow console (a fresh shortcut's conhost defaults to 80 columns)
 # so the full-log lines don't wrap (190: the 2026-08-16 CALLS + INSTRUCTION
 # columns pushed the widest rows past the previous 142; 226 since the
@@ -387,13 +392,29 @@ try {
         # it is derived from the one heading list rather than kept by hand.
         $hdr = @('DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS',
                  'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION', 'CHAT')
-        $out += ($fmt -f $hdr)
+        $head = $fmt -f $hdr
+        $out += $head
         $out += ($fmt -f @($hdr | ForEach-Object { '-' * $_.Length }))
         $rev = @($rows); [array]::Reverse($rev)
-        $out += @(foreach ($r in $rev) {
+        $runLines = @(foreach ($r in $rev) {
             $fmt -f $r.Time, $r.Machine, $r.Provider, ('{0:N4}' -f $r.Cost), $r.Secs, $r.Calls,
                 (Format-Tok $r.TokIn), (Format-Tok $r.TokOut), (Format-Tok $r.TokCW), (Format-Tok $r.TokCR),
                 $r.Model, $r.Params, $r.Instr, $r.Chat
+        })
+        # A rule of dashes after every $runsPerGroup runs (2026-10-25, the user's
+        # request), so the eye keeps its place in a long log. The table's full
+        # width -- the widest of the heading and the rows, since a CHAT name runs
+        # past the heading -- and all dashes, where the heading's own rule is
+        # dashes AND spaces, so the two are told apart. It goes before the 6th,
+        # 11th, 16th ... run: a table of five or fewer has none, and none trails
+        # the last run. Still one array append for the rows (see above). The
+        # macOS twin rules the same rows at the same width.
+        $ruleW = $head.Length
+        foreach ($l in $runLines) { if ($l.Length -gt $ruleW) { $ruleW = $l.Length } }
+        $rule = '-' * $ruleW
+        $out += @(for ($i = 0; $i -lt $runLines.Count; $i++) {
+            if ($i -gt 0 -and $i % $runsPerGroup -eq 0) { $rule }
+            $runLines[$i]
         })
     }
 

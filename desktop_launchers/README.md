@@ -190,7 +190,7 @@ the current month only under a `THIS MONTH (yyyy-MM)` heading, each block
 built by one shared `rollups` shell function, plus (since 2026-09-14) a **By model (tokens and effective blended rate)** block (`token_rollup`: per-model IN / OUT / CACHE-W / CACHE-R totals, cost ÷ tokens as $/MTok and, since 2026-09-15, CACHE%, cache reads as a share of the input side) — before listing every run most-recent-first **with its
 individual cost** via `column -t -s';'` (columns: DATE/TIME, MACHINE, PROVIDER,
 COST(USD), TIME(sec), CALLS, TOK-IN, TOK-OUT, CACHE-W, CACHE-R, MODEL, PARAMETERS, INSTRUCTION; empty mid-row
-fields print as `-` because BSD `column -t` collapses consecutive delimiters).
+fields print as `-` because BSD `column -t` collapses consecutive delimiters). Since 2026-10-25 a row of dashes follows every five runs (`RUNS_PER_GROUP`), the table's full width — added by one more awk AFTER `column -t` has laid the table out, since a dash row fed into `column -t` would be one field and widen DATE/TIME to its length; none under a table of five or fewer runs, none after the last — the Windows twin's rule byte for byte.
 The cost/time/calls columns sit before the model/params columns and the
 open-ended INSTRUCTION is last, so a narrow terminal wraps at worst the tail and never hides a run's cost — the same layout
 the Windows twin uses, where it is load-bearing: `Format-Table -AutoSize`
@@ -494,7 +494,7 @@ and effective blended rate)** block from `Get-TokenRollup` — 2026-09-14; its C
 reads as a share of the input side, 2026-09-15) then lists every run
 most-recent-first with its cost, TIME(sec), CALLS, TOK-IN / TOK-OUT / CACHE-W / CACHE-R
 (2026-09-14, compacted to k/M, `-` when absent), MODEL, PARAMETERS,
-INSTRUCTION and CHAT columns (2026-10-07, the run's chat file name; fixed-width format strings — INSTRUCTION padded to its widest name now that CHAT follows it — console widened to 280 best-effort, 226 before). Both resolve the repo from the script's own location, page
+INSTRUCTION and CHAT columns (2026-10-07, the run's chat file name; fixed-width format strings — INSTRUCTION padded to its widest name now that CHAT follows it — console widened to 280 best-effort, 226 before; since 2026-10-25 a row of dashes after every five runs (`$runsPerGroup`), as wide as the table's widest line, the macOS twin's rule byte for byte). Both resolve the repo from the script's own location, page
 with `Out-Host -Paging`, and pause on `Read-Host` so the window stays open. On
 Windows `heartbeat.log` lives at the repo root (`BASE_DIR / "heartbeat.log"`,
 not under a `Logs` folder); the cost log lives in the OneDrive share on both
