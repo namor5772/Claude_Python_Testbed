@@ -578,6 +578,23 @@ SUMMARY
 
 — the grand total and span; today — since 2026-10-19 with its run count and each machine's share of the figure after the amount, highest spend first, e.g. `(2 runs: LenovoAug23 $0.1593, Romans-Mac-mini.local $0.0173)`, because the viewer sums every machine's log and a run on another machine is in the figure — and each of the seven days before it (every calendar day, `$0.0000` for a day without a run, in one decimal-aligned money column); this month; spend **By machine**, **By provider**, **By model** and **By instruction** (named runs only), highest first; **By model (tokens and effective blended rate)** — per-model IN / OUT / CACHE-W / CACHE-R totals, cost ÷ tokens as $/MTok, and **CACHE%** (cache reads as a share of the input side, the cache effect alone — the blended rate's denominator also carries output tokens, which bill several times input); then a **THIS MONTH (yyyy-MM)** block repeating the four rollups over the current month only; then the **FULL LOG**, most recent first, one run per row: `DATE/TIME · MACHINE · PROVIDER · COST(USD) · TIME(sec) · CALLS · TOK-IN · TOK-OUT · CACHE-W · CACHE-R · MODEL · PARAMETERS · INSTRUCTION · CHAT` (tokens compacted to k / M; CHAT, since 2026-10-07, is the name of the run's chat files in the shared `saved_chats/` folder, blank on older lines). The numeric columns come before the open-ended text ones (fixed-width on Windows, `column -t` on macOS), so the per-run cost stays on screen at any console width; since 2026-10-25 a row of dashes, the table's full width, follows every five runs, so the eye keeps its place in a long log. The By-model blocks split a line carrying a split in field 13 between its models; every other block counts it as the one run it was.
 
+The left-hand columns of the FULL LOG, with the rule that follows every five runs (PARAMETERS, INSTRUCTION and CHAT continue to the right):
+
+```
+===================== FULL LOG (most recent first) =====================
+
+DATE/TIME           MACHINE               PROVIDER  COST(USD) TIME(sec) CALLS   TOK-IN  TOK-OUT  CACHE-W  CACHE-R MODEL
+---------           -------               --------  --------- --------- -----   ------  -------  -------  ------- -----
+2026-10-25 09:01:39 LenovoAug23           Anthropic    0.4958       204    40       82     7878    78.2k    2.21M claude-sonnet-5-5
+2026-10-25 08:26:27 LenovoAug23           Anthropic    1.2308       440    86      174    22.3k   123.8k    6.98M claude-sonnet-5-5
+2026-10-25 08:16:23 LenovoAug23           Anthropic    0.0302       121    22       46    12.7k    85.7k    1.31M claude-haiku-5-5
+2026-10-25 07:23:08 LenovoAug23           Anthropic    0.0255       108    13       28    11.9k    89.6k   834.0k claude-haiku-5-5
+2026-10-24 20:44:32 LenovoAug23           Anthropic    0.0247       103    17       36    11.0k    78.2k   939.2k claude-haiku-5-5
+-----------------------------------------------------------------------------------------------------------------------------------------------
+2026-10-24 06:20:41 LenovoAug23           Anthropic    0.1031       144    15       32    16.9k   118.5k    1.33M claude-haiku-5-5
+2026-10-23 20:36:59 LenovoAug23           Anthropic    0.0216        86    14       30     8791    77.7k   751.3k claude-haiku-5-5
+```
+
 ### Other niceties
 
 - **Parallel tool execution** — the parallel-safe tools (`web_search`, `fetch_webpage`, `csv_search`, `get_skill`, `read_document`, `read_file`, `glob_files`, `grep_files`, `run_instruction`) run first, concurrently; results are reinserted in API order.
