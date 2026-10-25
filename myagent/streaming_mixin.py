@@ -1089,7 +1089,7 @@ class StreamingMixin(PaneNotesMixin):
                 return (
                     f"{self.model} is a text-only model — it cannot see screenshots. "
                     "Desktop/browser tools will not work with this model. "
-                    "Switch to kimi-k2.6 or kimi-k3 (both vision-capable) "
+                    "Switch to kimi-k3.1-pro or kimi-k3 (both vision-capable) "
                     "for desktop work."
                 )
         elif self.provider == "Ollama":

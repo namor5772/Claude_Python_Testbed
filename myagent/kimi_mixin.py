@@ -15,11 +15,17 @@ tool-call loop the accumulated reasoning must be sent back unmodified on the
 assistant messages, or quality degrades (naively pointing a Grok/OpenAI-style
 harness at Kimi "works" but silently underperforms — several frameworks have
 shipped exactly that bug). The per-model contract, verified against
-platform.kimi.ai docs 2026-07-25:
+platform.kimi.ai docs 2026-07-25 and re-audited live 2026-10-26:
 
-- ``kimi-k3`` — reasons unless told "none"; Preserved Thinking always on;
-  top-level ``reasoning_effort`` (none/low/high/max, default max — "none",
-  a real off switch, since 2026-09-23). ROUND-TRIP REQUIRED.
+- the K3 LINE — ``kimi-k3.1-pro`` (+ ``-highspeed``; the 2026-10 flagship,
+  the picker default since 2026-10-26) and ``kimi-k3`` — always reasons
+  with Preserved Thinking on; top-level ``reasoning_effort`` on the sparse
+  none/low/high/max ladder (default max; the docs and the listing name
+  low/high/max, and "none" is an undocumented but MEASURED off switch — no
+  reasoning tokens, a prompt 68 tokens shorter — on all three ids,
+  2026-09-23 / 2026-10-26). ROUND-TRIP REQUIRED. Output cap: the API's own
+  131,072 default (KIMI_MAX_COMPLETION_TOKENS) — the 32,768 the K2 rule
+  sent had LOWERED it.
 - ``kimi-k2.7-code`` (+ ``-highspeed``) — always thinks; the ``thinking``
   param is rejected (behaviour baked in); keep is fixed "all".
   ROUND-TRIP REQUIRED.
@@ -28,7 +34,14 @@ platform.kimi.ai docs 2026-07-25:
   (Preserved Thinking) extends it across turns — requested here whenever
   thinking is on, matching the keep-everything translator.
 - ``kimi-k2.5`` — thinking toggleable, but Preserved Thinking is UNSUPPORTED:
-  reasoning_content must NOT be sent back at all.
+  reasoning_content must NOT be sent back at all. Retired 2026-08-31.
+
+The whole K2 line (k2.6, k2.7-code, -highspeed) is RETIRING: Moonshot's
+models page (read 2026-10-26) closes it to new accounts on 2026-10-31 and
+retires it "by the end of December 2026" — so under the retirement policy it
+is hidden from the picker and unpriced (KIMI_DEPRECATED_MODEL_PREFIXES) while
+the param wiring above stays, and a pinned instruction still runs it, served,
+behind the "hidden from the model picker" warning.
 
 Mechanically: ``_stream_kimi_events`` accumulates the streamed reasoning into
 a ``{"type": "thinking", "thinking": ...}`` block stored FIRST in the
@@ -52,14 +65,29 @@ Other deliberate choices:
    / ``fetch_webpage`` (the Gemini pattern); ``_get_tools()`` does not strip
    them for this provider.
 3. **max_completion_tokens** (the currently documented name; a 400 ladder
-   rung swaps to the legacy ``max_tokens``) — MAX_TOKENS_THINKING (32768)
-   when thinking is active, comfortably above the docs' ">= 16000 for
-   tool-calling loops" floor.
+   rung swaps to the legacy ``max_tokens``) — the K3 line gets its own
+   documented default, 131,072 (KIMI_MAX_COMPLETION_TOKENS, thinking on or
+   off — the Anthropic rule of never capping a model below its ceiling);
+   the K2 line keeps MAX_TOKENS_THINKING (32768) while thinking is active,
+   above the docs' ">= 16000 for tool-calling loops" floor, else 8192.
 4. **Model fetch filter** — keep ids starting ``kimi-k`` and drop the DASH
    family ``kimi-k2-*`` (kimi-k2-thinking etc., discontinued 2026-05-25;
    the current K2 generation uses DOTS: kimi-k2.5/k2.6/k2.7-code). The
    non-K rest (moonshot-v1* — EOL 2026-08-31 — kimi-latest,
-   kimi-thinking-preview) falls out of the prefix rule.
+   kimi-thinking-preview) falls out of the prefix rule. Every kept id is
+   recorded as SERVED (helpers.note_served_models) before the retiring K2
+   line is hidden from the picker, and the listing's per-model capability
+   fields — supports_image_in, context_length, supports_reasoning, the K3
+   line's reasoning_efforts.valid_efforts ladder, supports_thinking_type —
+   are kept in _kimi_caps.
+5. **Cache writes are a bucket of their own** (2026-10-26) — the K3 line
+   reports ``prompt_tokens_details.cache_write_tokens`` (disjoint from
+   ``cached_tokens`` and the uncached rest; the three sum to
+   ``prompt_tokens``), billed at the 5-minute-TTL write rate
+   (KIMI_CACHE_WRITE_PRICING — equal to the miss rate on every K3 model
+   today; MyAgent sends no ``prompt_cache_options``, so 5m is the TTL it
+   gets). ``_kimi_usage_dict`` emits them as ``cache_creation_input_tokens``
+   so the cost log's buckets stay disjoint; the K2 line writes none.
 """
 import json
 import re
@@ -72,7 +100,11 @@ from myagent.constants import (
     FIRST_CONTENT_TIMEOUT,
     KIMI_ALWAYS_THINKING_PREFIXES,
     KIMI_CACHE_HIT_PRICING,
+    KIMI_CACHE_WRITE_PRICING,
+    KIMI_DEPRECATED_MODEL_PREFIXES,
+    KIMI_EFFORT_LADDER,
     KIMI_FALLBACK_MODELS,
+    KIMI_MAX_COMPLETION_TOKENS,
     KIMI_NO_REASONING_ROUNDTRIP_PREFIXES,
     KIMI_NON_VISION_PREFIXES,
     KIMI_REASONING_EFFORT,
@@ -80,7 +112,8 @@ from myagent.constants import (
     MAX_TOKENS,
     MAX_TOKENS_THINKING,
 )
-from myagent.helpers import camera_aware_hint, is_camera_result, screenshot_hint, tool_use_blocks
+from myagent.helpers import (camera_aware_hint, is_camera_result, note_served_models,
+                             screenshot_hint, tool_use_blocks)
 from myagent.retry_util import (rate_limit_backoff, server_error_backoff,
                                 start_waiting_ticker)
 from myagent.pane_notes import PaneNotesMixin
@@ -103,8 +136,13 @@ class KimiMixin(PaneNotesMixin):
 
     def _kimi_reasoning_values(self, model_id=None):
         """Accepted reasoning_effort values for a Kimi model, or None when the
-        family has no effort knob (only kimi-k3 has one today). Longest prefix
-        wins, same convention as the xAI matrix."""
+        family has no effort knob. The hand-verified KIMI_REASONING_EFFORT
+        table answers FIRST (longest prefix wins, the xAI convention): the K3
+        line's ladder carries the measured "none" rung the listing does not
+        publish. A model the table does not name takes the ladder the live
+        listing published for it (reasoning_efforts.valid_efforts, kept in
+        _kimi_caps by _fetch_kimi_models, in KIMI_EFFORT_LADDER order), so a
+        new tier gets its Reasoning combobox the day it appears; else None."""
         mid = model_id or self.model or ""
         best = None
         best_len = 0
@@ -112,6 +150,24 @@ class KimiMixin(PaneNotesMixin):
             if mid.startswith(prefix) and len(prefix) > best_len:
                 best = values
                 best_len = len(prefix)
+        if best is not None:
+            return best
+        live = (self._kimi_model_caps().get(mid) or {}).get("efforts")
+        if live:
+            known = [v for v in KIMI_EFFORT_LADDER if v in live]
+            return known + [v for v in live if v not in known]
+        return None
+
+    @staticmethod
+    def _kimi_prefix_value(table, model_id, default=None):
+        """The value of `table` under the longest prefix of `model_id`, else
+        `default` — the one lookup behind the per-family rate and cap
+        tables (KIMI_CACHE_HIT_PRICING, KIMI_CACHE_WRITE_PRICING,
+        KIMI_MAX_COMPLETION_TOKENS)."""
+        best, best_len = default, 0
+        for prefix, value in table.items():
+            if model_id.startswith(prefix) and len(prefix) > best_len:
+                best, best_len = value, len(prefix)
         return best
 
     def _kimi_reasoning_effort(self, values):
@@ -133,19 +189,35 @@ class KimiMixin(PaneNotesMixin):
         return mid.startswith(KIMI_THINKING_TOGGLE_PREFIXES)
 
     def _kimi_thinking_active(self, model_id=None):
-        """Whether this call will produce reasoning: k3 unless its effort is
-        the "none" rung (a real off switch, 2026-09-23), always for
-        k2.7-code, the Thinking checkbox for k2.6 / k2.5, else False. Sizes
-        max_completion_tokens (_kimi_model_params)."""
+        """Whether this call will produce reasoning: a knob model unless its
+        effort is the "none" rung (a real off switch, 2026-09-23), always for
+        the KIMI_ALWAYS_THINKING_PREFIXES families and for a model whose
+        listing says `supports_thinking_type: "only"`, the Thinking checkbox
+        for k2.6 / k2.5, else False. Sizes the K2 line's
+        max_completion_tokens (_kimi_output_cap) and the param summary."""
         mid = model_id or self.model or ""
         values = self._kimi_reasoning_values(mid)
         if values:
             return self._kimi_reasoning_effort(values) != "none"
         if mid.startswith(KIMI_ALWAYS_THINKING_PREFIXES):
             return True
+        if (self._kimi_model_caps().get(mid) or {}).get("thinking_type") == "only":
+            return True
         if self._kimi_thinking_toggleable(mid):
             return bool(self.thinking_enabled)
         return False
+
+    def _kimi_output_cap(self, model_id=None):
+        """The max_completion_tokens a call sends: a KIMI_MAX_COMPLETION_TOKENS
+        family's own documented default (the K3 line's 131,072 — thinking on
+        or off, never below the model's ceiling; the K2 rule's 32,768 had
+        LOWERED it there), else MAX_TOKENS_THINKING while thinking is active
+        and MAX_TOKENS when it is not (the K2 line)."""
+        mid = model_id or self.model or ""
+        cap = self._kimi_prefix_value(KIMI_MAX_COMPLETION_TOKENS, mid)
+        if cap is not None:
+            return cap
+        return MAX_TOKENS_THINKING if self._kimi_thinking_active(mid) else MAX_TOKENS
 
     def _kimi_roundtrips_reasoning(self, model_id=None):
         """True when historical reasoning_content must be sent back on
@@ -167,8 +239,11 @@ class KimiMixin(PaneNotesMixin):
     def _kimi_model_caps(self):
         """The per-model capability records the last successful models.list()
         kept (_fetch_kimi_models): id → {"vision": bool | None, "context":
-        int | None, "reasoning": bool | None}. Empty until a fetch succeeds,
-        and after one fails — the static tables answer then."""
+        int | None, "reasoning": bool | None, "efforts": [str] | None (the
+        reasoning_effort ladder the listing publishes for the K3 line),
+        "thinking_type": str | None ("only" = cannot stop thinking)}. Empty
+        until a fetch succeeds, and after one fails — the static tables
+        answer then."""
         return getattr(self, "_kimi_caps", None) or {}
 
     def _is_kimi_vision_model(self, model_id=None):
@@ -183,22 +258,46 @@ class KimiMixin(PaneNotesMixin):
             return bool(live["vision"])
         return not mid.startswith(KIMI_NON_VISION_PREFIXES)
 
+    @staticmethod
+    def _kimi_listed_efforts(m):
+        """The reasoning_effort ladder a listing entry publishes (2026-10-26:
+        the K3 line carries `reasoning_efforts: {valid_efforts: [...]}` and
+        its twin `reasoning: {effort: {valid: [...]}}`), else None."""
+        efforts = getattr(m, "reasoning_efforts", None)
+        if isinstance(efforts, dict) and efforts.get("valid_efforts"):
+            return list(efforts["valid_efforts"])
+        reasoning = getattr(m, "reasoning", None)
+        if isinstance(reasoning, dict):
+            valid = (reasoning.get("effort") or {}).get("valid") \
+                if isinstance(reasoning.get("effort"), dict) else None
+            if valid:
+                return list(valid)
+        return None
+
     def _fetch_kimi_models(self):
         """List Kimi chat models from api.moonshot.ai. Keeps the current
-        K-series (``kimi-k`` prefix: kimi-k2.5/k2.6/k2.7-code/k3), drops the
+        K-series (``kimi-k`` prefix: the K3 line and the K2 line), drops the
         discontinued DASH family (``kimi-k2-*`` — kimi-k2-thinking etc., EOL
-        2026-05-25). moonshot-v1* (EOL 2026-08-31), kimi-latest and
-        kimi-thinking-preview fall out of the prefix rule. The listing's
-        model objects carry supports_image_in / supports_video_in /
-        supports_reasoning / context_length (found 2026-09-23 — the OpenAI
-        SDK keeps the unknown fields), kept on the instance as _kimi_caps
-        for _is_kimi_vision_model; a failed fetch clears them."""
+        2026-05-25); moonshot-v1* (EOL 2026-08-31), kimi-latest and
+        kimi-thinking-preview fall out of the prefix rule. Every kept id is
+        recorded as SERVED (helpers.note_served_models) and THEN the
+        retiring K2 line (KIMI_DEPRECATED_MODEL_PREFIXES — retirement
+        announced for the end of December 2026, read 2026-10-26) is hidden
+        from the picker, so a pinned instruction still runs it behind the
+        "hidden from the model picker" warning. The listing's model objects
+        carry supports_image_in / supports_video_in / supports_reasoning /
+        context_length (found 2026-09-23 — the OpenAI SDK keeps the unknown
+        fields) and, on the K3 line since 2026-10-26, the reasoning_effort
+        ladder and supports_thinking_type; all are kept on the instance as
+        _kimi_caps for the detection helpers. A failed fetch clears them and
+        the served set, and serves KIMI_FALLBACK_MODELS."""
         self._kimi_caps = {}
+        note_served_models(self, "Moonshot", None)
         if not getattr(self, "kimi_client", None):
             return list(KIMI_FALLBACK_MODELS)
         try:
             response = self.kimi_client.models.list()
-            model_ids = []
+            served = []
             caps = {}
             for m in response.data:
                 mid = m.id
@@ -206,15 +305,19 @@ class KimiMixin(PaneNotesMixin):
                     continue
                 if mid.startswith("kimi-k2-"):
                     continue
-                model_ids.append(mid)
+                served.append(mid)
                 caps[mid] = {"vision": getattr(m, "supports_image_in", None),
                              "context": getattr(m, "context_length", None),
-                             "reasoning": getattr(m, "supports_reasoning", None)}
-            model_ids.sort()
+                             "reasoning": getattr(m, "supports_reasoning", None),
+                             "efforts": self._kimi_listed_efforts(m),
+                             "thinking_type": getattr(m, "supports_thinking_type", None)}
+            note_served_models(self, "Moonshot", served)
+            model_ids = sorted(mid for mid in served
+                               if not mid.startswith(KIMI_DEPRECATED_MODEL_PREFIXES))
             self._kimi_model_display_names = {mid: mid for mid in model_ids}
+            self._kimi_caps = caps
             if not model_ids:
                 return list(KIMI_FALLBACK_MODELS)
-            self._kimi_caps = caps
             return model_ids
         except Exception:
             self._kimi_model_display_names = {}
@@ -242,19 +345,21 @@ class KimiMixin(PaneNotesMixin):
         """Flat wire-format params for a Kimi call — the single source of
         truth for _stream_kimi_call and the Debug payload display.
 
-        - NEVER temperature/top_p (fixed server-side on every current model).
-        - max_completion_tokens: 32768 when thinking is active (docs require
-          >= 16000 so reasoning + answer fit), else the plain 8192.
-        - kimi-k3: top-level reasoning_effort; no thinking param.
+        - NEVER temperature/top_p (fixed server-side on every current model:
+          HTTP 400 "invalid temperature: only 1 is allowed for this model",
+          probed 2026-10-26 on kimi-k3.1-pro and kimi-k2.6).
+        - max_completion_tokens: _kimi_output_cap — the K3 line's documented
+          131,072 default; on the K2 line 32768 when thinking is active
+          (docs require >= 16000 so reasoning + answer fit), else 8192.
+        - the K3 line (kimi-k3.1-pro / -highspeed / kimi-k3): top-level
+          reasoning_effort; no thinking param.
         - kimi-k2.6 / k2.5: thinking {"type": enabled|disabled}; k2.6 also
           gets keep:"all" (Preserved Thinking) when enabled, matching the
           keep-everything translator. k2.5 never gets keep (unsupported).
         - kimi-k2.7-code: no knobs at all — always thinks, params baked in.
         """
         mid = model_id or self.model or ""
-        params = {"max_completion_tokens":
-                  MAX_TOKENS_THINKING if self._kimi_thinking_active(mid)
-                  else MAX_TOKENS}
+        params = {"max_completion_tokens": self._kimi_output_cap(mid)}
         values = self._kimi_reasoning_values(mid)
         if values:
             params["reasoning_effort"] = self._kimi_reasoning_effort(values)
@@ -430,7 +535,13 @@ class KimiMixin(PaneNotesMixin):
         estimate can't see that cached input bills at ~1/6 the miss rate).
         The cached-token count is probed under the three names in the wild:
         OpenAI-style prompt_tokens_details.cached_tokens, Moonshot's flat
-        cached_tokens, and the DeepSeek-style prompt_cache_hit_tokens."""
+        cached_tokens, and the DeepSeek-style prompt_cache_hit_tokens. The
+        K3 line also reports prompt_tokens_details.cache_write_tokens (since
+        2026-10, found 2026-10-26): the prefix this request wrote to the
+        cache, disjoint from the hits and the uncached rest — emitted as
+        cache_creation_input_tokens and billed at the 5-minute-TTL write
+        rate (KIMI_CACHE_WRITE_PRICING; MyAgent sends no prompt_cache_options,
+        so 5m is the TTL every write gets)."""
         input_tokens = getattr(usage, "prompt_tokens", 0) or 0
         output_tokens = getattr(usage, "completion_tokens", 0) or 0
         details = getattr(usage, "prompt_tokens_details", None)
@@ -440,25 +551,30 @@ class KimiMixin(PaneNotesMixin):
         if not cached:
             cached = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
         cached = min(cached, input_tokens)
-        # prompt_tokens is the GROSS prompt with the cache hits inside it (the
-        # OpenAI shape), so the emitted input bucket is the MISS count —
-        # stream_worker's buckets are disjoint (pinned by DisjointContractCase
-        # in tests/test_cached_usage.py).
-        miss = input_tokens - cached
+        written = (getattr(details, "cache_write_tokens", 0) or 0) if details else 0
+        written = min(written, input_tokens - cached)
+        # prompt_tokens is the GROSS prompt with the cache hits and writes
+        # inside it (the OpenAI shape), so the emitted input bucket is the
+        # MISS count — stream_worker's buckets are disjoint (pinned by
+        # DisjointContractCase in tests/test_cached_usage.py).
+        miss = input_tokens - cached - written
         usage_dict = {"input_tokens": miss, "output_tokens": output_tokens}
         if cached:
             usage_dict["cache_read_input_tokens"] = cached
+        if written:
+            usage_dict["cache_creation_input_tokens"] = written
         pricing = self._get_pricing("Moonshot", self.model)
         if pricing:
-            hit_rate = pricing["input"]  # fall back to the miss rate
-            best_len = 0
-            for prefix, rate in KIMI_CACHE_HIT_PRICING.items():
-                if (self.model or "").startswith(prefix) and len(prefix) > best_len:
-                    hit_rate = rate / 1_000_000
-                    best_len = len(prefix)
+            mid = self.model or ""
+            # Both fall back to the miss rate for a family the tables miss
+            hit_rate = self._kimi_prefix_value(KIMI_CACHE_HIT_PRICING, mid,
+                                               pricing["input"] * 1_000_000) / 1_000_000
+            write_rate = self._kimi_prefix_value(KIMI_CACHE_WRITE_PRICING, mid,
+                                                 pricing["input"] * 1_000_000) / 1_000_000
             usage_dict["cost_usd"] = (
                 miss * pricing["input"]
                 + cached * hit_rate
+                + written * write_rate
                 + output_tokens * pricing["output"])
         return usage_dict
 

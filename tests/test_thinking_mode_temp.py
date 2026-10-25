@@ -62,9 +62,10 @@ class TempAfterModeTests(unittest.TestCase):
         return bool(h._temp_spin.winfo_manager())
 
     def test_moonshot_never_shows_temperature(self):
-        for mode in ("None", "Low", "Max"):
-            with self.subTest(mode=mode):
-                self.assertFalse(self._temp_shown(self._host("Moonshot", "kimi-k3", mode)))
+        for model in ("kimi-k3", "kimi-k3.1-pro"):
+            for mode in ("None", "Low", "Max"):
+                with self.subTest(model=model, mode=mode):
+                    self.assertFalse(self._temp_shown(self._host("Moonshot", model, mode)))
 
     def test_xai_always_shows_temperature(self):
         for model, mode in (("grok-4.3", "None"), ("grok-4.7", "Xhigh")):

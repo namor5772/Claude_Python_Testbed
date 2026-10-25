@@ -590,44 +590,61 @@
   https://api.moonshot.ai/v1 with MOONSHOT_API_KEY (or KIMI_API_KEY).
 
   Current Catalog — verified against platform.kimi.ai/docs/pricing 2026-07-25,
-  re-verified 2026-08-25 and 2026-09-23 (rates unchanged; that day's audit
-  gave k3 a "none" reasoning_effort rung and found the k2.7-code line takes
-  images after all)
+  re-verified 2026-08-25 and 2026-09-23, re-read 2026-10-26 (the K3.1 Pro
+  line's rows added; the K2 line unpriced on Moonshot's retirement notice —
+  closed to new accounts 2026-10-31, retired by the end of December 2026).
+  The page's table is rendered client-side: read its React payload, not the
+  .md copy, whose <table> is empty.
   ──────────────────────────────────────────────────────────────────────────
-  Model Prefix              Input    Output   Cache-Hit Input
+  Model Prefix              Input    Output   Cache-Hit  Cache-Write 5m / 1h
   ──────────────────────────────────────────────────────────────────────────
-  kimi-k3                   $3.00    $15.00   $0.30   (1M context, vision,
-                                              reasoning_effort none/low/
-                                              high/max — none is a real off)
-  kimi-k2.7-code-highspeed  $1.90    $8.00    $0.38   (~180 tok/s variant)
-  kimi-k2.7-code            $0.95    $4.00    $0.19   (coding line, takes images
-                                              after all, always-thinking,
-                                              no knobs)
-  kimi-k2.6                 $0.95    $4.00    $0.16   (256K, vision, thinking
-                                              toggle + Preserved Thinking)
-  kimi-k2.5                 —        —        —       (UNPRICED since 2026-08-25:
-                                              full platform sunset 2026-08-31
-                                              per the models page, and never
-                                              in this account's /v1/models
-                                              catalog; the thinking-toggle /
-                                              no-round-trip param wiring stays
-                                              for pinned instructions)
+  kimi-k3.1-pro-highspeed   $4.00    $20.00   $0.20      $4.00 / $8.00
+                                              (2-3x the speed of K3.1 Pro,
+                                              the same model; the premium is
+                                              on misses and output, not on
+                                              cache reads)
+  kimi-k3.1-pro             $2.00    $10.00   $0.20      $2.00 / $4.00
+                                              (the 2026-10 flagship and the
+                                              picker default: 1M context,
+                                              vision, reasoning_effort
+                                              none/low/high/max — none is a
+                                              measured off switch the docs
+                                              do not list; output cap
+                                              131,072, the API's own default)
+  kimi-k3                   $3.00    $15.00   $0.30      $3.00 / $6.00
+                                              (1M context, vision, the same
+                                              ladder and cap)
+  kimi-k2.7-code-highspeed  —        —        —          (UNPRICED since 2026-10-26:
+  kimi-k2.7-code            —        —        —           the K2 line retires by the
+  kimi-k2.6                 —        —        —           end of December 2026; was
+                                                          $1.90 / $8 ($0.38 hit),
+                                                          $0.95 / $4 ($0.19) and
+                                                          $0.95 / $4 ($0.16); the
+                                                          param wiring stays for
+                                                          pinned instructions, whose
+                                                          runs are not logged)
+  kimi-k2.5                 —        —        —          (retired 2026-08-31 — a 404)
 
   Notes:
-  - MyAgent's Kimi cost line is computed exactly: usage reports cached input
-    tokens, and kimi_mixin folds the cache-hit discount into cost_usd
-    ((input − cached) × miss + cached × hit + output × out). The KIMI_PRICING
-    2-tuple is the all-miss fallback estimate only.
+  - MyAgent's Kimi cost line is computed exactly: usage reports cached and,
+    on the K3 line, written input tokens, and kimi_mixin folds both rates
+    into cost_usd ((prompt − cached − written) × miss + cached × hit
+    + written × write-5m + output × out). MyAgent sends no
+    prompt_cache_options, so every write is at the 5-minute tier, which
+    equals the miss rate on every K3 model today. The KIMI_PRICING 2-tuple
+    is the all-miss fallback estimate only.
   - The legacy DASH family (kimi-k2-thinking, kimi-k2-thinking-turbo,
     kimi-k2-0905-preview, kimi-k2-0711-preview, kimi-k2-turbo-preview) was
     discontinued 2026-05-25; kimi-latest and kimi-thinking-preview are gone
-    too, and moonshot-v1* dies 2026-08-31. _fetch_kimi_models filters them
-    all out, so none are priced.
+    too, and moonshot-v1* and kimi-k2.5 were retired 2026-08-31.
+    _fetch_kimi_models filters them all out, so none are priced.
   - No server-side tools (Kimi keeps MyAgent's local DuckDuckGo search), so
     tokens are the only cost.
 
   Sources:
-    https://platform.kimi.ai/docs/pricing/chat  (per-model subpages)
+    https://platform.kimi.ai/docs/pricing/chat  (one client-rendered table
+    for every model since 2026-10; the per-model subpages are gone)
+    https://platform.kimi.ai/docs/models.md  (the K2 retirement notice)
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -707,15 +724,18 @@
     in token-based cost display).
 
   - This file is auto-generated from the ANTHROPIC_PRICING, OPENAI_PRICING,
-    GEMINI_PRICING, XAI_PRICING, KIMI_PRICING (+ KIMI_CACHE_HIT_PRICING) and
-    VOICE_PRICING_PER_MIN tables in myagent/constants.py.
+    GEMINI_PRICING, XAI_PRICING, KIMI_PRICING (+ KIMI_CACHE_HIT_PRICING and
+    KIMI_CACHE_WRITE_PRICING) and VOICE_PRICING_PER_MIN tables in
+    myagent/constants.py.
 
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: October 17, 2026 (xAI audit: catalog, ladders and rates re-verified
-                against /v1/language-models and docs.x.ai — no change, no retirement)
-  Before that:  September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
+  Last updated: October 26, 2026 (Moonshot audit: kimi-k3.1-pro / -highspeed rows
+                with cache-write rates; the K2 line unpriced on its retirement notice)
+  Before that:  October 17, 2026 (xAI audit: catalog, ladders and rates re-verified
+                against /v1/language-models and docs.x.ai — no change, no retirement);
+                September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
                 OpenAI audit: gpt-6-sol / gpt-6-luna rows; Gemini audit: re-verified;
                 Anthropic audit: claude-opus-5-5 + claude-mythos-5-1 rows; Moonshot: re-verified)
 ================================================================================

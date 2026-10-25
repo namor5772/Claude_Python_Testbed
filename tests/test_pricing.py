@@ -204,20 +204,24 @@ class TestGetPricing(unittest.TestCase):
         ("xAI", "grok-3-mini"): None,
         ("xAI", "totally-unknown-xyz"): None,
         # Kimi (Moonshot) — cache-MISS input rates; the mixin's cost_usd
-        # applies the cache-hit discount separately. Expressed as arithmetic
-        # (rate / 1e6) to match the live float conversion exactly.
+        # applies the cache-hit and cache-write rates separately. Expressed
+        # as arithmetic (rate / 1e6) to match the live float conversion.
         ("Moonshot", "kimi-k3"): {"input": 3.00 / 1_000_000,
                               "output": 15.00 / 1_000_000},
-        ("Moonshot", "kimi-k2.6"): {"input": 0.95 / 1_000_000,
-                                "output": 4.00 / 1_000_000},
-        # kimi-k2.5 sunsets 2026-08-31 (never served to this account) —
-        # unpriced under the retiring-models policy since 2026-08-25
+        # The K3.1 Pro line (2026-10-26) has its own rows, so the shorter
+        # "kimi-k3" prefix never prices it (1.5x over) — and -highspeed (2x)
+        # must NOT prefix-match down to kimi-k3.1-pro
+        ("Moonshot", "kimi-k3.1-pro"): {"input": 2.00 / 1_000_000,
+                                    "output": 10.00 / 1_000_000},
+        ("Moonshot", "kimi-k3.1-pro-highspeed"): {"input": 4.00 / 1_000_000,
+                                              "output": 20.00 / 1_000_000},
+        # The K2 line is retiring (new accounts cut off 2026-10-31, retirement
+        # by the end of December 2026 — read 2026-10-26): unpriced under the
+        # retiring-models policy, like kimi-k2.5 (retired 2026-08-31) before it
+        ("Moonshot", "kimi-k2.6"): None,
+        ("Moonshot", "kimi-k2.7-code"): None,
+        ("Moonshot", "kimi-k2.7-code-highspeed"): None,
         ("Moonshot", "kimi-k2.5"): None,
-        # -highspeed (2x rates) must NOT prefix-match down to kimi-k2.7-code
-        ("Moonshot", "kimi-k2.7-code-highspeed"): {"input": 1.90 / 1_000_000,
-                                               "output": 8.00 / 1_000_000},
-        ("Moonshot", "kimi-k2.7-code"): {"input": 0.95 / 1_000_000,
-                                     "output": 4.00 / 1_000_000},
         # The discontinued DASH family (kimi-k2-thinking etc.) is filtered out
         # of the picker and deliberately unpriced
         ("Moonshot", "kimi-k2-thinking"): None,

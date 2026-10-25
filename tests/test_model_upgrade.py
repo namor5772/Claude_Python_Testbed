@@ -374,6 +374,9 @@ class LevelTests(unittest.TestCase):
         self.assertEqual(self.levels("xAI", "grok-4.3")[0], "None")
         self.assertEqual(self.levels("xAI", "grok-4.20-0309-non-reasoning"), [])   # no knob
         self.assertEqual(self.levels("Moonshot", "kimi-k3"), ["None", "Low", "High", "Max"])
+        # the K3.1 Pro line (2026-10-26) shares k3's ladder
+        self.assertEqual(self.levels("Moonshot", "kimi-k3.1-pro"), ["None", "Low", "High", "Max"])
+        self.assertEqual(self.levels("Moonshot", "kimi-k3.1-pro-highspeed"), ["None", "Low", "High", "Max"])
         self.assertEqual(self.levels("Moonshot", "kimi-k2.6"), ["Off", "On"])
         self.assertEqual(self.levels("Moonshot", "kimi-k2.7-code"), [])   # always-on, no knob
         self.assertEqual(self.levels("Ollama", "qwen3:8b"), ["Off", "On"])

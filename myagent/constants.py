@@ -1461,10 +1461,11 @@ FALLBACK_MODELS = [
     "claude-haiku-4-5-20251001",
 ]
 DEFAULT_MODEL = FALLBACK_MODELS[0]
-# Moonshot's output caps (kimi_mixin's max_completion_tokens: the thinking
-# figure when a Kimi model reasons — its docs ask for >= 16,000 in tool loops —
-# else the plain one). Until 2026-10-11 the Anthropic caller used them too;
-# it now sends the model's own ceiling, below.
+# Moonshot's K2-line output caps (kimi_mixin's max_completion_tokens: the
+# thinking figure when a Kimi model reasons — its docs ask for >= 16,000 in
+# tool loops — else the plain one; the K3 line sends its own documented
+# 131,072 default instead, KIMI_MAX_COMPLETION_TOKENS). Until 2026-10-11 the
+# Anthropic caller used them too; it now sends the model's own ceiling, below.
 MAX_TOKENS = 8192
 MAX_TOKENS_THINKING = 32768
 # The output ceiling an Anthropic call sends as `max_tokens` — the model's OWN
@@ -2035,32 +2036,66 @@ XAI_NON_VISION_PREFIXES = ()
 # (KIMI_API_KEY also accepted). Catalog, parameters, and the reasoning_content
 # round-trip contract verified against platform.kimi.ai docs 2026-07-25.
 KIMI_DEFAULT_BASE_URL = "https://api.moonshot.ai/v1"
-# Matches the LIVE /v1/models catalog 1:1 (verified 2026-07-25, re-verified
-# 2026-08-25 with a real key): kimi-k2.5 is documented but NOT served to this
-# account, and the models page now gives it a full platform sunset on
-# 2026-08-31 — so it is omitted here and unpriced (the retiring-models-
-# unpriced policy); its thinking-toggle / no-round-trip PARAM wiring below
-# stays so a pinned instruction keeps correct params until the shutdown.
-KIMI_FALLBACK_MODELS = ["kimi-k2.6", "kimi-k3",
-                        "kimi-k2.7-code", "kimi-k2.7-code-highspeed"]
+# Mirrors the PICKER (the live /v1/models catalog minus the retiring K2 line
+# below), re-verified with a real key 2026-10-26: the catalog serves six ids —
+# the K3 line kimi-k3.1-pro / kimi-k3.1-pro-highspeed (new since the
+# 2026-09-23 audit: "the first model of the new K3.1 series and Kimi's most
+# capable flagship", 1M context, vision, $2 / $10 against k3's $3 / $15 — the
+# default since that day, and Moonshot's own migration target) and kimi-k3,
+# and the K2 line kimi-k2.6 / kimi-k2.7-code / -highspeed, which the models
+# page closes to new accounts on 2026-10-31 and retires "by the end of
+# December 2026" — so it is hidden from the picker and unpriced (the
+# retiring-models policy; KIMI_DEPRECATED_MODEL_PREFIXES) while its PARAM
+# wiring below stays and a pinned instruction still runs it, served, behind
+# the "hidden from the model picker" warning. kimi-k2.5 was retired
+# 2026-08-31 (a 404 since).
+KIMI_FALLBACK_MODELS = ["kimi-k3.1-pro", "kimi-k3", "kimi-k3.1-pro-highspeed"]
 KIMI_DEFAULT_MODEL = KIMI_FALLBACK_MODELS[0]
-# reasoning_effort support by family (longest prefix wins) — kimi-k3 only.
-# NOTE the sparse ladder: none/low/high/max, NO medium (the API default is
-# max); _kimi_reasoning_effort() coerces stale saved efforts from other
-# providers. "none" joined 2026-09-23: probed live, it is a real OFF switch
-# (no reasoning_content, no reasoning tokens, and the prompt loses the
-# reasoning preamble — 31 prompt tokens against 99), where the API also
-# accepts "medium" and even "banana" in silence with no measurable effect,
-# so acceptance alone proved nothing and only "none" earned a rung.
-# k2.6/k2.5 use the thinking on/off checkbox instead; k2.7-code has no knob.
+# The retiring K2 line — the DOTTED k2.x ids (k2.6, k2.7-code, -highspeed;
+# k2.5 is gone already; the DASH family kimi-k2-* is dropped from the served
+# set altogether, discontinued 2026-05-25): hidden from the picker by
+# _fetch_kimi_models, kept served. Delete the entry once Moonshot's shutdown
+# makes the ids 404, or to re-offer them.
+KIMI_DEPRECATED_MODEL_PREFIXES = ("kimi-k2.",)
+# reasoning_effort support by family (longest prefix wins) — the K3 LINE: the
+# "kimi-k3" prefix covers kimi-k3, kimi-k3.1-pro and -highspeed, which the
+# docs give identical parameter constraints. NOTE the sparse ladder:
+# none/low/high/max, NO medium (the API default is max);
+# _kimi_reasoning_effort() coerces stale saved efforts from other providers.
+# "none" joined 2026-09-23: probed live, it is a real OFF switch (no
+# reasoning_content, no reasoning tokens, and the prompt loses the reasoning
+# preamble — 31 prompt tokens against 99), where the API also accepts
+# "medium" and even "banana" in silence with no measurable effect, so
+# acceptance alone proved nothing and only "none" earned a rung. Re-measured
+# 2026-10-26 on all three K3 ids (0 reasoning tokens, 146 prompt tokens
+# against 214 at low) although the docs say "You can't — K3.1 Pro always
+# thinks" and the listing's valid_efforts names low/high/max only — which is
+# why this hand-verified table answers BEFORE the listing's ladder
+# (_kimi_reasoning_values): a model the table does not name takes the
+# listing's rungs, in KIMI_EFFORT_LADDER order. k2.6/k2.5 use the thinking
+# on/off checkbox instead; k2.7-code has no knob.
 KIMI_REASONING_EFFORT = {
     "kimi-k3": ["none", "low", "high", "max"],
 }
+# The canonical order of a listing-published ladder (the K3 line's listing
+# entries carry reasoning_efforts.valid_efforts since 2026-10).
+KIMI_EFFORT_LADDER = ("none", "low", "medium", "high", "max")
+# The output cap the K3 line is sent as max_completion_tokens — the API's own
+# documented default for kimi-k3.1-pro / -highspeed / kimi-k3 ("defaults to
+# 131072 and can be set up to 1048576"), thinking on or off: until 2026-10-26
+# the K2 rule's 32,768 was sent, which LOWERED the server's default and would
+# have cut a long max-effort turn short (the Anthropic rule since 2026-10-11:
+# never cap a model below its own ceiling). The K2 line keeps MAX_TOKENS /
+# MAX_TOKENS_THINKING.
+KIMI_MAX_COMPLETION_TOKENS = {"kimi-k3": 131072}
 # Models whose thinking can be toggled via {"thinking": {"type": "enabled" |
 # "disabled"}} (thinking is ON by default server-side for both).
 KIMI_THINKING_TOGGLE_PREFIXES = ("kimi-k2.6", "kimi-k2.5")
 # Models that ALWAYS think — no thinking param accepted (k2.7-code errors on
-# any value but its baked-in one; k3 uses reasoning_effort instead).
+# any value but its baked-in one; the K3 line uses reasoning_effort instead,
+# its measured "none" rung the one exception). The listing's
+# supports_thinking_type == "only" (the K3 line's value) says the same for a
+# model this tuple does not name (_kimi_thinking_active).
 KIMI_ALWAYS_THINKING_PREFIXES = ("kimi-k3", "kimi-k2.7-code")
 # Models that do NOT support Preserved Thinking: reasoning_content must NOT be
 # sent back on assistant messages (kimi-k2.5 is documented as unsupported).
@@ -2075,7 +2110,9 @@ KIMI_NO_REASONING_ROUNDTRIP_PREFIXES = ("kimi-k2.5",)
 # EMPTY since that audit: every served Kimi model reports image input,
 # INCLUDING the k2.7-code coding line (the models doc once called it
 # text-only; live, both k2.7-code and -highspeed read a red test square as
-# "Red"). The tuple stays so a future text-only tier is one entry away.
+# "Red"); re-verified 2026-10-26 — all six served ids, the K3.1 Pro line
+# included, list text, image and video input. The tuple stays so a future
+# text-only tier is one entry away.
 KIMI_NON_VISION_PREFIXES = ()
 PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill", "read_document",
                        "read_file", "glob_files", "grep_files",
@@ -3992,29 +4029,50 @@ XAI_PRICING = {
 # Each entry: (input_price, output_price) — reasoning tokens bill as output,
 # and re-sent reasoning_content (the required round-trip on thinking models)
 # bills again as input. Verified against platform.kimi.ai/docs/pricing
-# 2026-07-25, re-verified 2026-08-25 against the per-model pages
-# (pricing/chat-k3 / -k27-code / -k26: unchanged). The 2-tuple treats all
-# input at the cache-MISS rate; the mixin computes an exact cost_usd from the
-# reported cached tokens using KIMI_CACHE_HIT_PRICING below (stream_worker
-# prefers cost_usd when present). Unpriced under the retiring-models policy:
-# the legacy dash-family (kimi-k2-thinking / -0905 / -0711 / -turbo,
-# discontinued 2026-05-25), moonshot-v1 (dies 2026-08-31), and kimi-k2.5
-# (full platform sunset 2026-08-31 per the models page) — none of them is
-# served by _fetch_kimi_models.
+# 2026-07-25, re-verified 2026-08-25 and 2026-09-23, and re-read 2026-10-26
+# from the one pricing page's table (the per-model pages are gone, and the
+# table is rendered client-side — read the page's React payload, not its
+# .md, whose <table> is empty): kimi-k3.1-pro $2 / $10 (cached $0.20; 5m
+# writes $2, 1h $4), its -highspeed twin $4 / $20 (cached $0.20; writes $4 /
+# $8), kimi-k3 $3 / $15 (cached $0.30; writes $3 / $6) — one flat rate at
+# every context length. The 2-tuple treats all input at the cache-MISS rate;
+# the mixin computes an exact cost_usd from the reported cached and written
+# tokens using KIMI_CACHE_HIT_PRICING / KIMI_CACHE_WRITE_PRICING below
+# (stream_worker prefers cost_usd when present). Unpriced under the
+# retiring-models policy: the K2 line (kimi-k2.6 $0.95 / $4, kimi-k2.7-code
+# $0.95 / $4, -highspeed $1.90 / $8, cached $0.16 / $0.19 / $0.38 —
+# retirement announced for the end of December 2026, read 2026-10-26; a
+# pinned instruction still runs them, unlogged, behind the unpriced
+# warning), kimi-k2.5 (retired 2026-08-31), the legacy dash-family
+# (kimi-k2-thinking / -0905 / -0711 / -turbo, discontinued 2026-05-25) and
+# moonshot-v1 (retired 2026-08-31). Longest prefix wins, so the "kimi-k3"
+# row never prices a kimi-k3.1-pro id while its own row exists — from the
+# day the K3.1 tier appeared until 2026-10-26 it did, 1.5x over on every
+# token.
 KIMI_PRICING = {
+    "kimi-k3.1-pro-highspeed":    (4.00, 20.00),
+    "kimi-k3.1-pro":              (2.00, 10.00),
     "kimi-k3":                    (3.00, 15.00),
-    "kimi-k2.7-code-highspeed":   (1.90, 8.00),
-    "kimi-k2.7-code":             (0.95, 4.00),
-    "kimi-k2.6":                  (0.95, 4.00),
 }
 # Cache-HIT input rate (USD per million tokens), used only by kimi_mixin's
-# exact-cost computation. Longest prefix wins (so -highspeed outranks
-# kimi-k2.7-code, same convention as every other table).
+# exact-cost computation. Longest prefix wins (so -highspeed outranks its
+# base id, same convention as every other table). Both K3.1 Pro tiers read
+# the cache at $0.20 — the highspeed premium is on misses and output only.
 KIMI_CACHE_HIT_PRICING = {
+    "kimi-k3.1-pro-highspeed":    0.20,
+    "kimi-k3.1-pro":              0.20,
     "kimi-k3":                    0.30,
-    "kimi-k2.7-code-highspeed":   0.38,
-    "kimi-k2.7-code":             0.19,
-    "kimi-k2.6":                  0.16,
+}
+# Cache-WRITE rate (USD per million tokens) at the 5-minute TTL — the one
+# MyAgent's requests get, since they send no prompt_cache_options (the 1-hour
+# tier bills 2x these). Equal to the miss rate on every K3 model today, so a
+# written token costs what an uncached one does; the K2 line writes none
+# (its usage carries no cache_write_tokens). Used only by kimi_mixin's
+# exact-cost computation, like the hit table.
+KIMI_CACHE_WRITE_PRICING = {
+    "kimi-k3.1-pro-highspeed":    4.00,
+    "kimi-k3.1-pro":              2.00,
+    "kimi-k3":                    3.00,
 }
 # Local inference is free — empty table makes _get_pricing return None and the
 # cost line is silently skipped by the accumulator.
