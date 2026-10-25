@@ -996,6 +996,7 @@ Everything the apps share between machines lives in two OneDrive trees, both **o
 | `mcp_servers.example.json` | Tracked template for the gitignored `mcp_servers.json` |
 | `docs/selfbot-tool-audit.html` | An HTML audit of SelfBot's tool system — every tool call traced schema → dispatch → handler |
 | `docs/voice-stt-audit.md` | The speech-to-text suitability audit behind Voice Setup's model list (re-runnable with `tests/check_voice_models_live.py`) |
+| `docs/skills-simplification-2026-10-26.md` | The 2026-10-26 pass that rewrote every OneDrive skill shorter — what was cut, what must stay, the fixes made along the way, the stale `skill_modes` cleanup, and the conventions for the next skill edit |
 | `LaunchSelfBot.bat`, `selfbot_position.ps1`, `LaunchMyAgent.bat`, `LaunchMyAgent.sh`, `My Agent.command`, `LaunchTodoList.bat` | Per-platform command-line launchers (`LaunchSelfBot.bat` force-kills every running Python process, then opens and positions the SelfBot duo) |
 | `CLAUDE.md`, `.claude/rules/`, `.claude/skills/`, `.claude/commands/` | Claude Code project instructions, per-app architecture docs and the slash commands above |
 | `.gitattributes` | The line-ending policy: LF in the repo; CRLF on checkout only for `.bat` / `.ps1`; `.sh` / `.command` forced LF even on Windows, since a CRLF shebang is a macOS "bad interpreter" |
