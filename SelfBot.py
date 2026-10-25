@@ -54,7 +54,7 @@ try:
     from myagent.constants import (
         GOOGLE_TOOLS, PROTON_TOOLS, OUTLOOK_TOOLS, MCP_TOOLS,
         GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-        ANTHROPIC_PRICING, ANTHROPIC_WEB_SEARCH_FEE, APICOST_LOG_MAX_BYTES,
+        ANTHROPIC_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
         ANTHROPIC_THINKING_BINDING_BETA, ANTHROPIC_THINKING_BLOCK_BINDING,
         ANTHROPIC_SERVER_FALLBACK_BETA, ANTHROPIC_SERVER_FALLBACKS,
         ANTHROPIC_MAX_OUTPUT_TOKENS, ANTHROPIC_MAX_OUTPUT_DEFAULT,
@@ -67,7 +67,7 @@ try:
         EXCEL_TOOLS, PHYSICAL_TOOLS, PARALLEL_SAFE_TOOLS,
         _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE, _HAS_PHYSICAL,
     )
-    from myagent.helpers import rotate_log_if_needed, parse_output_cap, strip_old_images, input_wait_timer
+    from myagent.helpers import parse_output_cap, strip_old_images, input_wait_timer
     from myagent.retry_util import connection_error_backoff
     from myagent.mcp_mixin import MCPMixin
     from myagent.gmail_mixin import GmailMixin
@@ -91,7 +91,6 @@ except Exception:
     GMAIL_CONFIRM_TOOLS = PROTON_CONFIRM_TOOLS = OUTLOOK_CONFIRM_TOOLS = []
     ANTHROPIC_PRICING = {}
     ANTHROPIC_WEB_SEARCH_FEE = 10.00 / 1000   # USD per executed web search
-    APICOST_LOG_MAX_BYTES = 100_000
     # Claude Fable 5.1 beta surfaces (see myagent/constants.py for the why):
     # preserved-thinking drop_block binding + server-side refusal fallbacks.
     ANTHROPIC_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
@@ -123,9 +122,6 @@ except Exception:
 
     def input_wait_timer(app):
         return _NoWaitTimer()
-
-    def rotate_log_if_needed(log_path, max_bytes):
-        return False  # no myagent package -> no rotation; the log just grows
 
     def parse_output_cap(msg):
         """The ceiling named by an over-cap max_tokens 400 (myagent/helpers.py)."""
@@ -7198,7 +7194,11 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             line = (f"{timestamp};{provider};{model};"
                     f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
                     f"{tok_s}{tail}\n")
-            rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
+            # Never rotated (2026-10-25): both Cost Log viewers sum this ledger
+            # over its whole life, and the one-slot 100 KB rotation that ran
+            # here had just moved the laptop's 963 lines into a .old file the
+            # viewers exclude by name — the viewer showed one run. At ~300
+            # bytes a run the file grows about 100 KB a year.
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
             with open(APICOST_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:

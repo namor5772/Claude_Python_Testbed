@@ -96,7 +96,8 @@ if (-not $share) {
 }
 
 # One log file per machine: APICostLog_<machine>.txt in the share (the regex
-# excludes the .old rotation archives and .migrated.bak markers), plus the
+# excludes a .old archive -- the log is never rotated since 2026-10-25, one
+# from before may linger -- and .migrated.bak markers), plus the
 # repo-root file when it still exists.
 $logs = @()
 if ($share -and (Test-Path -LiteralPath $share -PathType Container)) {

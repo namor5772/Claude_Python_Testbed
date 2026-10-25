@@ -71,8 +71,9 @@ if [ -z "$SHARE" ]; then
   done
 fi
 
-# One log file per machine (the glob can't match the .old rotation archives or
-# .migrated.bak markers), plus the repo-root file when it still exists.
+# One log file per machine (the glob can't match a .old archive — the log is
+# never rotated since 2026-10-25, one from before may linger — or .migrated.bak
+# markers), plus the repo-root file when it still exists.
 LOGS=()
 LABELS=()
 if [ -n "$SHARE" ] && [ -d "$SHARE" ]; then

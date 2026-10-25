@@ -21,11 +21,11 @@ from myagent.constants import (
     RESPONSES_REASONING_INCLUDE, XAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
-    APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES, CONVO_END_WORDS, CONVO_EXIT_WORD,
+    APICOST_LOG_FILE, CONVO_END_WORDS, CONVO_EXIT_WORD,
     AGENT_RUN_PREFIX,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
-                             responses_replay_refused, rotate_log_if_needed, screenshot_hint)
+                             responses_replay_refused, screenshot_hint)
 from myagent.pane_notes import PaneNotesMixin
 
 if _HAS_DESKTOP:
@@ -1441,7 +1441,11 @@ class StreamingMixin(PaneNotesMixin):
             line = (f"{timestamp};{provider};{model};"
                     f"{total_cost:.4f};{params};{secs};{instr};{calls_s};"
                     f"{tok_s}{tail}\n")
-            rotate_log_if_needed(APICOST_LOG_FILE, APICOST_LOG_MAX_BYTES)
+            # Never rotated (2026-10-25): both Cost Log viewers sum this ledger
+            # over its whole life, and the one-slot 100 KB rotation that ran
+            # here had just moved the laptop's 963 lines into a .old file the
+            # viewers exclude by name — the viewer showed one run. At ~300
+            # bytes a run the file grows about 100 KB a year.
             # newline="\n": the per-machine logs are read cross-platform via
             # OneDrive; Windows text-mode CRLF shows as ^M in the macOS viewer.
             with open(APICOST_LOG_FILE, "a", encoding="utf-8", newline="\n") as f:
