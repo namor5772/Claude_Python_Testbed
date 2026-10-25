@@ -155,16 +155,23 @@ TOK_FN='function tok(v) {
 # the model (3), a row carrying the per-model split ($S, 2026-09-27) counts
 # under EACH model that served it, with that model's own cost — the Windows
 # twin's Expand-ModelSplit.
+# A machine's row also ends with its LAST run (2026-10-25) — "(964 runs, last
+# 2026-10-25 11:04:22)" — so a machine that has gone quiet, or whose log has
+# stopped syncing, shows as such here: the FULL LOG's first page was 25 laptop
+# rows in a row the day the other two machines had sat idle since Wednesday,
+# and read as "only this laptop's runs are shown". The merged rows are in
+# timestamp order, so the last row seen is the latest; the Windows twin
+# prints the same tail from the same rule, and the other buckets none.
 bucket() {
-  local fmt="    %-$3s \$%10.4f  (%d$4)\n"
+  local fmt="    %-$3s \$%10.4f  (%d$4%s)\n"
   awk -F';' -v K="$1" -v P="$2" -v W="$W" -v S="$S" 'NF>=W && substr($1,1,length(P))==P && $K!="" {
       if (K == 3 && $S != "") {
         np = split($S, parts, "|")
         for (i = 1; i <= np; i++) { if (split(parts[i], p, ",") >= 6) { m[p[1]] += p[2]; c[p[1]]++ } }
-      } else { m[$K]+=$4; c[$K]++ }
+      } else { m[$K]+=$4; c[$K]++; last[$K] = $1 }
     }
-    END { for (k in m) printf "%.4f\t%s\t%d\n", m[k], k, c[k] }' "$MERGED" \
-    | sort -rn | awk -F'\t' -v FMT="$fmt" '{ printf FMT, $2, $1+0, $3 }'
+    END { for (k in m) printf "%.4f\t%s\t%d\t%s\n", m[k], k, c[k], (K == W ? ", last " last[k] : "") }' "$MERGED" \
+    | sort -rn | awk -F'\t' -v FMT="$fmt" '{ printf FMT, $2, $1+0, $3, $4 }'
 }
 
 # Per-model token totals + the EFFECTIVE blended rate (total cost / total

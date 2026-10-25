@@ -303,9 +303,10 @@ class ModelSplitTests(_ViewerCase):
             [header,
              token_row("claude-fable-5-1", 2, 3000, 600, 10000, 15000, 3.0),
              token_row("claude-sonnet-5", 2, 2000, 500, 0, 15000, 0.75)])
-        # Everything else still counts the upgraded run once, whole.
+        # Everything else still counts the upgraded run once, whole — and the
+        # machine row ends with the machine's last run (2026-10-25).
         self.assertEqual(self.block(lines, "  By machine:"),
-                         ["    MACHINE-A                $    3.7500  (3 runs)"])
+                         [f"    MACHINE-A                $    3.7500  (3 runs, last {today} 10:00:00)"])
         self.assertEqual(self.block(lines, "  By provider:"),
                          ["    Anthropic    $    3.7500  (3 runs)"])
         self.assertIn("  3 runs", "\n".join(lines))

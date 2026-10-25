@@ -184,7 +184,7 @@ right-aligned to end at column 34, where a single-digit `today` always ended,
 so decimal points line up when a day passes $10 (the two old format strings
 only looked aligned: their `{0}` / `%s` is 10 characters for a date, 7 for a
 month) — this month, by
-machine, by provider, by model (highest spend first) and, for rows that carry
+machine (each with the time of its last run, since 2026-10-25), by provider, by model (highest spend first) and, for rows that carry
 one, by instruction, then (since 2026-09-02) the same four rollups again over
 the current month only under a `THIS MONTH (yyyy-MM)` heading, each block
 built by one shared `rollups` shell function, plus (since 2026-09-14) a **By model (tokens and effective blended rate)** block (`token_rollup`: per-model IN / OUT / CACHE-W / CACHE-R totals, cost ÷ tokens as $/MTok and, since 2026-09-15, CACHE%, cache reads as a share of the input side) — before listing every run most-recent-first **with its
@@ -487,7 +487,7 @@ the last seven days under it, all read
 from one `$byDay` hashtable built in a single pass over the rows rather than a
 `Where-Object` pipeline per day, with every date taken from one `$now`; the
 layout is the macOS twin's, byte for byte — this
-month, by machine, by provider, by model, by instruction — and, since
+month, by machine (each with the time of its last run, 2026-10-25), by provider, by model, by instruction — and, since
 2026-09-02, those four rollups again over the current month only under a
 `THIS MONTH` heading, both blocks from one `Get-Rollups` function, plus the **By model (tokens
 and effective blended rate)** block from `Get-TokenRollup` — 2026-09-14; its CACHE% column, cache

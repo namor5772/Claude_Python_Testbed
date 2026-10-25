@@ -208,10 +208,17 @@ function Get-TokenRollup([object[]]$set) {
 function Get-Rollups([object[]]$set, [string]$qual) {
     $sfx  = if ($qual) { " ($qual)" } else { '' }
     $lead = if ($qual) { "$qual; " } else { '' }
+    # Each machine's LAST run (2026-10-25) closes its row -- "(964 runs, last
+    # 2026-10-25 11:04:22)" -- so a machine that has gone quiet, or whose log
+    # has stopped syncing, shows as such here: the FULL LOG's first page was
+    # 25 laptop rows in a row the day the other two machines had sat idle
+    # since Wednesday, and read as "only this laptop's runs are shown". $set
+    # is in timestamp order (sorted once, filtered in order), so a group's
+    # last row is its latest.
     $lines = @('', "  By machine${sfx}:")
     $lines += @($set | Group-Object Machine |
         Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
-        ForEach-Object { '    {0,-24} ${1,10:N4}  ({2} runs)' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count })
+        ForEach-Object { '    {0,-24} ${1,10:N4}  ({2} runs, last {3})' -f $_.Name, ($_.Group | Measure-Object Cost -Sum).Sum, $_.Count, $_.Group[-1].Time })
     $lines += @('', "  By provider${sfx}:")
     $lines += @($set | Group-Object Provider |
         Sort-Object { ($_.Group | Measure-Object Cost -Sum).Sum } -Descending |
