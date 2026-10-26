@@ -34,6 +34,7 @@ from pathlib import Path
 from unittest import mock
 
 import Heartbeat
+from myagent import relay
 
 
 class RotateLogTests(unittest.TestCase):
@@ -137,15 +138,17 @@ class _TelegramBase(unittest.TestCase):
         self.events = []
         self.rewrites = []
         self.launches = []
+        self.relays = []
         self.running = []
         self.launch_error = None
         _patch(self, Heartbeat, "rewrite_instruction",
                lambda name, core: self.rewrites.append((name, core)))
         _patch(self, Heartbeat, "running_instances", lambda name: list(self.running))
 
-        def launch(name, result_file=None):
+        def launch(name, result_file=None, relay_dir=None):
             self.events.append(f"launch:{name}")
             self.launches.append((name, result_file))
+            self.relays.append(relay_dir)
             if self.launch_error:
                 raise self.launch_error
             return 4242
@@ -579,6 +582,13 @@ class LaunchCommandTests(unittest.TestCase):
         line = subprocess.list2cmdline(cmd)
         self.assertRegex(line, Heartbeat.watchdog_pattern("Balance Westpac"))
 
+    def test_the_relay_folder_follows_too(self):
+        cmd = self._command(result_file=Path("C:/x/results/10.json"),
+                            relay_dir=Path("C:/x/relay/10"))
+        self.assertEqual(cmd[-4:], ["--result-file", str(Path("C:/x/results/10.json")),
+                                    "--relay-dir", str(Path("C:/x/relay/10"))])
+        self.assertRegex(subprocess.list2cmdline(cmd), Heartbeat.watchdog_pattern("Balance Westpac"))
+
     def test_without_a_result_file_the_command_is_unchanged(self):
         cmd = self._command()
         self.assertEqual(cmd[1:], ["MyAgent.py", "-l", "Balance Westpac", "--headless"])
@@ -815,6 +825,189 @@ class WatchRunTests(_TelegramBase):
         Heartbeat.watch_run(self.cfg, 5151, pending)
         self.assertEqual(self.api.sent, [])
         self.assertEqual(self.log_text(), "")
+
+
+class RelayHandleTests(_TelegramBase):
+    """telegram_handle_update while a run of the chat's is waiting on an
+    Agent Request: the message is the reply, not a trigger."""
+
+    def setUp(self):
+        super().setUp()
+        _patch(self, Heartbeat, "AWAITING", {})
+        _patch(self, Heartbeat, "TELEGRAM_RELAY_DIR", self.root / "tg" / "relay")
+        self.relay_dir = self.root / "tg" / "relay" / "10"
+        self.relay_dir.mkdir(parents=True)
+
+    def test_a_launch_gets_a_relay_folder_on_the_command_line_and_in_the_record(self):
+        self.fake(_update(10, "ZZ Probe\nDo"))
+        Heartbeat.process_telegram(self.cfg)
+        self.assertEqual(self.relays, [self.root / "tg" / "relay" / "10"])
+        record = json.loads(self.pending_files()[0].read_text(encoding="utf-8"))
+        self.assertEqual(Path(record["relay_dir"]), self.root / "tg" / "relay" / "10")
+
+    def test_the_next_message_answers_the_open_request(self):
+        relay.write_request(self.relay_dir, 1, "Which month?")
+        Heartbeat.AWAITING[777] = [(str(self.relay_dir), 1, "ZZ Probe")]
+        self.fake(_update(20, "October please"))
+        status, _ = Heartbeat.telegram_handle_update(self.cfg, _update(20, "October please"))
+        self.assertEqual(status, "skipped")
+        self.assertEqual(self.events, ["confirm:20", "send:777"])
+        self.assertEqual(relay.read_reply(self.relay_dir, 1), "October please")
+        self.assertIn("Sent to ZZ Probe", self.api.sent[0][1])
+        self.assertEqual(self.launches, [])
+        self.assertEqual(Heartbeat.AWAITING, {})
+        self.assertIn("reply to 'ZZ Probe' request #1 from update 20", self.log_text())
+
+    def test_a_reply_after_the_pc_answered_is_not_used(self):
+        Heartbeat.AWAITING[777] = [(str(self.relay_dir), 1, "ZZ Probe")]
+        self.fake()
+        status, _ = Heartbeat.telegram_handle_update(self.cfg, _update(20, "too late"))
+        self.assertEqual(status, "skipped")
+        self.assertIn("already been answered at the PC", self.api.sent[0][1])
+        self.assertIsNone(relay.read_reply(self.relay_dir, 1))
+
+    def test_a_reply_to_an_old_request_is_not_used(self):
+        relay.write_request(self.relay_dir, 2, "second question")
+        Heartbeat.AWAITING[777] = [(str(self.relay_dir), 1, "ZZ Probe")]
+        self.fake()
+        Heartbeat.telegram_handle_update(self.cfg, _update(20, "stale"))
+        self.assertIsNone(relay.read_reply(self.relay_dir, 2))
+        self.assertIn("already been answered", self.api.sent[0][1])
+
+    def test_the_oldest_request_is_answered_first_and_the_rest_wait(self):
+        other = self.root / "tg" / "relay" / "11"
+        other.mkdir()
+        relay.write_request(self.relay_dir, 1, "q1")
+        relay.write_request(other, 1, "q2")
+        Heartbeat.AWAITING[777] = [(str(self.relay_dir), 1, "First"), (str(other), 1, "Second")]
+        self.fake()
+        Heartbeat.telegram_handle_update(self.cfg, _update(20, "a1"))
+        self.assertEqual(relay.read_reply(self.relay_dir, 1), "a1")
+        self.assertIsNone(relay.read_reply(other, 1))
+        self.assertEqual(Heartbeat.AWAITING, {777: [(str(other), 1, "Second")]})
+
+    def test_commands_and_media_are_not_taken_as_the_reply(self):
+        Heartbeat.AWAITING[777] = [(str(self.relay_dir), 1, "ZZ Probe")]
+        relay.write_request(self.relay_dir, 1, "q")
+        self.fake()
+        Heartbeat.telegram_handle_update(self.cfg, _update(20, "/help"))
+        Heartbeat.telegram_handle_update(self.cfg, _update(21, None, sticker={"file_id": "s"}))
+        self.assertIsNone(relay.read_reply(self.relay_dir, 1))
+        self.assertEqual(len(Heartbeat.AWAITING[777]), 1)
+
+    def test_another_chat_is_not_awaited(self):
+        Heartbeat.AWAITING[888] = [(str(self.relay_dir), 1, "ZZ Probe")]
+        self.cfg["allowed_chat_ids"] = [777, 888]
+        self.fake()
+        status, _ = Heartbeat.telegram_handle_update(self.cfg, _update(20, "ZZ Probe\nDo"))
+        self.assertEqual(status, "launched")
+        self.assertIsNone(relay.read_reply(self.relay_dir, 1))
+
+
+class RelayTickTests(_TelegramBase):
+    def setUp(self):
+        super().setUp()
+        _patch(self, Heartbeat, "AWAITING", {})
+        self.relay_dir = self.root / "tg" / "relay" / "10"
+        self.relay_dir.mkdir(parents=True)
+        self.record = {"chat_id": 777, "instruction": "ZZ Probe"}
+        self.fake()
+
+    def test_an_open_request_is_posted_once_and_awaited(self):
+        relay.write_request(self.relay_dir, 1, "Which month?")
+        seq = Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, 0)
+        self.assertEqual(seq, 1)
+        self.assertEqual(self.api.sent, [(777, "❓ ZZ Probe asks:\nWhich month?\n\nReply here and it goes to the run.")])
+        self.assertEqual(Heartbeat.AWAITING, {777: [(str(self.relay_dir), 1, "ZZ Probe")]})
+        self.assertEqual(Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, seq), 1)
+        self.assertEqual(len(self.api.sent), 1)                  # not posted again
+        self.assertIn("relayed 'ZZ Probe' request #1 to chat 777", self.log_text())
+
+    def test_a_later_request_is_posted_in_turn(self):
+        relay.write_request(self.relay_dir, 1, "q1")
+        seq = Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, 0)
+        relay.clear(self.relay_dir)
+        relay.write_request(self.relay_dir, 2, "q2")
+        seq = Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, seq)
+        self.assertEqual(seq, 2)
+        self.assertEqual([t for _, t in self.api.sent][1], "❓ ZZ Probe asks:\nq2\n\nReply here and it goes to the run.")
+
+    def test_a_request_answered_at_the_pc_is_withdrawn(self):
+        relay.write_request(self.relay_dir, 1, "q1")
+        Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, 0)
+        relay.clear(self.relay_dir)
+        relay.mark_answered(self.relay_dir, 1)
+        Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, 1)
+        self.assertIn("answered at the PC", self.api.sent[1][1])
+        self.assertEqual(Heartbeat.AWAITING, {})
+        self.assertFalse((self.relay_dir / relay.ANSWERED).exists())
+
+    def test_a_pc_answer_after_the_phone_replied_withdraws_nothing(self):
+        relay.mark_answered(self.relay_dir, 1)      # nothing awaited any more
+        Heartbeat.relay_tick(self.cfg, self.record, self.relay_dir, 1)
+        self.assertEqual(self.api.sent, [])
+
+    def test_forget_drops_the_run_and_keeps_the_others(self):
+        other = self.root / "tg" / "relay" / "11"
+        Heartbeat.AWAITING[777] = [(str(self.relay_dir), 1, "A"), (str(other), 1, "B")]
+        Heartbeat.relay_forget(777, self.relay_dir)
+        self.assertEqual(Heartbeat.AWAITING, {777: [(str(other), 1, "B")]})
+        Heartbeat.relay_forget(777, other)
+        self.assertEqual(Heartbeat.AWAITING, {})
+
+
+class WatchRunRelayTests(_TelegramBase):
+    """watch_run with a relay folder: the request posted while the run lives,
+    the awaiting entry dropped and the folder removed when it ends."""
+
+    def setUp(self):
+        super().setUp()
+        _patch(self, Heartbeat, "AWAITING", {})
+        self.relay_dir = self.root / "tg" / "relay" / "7"
+        self.relay_dir.mkdir(parents=True)
+        self.fake()
+
+    def test_a_request_during_the_run_is_posted_and_the_folder_cleaned_at_the_end(self):
+        result = self.root / "tg" / "results" / "7.json"
+        pending = Heartbeat.telegram_pending_write(7, 777, "ZZ", 5151, result, self.relay_dir)
+        ticks = []
+
+        class _Proc:
+            pid = 5151
+
+            def wait(self_, timeout=None):
+                ticks.append(timeout)
+                if len(ticks) == 1:
+                    relay.write_request(self.relay_dir, 1, "Which month?")
+                    raise subprocess.TimeoutExpired("MyAgent.py", timeout)
+                if len(ticks) == 2:
+                    raise subprocess.TimeoutExpired("MyAgent.py", timeout)
+                result.parent.mkdir(parents=True, exist_ok=True)
+                result.write_text(json.dumps({"status": "completed", "error": "",
+                                              "final_text": "Done"}), encoding="utf-8")
+        Heartbeat.LAUNCHED[5151] = _Proc()
+        _patch(self, Heartbeat, "pid_alive", lambda pid: False)
+        Heartbeat.watch_run(self.cfg, 5151, pending)
+        self.assertEqual(ticks, [Heartbeat.RELAY_POLL_SECONDS] * 3)
+        texts = [t for _, t in self.api.sent]
+        self.assertTrue(texts[0].startswith("❓ ZZ asks:\nWhich month?"))
+        self.assertTrue(texts[-1].startswith("✅ ZZ completed"))
+        self.assertEqual(Heartbeat.AWAITING, {})
+        self.assertFalse(self.relay_dir.exists())
+        self.assertFalse(pending.exists())
+
+    def test_a_run_without_a_relay_folder_polls_at_the_slow_step(self):
+        result = self.root / "tg" / "results" / "7.json"
+        pending = Heartbeat.telegram_pending_write(7, 777, "ZZ", 5151, result)
+        waited = []
+
+        class _Proc:
+            def wait(self_, timeout=None):
+                waited.append(timeout)
+        Heartbeat.LAUNCHED[5151] = _Proc()
+        _patch(self, Heartbeat, "pid_alive", lambda pid: False)
+        Heartbeat.watch_run(self.cfg, 5151, pending)
+        self.assertEqual(waited, [Heartbeat.WATCH_POLL_SECONDS])
 
 
 class TokenHygieneTests(unittest.TestCase):

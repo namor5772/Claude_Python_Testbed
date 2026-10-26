@@ -16,7 +16,12 @@ from myagent.constants import (
 from myagent.helpers import extract_text_from_html, input_wait_timer
 from myagent.keyboard import bind_mnemonics, link_embedded_checkbuttons
 from myagent.pane_notes import PaneNotesMixin
+from myagent import relay
 from myagent.speech import AGENT_REQUEST_ANNOUNCEMENT, speak
+
+# How often an open Agent Request dialog looks for a reply relayed from the
+# phone (a run the Telegram listener launched — see myagent/relay.py).
+RELAY_POLL_MS = 500
 
 from ddgs import DDGS
 import httpx
@@ -418,13 +423,58 @@ class SafetyMixin(PaneNotesMixin):
             except tk.TclError:
                 pass
 
+    # ── Agent Request relay (2026-10-26) ──────────────────────────────
+    # A run Heartbeat's Telegram listener launched carries --relay-dir, and
+    # every Agent Request of such a run is also posted to the phone: the
+    # dialog writes the request to that folder, the listener's watcher sends
+    # the text to the chat, the chat's next message comes back as reply.json,
+    # and the dialog's poller drops it in the reply box and sends it through
+    # on_inject — the one door every reply takes (Enter, Mike's Auto-send).
+    # The dialog stays answerable at the PC; the first answer wins, and the
+    # other side is told (answered.json withdraws the question in the chat).
+    # All of it is best-effort: a relay folder that cannot be written never
+    # stops a dialog from opening.
+
+    def _relay_request(self, message):
+        """Post the dialog's text to the run's relay folder; its sequence
+        number, or None for a run with no relay (or a folder that failed)."""
+        relay_dir = getattr(self, "_relay_dir", None)
+        if not relay_dir:
+            return None
+        self._relay_seq = getattr(self, "_relay_seq", 0) + 1
+        try:
+            relay.write_request(relay_dir, self._relay_seq, message)
+        except OSError as e:
+            self._warn(f"⚠ Agent Request not relayed to the phone ({e})\n")
+            return None
+        return self._relay_seq
+
+    def _relay_reply(self, seq):
+        """The phone's reply to request ``seq`` once it has landed, else None."""
+        try:
+            return relay.read_reply(self._relay_dir, seq)
+        except OSError:
+            return None
+
+    def _relay_settle(self, seq, from_relay):
+        """The request is over: clear it, and — answered at the PC — leave the
+        marker that lets the listener withdraw the question in the chat."""
+        try:
+            relay.clear(self._relay_dir)
+            if not from_relay:
+                relay.mark_answered(self._relay_dir, seq)
+        except OSError:
+            pass
+
     def do_user_prompt(self, message, convo=False):
         """Pause the agent and ask the user for input via a modal dialog.
 
         Returns the reply text; any images the user attached are stashed on
         self._prompt_attached_images for the caller to pop via
         _take_prompt_images() (same thread — the streaming worker blocks on
-        the dialog and reads the result synchronously)."""
+        the dialog and reads the result synchronously). A run with a relay
+        folder (--relay-dir) also takes the reply from the phone — see
+        _relay_request above."""
         # The model's tool input: a sloppy (local) model can send null or a
         # non-string, and Text.insert(None) raises inside the dialog builder.
         message = "" if message is None else str(message)
@@ -573,11 +623,37 @@ class SafetyMixin(PaneNotesMixin):
             if not IS_WINDOWS:
                 resp_text.bind("<Command-v>", on_paste)
 
+            # The relay (see _relay_request): the request goes out as the
+            # dialog is built, the poller below looks for the phone's reply,
+            # and from_relay tells the close path which side answered.
+            relay_seq = self._relay_request(message)
+            from_relay = [False]
+            relay_poll = [None]
+
             def _capture_and_close():
                 """Cache the dialog geometry before destroying."""
                 dictation.shutdown()   # release the microphone, drop a pending transcript
+                if relay_poll[0] is not None:
+                    dlg.after_cancel(relay_poll[0])
+                    relay_poll[0] = None
+                if relay_seq is not None:
+                    self._relay_settle(relay_seq, from_relay[0])
                 self._remember_geometry("prompt", dlg)
                 self._prompt_dialog = None
+
+            def poll_relay():
+                relay_poll[0] = None
+                if not dlg.winfo_exists():
+                    return
+                text = self._relay_reply(relay_seq)
+                # Mid-dictation the box belongs to the microphone: wait.
+                if text is not None and dictation.state == "idle":
+                    from_relay[0] = True
+                    resp_text.delete("1.0", tk.END)
+                    resp_text.insert("1.0", text)
+                    on_inject()
+                    return
+                relay_poll[0] = dlg.after(RELAY_POLL_MS, poll_relay)
 
             def on_inject(ev=None):
                 # Mid-dictation, Enter must not send: the speech would be
@@ -641,6 +717,8 @@ class SafetyMixin(PaneNotesMixin):
             (mike_btn if hands_free else resp_text).focus_set()
             if hands_free:
                 self._announce_request(dlg)
+            if relay_seq is not None:
+                relay_poll[0] = dlg.after(RELAY_POLL_MS, poll_relay)
 
         failure = []
 

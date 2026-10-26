@@ -659,7 +659,7 @@ class DispatchOrderTests(_TempLog):
         self.launch_error = None
         self.consume_error = None
 
-        def launch(name, result_file=None):
+        def launch(name, result_file=None, relay_dir=None):
             self.events.append(f"launch:{name}")
             if self.launch_error:
                 raise self.launch_error

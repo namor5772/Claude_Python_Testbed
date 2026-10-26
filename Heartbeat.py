@@ -20,6 +20,13 @@ or a note that it ended without a result (the watchdog, a crash) or has run
 a day without one (a dialog). The bot answers at once: ▶ Started, ⚠ Not run
 with the reason for a poison trigger, the usage for /start or /help, and
 what it received for a message without text (a voice note, a sticker).
+A run the listener launched also has its Agent Request dialogs RELAYED
+(2026-10-26, myagent/relay.py): MyAgent writes each request to the run's
+relay folder (--relay-dir), the watcher posts "❓ <name> asks: …" to the
+chat and marks the chat as awaiting that run's reply, the chat's next text
+message is written back as the reply and the dialog sends it as if typed —
+so a whole Convo-mode conversation can be held from the phone; a request
+answered at the PC first is withdrawn in the chat.
 Only messages from the chat ids in ~/.config/myagent-telegram/config.json
 are obeyed; anything else is confirmed, logged and ignored. Set up with
     python Heartbeat.py --telegram-pair <bot token from BotFather>
@@ -57,6 +64,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -71,6 +79,7 @@ BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
 from myagent.helpers import rotate_log_if_needed as _rotate_log  # noqa: E402
 from myagent.datapaths import resolve_store as _resolve_store  # noqa: E402
+from myagent import relay as _relay  # noqa: E402
 
 # The machine's code, the label the bot's messages carry: the desktop answers
 # as APD, any other Windows machine (the laptop) as APL, the Mac as APM. They
@@ -315,11 +324,12 @@ def format_result_reply(name, result):
     return head + (f"\n\n{body}" if body else "")
 
 
-def telegram_pending_write(update_id, chat_id, name, pid, result_file):
+def telegram_pending_write(update_id, chat_id, name, pid, result_file, relay_dir=None):
     """Record a launched run until its outcome is posted; the record's path."""
     TELEGRAM_PENDING_DIR.mkdir(parents=True, exist_ok=True)
     record = {"update_id": update_id, "chat_id": chat_id, "instruction": name,
-              "pid": pid, "started": time.time(), "result_file": str(result_file)}
+              "pid": pid, "started": time.time(), "result_file": str(result_file),
+              "relay_dir": str(relay_dir) if relay_dir else None}
     path = TELEGRAM_PENDING_DIR / f"{update_id}.json"
     path.write_text(json.dumps(record, indent=2), encoding="utf-8")
     return path
@@ -419,9 +429,33 @@ def telegram_handle_update(cfg, upd):
         telegram_send(token, chat_id, telegram_usage())
         log(f"telegram: {text.strip()} in update {uid} — answered with the usage")
         return "skipped", None
+    # A run of this chat's is waiting on an Agent Request: this message is
+    # its reply, not a new trigger (the oldest open request first).
+    with _RELAY_LOCK:
+        waiting = AWAITING.get(chat_id) or []
+        item = waiting.pop(0) if waiting else None
+        if not waiting:
+            AWAITING.pop(chat_id, None)
+    if item is not None:
+        relay_dir, seq, name = item
+        telegram_confirm(token, uid)
+        open_request = _relay.read_request(relay_dir)
+        if open_request is None or open_request.get("seq") != seq:
+            # Answered at the PC between the question and this reply.
+            telegram_send(token, chat_id,
+                          f"⚠ {name} on {HOST} had already been answered at the PC "
+                          f"— your message was not used.")
+            log(f"telegram: late reply to {name!r} request #{seq} in update {uid} "
+                f"— already answered at the PC")
+            return "skipped", None
+        _relay.write_reply(relay_dir, seq, text)
+        telegram_send(token, chat_id, f"↩ Sent to {name}.")
+        log(f"telegram: reply to {name!r} request #{seq} from update {uid}")
+        return "skipped", None
     name, prompt_core = parse_telegram_trigger(text)
     TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
+    relay_dir = TELEGRAM_RELAY_DIR / str(uid)
     consumed = []
 
     def consume():
@@ -430,7 +464,7 @@ def telegram_handle_update(cfg, upd):
 
     try:
         status, detail = dispatch_trigger(label, name, prompt_core, consume,
-                                          result_file=result_file)
+                                          result_file=result_file, relay_dir=relay_dir)
     except Exception as e:
         # Consumed already means the launch itself failed — an update cannot
         # be un-confirmed, so the user is told to resend.
@@ -446,7 +480,7 @@ def telegram_handle_update(cfg, upd):
         return "poison", None
     if status == "deferred":
         return "deferred", None
-    pending = telegram_pending_write(uid, chat_id, name, detail, result_file)
+    pending = telegram_pending_write(uid, chat_id, name, detail, result_file, relay_dir)
     telegram_send(token, chat_id,
                   f"▶ Started {name} on {HOST} — the result will follow when it "
                   f"finishes.")
@@ -485,6 +519,17 @@ LISTEN_ALIVE_LINE_SECONDS = 3600
 # watched by polling its pid.
 WATCH_POLL_SECONDS = 5
 TELEGRAM_LOCK_FILE = TELEGRAM_CONFIG_DIR / "listener.lock"
+# One folder per launched run for its Agent Request relay (myagent/relay.py),
+# named by the update id like the result file; removed when the run ends.
+TELEGRAM_RELAY_DIR = TELEGRAM_CONFIG_DIR / "relay"
+# How often a watcher looks at its run's relay folder while the run lives.
+RELAY_POLL_SECONDS = 1.0
+# chat id → [(relay folder, request seq, instruction name), …] — the Agent
+# Requests posted to that chat and not yet answered, oldest first: the chat's
+# next text message answers the first of them. Watcher threads add and
+# remove entries, the poll loop takes them, hence the lock.
+AWAITING = {}
+_RELAY_LOCK = threading.Lock()
 # pid → Popen of every run THIS process launched, so a watcher can wait on the
 # child instead of polling (launch_instruction fills it, watch_run takes).
 LAUNCHED = {}
@@ -517,27 +562,87 @@ def listener_lock_release():
         pass
 
 
+def relay_tick(cfg, record, relay_dir, sent_seq):
+    """One look at a live run's relay folder: a request answered at the PC is
+    withdrawn in the chat; a request not yet posted (its seq above
+    ``sent_seq``) is posted and the chat marked as awaiting its reply.
+    Returns the seq of the last request posted."""
+    chat_id, name = record["chat_id"], record.get("instruction", "?")
+    answered = _relay.take_answered(relay_dir)
+    if answered is not None:
+        with _RELAY_LOCK:
+            waiting = AWAITING.get(chat_id) or []
+            entry = (str(relay_dir), answered, name)
+            withdrawn = entry in waiting
+            if withdrawn:
+                waiting.remove(entry)
+            if not waiting:
+                AWAITING.pop(chat_id, None)
+        if withdrawn:
+            telegram_send(cfg["bot_token"], chat_id,
+                          f"✔ {name} was answered at the PC — no reply needed.")
+            log(f"telegram: {name!r} request #{answered} answered at the PC — withdrawn")
+    request = _relay.read_request(relay_dir)
+    if request is not None and int(request.get("seq", 0)) > sent_seq:
+        seq = int(request["seq"])
+        with _RELAY_LOCK:
+            AWAITING.setdefault(chat_id, []).append((str(relay_dir), seq, name))
+        telegram_send(cfg["bot_token"], chat_id,
+                      f"❓ {name} asks:\n{request.get('text', '')}\n\n"
+                      f"Reply here and it goes to the run.")
+        log(f"telegram: relayed {name!r} request #{seq} to chat {chat_id}")
+        sent_seq = seq
+    return sent_seq
+
+
+def relay_forget(chat_id, relay_dir):
+    """The run is over: whatever it was still asking is dropped."""
+    with _RELAY_LOCK:
+        waiting = [w for w in (AWAITING.get(chat_id) or []) if w[0] != str(relay_dir)]
+        if waiting:
+            AWAITING[chat_id] = waiting
+        else:
+            AWAITING.pop(chat_id, None)
+
+
 def watch_run(cfg, pid, pending):
-    """Wait for one run to end, then post its outcome at once. Waits on the
-    Popen when this process launched the run, else polls the pid; the wait
-    is capped at the record's TELEGRAM_RESULT_WAIT_SECONDS so the timeout
-    note still goes out for a run parked on a dialog."""
+    """Wait for one run to end, relaying its Agent Requests meanwhile, then
+    post its outcome at once. Waits on the Popen when this process launched
+    the run, else polls the pid; the wait is capped at the record's
+    TELEGRAM_RESULT_WAIT_SECONDS so the timeout note still goes out for a
+    run parked on a dialog nobody answers."""
     try:
-        started = float(json.loads(pending.read_text(encoding="utf-8")).get("started") or 0)
+        record = json.loads(pending.read_text(encoding="utf-8"))
     except Exception:
-        started = time.time()
+        record = {}
+    started = float(record.get("started") or 0) or time.time()
     deadline = started + TELEGRAM_RESULT_WAIT_SECONDS
+    relay_dir = record.get("relay_dir")
     proc = LAUNCHED.pop(pid, None)
-    if proc is not None:
-        try:
-            proc.wait(timeout=max(0.0, deadline - time.time()))
-        except subprocess.TimeoutExpired:
-            pass
-    else:
-        while pid_alive(pid) and time.time() < deadline:
-            time.sleep(WATCH_POLL_SECONDS)
+    step = RELAY_POLL_SECONDS if relay_dir else WATCH_POLL_SECONDS
+    sent_seq = 0
+    while time.time() < deadline:
+        if proc is not None:
+            try:
+                proc.wait(timeout=step)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+        else:
+            if not pid_alive(pid):
+                break
+            time.sleep(step)
+        if relay_dir:
+            try:
+                sent_seq = relay_tick(cfg, record, relay_dir, sent_seq)
+            except Exception as e:
+                log(f"ERROR relay {type(e).__name__}: {e}")
+    if relay_dir:
+        relay_forget(record.get("chat_id"), relay_dir)
     with _DELIVER_LOCK:
         telegram_deliver_one(cfg, pending)
+    if relay_dir:
+        shutil.rmtree(relay_dir, ignore_errors=True)
 
 
 def start_watcher(cfg, pid, pending):
@@ -783,10 +888,10 @@ def running_instances(name):
     return out
 
 
-def launch_instruction(name, result_file=None):
-    """Spawn the headless run, detached. ``result_file`` (the Telegram
-    transport's) is appended AFTER --headless so the watchdog's command-line
-    pattern, which ends there, still matches the run."""
+def launch_instruction(name, result_file=None, relay_dir=None):
+    """Spawn the headless run, detached. ``result_file`` and ``relay_dir``
+    (the Telegram transport's) are appended AFTER --headless so the
+    watchdog's command-line pattern, which ends there, still matches."""
     if platform.system() == "Windows":
         python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
         # start_new_session is POSIX-only; CREATE_NO_WINDOW detaches the child
@@ -800,6 +905,8 @@ def launch_instruction(name, result_file=None):
     cmd = [str(python), "MyAgent.py", "-l", name, "--headless"]
     if result_file:
         cmd += ["--result-file", str(result_file)]
+    if relay_dir:
+        cmd += ["--relay-dir", str(relay_dir)]
     proc = subprocess.Popen(
         cmd,
         cwd=str(BASE_DIR),
@@ -811,7 +918,7 @@ def launch_instruction(name, result_file=None):
     return proc.pid
 
 
-def dispatch_trigger(label, name, prompt_core, consume, result_file=None):
+def dispatch_trigger(label, name, prompt_core, consume, result_file=None, relay_dir=None):
     """The tail every trigger goes through: rewrite the instruction, run the
     watchdog, CONSUME the trigger, launch. ``consume`` is the transport's
     "mark read" — the Telegram update confirmed (the email transport's was
@@ -857,7 +964,7 @@ def dispatch_trigger(label, name, prompt_core, consume, result_file=None):
         log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
 
     consume()
-    pid = launch_instruction(name, result_file=result_file)
+    pid = launch_instruction(name, result_file=result_file, relay_dir=relay_dir)
     log(f"launched {name!r} headless (PID {pid}) from {label}")
     return "launched", pid
 

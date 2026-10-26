@@ -30,11 +30,14 @@ grant the keyboard focus a synthetic Return needs.
 
 import gc
 import queue
+import tempfile
 import threading
 import tkinter as tk
 import unittest
+from pathlib import Path
 from unittest import mock
 
+from myagent import relay
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
 from myagent.keyboard import install_class_bindings
@@ -458,6 +461,113 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(self.queued(host),
                          [{"type": "user_prompt_request", "content": asked},
                           {"type": "user_prompt_echo", "content": "the joint account"}])
+
+
+def _reply_box(dialog):
+    """The dialog's editable Text — the reply box (the message box is disabled)."""
+    return [w for w in _walk(dialog)
+            if isinstance(w, tk.Text) and str(w.cget("state")) == "normal"][0]
+
+
+class RelayDialogTests(DialogTests):
+    """The real dialog on a run with a relay folder (--relay-dir): the request
+    is written as the dialog opens, a reply landing in the folder is sent as
+    if typed, a reply typed at the PC leaves the answered marker, and a run
+    without a folder writes nothing."""
+
+    def setUp(self):
+        super().setUp()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.relay_dir = Path(tmp.name) / "relay" / "10"
+
+    def run_relay_dialog(self, message, act, relay_dir):
+        host, outcome = self._run(message, act, relay_dir)
+        return host, outcome
+
+    def _run(self, message, act, relay_dir):
+        # DialogTests.run_dialog builds the host itself; set the relay folder
+        # on it as soon as it exists — before the worker runs do_user_prompt.
+        original = _DialogHost.__init__
+
+        def init(host, root):
+            original(host, root)
+            host._relay_dir = str(relay_dir) if relay_dir else None
+            host._relay_seq = 0
+        with mock.patch.object(_DialogHost, "__init__", init):
+            return self.run_dialog(message, act)
+
+    def test_a_reply_from_the_relay_folder_answers_the_dialog(self):
+        seen = {}
+
+        def act(dialog):
+            seen["request"] = relay.read_request(self.relay_dir)
+            relay.write_reply(self.relay_dir, 1, "October please")
+        host, outcome = self._run("Which month?", act, self.relay_dir)
+        self.assertEqual(outcome["reply"], "October please")
+        self.assertEqual((seen["request"]["seq"], seen["request"]["text"]), (1, "Which month?"))
+        self.assertIsNone(relay.read_request(self.relay_dir))
+        self.assertIsNone(relay.read_reply(self.relay_dir, 1))
+        self.assertIsNone(relay.take_answered(self.relay_dir))     # answered from the phone
+        self.assertEqual(host.queue.get_nowait()["type"], "user_prompt_request")
+        self.assertEqual(host.queue.get_nowait(), {"type": "user_prompt_echo",
+                                                   "content": "October please"})
+
+    def test_a_reply_to_an_earlier_request_is_ignored(self):
+        def act(dialog):
+            relay.write_reply(self.relay_dir, 0, "stale")
+            dialog.after(300, lambda: relay.write_reply(self.relay_dir, 1, "fresh"))
+        _host, outcome = self._run("q", act, self.relay_dir)
+        self.assertEqual(outcome["reply"], "fresh")
+
+    def _type_and_send(self, text, state):
+        """act(): type into the reply box and press Enter (focus permitting —
+        the existing tests' rule: without it, dismiss and skip)."""
+        def act(dialog):
+            box = _reply_box(dialog)
+            box.insert("1.0", text)
+            box.focus_force()
+
+            def send():
+                if self.root.focus_get() is not box:
+                    state["no_focus"] = True
+                    self.dismiss(dialog)
+                else:
+                    box.event_generate("<Return>")
+            self.root.after(150, send)
+        return act
+
+    def test_a_reply_typed_at_the_pc_leaves_the_answered_marker(self):
+        state = {}
+        _host, outcome = self._run("q", self._type_and_send("typed here", state), self.relay_dir)
+        if state.get("no_focus"):
+            self.skipTest("the display will not give this process the keyboard focus")
+        self.assertEqual(outcome["reply"], "typed here")
+        self.assertIsNone(relay.read_request(self.relay_dir))
+        self.assertEqual(relay.take_answered(self.relay_dir), 1)
+
+    def test_a_dismissed_dialog_leaves_the_answered_marker(self):
+        _host, outcome = self._run("q", self.dismiss, self.relay_dir)
+        self.assertEqual(outcome["reply"], DISMISSED)
+        self.assertIsNone(relay.read_request(self.relay_dir))
+        self.assertEqual(relay.take_answered(self.relay_dir), 1)
+
+    def test_requests_are_numbered_per_run(self):
+        seqs = []
+
+        def act(dialog):
+            seqs.append(relay.read_request(self.relay_dir)["seq"])
+            relay.write_reply(self.relay_dir, seqs[-1], "ok")
+        host, _ = self._run("first", act, self.relay_dir)
+        host._relay_dir = str(self.relay_dir)
+        self.host = None
+        _host, _ = self._run("second", act, self.relay_dir)
+        self.assertEqual(seqs, [1, 1])      # a fresh host each time: seq restarts
+
+    def test_a_run_without_a_relay_folder_writes_nothing(self):
+        _host, outcome = self._run("q", self.dismiss, None)
+        self.assertEqual(outcome["reply"], DISMISSED)
+        self.assertFalse(self.relay_dir.exists())
 
 
 if __name__ == "__main__":

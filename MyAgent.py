@@ -87,9 +87,16 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           VoiceMixin, ModelUpgradeMixin, OtherSetupMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
-                 extra_file=None):
+                 extra_file=None, relay_dir=None):
         self.root = root
         self._headless = headless
+        # Optional folder (from --relay-dir, set by Heartbeat's Telegram
+        # listener on the runs it launches) through which every Agent Request
+        # of this run is relayed to the phone and can be answered from it —
+        # the file protocol is myagent/relay.py, the dialog side is
+        # safety_mixin's do_user_prompt. None for a run started any other way.
+        self._relay_dir = relay_dir
+        self._relay_seq = 0
         # Optional path (from --result-file) where stream_worker writes a JSON
         # summary of the run's outcome on completion — the return channel for a
         # parent agent's blocking run_instruction(wait=true).
@@ -405,8 +412,13 @@ if __name__ == "__main__":
                              "ADDITIONAL TASK CONTEXT block for this run only — used by "
                              "run_instruction's extra_text to parameterize a saved "
                              "instruction per spawn")
+    parser.add_argument("--relay-dir", metavar="DIR",
+                        help="Folder through which each Agent Request of this run is "
+                             "relayed to, and answered from, the Telegram chat — set by "
+                             "Heartbeat's listener on the runs it launches (myagent/relay.py)")
     args = parser.parse_args()
     root = tk.Tk()
     app = App(root, launch_instruction=args.load, headless=args.headless,
-              result_file=args.result_file, extra_file=args.extra_file)
+              result_file=args.result_file, extra_file=args.extra_file,
+              relay_dir=args.relay_dir)
     root.mainloop()
