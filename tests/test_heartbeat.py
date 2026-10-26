@@ -4,8 +4,8 @@ chunking, the config file, the pass over a fake Bot API (a stranger's message
 consumed and ignored, a trigger confirmed BEFORE its launch and started with
 --result-file, poison and deferred triggers, a launch that fails after the
 confirm telling the user to resend, one trigger per pass), the outcome
-delivery (the result file, a dead process, the 24-hour rule), main() running
-both transports with each one's failure isolated, the launcher's command
+delivery (the result file, a dead process, the 24-hour rule), main() over the
+one transport (no setup is an error, idle is one line), the launcher's command
 line still matching the watchdog pattern, the pairing command, and the rule
 that the bot token never reaches a log line or an error text.
 
@@ -508,35 +508,31 @@ class TelegramDeliverTests(_TelegramBase):
 
 
 class HeartbeatMainTests(_TelegramBase):
-    """main() runs the email transport and then Telegram, each one's failure
-    isolated, one idle line when neither found anything."""
+    """main(): no Telegram setup is an error (nothing can reach the machine),
+    an idle pass writes the one 'nothing found' line, a failure propagates
+    to the entry block, which logs it."""
 
-    def test_both_idle_writes_one_nothing_found_line(self):
-        _patch(self, Heartbeat, "process_gmail", lambda: False)
+    def test_idle_writes_one_nothing_found_line(self):
         _patch(self, Heartbeat, "telegram_config", lambda: self.cfg)
         self.fake()
         Heartbeat.main()
         self.assertEqual(self.log_text().strip().split(" ", 2)[2], "checked — nothing found")
 
-    def test_no_telegram_setup_polls_nothing(self):
-        _patch(self, Heartbeat, "process_gmail", lambda: False)
+    def test_no_telegram_setup_is_an_error_and_polls_nothing(self):
         api = self.fake()
-        Heartbeat.main()
+        with self.assertRaises(RuntimeError) as cm:
+            Heartbeat.main()
+        self.assertIn("--telegram-pair", str(cm.exception))
         self.assertEqual(api.calls, [])
 
-    def test_a_gmail_failure_still_runs_telegram_then_reraises(self):
-        def dead():
-            raise RuntimeError("no token")
-        _patch(self, Heartbeat, "process_gmail", dead)
+    def test_a_trigger_runs_through_main(self):
         _patch(self, Heartbeat, "telegram_config", lambda: self.cfg)
         self.fake(_update(10, "ZZ Probe\n\nDo"))
-        with self.assertRaises(RuntimeError):
-            Heartbeat.main()
+        Heartbeat.main()
         self.assertEqual(self.events, ["confirm:10", "launch:ZZ Probe", "send:777"])
-        self.assertIn("ERROR gmail RuntimeError: no token", self.log_text())
+        self.assertNotIn("nothing found", self.log_text())
 
-    def test_a_telegram_failure_is_logged_and_reraised_after_gmail(self):
-        _patch(self, Heartbeat, "process_gmail", lambda: True)
+    def test_a_telegram_failure_propagates(self):
         _patch(self, Heartbeat, "telegram_config", lambda: self.cfg)
 
         def down(token, method, **params):
@@ -544,16 +540,18 @@ class HeartbeatMainTests(_TelegramBase):
         _patch(self, Heartbeat, "telegram_api", down)
         with self.assertRaises(RuntimeError):
             Heartbeat.main()
-        self.assertIn("ERROR telegram RuntimeError: Telegram getUpdates: HTTP 502",
-                      self.log_text())
 
-    def test_a_bad_config_file_is_an_error_line_not_a_crash_of_gmail(self):
-        _patch(self, Heartbeat, "process_gmail", lambda: False)
+    def test_a_bad_config_file_is_an_error(self):
         (self.root / "tg").mkdir()
         (self.root / "tg" / "config.json").write_text("{}", encoding="utf-8")
         with self.assertRaises(RuntimeError):
             Heartbeat.main()
-        self.assertIn("ERROR telegram RuntimeError", self.log_text())
+
+    def test_the_module_needs_no_google_library(self):
+        src = Path(Heartbeat.__file__).read_text(encoding="utf-8")
+        for name in ("googleapiclient", "google.oauth2", "google.auth", "gmail_service",
+                     "extract_body", "GMAIL_SCOPES"):
+            self.assertNotIn(name, src)
 
 
 class LaunchCommandTests(unittest.TestCase):

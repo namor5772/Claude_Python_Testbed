@@ -646,46 +646,18 @@ class _Exec:
         return self.result
 
 
-class _FakeGmail:
-    def __init__(self, events, fail_mark_read=False):
-        self.events, self.fail_mark_read = events, fail_mark_read
-        body = base64.urlsafe_b64encode(b"ZZ Probe\n\nDo the thing").decode()
-        self.full = {"id": "t1", "payload": {
-            "mimeType": "text/plain", "body": {"data": body},
-            "headers": [{"name": "Subject", "value": Heartbeat.SUBJECT}]}}
+class DispatchOrderTests(_TempLog):
+    """dispatch_trigger's safety order (the fix of 2026-09-28, then on the
+    email transport): the trigger is CONSUMED before the launch, so a tick
+    that dies between the two can never start the same run twice."""
 
-    def users(self):
-        return self
-
-    def messages(self):
-        return self
-
-    def list(self, **kwargs):
-        return _Exec({"messages": [{"id": "t1"}]})
-
-    def get(self, **kwargs):
-        return _Exec(self.full)
-
-    def modify(self, userId, id, body):
-        if "removeLabelIds" in body:
-            self.events.append("mark-read")
-            if self.fail_mark_read:
-                return _Exec(error=RuntimeError("Gmail 503"))
-        else:
-            self.events.append(f"mark-unread:{body.get('addLabelIds')}")
-        return _Exec({})
-
-
-class HeartbeatOrderTests(_TempLog):
     def setUp(self):
         super().setUp()
         self.events = []
         _patch(self, Heartbeat, "rewrite_instruction", lambda name, core: None)
         _patch(self, Heartbeat, "running_instances", lambda name: [])
-        # The email transport alone: a machine with a Telegram bot must not
-        # be polled by the suite.
-        _patch(self, Heartbeat, "telegram_config", lambda: None)
         self.launch_error = None
+        self.consume_error = None
 
         def launch(name, result_file=None):
             self.events.append(f"launch:{name}")
@@ -694,34 +666,38 @@ class HeartbeatOrderTests(_TempLog):
             return 4242
         _patch(self, Heartbeat, "launch_instruction", launch)
 
-    def run_main(self, **gmail):
-        _patch(self, Heartbeat, "gmail_service", lambda: _FakeGmail(self.events, **gmail))
-        Heartbeat.main()
+    def consume(self):
+        self.events.append("consume")
+        if self.consume_error:
+            raise self.consume_error
 
-    def test_trigger_is_marked_read_before_the_launch(self):
-        self.run_main()
-        self.assertEqual(self.events, ["mark-read", "launch:ZZ Probe"])
-        self.assertIn("launched 'ZZ Probe' headless (PID 4242)", self.log_text())
+    def dispatch(self):
+        return Heartbeat.dispatch_trigger("msg t1", "ZZ Probe", "Do the thing", self.consume)
 
-    def test_a_failed_mark_launches_nothing(self):
+    def test_trigger_is_consumed_before_the_launch(self):
+        self.assertEqual(self.dispatch(), ("launched", 4242))
+        self.assertEqual(self.events, ["consume", "launch:ZZ Probe"])
+        self.assertIn("launched 'ZZ Probe' headless (PID 4242) from msg t1", self.log_text())
+
+    def test_a_failed_consume_launches_nothing(self):
+        self.consume_error = RuntimeError("Telegram 503")
         with self.assertRaises(RuntimeError):
-            self.run_main(fail_mark_read=True)
-        self.assertEqual(self.events, ["mark-read"])
+            self.dispatch()
+        self.assertEqual(self.events, ["consume"])
 
-    def test_a_failed_launch_puts_the_unread_label_back(self):
+    def test_a_failed_launch_raises_after_the_consume(self):
         self.launch_error = OSError("python missing")
         with self.assertRaises(OSError):
-            self.run_main()
-        self.assertEqual(self.events, ["mark-read", "launch:ZZ Probe",
-                                       "mark-unread:['UNREAD']"])
+            self.dispatch()
+        self.assertEqual(self.events, ["consume", "launch:ZZ Probe"])
 
-    def test_an_unanswered_watchdog_query_marks_and_launches_nothing(self):
+    def test_an_unanswered_watchdog_query_consumes_and_launches_nothing(self):
         def stalled(name):
             raise subprocess.TimeoutExpired("powershell", Heartbeat.WATCHDOG_QUERY_TIMEOUT)
         _patch(self, Heartbeat, "running_instances", stalled)
         with self.assertRaises(subprocess.TimeoutExpired):
-            self.run_main()
-        self.assertEqual(self.events, [])       # still unread: the next tick retries
+            self.dispatch()
+        self.assertEqual(self.events, [])       # still pending: the next tick retries
 
 
 if __name__ == "__main__":

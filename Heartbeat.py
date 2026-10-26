@@ -1,55 +1,48 @@
-"""Heartbeat.py — zero-API-cost replacement for the Heartbeat_Instruction.
+"""Heartbeat.py — zero-API-cost dispatcher: a Telegram message starts a MyAgent run.
 
-Polls namor5772@gmail.com for an unread Inbox email with the per-machine
-Subject — "APD" (the Windows desktop, DESKTOP-NAMOR), "APL" (any other
-Windows box, i.e. the laptop) or "APM" (macOS) — all machines poll the same
-inbox, so the per-machine subject routes each trigger to exactly one executor
-instead of racing for it.
-If found:
-  line 1 of the body  -> {Instruction}  (name of a saved agent instruction)
-  lines 3+ of the body -> {PromptCore}
+Each machine owns ONE Telegram bot (the desktop's, the laptop's, the Mac's),
+because the Bot API's getUpdates confirms updates globally — one bot polled by
+three machines would have each machine's confirmation swallow the others'
+messages, where one bot per machine needs no routing code at all. A message
+to a machine's bot:
+  line 1          -> {Instruction}  (name of a saved agent instruction)
+  the lines below -> {PromptCore}   (leading blank lines dropped)
 The named instruction's text is rewritten: it must contain at least TWO
 "*****" marker lines, and everything between the first and the LAST is
 replaced with {PromptCore} (the header above the first marker and the footer
 below the last are preserved — a PromptCore may hold ***** lines of its own).
-The email is then marked read and the instruction launched headless
-(python MyAgent.py -l "{Instruction}" --headless).
+The update is then CONFIRMED (getUpdates with offset = update_id + 1 — the
+consume step, done BEFORE the launch so a tick that dies cannot start the
+same run twice) and the instruction launched headless with a --result-file
+(python MyAgent.py -l "{Instruction}" --headless --result-file …); a later
+pass posts the run's outcome back to the chat — its status and final text,
+or a note that it ended without a result (the watchdog, a crash) or has run
+a day without one (a dialog). The bot answers at once: ▶ Started, ⚠ Not run
+with the reason for a poison trigger, the usage for /start or /help, and
+what it received for a message without text (a voice note, a sticker).
+Only messages from the chat ids in ~/.config/myagent-telegram/config.json
+are obeyed; anything else is confirmed, logged and ignored. Set up with
+    python Heartbeat.py --telegram-pair <bot token from BotFather>
+(saves the token, waits for the first message to the bot, records that chat)
+and check a machine with --telegram-test. Telegram keeps an unconfirmed
+message 24 hours, so a machine off for longer misses it.
 
 No LLM is involved — every step is deterministic, so each poll costs nothing
-but a Gmail API call. Designed to be run every few minutes by launchd
+but one Bot API call. Designed to be run every few minutes by launchd
 (StartInterval) on the Mac and Task Scheduler on Windows (every 8 minutes on
 the desktop, 3 on the laptop — MyAgent_Heartbeat_3min, since 2026-10-26);
 exits silently when there is nothing to do.
 
-Reuses MyAgent's Google config: token at ~/.config/myagent-google/
-{account}_token.json with the gmail.modify scope. Never starts the interactive
-OAuth flow — if the stored token is missing or unrefreshable it logs and exits,
-leaving the email unread so the next tick (or a manual MyAgent run, which CAN
-do the browser dance) recovers.
-
-Telegram (2026-10-26) — the second transport, a chat with a bot from the phone.
-Each machine owns ONE bot (three bots, one chat each: the desktop's, the
-laptop's, the Mac's), because the Bot API's getUpdates confirms updates
-globally — one bot polled by three machines would have each machine's
-confirmation swallow the others' messages. A message to a machine's bot is
-the email body without the subject: line 1 the instruction name, the prompt
-core below it (leading blank lines dropped). The same tail runs — rewrite,
-watchdog, consume, launch — with the update CONFIRMED (getUpdates with
-offset = update_id + 1, the UNREAD label's twin) before the launch, and the
-run started with --result-file so a later tick can post its outcome back to
-the chat: the run's status and final text, or a note that it ended without a
-result (the watchdog, a crash) or has run a day without one (a dialog).
-Only messages from the chat ids in ~/.config/myagent-telegram/config.json are
-obeyed; anything else is confirmed, logged and ignored. Set up with
-    python Heartbeat.py --telegram-pair <bot token from BotFather>
-(saves the token, waits for the first message to the bot, records that chat)
-and check a machine with --telegram-test. Telegram keeps an unconfirmed
-message 24 hours, so a machine off for longer misses it — email keeps its
-trigger unread forever.
+Until 2026-10-26 the trigger was an unread Gmail message whose SUBJECT was the
+machine's code — APD (the Windows desktop, DESKTOP-NAMOR), APL (any other
+Windows box, the laptop) or APM (macOS) — polled from one inbox by every
+machine. Retired the day Telegram proved itself live, so a pass costs one
+poll and this file no longer needs the Google libraries (UnreadSummary.py,
+the mail digest, still does). The codes survive as MACHINE_CODE, the label
+the bot's messages carry.
 """
 
 import argparse
-import base64
 import json
 import os
 import platform
@@ -63,31 +56,22 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-
 BASE_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(BASE_DIR))
-from myagent.helpers import extract_text_from_html  # noqa: E402
 from myagent.helpers import rotate_log_if_needed as _rotate_log  # noqa: E402
 from myagent.datapaths import resolve_store as _resolve_store  # noqa: E402
 
-ACCOUNT = "namor5772"
-# Per-machine trigger subject: every machine polls the SAME inbox, so each
-# answers only its own subject — deterministic routing, and no tick-timing
-# race where one machine processes (or steals) another's trigger. Two Windows
-# boxes split by hostname: the desktop answers APD, any other Windows machine
-# (the laptop) APL. Was a single Windows-wide "APW" until 2026-08-04.
+# The machine's code, the label the bot's messages carry: the desktop answers
+# as APD, any other Windows machine (the laptop) as APL, the Mac as APM. They
+# were the email trigger's per-machine subjects until 2026-10-26 (a single
+# Windows-wide "APW" until 2026-08-04).
 if platform.system() != "Windows":
-    SUBJECT = "APM"
+    MACHINE_CODE = "APM"
 elif platform.node().upper() == "DESKTOP-NAMOR":
-    SUBJECT = "APD"
+    MACHINE_CODE = "APD"
 else:
-    SUBJECT = "APL"
+    MACHINE_CODE = "APL"
 MARKER = "*****"
-GOOGLE_CONFIG_DIR = Path.home() / ".config" / "myagent-google"
-GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 # Same resolution as MyAgent itself: <OneDrive>/MyAppShare/agent_instructions.json
 # when a OneDrive client is present, repo root otherwise — the marker rewrite
 # below must edit the same store the spawned MyAgent will read.
@@ -259,7 +243,7 @@ TELEGRAM_HELP_COMMANDS = ("/start", "/help")
 
 
 def telegram_usage():
-    return (f"This is Heartbeat on {HOST} ({SUBJECT}). Send a text message: line 1 the "
+    return (f"This is Heartbeat on {HOST} ({MACHINE_CODE}). Send a text message: line 1 the "
             f"name of a saved MyAgent instruction, the prompt below it. I confirm the "
             f"start and post the result when the run ends.")
 
@@ -380,10 +364,9 @@ def telegram_deliver_results(cfg):
 
 
 def process_telegram(cfg):
-    """One pass of the Telegram transport: deliver finished runs' outcomes,
-    then drain the oldest pending message from an allowed chat the way
-    process_gmail drains its email. Returns True when the pass did or found
-    anything worth a log line."""
+    """One pass: deliver finished runs' outcomes, then drain the oldest
+    pending message from an allowed chat. Returns True when the pass did or
+    found anything worth a log line of its own."""
     token, allowed = cfg["bot_token"], cfg["allowed_chat_ids"]
     activity = telegram_deliver_results(cfg) > 0
     updates = telegram_updates(token)
@@ -488,7 +471,7 @@ def telegram_pair(token):
                 cfg["allowed_chat_ids"].append(chat_id)
                 telegram_write_config(cfg)
             telegram_send(token, chat_id,
-                          f"Paired with {HOST} ({SUBJECT}). Send me the instruction "
+                          f"Paired with {HOST} ({MACHINE_CODE}). Send me the instruction "
                           f"name on line 1 and the prompt below it; I reply when "
                           f"the run ends.")
             who = " ".join(p for p in (chat.get("first_name"), chat.get("last_name")) if p)
@@ -512,47 +495,9 @@ def telegram_test():
         return 1
     for chat_id in cfg["allowed_chat_ids"]:
         telegram_send(cfg["bot_token"], chat_id,
-                      f"Heartbeat on {HOST} ({SUBJECT}) can reach you.")
+                      f"Heartbeat on {HOST} ({MACHINE_CODE}) can reach you.")
         print(f"Sent a test message to chat {chat_id}.")
     return 0
-
-
-def gmail_service():
-    token_path = GOOGLE_CONFIG_DIR / f"{ACCOUNT}_token.json"
-    if not token_path.exists():
-        raise RuntimeError(f"no token at {token_path} — run MyAgent once to authorize")
-    creds = Credentials.from_authorized_user_file(str(token_path), GMAIL_SCOPES)
-    if not creds.valid:
-        if creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-            token_path.write_text(creds.to_json(), encoding="utf-8")
-            os.chmod(token_path, 0o600)
-        else:
-            raise RuntimeError("stored token invalid and not refreshable")
-    return build("gmail", "v1", credentials=creds, cache_discovery=False)
-
-
-def extract_body(payload):
-    """Depth-first search of the MIME tree: prefer text/plain, fall back to HTML."""
-    plain, html = None, None
-    stack = [payload]
-    while stack:
-        part = stack.pop()
-        stack.extend(part.get("parts", []))
-        data = part.get("body", {}).get("data")
-        if not data:
-            continue
-        text = base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
-        mime = part.get("mimeType", "")
-        if mime == "text/plain" and plain is None:
-            plain = text
-        elif mime == "text/html" and html is None:
-            html = text
-    if plain is not None:
-        return plain
-    if html is not None:
-        return extract_text_from_html(html)
-    return ""
 
 
 def rewrite_instruction(name, prompt_core):
@@ -693,23 +638,21 @@ def launch_instruction(name, result_file=None):
     return proc.pid
 
 
-def dispatch_trigger(label, name, prompt_core, consume, unconsume=None,
-                     result_file=None):
-    """The transport-neutral tail every trigger goes through: rewrite the
-    instruction, run the watchdog, CONSUME the trigger, launch. ``consume``
-    is the transport's "mark read" (Gmail's UNREAD label off, Telegram's
-    update confirmed), ``unconsume`` its undo where one exists (Gmail only —
-    an update cannot be un-confirmed). Returns ("poison", reason) for a
-    trigger consumed without a launch, ("deferred", reason) for one left
-    pending behind a live run, ("launched", pid) otherwise.
+def dispatch_trigger(label, name, prompt_core, consume, result_file=None):
+    """The tail every trigger goes through: rewrite the instruction, run the
+    watchdog, CONSUME the trigger, launch. ``consume`` is the transport's
+    "mark read" — the Telegram update confirmed (the email transport's was
+    the UNREAD label off). Returns ("poison", reason) for a trigger consumed
+    without a launch, ("deferred", reason) for one left pending behind a
+    live run, ("launched", pid) otherwise.
 
     The order is the safety rule: the trigger is consumed BEFORE the launch.
     A consume that fails costs nothing — nothing ran, the trigger stays
     pending, the next tick retries — where consuming after the launch left
     the trigger pending beside a live run, and a later tick launched the
     same command AGAIN (killing the first as "hung" once it passed
-    WATCHDOG_SECONDS). A launch that fails puts the trigger back where the
-    transport allows, so it is retried too."""
+    WATCHDOG_SECONDS). A launch that fails after the consume raises; an
+    update cannot be un-confirmed, so the caller tells the user to resend."""
     # Malformed triggers are poison messages: consumed so a permanently bad
     # one can't retry on every tick forever, logged, no launch.
     if not name:
@@ -741,103 +684,26 @@ def dispatch_trigger(label, name, prompt_core, consume, unconsume=None,
         log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
 
     consume()
-    try:
-        pid = launch_instruction(name, result_file=result_file)
-    except Exception:
-        if unconsume is not None:
-            try:
-                unconsume()
-            except Exception as e:
-                log(f"{label} could not be put back after the failed launch "
-                    f"({type(e).__name__}: {e}) — resend the trigger")
-        raise
+    pid = launch_instruction(name, result_file=result_file)
     log(f"launched {name!r} headless (PID {pid}) from {label}")
     return "launched", pid
 
 
-def process_gmail():
-    """One pass of the email transport: the oldest unread message with this
-    machine's exact subject. Returns True when the pass found anything worth
-    a log line of its own (the caller writes the idle line otherwise)."""
-    service = gmail_service()
-    resp = (
-        service.users()
-        .messages()
-        .list(userId="me", q=f'in:inbox is:unread subject:"{SUBJECT}"', maxResults=10)
-        .execute()
-    )
-    candidates = resp.get("messages", [])
-    if not candidates:
-        return False
-
-    # Gmail subject: search is word-based, so verify the exact header. Process
-    # the OLDEST exact match (list is newest-first); any others stay unread and
-    # are picked up on subsequent ticks — one spawn per tick by design.
-    msg = None
-    for ref in reversed(candidates):
-        full = (
-            service.users()
-            .messages()
-            .get(userId="me", id=ref["id"], format="full")
-            .execute()
-        )
-        headers = {h["name"].lower(): h["value"] for h in full["payload"]["headers"]}
-        if headers.get("subject", "").strip() == SUBJECT:
-            msg = full
-            break
-    if msg is None:
-        log(f"checked — {len(candidates)} candidate(s), none with exact subject")
-        return True
-
-    def mark_read():
-        service.users().messages().modify(
-            userId="me", id=msg["id"], body={"removeLabelIds": ["UNREAD"]}
-        ).execute()
-
-    def mark_unread():
-        service.users().messages().modify(
-            userId="me", id=msg["id"], body={"addLabelIds": ["UNREAD"]}
-        ).execute()
-
-    body = extract_body(msg["payload"])
-    lines = body.splitlines()
-    name = lines[0].strip() if lines else ""
-    prompt_core = "\n".join(lines[2:])
-    dispatch_trigger(f"msg {msg['id']}", name, prompt_core, mark_read, mark_unread)
-    return True
-
-
 def main():
-    """One pass: the email transport, then the Telegram one where this
-    machine has a bot. A failing transport is logged and the other still
-    runs; the first failure is re-raised at the end so the pass exits
-    non-zero. One idle line when neither found anything — the viewers hide
-    the 'nothing found' ticks."""
-    activity = False
-    failure = None
-    try:
-        activity |= process_gmail()
-    except Exception as e:
-        # Transient failures (network, auth) leave the email unread — the next
-        # tick retries naturally.
-        failure = e
-        log(f"ERROR gmail {type(e).__name__}: {e}")
-    try:
-        cfg = telegram_config()
-        if cfg:
-            activity |= process_telegram(cfg)
-    except Exception as e:
-        failure = failure or e
-        log(f"ERROR telegram {type(e).__name__}: {e}")
-    if failure is not None:
-        raise failure
-    if not activity:
+    """One pass. A machine without a Telegram setup is an error every tick —
+    nothing can reach it until it is paired — and an idle pass writes the one
+    'nothing found' line the log viewers hide."""
+    cfg = telegram_config()
+    if cfg is None:
+        raise RuntimeError(f"no Telegram setup on this machine ({TELEGRAM_CONFIG_FILE} "
+                           f"is missing) — run: python Heartbeat.py --telegram-pair <bot token>")
+    if not process_telegram(cfg):
         log("checked — nothing found")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="One Heartbeat pass: drain one email and one Telegram trigger.")
+        description="One Heartbeat pass: post finished runs' results, drain one Telegram trigger.")
     parser.add_argument("--telegram-pair", metavar="BOT_TOKEN",
                         help="Save this machine's bot token, then wait for the first "
                              "message to the bot and record that chat as allowed")
@@ -851,6 +717,8 @@ if __name__ == "__main__":
     rotate_log_if_needed()
     try:
         main()
-    except Exception:
-        # main() has already logged the failure per transport.
+    except Exception as e:
+        # A transient failure (network, Telegram down) leaves the update
+        # unconfirmed — the next tick retries by itself.
+        log(f"ERROR {type(e).__name__}: {e}")
         sys.exit(1)

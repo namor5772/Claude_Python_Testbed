@@ -1296,7 +1296,13 @@ class IndependenceTests(unittest.TestCase):
                      "skills_mixin.py", "streaming_mixin.py", "datapaths.py"):
             src = (REPO / "myagent" / name).read_text(encoding="utf-8").lower()
             self.assertNotIn("voice", src, name)
-        self.assertNotIn("voice", (REPO / "Heartbeat.py").read_text(encoding="utf-8").lower())
+        # Heartbeat may name Telegram's own "voice" message type (a voice note a
+        # phone sends to the bot); what it must never touch is the voice INPUT
+        # machinery — the mixin, its helpers, its settings file, dictation.
+        src = (REPO / "Heartbeat.py").read_text(encoding="utf-8").lower()
+        for token in ("voice_mixin", "_voice", "voice_", "myagent-voice", "dictation",
+                      "sounddevice", "transcri"):
+            self.assertNotIn(token, src, token)
 
     def test_the_auto_send_tick_is_the_one_dictation_setting_an_instruction_carries(self):
         # Auto-send (2026-09-23) says what the DIALOG does with a transcript,
