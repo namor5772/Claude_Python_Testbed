@@ -18,7 +18,8 @@ The email is then marked read and the instruction launched headless
 No LLM is involved — every step is deterministic, so each poll costs nothing
 but a Gmail API call. Designed to be run every few minutes by launchd
 (StartInterval) on the Mac and Task Scheduler on Windows (every 8 minutes on
-the desktop, 5 on the laptop); exits silently when there is nothing to do.
+the desktop, 3 on the laptop — MyAgent_Heartbeat_3min, since 2026-10-26);
+exits silently when there is nothing to do.
 
 Reuses MyAgent's Google config: token at ~/.config/myagent-google/
 {account}_token.json with the gmail.modify scope. Never starts the interactive
