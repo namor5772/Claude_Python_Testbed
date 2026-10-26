@@ -27,11 +27,21 @@ are obeyed; anything else is confirmed, logged and ignored. Set up with
 and check a machine with --telegram-test. Telegram keeps an unconfirmed
 message 24 hours, so a machine off for longer misses it.
 
-No LLM is involved — every step is deterministic, so each poll costs nothing
-but one Bot API call. Designed to be run every few minutes by launchd
-(StartInterval) on the Mac and Task Scheduler on Windows (every 8 minutes on
-the desktop, 3 on the laptop — MyAgent_Heartbeat_3min, since 2026-10-26);
-exits silently when there is nothing to do.
+No LLM is involved — every step is deterministic, so a poll costs nothing
+but one Bot API call. Two ways to run it:
+  python Heartbeat.py --listen   the RESIDENT LISTENER (since 2026-10-26, the
+      way it is deployed): one process that long-polls the bot — getUpdates
+      holds the connection up to LONG_POLL_SECONDS and answers the moment a
+      message arrives — so a trigger is picked up within a second, and a
+      watcher thread per run posts the outcome the instant the child exits.
+      Started at logon by Task Scheduler (MyAgent_Heartbeat_Listener, via
+      desktop_launchers/Heartbeat_Listener_Win.ps1 -Register) or a launchd
+      KeepAlive job on the Mac; a lock file keeps it to one instance (two
+      would consume each other's updates); a network failure backs off and
+      retries; an hourly 'listener alive' line is its liveness record.
+  python Heartbeat.py            ONE PASS: post finished runs' outcomes, drain
+      one trigger, exit — the shape the scheduled job had (every 3 minutes on
+      the laptop, 8 on the desktop) and still the hand-run check.
 
 Until 2026-10-26 the trigger was an unread Gmail message whose SUBJECT was the
 machine's code — APD (the Windows desktop, DESKTOP-NAMOR), APL (any other
@@ -50,6 +60,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -305,136 +316,297 @@ def format_result_reply(name, result):
 
 
 def telegram_pending_write(update_id, chat_id, name, pid, result_file):
+    """Record a launched run until its outcome is posted; the record's path."""
     TELEGRAM_PENDING_DIR.mkdir(parents=True, exist_ok=True)
     record = {"update_id": update_id, "chat_id": chat_id, "instruction": name,
               "pid": pid, "started": time.time(), "result_file": str(result_file)}
-    (TELEGRAM_PENDING_DIR / f"{update_id}.json").write_text(
-        json.dumps(record, indent=2), encoding="utf-8")
+    path = TELEGRAM_PENDING_DIR / f"{update_id}.json"
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return path
+
+
+def telegram_deliver_one(cfg, pending):
+    """Post one pending run's outcome if it is known: the result file the run
+    wrote, else — when its process is gone — that it ended without one, else
+    — after TELEGRAM_RESULT_WAIT_SECONDS — that no result is coming. True when
+    a reply went out (the record and the result file are then removed)."""
+    if not pending.exists():
+        return False            # delivered by another caller meanwhile
+    try:
+        record = json.loads(pending.read_text(encoding="utf-8"))
+        chat_id = record["chat_id"]
+        result_file = Path(record["result_file"])
+    except Exception as e:
+        log(f"telegram: unreadable pending record {pending.name} "
+            f"({type(e).__name__}: {e}) — removed")
+        pending.unlink(missing_ok=True)
+        return False
+    name = record.get("instruction", "?")
+    alive = pid_alive(record.get("pid"))
+    if result_file.exists():
+        try:
+            result = json.loads(result_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            if alive:
+                return False    # still being written — next time
+            result = {"status": "error", "final_text": "",
+                      "error": f"result file unreadable ({type(e).__name__}: {e})"}
+        text = format_result_reply(name, result)
+        what = f"result ({result.get('status', '?')})"
+    elif not alive:
+        text = (f"⚠ {name} on {HOST} ended without a result — killed by the "
+                f"watchdog, crashed, or closed from its window.")
+        what = "no-result note"
+    elif time.time() - float(record.get("started") or 0) > TELEGRAM_RESULT_WAIT_SECONDS:
+        text = (f"⚠ {name} on {HOST} has run for over 24 hours without a "
+                f"result — it may be waiting on a dialog. No further reply "
+                f"will come for this run.")
+        what = "timeout note"
+    else:
+        return False
+    telegram_send(cfg["bot_token"], chat_id, text)
+    log(f"telegram: sent {what} of {name!r} to chat {chat_id} "
+        f"(update {record.get('update_id')})")
+    pending.unlink(missing_ok=True)
+    if result_file.exists():
+        result_file.unlink()
+    return True
 
 
 def telegram_deliver_results(cfg):
-    """Post the outcome of every run a Telegram trigger started, once it is
-    known: the result file the run wrote, else — when its process is gone —
-    that it ended without one, else — after TELEGRAM_RESULT_WAIT_SECONDS —
-    that no result is coming. Returns the number of replies sent."""
+    """Post the outcome of every pending run whose outcome is known. Returns
+    the number of replies sent."""
     if not TELEGRAM_PENDING_DIR.exists():
         return 0
-    sent = 0
-    for pending in sorted(TELEGRAM_PENDING_DIR.glob("*.json")):
-        try:
-            record = json.loads(pending.read_text(encoding="utf-8"))
-            chat_id = record["chat_id"]
-            result_file = Path(record["result_file"])
-        except Exception as e:
-            log(f"telegram: unreadable pending record {pending.name} "
-                f"({type(e).__name__}: {e}) — removed")
-            pending.unlink()
-            continue
-        name = record.get("instruction", "?")
-        alive = pid_alive(record.get("pid"))
-        if result_file.exists():
-            try:
-                result = json.loads(result_file.read_text(encoding="utf-8"))
-            except Exception as e:
-                if alive:
-                    continue        # still being written — next tick
-                result = {"status": "error", "final_text": "",
-                          "error": f"result file unreadable ({type(e).__name__}: {e})"}
-            text = format_result_reply(name, result)
-            what = f"result ({result.get('status', '?')})"
-        elif not alive:
-            text = (f"⚠ {name} on {HOST} ended without a result — killed by the "
-                    f"watchdog, crashed, or closed from its window.")
-            what = "no-result note"
-        elif time.time() - float(record.get("started") or 0) > TELEGRAM_RESULT_WAIT_SECONDS:
-            text = (f"⚠ {name} on {HOST} has run for over 24 hours without a "
-                    f"result — it may be waiting on a dialog. No further reply "
-                    f"will come for this run.")
-            what = "timeout note"
-        else:
-            continue
-        telegram_send(cfg["bot_token"], chat_id, text)
-        log(f"telegram: sent {what} of {name!r} to chat {chat_id} "
-            f"(update {record.get('update_id')})")
-        pending.unlink()
-        if result_file.exists():
-            result_file.unlink()
-        sent += 1
-    return sent
+    with _DELIVER_LOCK:
+        return sum(telegram_deliver_one(cfg, p)
+                   for p in sorted(TELEGRAM_PENDING_DIR.glob("*.json")))
+
+
+def telegram_handle_update(cfg, upd):
+    """One update, start to finish. Returns (status, info): "ignored" (a
+    stranger, or no message), "skipped" (no text, or /start — answered),
+    "poison" (answered with the reason), "deferred" (left pending behind a
+    live run), or "launched" with info = (pid, pending record path). A launch
+    that fails AFTER the confirm raises, the user having been told to resend;
+    a failure before it raises with the update left pending, so the next
+    poll retries by itself."""
+    token, allowed = cfg["bot_token"], cfg["allowed_chat_ids"]
+    uid = upd.get("update_id")
+    msg = upd.get("message") or {}
+    chat_id = (msg.get("chat") or {}).get("id")
+    label = f"telegram update {uid}"
+    if chat_id not in allowed:
+        # A stranger (or a non-message update): consumed so it cannot sit at
+        # the head of the queue forever, logged, never answered.
+        telegram_confirm(token, uid)
+        log(f"telegram: ignored update {uid} from chat {chat_id} — not in "
+            f"allowed_chat_ids")
+        return "ignored", None
+    text = msg.get("text") or msg.get("caption")
+    if not text:
+        # Consumed and answered, then on to the next update: a sticker or a
+        # voice note must not use up a pass's one launch.
+        kind = telegram_message_kind(msg)
+        telegram_confirm(token, uid)
+        telegram_send(token, chat_id,
+                      f"I received {kind}, which I cannot read. Send text: line 1 "
+                      f"the instruction name, the prompt below it.")
+        log(f"telegram: {kind} in update {uid} — consumed, no launch")
+        return "skipped", None
+    if text.strip().lower() in TELEGRAM_HELP_COMMANDS:
+        telegram_confirm(token, uid)
+        telegram_send(token, chat_id, telegram_usage())
+        log(f"telegram: {text.strip()} in update {uid} — answered with the usage")
+        return "skipped", None
+    name, prompt_core = parse_telegram_trigger(text)
+    TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
+    consumed = []
+
+    def consume():
+        telegram_confirm(token, uid)
+        consumed.append(uid)
+
+    try:
+        status, detail = dispatch_trigger(label, name, prompt_core, consume,
+                                          result_file=result_file)
+    except Exception as e:
+        # Consumed already means the launch itself failed — an update cannot
+        # be un-confirmed, so the user is told to resend.
+        if consumed:
+            telegram_send(token, chat_id,
+                          f"❌ Could not start {name} on {HOST}: "
+                          f"{type(e).__name__}: {e}\nResend the message to retry.")
+        raise
+    if status == "poison":
+        # Answered and skipped: a mistyped name must not cost a pass its one
+        # launch when a good trigger waits behind it.
+        telegram_send(token, chat_id, f"⚠ Not run on {HOST}: {detail}")
+        return "poison", None
+    if status == "deferred":
+        return "deferred", None
+    pending = telegram_pending_write(uid, chat_id, name, detail, result_file)
+    telegram_send(token, chat_id,
+                  f"▶ Started {name} on {HOST} — the result will follow when it "
+                  f"finishes.")
+    return "launched", (detail, pending)
 
 
 def process_telegram(cfg):
-    """One pass: deliver finished runs' outcomes, then drain the oldest
-    pending message from an allowed chat. Returns True when the pass did or
-    found anything worth a log line of its own."""
-    token, allowed = cfg["bot_token"], cfg["allowed_chat_ids"]
+    """One PASS (the scheduled shape): deliver finished runs' outcomes, then
+    drain the pending messages from the oldest up to and including the first
+    launch — or the first trigger deferred behind a live run. Returns True
+    when the pass did or found anything worth a log line of its own."""
     activity = telegram_deliver_results(cfg) > 0
-    updates = telegram_updates(token)
+    updates = telegram_updates(cfg["bot_token"])
     for upd in sorted(updates, key=lambda u: u.get("update_id", 0)):
-        uid = upd.get("update_id")
-        msg = upd.get("message") or {}
-        chat_id = (msg.get("chat") or {}).get("id")
-        label = f"telegram update {uid}"
-        if chat_id not in allowed:
-            # A stranger (or a non-message update): consumed so it cannot sit
-            # at the head of the queue forever, logged, never answered.
-            telegram_confirm(token, uid)
-            log(f"telegram: ignored update {uid} from chat {chat_id} — not in "
-                f"allowed_chat_ids")
-            activity = True
-            continue
-        text = msg.get("text") or msg.get("caption")
-        if not text:
-            # Consumed and answered, then on to the next update: a sticker or a
-            # voice note must not use up the pass's one launch.
-            kind = telegram_message_kind(msg)
-            telegram_confirm(token, uid)
-            telegram_send(token, chat_id,
-                          f"I received {kind}, which I cannot read. Send text: line 1 "
-                          f"the instruction name, the prompt below it.")
-            log(f"telegram: {kind} in update {uid} — consumed, no launch")
-            activity = True
-            continue
-        if text.strip().lower() in TELEGRAM_HELP_COMMANDS:
-            telegram_confirm(token, uid)
-            telegram_send(token, chat_id, telegram_usage())
-            log(f"telegram: {text.strip()} in update {uid} — answered with the usage")
-            activity = True
-            continue
-        name, prompt_core = parse_telegram_trigger(text)
-        TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-        result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
-        consumed = []
-
-        def consume():
-            telegram_confirm(token, uid)
-            consumed.append(uid)
-
-        try:
-            status, detail = dispatch_trigger(label, name, prompt_core, consume,
-                                              result_file=result_file)
-        except Exception as e:
-            # Consumed already means the launch itself failed — an update
-            # cannot be un-confirmed, so the user is told to resend. Earlier
-            # failures leave it pending and the next tick retries by itself.
-            if consumed:
-                telegram_send(token, chat_id,
-                              f"❌ Could not start {name} on {HOST}: "
-                              f"{type(e).__name__}: {e}\nResend the message to retry.")
-            raise
-        if status == "poison":
-            # Answered and skipped: a mistyped name must not cost the pass its
-            # one launch when a good trigger waits behind it.
-            telegram_send(token, chat_id, f"⚠ Not run on {HOST}: {detail}")
-            activity = True
-            continue
-        if status == "launched":
-            telegram_pending_write(uid, chat_id, name, detail, result_file)
-            telegram_send(token, chat_id,
-                          f"▶ Started {name} on {HOST} — the result will follow "
-                          f"when it finishes.")
-        return True         # one trigger per pass, as for email
+        status, _info = telegram_handle_update(cfg, upd)
+        if status in ("launched", "deferred"):
+            return True         # one trigger per pass
+        activity = True
     return activity
+
+
+# ── Resident listener (--listen) ──────────────────────────────────────────
+# getUpdates holds the connection this long and answers the moment a message
+# arrives: one request a minute when idle, a second's latency when not.
+LONG_POLL_SECONDS = 50
+# A trigger deferred behind a live run is left unconfirmed, so the next poll
+# would return it at once — the listener waits this long before asking again.
+LISTEN_DEFER_RETRY_SECONDS = 30
+# A failing poll (network down, Telegram down, the laptop asleep) backs off
+# 5 → 10 → … → this ceiling, and repeats of one error are logged this often.
+LISTEN_BACKOFF_MAX_SECONDS = 60
+LISTEN_ERROR_LOG_EVERY_SECONDS = 600
+# The listener's liveness record: one line this often while idle.
+LISTEN_ALIVE_LINE_SECONDS = 3600
+# A run this process did not launch (a record from an earlier life) is
+# watched by polling its pid.
+WATCH_POLL_SECONDS = 5
+TELEGRAM_LOCK_FILE = TELEGRAM_CONFIG_DIR / "listener.lock"
+# pid → Popen of every run THIS process launched, so a watcher can wait on the
+# child instead of polling (launch_instruction fills it, watch_run takes).
+LAUNCHED = {}
+_DELIVER_LOCK = threading.Lock()
+
+
+def listener_lock_acquire():
+    """Claim the one-listener lock: False when another live listener holds
+    it (two would confirm each other's updates). A stale lock — its pid dead
+    — is taken over."""
+    other = 0
+    if TELEGRAM_LOCK_FILE.exists():
+        try:
+            other = int(TELEGRAM_LOCK_FILE.read_text(encoding="utf-8").strip() or 0)
+        except (ValueError, OSError):
+            other = 0
+    if other and other != os.getpid() and pid_alive(other):
+        return False
+    TELEGRAM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    TELEGRAM_LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    return True
+
+
+def listener_lock_release():
+    try:
+        if (TELEGRAM_LOCK_FILE.exists()
+                and TELEGRAM_LOCK_FILE.read_text(encoding="utf-8").strip() == str(os.getpid())):
+            TELEGRAM_LOCK_FILE.unlink()
+    except OSError:
+        pass
+
+
+def watch_run(cfg, pid, pending):
+    """Wait for one run to end, then post its outcome at once. Waits on the
+    Popen when this process launched the run, else polls the pid; the wait
+    is capped at the record's TELEGRAM_RESULT_WAIT_SECONDS so the timeout
+    note still goes out for a run parked on a dialog."""
+    try:
+        started = float(json.loads(pending.read_text(encoding="utf-8")).get("started") or 0)
+    except Exception:
+        started = time.time()
+    deadline = started + TELEGRAM_RESULT_WAIT_SECONDS
+    proc = LAUNCHED.pop(pid, None)
+    if proc is not None:
+        try:
+            proc.wait(timeout=max(0.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            pass
+    else:
+        while pid_alive(pid) and time.time() < deadline:
+            time.sleep(WATCH_POLL_SECONDS)
+    with _DELIVER_LOCK:
+        telegram_deliver_one(cfg, pending)
+
+
+def start_watcher(cfg, pid, pending):
+    threading.Thread(target=watch_run, args=(cfg, pid, pending),
+                     name=f"watch-{pid}", daemon=True).start()
+
+
+def listen():
+    """--listen: the resident listener. Long-polls the bot for as long as the
+    process lives, handles every update as it arrives, and gives each run a
+    watcher that posts its outcome the moment it ends. Ctrl+C (or the task
+    being ended) stops it; the exit code is what the entry block returns."""
+    cfg = telegram_config()
+    if cfg is None:
+        raise RuntimeError(f"no Telegram setup on this machine ({TELEGRAM_CONFIG_FILE} "
+                           f"is missing) — run: python Heartbeat.py --telegram-pair <bot token>")
+    if not listener_lock_acquire():
+        log(f"listener already running (lock {TELEGRAM_LOCK_FILE}) — this one exits")
+        return 1
+    log(f"listener started (PID {os.getpid()}) on {HOST} ({MACHINE_CODE}) — "
+        f"long-polling the bot")
+    token = cfg["bot_token"]
+    # Runs an earlier life launched and never reported on: watch them too.
+    if TELEGRAM_PENDING_DIR.exists():
+        for pending in sorted(TELEGRAM_PENDING_DIR.glob("*.json")):
+            try:
+                pid = json.loads(pending.read_text(encoding="utf-8")).get("pid")
+            except Exception:
+                continue        # telegram_deliver_one drops it when it is next seen
+            start_watcher(cfg, pid, pending)
+    polls = 0
+    backoff = 0
+    last_alive = time.time()
+    last_error = (None, 0.0)
+    try:
+        while True:
+            try:
+                updates = telegram_api(token, "getUpdates", timeout=LONG_POLL_SECONDS,
+                                       allowed_updates=["message"]) or []
+                polls += 1
+                backoff = 0
+                deferred = False
+                for upd in sorted(updates, key=lambda u: u.get("update_id", 0)):
+                    status, info = telegram_handle_update(cfg, upd)
+                    if status == "launched":
+                        start_watcher(cfg, *info)
+                    elif status == "deferred":
+                        deferred = True
+                        break   # the rest waits behind it, in order
+                if deferred:
+                    time.sleep(LISTEN_DEFER_RETRY_SECONDS)
+                if time.time() - last_alive >= LISTEN_ALIVE_LINE_SECONDS:
+                    log(f"listener alive — {polls} polls since start")
+                    last_alive = time.time()
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                backoff = min(LISTEN_BACKOFF_MAX_SECONDS, backoff * 2 if backoff else 5)
+                text = f"{type(e).__name__}: {e}"
+                if (text != last_error[0]
+                        or time.time() - last_error[1] >= LISTEN_ERROR_LOG_EVERY_SECONDS):
+                    log(f"ERROR listener {text} — retrying in {backoff} s")
+                    last_error = (text, time.time())
+                time.sleep(backoff)
+    except KeyboardInterrupt:
+        log("listener stopped")
+    finally:
+        listener_lock_release()
+    return 0
 
 
 def telegram_pair(token):
@@ -635,6 +807,7 @@ def launch_instruction(name, result_file=None):
         stderr=subprocess.DEVNULL,
         **detach,
     )
+    LAUNCHED[proc.pid] = proc       # the listener's watcher waits on it
     return proc.pid
 
 
@@ -703,7 +876,12 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="One Heartbeat pass: post finished runs' results, drain one Telegram trigger.")
+        description="Heartbeat: a Telegram message to this machine's bot starts a MyAgent run. "
+                    "Without --listen, one pass: post finished runs' results, drain one trigger.")
+    parser.add_argument("--listen", action="store_true",
+                        help="Run as the resident listener: long-poll the bot until stopped, "
+                             "handle every message as it arrives, post each run's result "
+                             "the moment it ends")
     parser.add_argument("--telegram-pair", metavar="BOT_TOKEN",
                         help="Save this machine's bot token, then wait for the first "
                              "message to the bot and record that chat as allowed")
@@ -716,7 +894,11 @@ if __name__ == "__main__":
         sys.exit(telegram_test())
     rotate_log_if_needed()
     try:
+        if args.listen:
+            sys.exit(listen())
         main()
+    except SystemExit:
+        raise
     except Exception as e:
         # A transient failure (network, Telegram down) leaves the update
         # unconfirmed — the next tick retries by itself.

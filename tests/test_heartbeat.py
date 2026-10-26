@@ -5,7 +5,11 @@ consumed and ignored, a trigger confirmed BEFORE its launch and started with
 --result-file, poison and deferred triggers, a launch that fails after the
 confirm telling the user to resend, one trigger per pass), the outcome
 delivery (the result file, a dead process, the 24-hour rule), main() over the
-one transport (no setup is an error, idle is one line), the launcher's command
+one transport (no setup is an error, idle is one line), the resident listener
+(every update of a long-poll batch handled, a deferred trigger pausing the
+poll, errors backed off and logged once, the one-instance lock, runs from an
+earlier life watched, the per-run watcher posting the outcome the moment the
+child exits), the launcher's command
 line still matching the watchdog pattern, the pairing command, and the rule
 that the bot token never reaches a log line or an error text.
 
@@ -579,6 +583,11 @@ class LaunchCommandTests(unittest.TestCase):
         cmd = self._command()
         self.assertEqual(cmd[1:], ["MyAgent.py", "-l", "Balance Westpac", "--headless"])
 
+    def test_the_launched_popen_is_kept_for_the_listener_watcher(self):
+        self._command()
+        self.assertIn(99, Heartbeat.LAUNCHED)
+        self.assertEqual(Heartbeat.LAUNCHED.pop(99).pid, 99)
+
 
 class TelegramPairTests(_TelegramBase):
     def test_pairing_saves_the_token_records_the_first_chat_and_consumes_it(self):
@@ -619,6 +628,193 @@ class TelegramPairTests(_TelegramBase):
     def test_test_command_without_setup_exits_1(self):
         with mock.patch("builtins.print"):
             self.assertEqual(Heartbeat.telegram_test(), 1)
+
+
+class _FakeListenerApi(_FakeTelegram):
+    """The fake over a long poll: each getUpdates with a timeout hands out
+    the next scripted batch (a list, or an exception to raise); when the
+    script runs out it raises KeyboardInterrupt, which stops the listener."""
+
+    def __init__(self, events, batches):
+        super().__init__(events, ())
+        self.batches = list(batches)
+        self.polls = 0
+
+    def __call__(self, token, method, **params):
+        if method == "getUpdates" and params.get("timeout"):
+            self.calls.append((method, params))
+            if not self.batches:
+                raise KeyboardInterrupt
+            self.polls += 1
+            batch = self.batches.pop(0)
+            if isinstance(batch, Exception):
+                raise batch
+            return [u for u in batch if u["update_id"] >= self.offset]
+        return super().__call__(token, method, **params)
+
+
+class ListenerTests(_TelegramBase):
+    def setUp(self):
+        super().setUp()
+        _patch(self, Heartbeat, "TELEGRAM_LOCK_FILE", self.root / "tg" / "listener.lock")
+        _patch(self, Heartbeat, "telegram_config", lambda: self.cfg)
+        self.sleeps = []
+        _patch(self, Heartbeat.time, "sleep", lambda secs: self.sleeps.append(secs))
+        self.watched = []
+        _patch(self, Heartbeat, "start_watcher",
+               lambda cfg, pid, pending: self.watched.append((pid, pending.name)))
+
+    def listen(self, *batches):
+        self.api = _FakeListenerApi(self.events, batches)
+        _patch(self, Heartbeat, "telegram_api", self.api)
+        return Heartbeat.listen()
+
+    def test_long_polls_with_the_timeout_and_stops_cleanly(self):
+        self.assertEqual(self.listen([]), 0)
+        method, params = self.api.calls[0]
+        self.assertEqual((method, params["timeout"], params["allowed_updates"]),
+                         ("getUpdates", Heartbeat.LONG_POLL_SECONDS, ["message"]))
+        self.assertNotIn("offset", params)
+        log = self.log_text()
+        self.assertIn("listener started (PID", log)
+        self.assertIn("listener stopped", log)
+        self.assertFalse((self.root / "tg" / "listener.lock").exists())
+
+    def test_every_trigger_of_a_batch_is_launched_and_watched(self):
+        self.listen([_update(10, "First\na"), _update(11, "Second\nb")])
+        self.assertEqual(self.events, ["confirm:10", "launch:First", "send:777",
+                                       "confirm:11", "launch:Second", "send:777"])
+        self.assertEqual(self.watched, [(4242, "10.json"), (4242, "11.json")])
+        self.assertEqual(self.sleeps, [])
+
+    def test_a_deferred_trigger_pauses_the_poll_and_holds_the_rest(self):
+        self.running = [(5151, 60)]
+        self.listen([_update(10, "ZZ Probe\na"), _update(11, "Other\nb")])
+        self.assertEqual(self.events, [])                 # nothing confirmed, nothing launched
+        self.assertEqual(self.sleeps, [Heartbeat.LISTEN_DEFER_RETRY_SECONDS])
+        self.assertEqual(self.rewrites, [("ZZ Probe", "a")])
+
+    def test_a_failing_poll_backs_off_and_the_next_one_goes_on(self):
+        self.listen(RuntimeError("Telegram getUpdates: HTTP 502"), [_update(10, "ZZ Probe\na")])
+        self.assertEqual(self.sleeps, [5])
+        self.assertIn("ERROR listener RuntimeError: Telegram getUpdates: HTTP 502 — retrying in 5 s",
+                      self.log_text())
+        self.assertEqual(self.events, ["confirm:10", "launch:ZZ Probe", "send:777"])
+
+    def test_repeats_of_one_error_grow_the_backoff_and_are_logged_once(self):
+        errs = [RuntimeError("down") for _ in range(5)]
+        self.listen(*errs)
+        self.assertEqual(self.sleeps, [5, 10, 20, 40, 60])
+        self.assertEqual(self.log_text().count("ERROR listener"), 1)
+
+    def test_a_different_error_is_logged(self):
+        self.listen(RuntimeError("down"), OSError("no route"))
+        self.assertEqual(self.log_text().count("ERROR listener"), 2)
+
+    def test_a_live_listener_keeps_a_second_one_out(self):
+        (self.root / "tg").mkdir(parents=True)
+        (self.root / "tg" / "listener.lock").write_text("424242", encoding="utf-8")
+        _patch(self, Heartbeat, "pid_alive", lambda pid: pid == 424242)
+        self.assertEqual(self.listen([]), 1)
+        self.assertEqual(self.api.polls, 0)
+        self.assertIn("listener already running", self.log_text())
+        self.assertEqual((self.root / "tg" / "listener.lock").read_text(encoding="utf-8"), "424242")
+
+    def test_a_stale_lock_is_taken_over(self):
+        (self.root / "tg").mkdir(parents=True)
+        (self.root / "tg" / "listener.lock").write_text("424242", encoding="utf-8")
+        _patch(self, Heartbeat, "pid_alive", lambda pid: False)
+        self.assertEqual(self.listen([]), 0)
+        self.assertEqual(self.api.polls, 1)
+
+    def test_runs_from_an_earlier_life_are_watched_at_start(self):
+        Heartbeat.telegram_pending_write(3, 777, "ZZ", 31337, self.root / "tg" / "results" / "3.json")
+        self.listen([])
+        self.assertEqual(self.watched, [(31337, "3.json")])
+
+    def test_no_setup_is_an_error(self):
+        _patch(self, Heartbeat, "telegram_config", lambda: None)
+        with self.assertRaises(RuntimeError):
+            Heartbeat.listen()
+
+    def test_the_alive_line(self):
+        _patch(self, Heartbeat, "LISTEN_ALIVE_LINE_SECONDS", 0)
+        self.listen([], [])
+        self.assertEqual(self.log_text().count("listener alive"), 2)
+
+
+class _FakeProc:
+    def __init__(self, pid, hang=False):
+        self.pid, self.hang, self.waited = pid, hang, []
+
+    def wait(self, timeout=None):
+        self.waited.append(timeout)
+        if self.hang:
+            raise subprocess.TimeoutExpired("MyAgent.py", timeout)
+
+
+class WatchRunTests(_TelegramBase):
+    def pend(self, pid, started=None):
+        result = self.root / "tg" / "results" / "7.json"
+        pending = Heartbeat.telegram_pending_write(7, 777, "ZZ", pid, result)
+        if started is not None:
+            rec = json.loads(pending.read_text(encoding="utf-8"))
+            rec["started"] = started
+            pending.write_text(json.dumps(rec), encoding="utf-8")
+        return pending, result
+
+    def test_the_outcome_is_posted_as_soon_as_the_child_exits(self):
+        self.fake()
+        pending, result = self.pend(5151)
+        proc = _FakeProc(5151)
+        Heartbeat.LAUNCHED[5151] = proc
+        result.parent.mkdir(parents=True)
+        result.write_text(json.dumps({"status": "completed", "error": "", "final_text": "Done."}),
+                          encoding="utf-8")
+        _patch(self, Heartbeat, "pid_alive", lambda pid: False)
+        Heartbeat.watch_run(self.cfg, 5151, pending)
+        self.assertEqual(len(proc.waited), 1)
+        self.assertNotIn(5151, Heartbeat.LAUNCHED)
+        self.assertIn("ZZ completed", self.api.sent[0][1])
+        self.assertFalse(pending.exists())
+        self.assertFalse(result.exists())
+
+    def test_a_child_that_dies_without_a_result_gets_the_no_result_note(self):
+        self.fake()
+        pending, _result = self.pend(5151)
+        Heartbeat.LAUNCHED[5151] = _FakeProc(5151)
+        _patch(self, Heartbeat, "pid_alive", lambda pid: False)
+        Heartbeat.watch_run(self.cfg, 5151, pending)
+        self.assertIn("ended without a result", self.api.sent[0][1])
+
+    def test_a_run_from_an_earlier_life_is_polled_by_pid(self):
+        self.fake()
+        pending, _result = self.pend(31337)
+        alive = [True, True, False]
+        _patch(self, Heartbeat, "pid_alive", lambda pid: alive.pop(0) if alive else False)
+        sleeps = []
+        _patch(self, Heartbeat.time, "sleep", lambda secs: sleeps.append(secs))
+        Heartbeat.watch_run(self.cfg, 31337, pending)
+        self.assertEqual(sleeps, [Heartbeat.WATCH_POLL_SECONDS] * 2)
+        self.assertIn("ended without a result", self.api.sent[0][1])
+
+    def test_a_run_parked_past_the_deadline_gets_the_timeout_note(self):
+        self.fake()
+        pending, _result = self.pend(5151, started=time.time() - Heartbeat.TELEGRAM_RESULT_WAIT_SECONDS - 5)
+        Heartbeat.LAUNCHED[5151] = _FakeProc(5151, hang=True)
+        _patch(self, Heartbeat, "pid_alive", lambda pid: True)
+        Heartbeat.watch_run(self.cfg, 5151, pending)
+        self.assertIn("over 24 hours", self.api.sent[0][1])
+        self.assertFalse(pending.exists())
+
+    def test_a_record_already_delivered_is_left_alone(self):
+        self.fake()
+        pending, _result = self.pend(5151)
+        pending.unlink()
+        Heartbeat.LAUNCHED[5151] = _FakeProc(5151)
+        Heartbeat.watch_run(self.cfg, 5151, pending)
+        self.assertEqual(self.api.sent, [])
+        self.assertEqual(self.log_text(), "")
 
 
 class TokenHygieneTests(unittest.TestCase):
