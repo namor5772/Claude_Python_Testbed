@@ -308,10 +308,30 @@ class TelegramProcessTests(_TelegramBase):
             raise LookupError(f"instruction {name!r} not found")
         _patch(self, Heartbeat, "rewrite_instruction", missing)
         self.fake(_update(10, "Nope\n\nDo"))
-        Heartbeat.process_telegram(self.cfg)
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
         self.assertEqual(self.events, ["confirm:10", "send:777"])
         self.assertIn("instruction 'Nope' not found", self.api.sent[0][1])
         self.assertEqual(self.launches, [])
+
+    def test_a_poison_trigger_does_not_use_up_the_pass(self):
+        def rewrite(name, core):
+            if name == "Nope":
+                raise LookupError(f"instruction {name!r} not found")
+        _patch(self, Heartbeat, "rewrite_instruction", rewrite)
+        self.fake(_update(10, "Nope\nDo"), _update(11, "ZZ Probe\nDo"))
+        Heartbeat.process_telegram(self.cfg)
+        self.assertEqual(self.events, ["confirm:10", "send:777", "confirm:11",
+                                       "launch:ZZ Probe", "send:777"])
+
+    def test_start_and_help_are_answered_with_the_usage_and_skipped(self):
+        self.fake(_update(10, "/start"), _update(11, " /HELP "), _update(12, "ZZ Probe\nDo"))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["confirm:10", "send:777", "confirm:11", "send:777",
+                                       "confirm:12", "launch:ZZ Probe", "send:777"])
+        self.assertIn("line 1 the name of a saved MyAgent instruction", self.api.sent[0][1])
+        self.assertIn(Heartbeat.HOST, self.api.sent[0][1])
+        self.assertEqual(self.rewrites, [("ZZ Probe", "Do")])
+        self.assertIn("/start in update 10 — answered with the usage", self.log_text())
 
     def test_a_live_run_defers_the_trigger_unconsumed_and_unanswered(self):
         self.running = [(5151, 60)]

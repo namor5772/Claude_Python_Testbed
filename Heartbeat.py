@@ -254,6 +254,16 @@ def telegram_message_kind(msg):
     return "a message without text"
 
 
+# The chat's START button sends /start; /help is what a person types.
+TELEGRAM_HELP_COMMANDS = ("/start", "/help")
+
+
+def telegram_usage():
+    return (f"This is Heartbeat on {HOST} ({SUBJECT}). Send a text message: line 1 the "
+            f"name of a saved MyAgent instruction, the prompt below it. I confirm the "
+            f"start and post the result when the run ends.")
+
+
 def parse_telegram_trigger(text):
     """(instruction name, prompt core): line 1, then the rest with leading
     blank lines dropped — the email body's layout, with or without its
@@ -402,6 +412,12 @@ def process_telegram(cfg):
             log(f"telegram: {kind} in update {uid} — consumed, no launch")
             activity = True
             continue
+        if text.strip().lower() in TELEGRAM_HELP_COMMANDS:
+            telegram_confirm(token, uid)
+            telegram_send(token, chat_id, telegram_usage())
+            log(f"telegram: {text.strip()} in update {uid} — answered with the usage")
+            activity = True
+            continue
         name, prompt_core = parse_telegram_trigger(text)
         TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
@@ -424,8 +440,12 @@ def process_telegram(cfg):
                               f"{type(e).__name__}: {e}\nResend the message to retry.")
             raise
         if status == "poison":
+            # Answered and skipped: a mistyped name must not cost the pass its
+            # one launch when a good trigger waits behind it.
             telegram_send(token, chat_id, f"⚠ Not run on {HOST}: {detail}")
-        elif status == "launched":
+            activity = True
+            continue
+        if status == "launched":
             telegram_pending_write(uid, chat_id, name, detail, result_file)
             telegram_send(token, chat_id,
                           f"▶ Started {name} on {HOST} — the result will follow "
