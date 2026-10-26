@@ -25,8 +25,29 @@ Reuses MyAgent's Google config: token at ~/.config/myagent-google/
 OAuth flow — if the stored token is missing or unrefreshable it logs and exits,
 leaving the email unread so the next tick (or a manual MyAgent run, which CAN
 do the browser dance) recovers.
+
+Telegram (2026-10-26) — the second transport, a chat with a bot from the phone.
+Each machine owns ONE bot (three bots, one chat each: the desktop's, the
+laptop's, the Mac's), because the Bot API's getUpdates confirms updates
+globally — one bot polled by three machines would have each machine's
+confirmation swallow the others' messages. A message to a machine's bot is
+the email body without the subject: line 1 the instruction name, the prompt
+core below it (leading blank lines dropped). The same tail runs — rewrite,
+watchdog, consume, launch — with the update CONFIRMED (getUpdates with
+offset = update_id + 1, the UNREAD label's twin) before the launch, and the
+run started with --result-file so a later tick can post its outcome back to
+the chat: the run's status and final text, or a note that it ended without a
+result (the watchdog, a crash) or has run a day without one (a dialog).
+Only messages from the chat ids in ~/.config/myagent-telegram/config.json are
+obeyed; anything else is confirmed, logged and ignored. Set up with
+    python Heartbeat.py --telegram-pair <bot token from BotFather>
+(saves the token, waits for the first message to the bot, records that chat)
+and check a machine with --telegram-test. Telegram keeps an unconfirmed
+message 24 hours, so a machine off for longer misses it — email keeps its
+trigger unread forever.
 """
 
+import argparse
 import base64
 import json
 import os
@@ -35,6 +56,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -90,6 +114,358 @@ LOG_MAX_BYTES = 100_000
 
 def rotate_log_if_needed():
     _rotate_log(LOG_FILE, LOG_MAX_BYTES)
+
+
+# ── Telegram transport ────────────────────────────────────────────────────
+# Per machine, outside OneDrive like the Google tokens: each machine's bot
+# token is its own. {"bot_token": "...", "allowed_chat_ids": [123456789]}.
+TELEGRAM_CONFIG_DIR = Path.home() / ".config" / "myagent-telegram"
+TELEGRAM_CONFIG_FILE = TELEGRAM_CONFIG_DIR / "config.json"
+# One record per run a Telegram trigger started, until its outcome is posted.
+TELEGRAM_PENDING_DIR = TELEGRAM_CONFIG_DIR / "pending"
+# Where those runs write their --result-file.
+TELEGRAM_RESULTS_DIR = TELEGRAM_CONFIG_DIR / "results"
+TELEGRAM_API_BASE = "https://api.telegram.org"
+TELEGRAM_HTTP_TIMEOUT = 30
+# Telegram caps a message at 4096 characters; replies are cut into chunks
+# under that, at a line break where one is near.
+TELEGRAM_CHUNK_CHARS = 3900
+# A run with no result file after this long gets a last reply and is dropped
+# from the pending list — it is parked on a dialog or was closed by hand.
+TELEGRAM_RESULT_WAIT_SECONDS = 24 * 3600
+# How long --telegram-pair waits for the first message to the new bot.
+TELEGRAM_PAIR_WAIT_SECONDS = 120
+HOST = platform.node()
+
+
+def telegram_config():
+    """The bot token and the chat ids this machine obeys, or None when it has
+    no Telegram setup (no config file — the common case on a machine that
+    uses email alone). A file that exists but is unusable raises, so the
+    pass logs it instead of silently polling nothing."""
+    if not TELEGRAM_CONFIG_FILE.exists():
+        return None
+    data = json.loads(TELEGRAM_CONFIG_FILE.read_text(encoding="utf-8"))
+    token = str(data.get("bot_token", "")).strip()
+    ids = data.get("allowed_chat_ids", [])
+    if not token:
+        raise RuntimeError(f"{TELEGRAM_CONFIG_FILE} has no bot_token")
+    if (not isinstance(ids, list)
+            or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids)):
+        raise RuntimeError(f"{TELEGRAM_CONFIG_FILE}: allowed_chat_ids must be a "
+                           "list of integers")
+    return {"bot_token": token, "allowed_chat_ids": ids}
+
+
+def telegram_write_config(cfg):
+    TELEGRAM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    TELEGRAM_CONFIG_FILE.write_text(
+        json.dumps({"bot_token": cfg["bot_token"],
+                    "allowed_chat_ids": cfg["allowed_chat_ids"]}, indent=2),
+        encoding="utf-8")
+    os.chmod(TELEGRAM_CONFIG_FILE, 0o600)
+
+
+def telegram_api(token, method, **params):
+    """One Bot API call; the ``result`` field, or a RuntimeError that names
+    the method and Telegram's description — never the URL, which carries
+    the token (nothing here may put the token in a log line)."""
+    url = f"{TELEGRAM_API_BASE}/bot{token}/{method}"
+    req = urllib.request.Request(
+        url, data=json.dumps(params).encode("utf-8"),
+        headers={"Content-Type": "application/json"})
+    # A long poll (getUpdates timeout=N) holds the connection N seconds on
+    # purpose, so the socket timeout sits above it.
+    timeout = TELEGRAM_HTTP_TIMEOUT + int(params.get("timeout", 0) or 0)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            payload = json.loads(e.read().decode("utf-8"))
+        except Exception:
+            raise RuntimeError(f"Telegram {method}: HTTP {e.code}") from None
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        desc = payload.get("description", "not ok") if isinstance(payload, dict) else payload
+        raise RuntimeError(f"Telegram {method}: {desc}")
+    return payload.get("result")
+
+
+def telegram_chunks(text, limit=TELEGRAM_CHUNK_CHARS):
+    """``text`` as a list of sendMessage-sized pieces, cut at the last line
+    break in each window when one sits past its midpoint, else hard."""
+    text = (text or "").strip()
+    if not text:
+        return ["(empty)"]
+    chunks = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip("\n")
+    if text:
+        chunks.append(text)
+    return chunks
+
+
+def telegram_send(token, chat_id, text):
+    """Post ``text`` to the chat as plain text (no parse mode — a run's
+    final text may hold Markdown that Telegram would refuse), in chunks."""
+    for chunk in telegram_chunks(text):
+        telegram_api(token, "sendMessage", chat_id=chat_id, text=chunk)
+
+
+def telegram_updates(token):
+    """Every unconfirmed message update, oldest first — a plain poll, no
+    long wait, because the scheduler owns the cadence."""
+    return telegram_api(token, "getUpdates", timeout=0,
+                        allowed_updates=["message"]) or []
+
+
+def telegram_confirm(token, update_id):
+    """Consume one update: Telegram confirms every update below the offset,
+    so offset = id + 1 confirms this one and the ones before it — the oldest
+    is always the one processed, so nothing newer is lost."""
+    telegram_api(token, "getUpdates", offset=update_id + 1, limit=1, timeout=0)
+
+
+def parse_telegram_trigger(text):
+    """(instruction name, prompt core): line 1, then the rest with leading
+    blank lines dropped — the email body's layout, with or without its
+    blank second line, since a phone keyboard makes that line easy to miss."""
+    lines = (text or "").splitlines()
+    name = lines[0].strip() if lines else ""
+    rest = lines[1:]
+    while rest and not rest[0].strip():
+        rest.pop(0)
+    return name, "\n".join(rest)
+
+
+def pid_alive(pid):
+    """Whether a process with this id is still running (a stale id reused by
+    another process reads as alive; the 24-hour rule then ends the wait)."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if platform.system() == "Windows":
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259                    # STILL_ACTIVE
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def format_result_reply(name, result):
+    """The message a finished run is reported with: a status line, the
+    error if any, then the run's final text."""
+    status = str(result.get("status", "unknown"))
+    icon = {"completed": "✅", "stopped": "⏹", "error": "❌"}.get(status, "ℹ")
+    head = f"{icon} {name} {status} on {HOST}"
+    error = str(result.get("error") or "").strip()
+    if error:
+        head += f"\n{error}"
+    body = str(result.get("final_text") or "").strip()
+    return head + (f"\n\n{body}" if body else "")
+
+
+def telegram_pending_write(update_id, chat_id, name, pid, result_file):
+    TELEGRAM_PENDING_DIR.mkdir(parents=True, exist_ok=True)
+    record = {"update_id": update_id, "chat_id": chat_id, "instruction": name,
+              "pid": pid, "started": time.time(), "result_file": str(result_file)}
+    (TELEGRAM_PENDING_DIR / f"{update_id}.json").write_text(
+        json.dumps(record, indent=2), encoding="utf-8")
+
+
+def telegram_deliver_results(cfg):
+    """Post the outcome of every run a Telegram trigger started, once it is
+    known: the result file the run wrote, else — when its process is gone —
+    that it ended without one, else — after TELEGRAM_RESULT_WAIT_SECONDS —
+    that no result is coming. Returns the number of replies sent."""
+    if not TELEGRAM_PENDING_DIR.exists():
+        return 0
+    sent = 0
+    for pending in sorted(TELEGRAM_PENDING_DIR.glob("*.json")):
+        try:
+            record = json.loads(pending.read_text(encoding="utf-8"))
+            chat_id = record["chat_id"]
+            result_file = Path(record["result_file"])
+        except Exception as e:
+            log(f"telegram: unreadable pending record {pending.name} "
+                f"({type(e).__name__}: {e}) — removed")
+            pending.unlink()
+            continue
+        name = record.get("instruction", "?")
+        alive = pid_alive(record.get("pid"))
+        if result_file.exists():
+            try:
+                result = json.loads(result_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                if alive:
+                    continue        # still being written — next tick
+                result = {"status": "error", "final_text": "",
+                          "error": f"result file unreadable ({type(e).__name__}: {e})"}
+            text = format_result_reply(name, result)
+            what = f"result ({result.get('status', '?')})"
+        elif not alive:
+            text = (f"⚠ {name} on {HOST} ended without a result — killed by the "
+                    f"watchdog, crashed, or closed from its window.")
+            what = "no-result note"
+        elif time.time() - float(record.get("started") or 0) > TELEGRAM_RESULT_WAIT_SECONDS:
+            text = (f"⚠ {name} on {HOST} has run for over 24 hours without a "
+                    f"result — it may be waiting on a dialog. No further reply "
+                    f"will come for this run.")
+            what = "timeout note"
+        else:
+            continue
+        telegram_send(cfg["bot_token"], chat_id, text)
+        log(f"telegram: sent {what} of {name!r} to chat {chat_id} "
+            f"(update {record.get('update_id')})")
+        pending.unlink()
+        if result_file.exists():
+            result_file.unlink()
+        sent += 1
+    return sent
+
+
+def process_telegram(cfg):
+    """One pass of the Telegram transport: deliver finished runs' outcomes,
+    then drain the oldest pending message from an allowed chat the way
+    process_gmail drains its email. Returns True when the pass did or found
+    anything worth a log line."""
+    token, allowed = cfg["bot_token"], cfg["allowed_chat_ids"]
+    activity = telegram_deliver_results(cfg) > 0
+    updates = telegram_updates(token)
+    for upd in sorted(updates, key=lambda u: u.get("update_id", 0)):
+        uid = upd.get("update_id")
+        msg = upd.get("message") or {}
+        chat_id = (msg.get("chat") or {}).get("id")
+        label = f"telegram update {uid}"
+        if chat_id not in allowed:
+            # A stranger (or a non-message update): consumed so it cannot sit
+            # at the head of the queue forever, logged, never answered.
+            telegram_confirm(token, uid)
+            log(f"telegram: ignored update {uid} from chat {chat_id} — not in "
+                f"allowed_chat_ids")
+            activity = True
+            continue
+        text = msg.get("text")
+        if not text:
+            telegram_confirm(token, uid)
+            telegram_send(token, chat_id, "Text only: line 1 the instruction name, "
+                                          "the prompt below it.")
+            log(f"telegram: non-text message in update {uid} — consumed, no launch")
+            return True
+        name, prompt_core = parse_telegram_trigger(text)
+        TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+        result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
+        consumed = []
+
+        def consume():
+            telegram_confirm(token, uid)
+            consumed.append(uid)
+
+        try:
+            status, detail = dispatch_trigger(label, name, prompt_core, consume,
+                                              result_file=result_file)
+        except Exception as e:
+            # Consumed already means the launch itself failed — an update
+            # cannot be un-confirmed, so the user is told to resend. Earlier
+            # failures leave it pending and the next tick retries by itself.
+            if consumed:
+                telegram_send(token, chat_id,
+                              f"❌ Could not start {name} on {HOST}: "
+                              f"{type(e).__name__}: {e}\nResend the message to retry.")
+            raise
+        if status == "poison":
+            telegram_send(token, chat_id, f"⚠ Not run on {HOST}: {detail}")
+        elif status == "launched":
+            telegram_pending_write(uid, chat_id, name, detail, result_file)
+            telegram_send(token, chat_id,
+                          f"▶ Started {name} on {HOST} — the result will follow "
+                          f"when it finishes.")
+        return True         # one trigger per pass, as for email
+    return activity
+
+
+def telegram_pair(token):
+    """--telegram-pair: save the token, wait for the first message to the
+    bot and record that chat as the one this machine obeys."""
+    me = telegram_api(token, "getMe")
+    username = me.get("username", "?")
+    cfg = {"bot_token": token, "allowed_chat_ids": []}
+    try:
+        old = telegram_config()
+        if old:
+            cfg["allowed_chat_ids"] = list(old["allowed_chat_ids"])
+    except Exception:
+        pass
+    telegram_write_config(cfg)
+    print(f"Bot @{username} saved to {TELEGRAM_CONFIG_FILE}")
+    print(f"Now send any message to @{username} from your phone - waiting up to "
+          f"{TELEGRAM_PAIR_WAIT_SECONDS} s ...")
+    deadline = time.time() + TELEGRAM_PAIR_WAIT_SECONDS
+    while time.time() < deadline:
+        updates = telegram_api(token, "getUpdates", timeout=20,
+                               allowed_updates=["message"]) or []
+        if not updates:
+            continue
+        # Everything that arrived is consumed — the pairing message must not
+        # be read as an instruction by the next tick.
+        telegram_confirm(token, max(u.get("update_id", 0) for u in updates))
+        for upd in updates:
+            chat = (upd.get("message") or {}).get("chat") or {}
+            if chat.get("id") is None:
+                continue
+            chat_id = chat["id"]
+            if chat_id not in cfg["allowed_chat_ids"]:
+                cfg["allowed_chat_ids"].append(chat_id)
+                telegram_write_config(cfg)
+            telegram_send(token, chat_id,
+                          f"Paired with {HOST} ({SUBJECT}). Send me the instruction "
+                          f"name on line 1 and the prompt below it; I reply when "
+                          f"the run ends.")
+            who = " ".join(p for p in (chat.get("first_name"), chat.get("last_name")) if p)
+            print(f"Paired with chat {chat_id} ({who or 'no name'}). Done.")
+            log(f"telegram: paired with chat {chat_id} on bot @{username}")
+            return 0
+    print("No message arrived. Run the command again and message the bot while it waits.")
+    return 1
+
+
+def telegram_test():
+    """--telegram-test: one message to every allowed chat, so a machine's
+    setup can be checked from the phone."""
+    cfg = telegram_config()
+    if not cfg:
+        print(f"No Telegram setup on this machine ({TELEGRAM_CONFIG_FILE} is missing) "
+              f"- run --telegram-pair first.")
+        return 1
+    if not cfg["allowed_chat_ids"]:
+        print("No allowed chat yet - run --telegram-pair and message the bot.")
+        return 1
+    for chat_id in cfg["allowed_chat_ids"]:
+        telegram_send(cfg["bot_token"], chat_id,
+                      f"Heartbeat on {HOST} ({SUBJECT}) can reach you.")
+        print(f"Sent a test message to chat {chat_id}.")
+    return 0
 
 
 def gmail_service():
@@ -241,7 +617,10 @@ def running_instances(name):
     return out
 
 
-def launch_instruction(name):
+def launch_instruction(name, result_file=None):
+    """Spawn the headless run, detached. ``result_file`` (the Telegram
+    transport's) is appended AFTER --headless so the watchdog's command-line
+    pattern, which ends there, still matches the run."""
     if platform.system() == "Windows":
         python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
         # start_new_session is POSIX-only; CREATE_NO_WINDOW detaches the child
@@ -252,8 +631,11 @@ def launch_instruction(name):
         detach = {"start_new_session": True}
     if not python.exists():
         python = Path(sys.executable)
+    cmd = [str(python), "MyAgent.py", "-l", name, "--headless"]
+    if result_file:
+        cmd += ["--result-file", str(result_file)]
     proc = subprocess.Popen(
-        [str(python), "MyAgent.py", "-l", name, "--headless"],
+        cmd,
         cwd=str(BASE_DIR),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -262,7 +644,72 @@ def launch_instruction(name):
     return proc.pid
 
 
-def main():
+def dispatch_trigger(label, name, prompt_core, consume, unconsume=None,
+                     result_file=None):
+    """The transport-neutral tail every trigger goes through: rewrite the
+    instruction, run the watchdog, CONSUME the trigger, launch. ``consume``
+    is the transport's "mark read" (Gmail's UNREAD label off, Telegram's
+    update confirmed), ``unconsume`` its undo where one exists (Gmail only —
+    an update cannot be un-confirmed). Returns ("poison", reason) for a
+    trigger consumed without a launch, ("deferred", reason) for one left
+    pending behind a live run, ("launched", pid) otherwise.
+
+    The order is the safety rule: the trigger is consumed BEFORE the launch.
+    A consume that fails costs nothing — nothing ran, the trigger stays
+    pending, the next tick retries — where consuming after the launch left
+    the trigger pending beside a live run, and a later tick launched the
+    same command AGAIN (killing the first as "hung" once it passed
+    WATCHDOG_SECONDS). A launch that fails puts the trigger back where the
+    transport allows, so it is retried too."""
+    # Malformed triggers are poison messages: consumed so a permanently bad
+    # one can't retry on every tick forever, logged, no launch.
+    if not name:
+        log(f"POISON {label}: empty first line — consumed, no launch")
+        consume()
+        return "poison", "the first line must name a saved instruction"
+
+    # Rewrite FIRST, unconditionally — mirroring the AI Heartbeat_Instruction's
+    # order (modify text field, then run_instruction). The command must land in
+    # agent_instructions.json immediately even if the spawn below is deferred.
+    # Idempotent, so a deferred trigger re-rewriting on the next tick is harmless.
+    try:
+        rewrite_instruction(name, prompt_core)
+        log(f"rewrote {name!r}: {len(prompt_core)} chars below marker ({label})")
+    except LookupError as e:
+        log(f"POISON {label}: {e} — consumed, no launch")
+        consume()
+        return "poison", str(e)
+
+    # Watchdog: a recent run defers the new spawn (the trigger stays pending so
+    # the next tick retries the launch). A run older than WATCHDOG_SECONDS is
+    # presumed hung — kill it and fall through to the new spawn.
+    for pid, age in running_instances(name):
+        if age < WATCHDOG_SECONDS:
+            log(f"spawn deferred for {label}: {name!r} still running "
+                f"(PID {pid}, {age}s old)")
+            return "deferred", f"{name!r} still running (PID {pid}, {age}s old)"
+        os.kill(pid, 15)
+        log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
+
+    consume()
+    try:
+        pid = launch_instruction(name, result_file=result_file)
+    except Exception:
+        if unconsume is not None:
+            try:
+                unconsume()
+            except Exception as e:
+                log(f"{label} could not be put back after the failed launch "
+                    f"({type(e).__name__}: {e}) — resend the trigger")
+        raise
+    log(f"launched {name!r} headless (PID {pid}) from {label}")
+    return "launched", pid
+
+
+def process_gmail():
+    """One pass of the email transport: the oldest unread message with this
+    machine's exact subject. Returns True when the pass found anything worth
+    a log line of its own (the caller writes the idle line otherwise)."""
     service = gmail_service()
     resp = (
         service.users()
@@ -272,8 +719,7 @@ def main():
     )
     candidates = resp.get("messages", [])
     if not candidates:
-        log("checked — nothing found")
-        return
+        return False
 
     # Gmail subject: search is word-based, so verify the exact header. Process
     # the OLDEST exact match (list is newest-first); any others stay unread and
@@ -292,7 +738,7 @@ def main():
             break
     if msg is None:
         log(f"checked — {len(candidates)} candidate(s), none with exact subject")
-        return
+        return True
 
     def mark_read():
         service.users().messages().modify(
@@ -308,63 +754,54 @@ def main():
     lines = body.splitlines()
     name = lines[0].strip() if lines else ""
     prompt_core = "\n".join(lines[2:])
+    dispatch_trigger(f"msg {msg['id']}", name, prompt_core, mark_read, mark_unread)
+    return True
 
-    # Malformed emails are poison messages: mark them read so a permanently bad
-    # email can't retry on every tick forever, log why, and skip the launch.
-    if not name:
-        log(f"POISON msg {msg['id']}: empty first line — marked read, no launch")
-        mark_read()
-        return
 
-    # Rewrite FIRST, unconditionally — mirroring the AI Heartbeat_Instruction's
-    # order (modify text field, then run_instruction). The command must land in
-    # agent_instructions.json immediately even if the spawn below is deferred.
-    # Idempotent, so a deferred email re-rewriting on the next tick is harmless.
+def main():
+    """One pass: the email transport, then the Telegram one where this
+    machine has a bot. A failing transport is logged and the other still
+    runs; the first failure is re-raised at the end so the pass exits
+    non-zero. One idle line when neither found anything — the viewers hide
+    the 'nothing found' ticks."""
+    activity = False
+    failure = None
     try:
-        rewrite_instruction(name, prompt_core)
-        log(f"rewrote {name!r}: {len(prompt_core)} chars below marker "
-            f"(msg {msg['id']})")
-    except LookupError as e:
-        log(f"POISON msg {msg['id']}: {e} — marked read, no launch")
-        mark_read()
-        return
-
-    # Watchdog: a recent run defers the new spawn (email stays unread so the
-    # next tick retries the launch). A run older than WATCHDOG_SECONDS is
-    # presumed hung — kill it and fall through to the new spawn.
-    for pid, age in running_instances(name):
-        if age < WATCHDOG_SECONDS:
-            log(f"spawn deferred for msg {msg['id']}: {name!r} still running "
-                f"(PID {pid}, {age}s old)")
-            return
-        os.kill(pid, 15)
-        log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
-
-    # Mark the trigger read BEFORE the launch. A mark that fails then costs
-    # nothing — nothing ran, the email stays unread, the next tick retries —
-    # where after the launch it left the email unread beside a live run, and
-    # a later tick launched the same command AGAIN (killing the first as
-    # "hung" once it passed WATCHDOG_SECONDS). A launch that fails puts the
-    # UNREAD label back, so that trigger is retried too.
-    mark_read()
-    try:
-        pid = launch_instruction(name)
-    except Exception:
-        try:
-            mark_unread()
-        except Exception as e:
-            log(f"msg {msg['id']} could not be marked unread again after the "
-                f"failed launch ({type(e).__name__}: {e}) — resend the trigger")
-        raise
-    log(f"launched {name!r} headless (PID {pid}) from msg {msg['id']}")
-
-
-if __name__ == "__main__":
-    rotate_log_if_needed()
-    try:
-        main()
+        activity |= process_gmail()
     except Exception as e:
         # Transient failures (network, auth) leave the email unread — the next
         # tick retries naturally.
-        log(f"ERROR {type(e).__name__}: {e}")
+        failure = e
+        log(f"ERROR gmail {type(e).__name__}: {e}")
+    try:
+        cfg = telegram_config()
+        if cfg:
+            activity |= process_telegram(cfg)
+    except Exception as e:
+        failure = failure or e
+        log(f"ERROR telegram {type(e).__name__}: {e}")
+    if failure is not None:
+        raise failure
+    if not activity:
+        log("checked — nothing found")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="One Heartbeat pass: drain one email and one Telegram trigger.")
+    parser.add_argument("--telegram-pair", metavar="BOT_TOKEN",
+                        help="Save this machine's bot token, then wait for the first "
+                             "message to the bot and record that chat as allowed")
+    parser.add_argument("--telegram-test", action="store_true",
+                        help="Send a test message to every allowed chat and exit")
+    args = parser.parse_args()
+    if args.telegram_pair:
+        sys.exit(telegram_pair(args.telegram_pair))
+    if args.telegram_test:
+        sys.exit(telegram_test())
+    rotate_log_if_needed()
+    try:
+        main()
+    except Exception:
+        # main() has already logged the failure per transport.
         sys.exit(1)

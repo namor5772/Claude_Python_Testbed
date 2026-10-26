@@ -682,9 +682,12 @@ class HeartbeatOrderTests(_TempLog):
         self.events = []
         _patch(self, Heartbeat, "rewrite_instruction", lambda name, core: None)
         _patch(self, Heartbeat, "running_instances", lambda name: [])
+        # The email transport alone: a machine with a Telegram bot must not
+        # be polled by the suite.
+        _patch(self, Heartbeat, "telegram_config", lambda: None)
         self.launch_error = None
 
-        def launch(name):
+        def launch(name, result_file=None):
             self.events.append(f"launch:{name}")
             if self.launch_error:
                 raise self.launch_error
