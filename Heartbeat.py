@@ -242,10 +242,14 @@ TELEGRAM_MESSAGE_KINDS = (
 
 
 def telegram_message_kind(msg):
-    """'a voice message', 'a photo', … for a message with no text, else
-    'a message without text'."""
+    """'a voice message', 'a photo', 'a sticker (👍)' … for a message with no
+    text, else 'a message without text'. A sticker names its emoji: the big
+    animated thumbs-up a phone offers above the keyboard IS a sticker, and
+    the user who sent one deserves to learn which tap did it."""
     for key, kind in TELEGRAM_MESSAGE_KINDS:
         if msg.get(key):
+            if key == "sticker" and isinstance(msg[key], dict) and msg[key].get("emoji"):
+                kind += f" ({msg[key]['emoji']})"
             return kind
     return "a message without text"
 
@@ -388,13 +392,16 @@ def process_telegram(cfg):
             continue
         text = msg.get("text") or msg.get("caption")
         if not text:
+            # Consumed and answered, then on to the next update: a sticker or a
+            # voice note must not use up the pass's one launch.
             kind = telegram_message_kind(msg)
             telegram_confirm(token, uid)
             telegram_send(token, chat_id,
                           f"I received {kind}, which I cannot read. Send text: line 1 "
                           f"the instruction name, the prompt below it.")
             log(f"telegram: {kind} in update {uid} — consumed, no launch")
-            return True
+            activity = True
+            continue
         name, prompt_core = parse_telegram_trigger(text)
         TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
         result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"

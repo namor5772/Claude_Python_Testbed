@@ -365,7 +365,23 @@ class TelegramProcessTests(_TelegramBase):
         self.assertEqual(Heartbeat.telegram_message_kind({"photo": [{"file_id": "x"}]}), "a photo")
         self.assertEqual(Heartbeat.telegram_message_kind({"sticker": {}}), "a message without text")
         self.assertEqual(Heartbeat.telegram_message_kind({"sticker": {"file_id": "s"}}), "a sticker")
+        self.assertEqual(Heartbeat.telegram_message_kind({"sticker": {"file_id": "s", "emoji": "👍"}}),
+                         "a sticker (👍)")
         self.assertEqual(Heartbeat.telegram_message_kind({}), "a message without text")
+
+    def test_a_sticker_does_not_use_up_the_pass(self):
+        self.fake(_update(10, None, sticker={"file_id": "s", "emoji": "👍"}),
+                  _update(11, "ZZ Probe\nDo"))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["confirm:10", "send:777", "confirm:11",
+                                       "launch:ZZ Probe", "send:777"])
+        self.assertIn("a sticker (👍)", self.api.sent[0][1])
+        self.assertIn("a sticker (👍) in update 10", self.log_text())
+
+    def test_a_lone_sticker_is_still_activity(self):
+        self.fake(_update(10, None, sticker={"file_id": "s"}))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["confirm:10", "send:777"])
 
     def test_a_photo_caption_is_read_as_the_trigger(self):
         self.fake(_update(10, None, photo=[{"file_id": "x"}], caption="ZZ Probe\nDo"))
