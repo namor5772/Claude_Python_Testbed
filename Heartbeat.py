@@ -230,6 +230,25 @@ def telegram_confirm(token, update_id):
     telegram_api(token, "getUpdates", offset=update_id + 1, limit=1, timeout=0)
 
 
+# What a message without text was, for the hint that answers it — a voice
+# note is the likely one on a phone whose owner dictates everywhere else.
+TELEGRAM_MESSAGE_KINDS = (
+    ("voice", "a voice message"), ("audio", "an audio file"), ("photo", "a photo"),
+    ("video_note", "a video message"), ("video", "a video"), ("sticker", "a sticker"),
+    ("animation", "an animation"), ("document", "a file"), ("location", "a location"),
+    ("contact", "a contact"), ("poll", "a poll"),
+)
+
+
+def telegram_message_kind(msg):
+    """'a voice message', 'a photo', … for a message with no text, else
+    'a message without text'."""
+    for key, kind in TELEGRAM_MESSAGE_KINDS:
+        if msg.get(key):
+            return kind
+    return "a message without text"
+
+
 def parse_telegram_trigger(text):
     """(instruction name, prompt core): line 1, then the rest with leading
     blank lines dropped — the email body's layout, with or without its
@@ -366,12 +385,14 @@ def process_telegram(cfg):
                 f"allowed_chat_ids")
             activity = True
             continue
-        text = msg.get("text")
+        text = msg.get("text") or msg.get("caption")
         if not text:
+            kind = telegram_message_kind(msg)
             telegram_confirm(token, uid)
-            telegram_send(token, chat_id, "Text only: line 1 the instruction name, "
-                                          "the prompt below it.")
-            log(f"telegram: non-text message in update {uid} — consumed, no launch")
+            telegram_send(token, chat_id,
+                          f"I received {kind}, which I cannot read. Send text: line 1 "
+                          f"the instruction name, the prompt below it.")
+            log(f"telegram: {kind} in update {uid} — consumed, no launch")
             return True
         name, prompt_core = parse_telegram_trigger(text)
         TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)

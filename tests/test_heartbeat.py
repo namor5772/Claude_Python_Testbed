@@ -352,12 +352,26 @@ class TelegramProcessTests(_TelegramBase):
         self.assertEqual(self.events, [])         # not confirmed: the next tick retries
         self.assertEqual(self.api.sent, [])
 
-    def test_a_non_text_message_is_consumed_with_a_hint(self):
-        self.fake(_update(10, None, photo=[{"file_id": "x"}]))
+    def test_a_non_text_message_is_consumed_with_a_hint_naming_its_kind(self):
+        self.fake(_update(10, None, voice={"file_id": "x", "duration": 3}))
         self.assertTrue(Heartbeat.process_telegram(self.cfg))
         self.assertEqual(self.events, ["confirm:10", "send:777"])
-        self.assertIn("Text only", self.api.sent[0][1])
+        self.assertIn("I received a voice message", self.api.sent[0][1])
+        self.assertIn("Send text", self.api.sent[0][1])
         self.assertEqual(self.launches, [])
+        self.assertIn("a voice message in update 10 — consumed", self.log_text())
+
+    def test_message_kinds(self):
+        self.assertEqual(Heartbeat.telegram_message_kind({"photo": [{"file_id": "x"}]}), "a photo")
+        self.assertEqual(Heartbeat.telegram_message_kind({"sticker": {}}), "a message without text")
+        self.assertEqual(Heartbeat.telegram_message_kind({"sticker": {"file_id": "s"}}), "a sticker")
+        self.assertEqual(Heartbeat.telegram_message_kind({}), "a message without text")
+
+    def test_a_photo_caption_is_read_as_the_trigger(self):
+        self.fake(_update(10, None, photo=[{"file_id": "x"}], caption="ZZ Probe\nDo"))
+        Heartbeat.process_telegram(self.cfg)
+        self.assertEqual(self.events, ["confirm:10", "launch:ZZ Probe", "send:777"])
+        self.assertEqual(self.rewrites, [("ZZ Probe", "Do")])
 
     def test_one_trigger_per_pass_oldest_first(self):
         self.fake(_update(11, "Second\n\nb"), _update(10, "First\n\na"))
