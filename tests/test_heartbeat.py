@@ -171,22 +171,33 @@ class _TelegramBase(unittest.TestCase):
 class TelegramParseTests(unittest.TestCase):
     def test_name_then_core_with_the_email_layout(self):
         self.assertEqual(Heartbeat.parse_telegram_trigger("ZZ Probe\n\nDo the thing\nline 2"),
-                         ("ZZ Probe", "Do the thing\nline 2"))
+                         ("ZZ Probe", "Do the thing\nline 2", False))
 
     def test_the_blank_second_line_is_optional(self):
         self.assertEqual(Heartbeat.parse_telegram_trigger("ZZ Probe\nDo the thing"),
-                         ("ZZ Probe", "Do the thing"))
+                         ("ZZ Probe", "Do the thing", False))
         self.assertEqual(Heartbeat.parse_telegram_trigger("ZZ Probe\n\n\n\nDo it"),
-                         ("ZZ Probe", "Do it"))
+                         ("ZZ Probe", "Do it", False))
 
     def test_a_name_alone_has_an_empty_core(self):
-        self.assertEqual(Heartbeat.parse_telegram_trigger("  ZZ Probe  "), ("ZZ Probe", ""))
-        self.assertEqual(Heartbeat.parse_telegram_trigger(""), ("", ""))
-        self.assertEqual(Heartbeat.parse_telegram_trigger(None), ("", ""))
+        self.assertEqual(Heartbeat.parse_telegram_trigger("  ZZ Probe  "), ("ZZ Probe", "", False))
+        self.assertEqual(Heartbeat.parse_telegram_trigger(""), ("", "", False))
+        self.assertEqual(Heartbeat.parse_telegram_trigger(None), ("", "", False))
 
     def test_a_core_keeps_its_own_blank_lines_and_markers(self):
-        name, core = Heartbeat.parse_telegram_trigger("N\n\na\n\nb\n*****\nc")
+        name, core, _show = Heartbeat.parse_telegram_trigger("N\n\na\n\nb\n*****\nc")
         self.assertEqual((name, core), ("N", "a\n\nb\n*****\nc"))
+
+    def test_an_at_sign_before_the_name_asks_for_the_window(self):
+        # 2026-10-28: "@Name" runs with the window shown; the @ is not part of
+        # the name, spaces after it are forgiven, the core is untouched.
+        for text in ("@ZZ Probe\nDo", "@ ZZ Probe\nDo", "  @ZZ Probe  \n\nDo"):
+            with self.subTest(text=text):
+                self.assertEqual(Heartbeat.parse_telegram_trigger(text), ("ZZ Probe", "Do", True))
+        self.assertEqual(Heartbeat.parse_telegram_trigger("@"), ("", "", True))   # poison, as "" is
+        # An @ anywhere else is just text.
+        self.assertEqual(Heartbeat.parse_telegram_trigger("ZZ@Probe\n@Do"),
+                         ("ZZ@Probe", "@Do", False))
 
 
 class TelegramChunkTests(unittest.TestCase):
@@ -571,13 +582,31 @@ class DispatchPrependTests(_TelegramBase):
         _patch(self, Heartbeat, "rewrite_instruction",
                lambda name, core: (self.rewrites.append((name, core)), self.verdict)[1])
 
-        def launch(name, result_file=None, relay_dir=None, prepend_file=None):
+        def launch(name, result_file=None, relay_dir=None, prepend_file=None,
+                   show_window=False):
             self.events.append(f"launch:{name}")
             self.launches.append((name, result_file, prepend_file))
+            self.shown.append(show_window)
             if self.launch_error:
                 raise self.launch_error
             return 4242
+        self.shown = []
         _patch(self, Heartbeat, "launch_instruction", launch)
+
+    def test_an_at_sign_shows_the_window_and_the_reply_says_so(self):
+        self.verdict = "replaced"
+        self.fake(_update(10, "@ZZ Probe\nDo the thing"), _update(11, "ZZ Probe\nDo"))
+        Heartbeat.process_telegram(self.cfg)        # one launch per pass
+        self.assertEqual(self.launches[0][0], "ZZ Probe")        # the @ is not in the name
+        self.assertEqual(self.shown, [True])
+        self.assertIn("▶ Started ZZ Probe on", self.api.sent[0][1])
+        self.assertIn("with its window — the result will follow", self.api.sent[0][1])
+        self.assertIn("launched 'ZZ Probe' with its window (PID 4242)", self.log_text())
+        self.events.clear()
+        Heartbeat.process_telegram(self.cfg)
+        self.assertEqual(self.shown, [True, False])
+        self.assertNotIn("window", self.api.sent[-1][1])
+        self.assertIn("launched 'ZZ Probe' headless (PID 4242)", self.log_text())
 
     def dispatch(self, core="Do the thing", result_file=None):
         return Heartbeat.dispatch_trigger(
@@ -651,6 +680,21 @@ class LaunchCommandTests(unittest.TestCase):
                                     "--relay-dir", str(Path("C:/x/relay/10")),
                                     "--prepend-file", str(Path("C:/x/results/10.prepend.txt"))])
         self.assertRegex(subprocess.list2cmdline(cmd), Heartbeat.watchdog_pattern("Balance Westpac"))
+
+    def test_show_window_follows_headless_and_the_watchdog_still_matches(self):
+        cmd = self._command(result_file=Path("C:/x/results/10.json"), show_window=True)
+        self.assertEqual(cmd[1:], ["MyAgent.py", "-l", "Balance Westpac", "--headless",
+                                   "--result-file", str(Path("C:/x/results/10.json")),
+                                   "--show-window"])
+        self.assertRegex(subprocess.list2cmdline(cmd), Heartbeat.watchdog_pattern("Balance Westpac"))
+        self.assertNotIn("--show-window", self._command(result_file=Path("C:/x/r.json")))
+
+    def test_every_flag_the_launcher_passes_is_one_myagent_parses(self):
+        entry = (Path(__file__).resolve().parents[1] / "MyAgent.py").read_text(encoding="utf-8")
+        for flag in ("--headless", "--result-file", "--relay-dir", "--prepend-file", "--show-window"):
+            self.assertIn(f'"{flag}"', entry, flag)
+        # And a shown window is still a headless run on the child's side.
+        self.assertIn("if self._headless and not self._show_window:", entry)
 
     def _command(self, **kwargs):
         seen = {}

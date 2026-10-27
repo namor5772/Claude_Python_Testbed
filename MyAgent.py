@@ -87,9 +87,15 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           VoiceMixin, ModelUpgradeMixin, OtherSetupMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
-                 extra_file=None, relay_dir=None, prepend_file=None):
+                 extra_file=None, relay_dir=None, prepend_file=None, show_window=False):
         self.root = root
         self._headless = headless
+        # --show-window (2026-10-28): a --headless run that keeps its main
+        # window on screen — a Telegram trigger whose first line starts with
+        # "@". Everything else stays headless: no state file written, the
+        # auto-close at run end, the unattended-launch rules. The window is a
+        # view of the run, not the user's own session.
+        self._show_window = bool(show_window)
         # Optional folder (from --relay-dir, set by Heartbeat's Telegram
         # listener on the runs it launches) through which every Agent Request
         # of this run is relayed to the phone and can be answered from it —
@@ -395,7 +401,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         if _HAS_MCP:
             self.root.after(100, self._connect_mcp_servers)
 
-        if self._headless:
+        if self._headless and not self._show_window:
             self.root.withdraw()
 
         # Auto-launch instruction from -l command-line argument
@@ -430,9 +436,15 @@ if __name__ == "__main__":
                         help="UTF-8 text file put IN FRONT of the -l instruction's text "
                              "for this run only — Heartbeat's Telegram prompt for an "
                              "instruction without a ***** block to rewrite")
+    parser.add_argument("--show-window", action="store_true",
+                        help="With --headless: keep the main window on screen while the "
+                             "run works — everything else stays headless (no state file, "
+                             "auto-close at the end). Heartbeat passes it for a Telegram "
+                             "trigger whose first line starts with '@'")
     args = parser.parse_args()
     root = tk.Tk()
     app = App(root, launch_instruction=args.load, headless=args.headless,
               result_file=args.result_file, extra_file=args.extra_file,
-              relay_dir=args.relay_dir, prepend_file=args.prepend_file)
+              relay_dir=args.relay_dir, prepend_file=args.prepend_file,
+              show_window=args.show_window)
     root.mainloop()

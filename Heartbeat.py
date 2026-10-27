@@ -267,20 +267,30 @@ def telegram_usage():
             f"name of a saved MyAgent instruction, the prompt below it. The prompt "
             f"replaces the instruction's {MARKER} block; an instruction without one "
             f"gets it put in front of its text for that run; no prompt runs the "
-            f"instruction as saved. I confirm the start and post the result when the "
-            f"run ends.")
+            f"instruction as saved. Start the name with {SHOW_WINDOW_PREFIX} to watch "
+            f"the run in its window on the PC (otherwise it runs headless). I confirm "
+            f"the start and post the result when the run ends.")
+
+
+SHOW_WINDOW_PREFIX = "@"
 
 
 def parse_telegram_trigger(text):
-    """(instruction name, prompt core): line 1, then the rest with leading
-    blank lines dropped — the email body's layout, with or without its
-    blank second line, since a phone keyboard makes that line easy to miss."""
+    """(instruction name, prompt core, show window): line 1 the name, then
+    the rest with leading blank lines dropped — the email body's layout, with
+    or without its blank second line, since a phone keyboard makes that line
+    easy to miss. A name that starts with "@" (2026-10-28, the user's
+    request) asks for the run's window to be shown — the "@" is not part of
+    the name — where a Telegram run is otherwise headless."""
     lines = (text or "").splitlines()
     name = lines[0].strip() if lines else ""
+    show_window = name.startswith(SHOW_WINDOW_PREFIX)
+    if show_window:
+        name = name[len(SHOW_WINDOW_PREFIX):].strip()
     rest = lines[1:]
     while rest and not rest[0].strip():
         rest.pop(0)
-    return name, "\n".join(rest)
+    return name, "\n".join(rest), show_window
 
 
 def pid_alive(pid):
@@ -456,7 +466,7 @@ def telegram_handle_update(cfg, upd):
         telegram_send(token, chat_id, f"↩ Sent to {name}.")
         log(f"telegram: reply to {name!r} request #{seq} from update {uid}")
         return "skipped", None
-    name, prompt_core = parse_telegram_trigger(text)
+    name, prompt_core, show_window = parse_telegram_trigger(text)
     TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
     relay_dir = TELEGRAM_RELAY_DIR / str(uid)
@@ -468,7 +478,8 @@ def telegram_handle_update(cfg, upd):
 
     try:
         status, detail = dispatch_trigger(label, name, prompt_core, consume,
-                                          result_file=result_file, relay_dir=relay_dir)
+                                          result_file=result_file, relay_dir=relay_dir,
+                                          show_window=show_window)
     except Exception as e:
         # Consumed already means the launch itself failed — an update cannot
         # be un-confirmed, so the user is told to resend.
@@ -486,8 +497,8 @@ def telegram_handle_update(cfg, upd):
         return "deferred", None
     pending = telegram_pending_write(uid, chat_id, name, detail, result_file, relay_dir)
     telegram_send(token, chat_id,
-                  f"▶ Started {name} on {HOST} — the result will follow when it "
-                  f"finishes.")
+                  f"▶ Started {name} on {HOST}{' with its window' if show_window else ''}"
+                  f" — the result will follow when it finishes.")
     return "launched", (detail, pending)
 
 
@@ -912,10 +923,13 @@ def running_instances(name):
     return out
 
 
-def launch_instruction(name, result_file=None, relay_dir=None, prepend_file=None):
-    """Spawn the headless run, detached. ``result_file``, ``relay_dir`` and
-    ``prepend_file`` (the Telegram transport's) are appended AFTER --headless
-    so the watchdog's command-line pattern, which ends there, still matches."""
+def launch_instruction(name, result_file=None, relay_dir=None, prepend_file=None,
+                       show_window=False):
+    """Spawn the headless run, detached. ``result_file``, ``relay_dir``,
+    ``prepend_file`` and ``show_window`` (the Telegram transport's) are
+    appended AFTER --headless so the watchdog's command-line pattern, which
+    ends there, still matches — a shown window is still a --headless run
+    (MyAgent's --show-window keeps the window and nothing else)."""
     if platform.system() == "Windows":
         python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
         # start_new_session is POSIX-only; CREATE_NO_WINDOW detaches the child
@@ -933,6 +947,8 @@ def launch_instruction(name, result_file=None, relay_dir=None, prepend_file=None
         cmd += ["--relay-dir", str(relay_dir)]
     if prepend_file:
         cmd += ["--prepend-file", str(prepend_file)]
+    if show_window:
+        cmd.append("--show-window")
     proc = subprocess.Popen(
         cmd,
         cwd=str(BASE_DIR),
@@ -944,7 +960,8 @@ def launch_instruction(name, result_file=None, relay_dir=None, prepend_file=None
     return proc.pid
 
 
-def dispatch_trigger(label, name, prompt_core, consume, result_file=None, relay_dir=None):
+def dispatch_trigger(label, name, prompt_core, consume, result_file=None, relay_dir=None,
+                     show_window=False):
     """The tail every trigger goes through: rewrite the instruction, run the
     watchdog, CONSUME the trigger, launch. ``consume`` is the transport's
     "mark read" — the Telegram update confirmed (the email transport's was
@@ -1009,13 +1026,16 @@ def dispatch_trigger(label, name, prompt_core, consume, result_file=None, relay_
     launch_kwargs = {"result_file": result_file, "relay_dir": relay_dir}
     if prepend_file:
         launch_kwargs["prepend_file"] = prepend_file
+    if show_window:
+        launch_kwargs["show_window"] = True
     try:
         pid = launch_instruction(name, **launch_kwargs)
     except Exception:
         if prepend_file:        # no run will read it, no delivery will remove it
             prepend_file.unlink(missing_ok=True)
         raise
-    log(f"launched {name!r} headless (PID {pid}) from {label}")
+    how = "with its window" if show_window else "headless"
+    log(f"launched {name!r} {how} (PID {pid}) from {label}")
     return "launched", pid
 
 
