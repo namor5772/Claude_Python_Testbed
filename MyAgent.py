@@ -87,7 +87,7 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
           VoiceMixin, ModelUpgradeMixin, OtherSetupMixin, ChatMixin, EventLoopMixin):
 
     def __init__(self, root, launch_instruction=None, headless=False, result_file=None,
-                 extra_file=None, relay_dir=None):
+                 extra_file=None, relay_dir=None, prepend_file=None):
         self.root = root
         self._headless = headless
         # Optional folder (from --relay-dir, set by Heartbeat's Telegram
@@ -112,6 +112,16 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
                     self._extra_text = f.read()
             except OSError:
                 pass  # missing/unreadable → run the instruction unmodified
+        # Its twin in front (from --prepend-file, 2026-10-28): the Telegram
+        # trigger's prompt for an instruction that has no ***** block to
+        # rewrite — put before the saved text for this run, the store untouched.
+        self._prepend_text = ""
+        if prepend_file:
+            try:
+                with open(prepend_file, encoding="utf-8") as f:
+                    self._prepend_text = f.read()
+            except OSError:
+                pass
         self.root.title("My Agent")
         self._set_geometry(self.root, DEFAULT_GEOMETRY)
 
@@ -416,9 +426,13 @@ if __name__ == "__main__":
                         help="Folder through which each Agent Request of this run is "
                              "relayed to, and answered from, the Telegram chat — set by "
                              "Heartbeat's listener on the runs it launches (myagent/relay.py)")
+    parser.add_argument("--prepend-file", metavar="PATH",
+                        help="UTF-8 text file put IN FRONT of the -l instruction's text "
+                             "for this run only — Heartbeat's Telegram prompt for an "
+                             "instruction without a ***** block to rewrite")
     args = parser.parse_args()
     root = tk.Tk()
     app = App(root, launch_instruction=args.load, headless=args.headless,
               result_file=args.result_file, extra_file=args.extra_file,
-              relay_dir=args.relay_dir)
+              relay_dir=args.relay_dir, prepend_file=args.prepend_file)
     root.mainloop()

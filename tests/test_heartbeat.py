@@ -561,7 +561,97 @@ class HeartbeatMainTests(_TelegramBase):
             self.assertNotIn(name, src)
 
 
+class DispatchPrependTests(_TelegramBase):
+    """The prompt's three roads into the run (2026-10-28): the ***** block,
+    a prepend file for an instruction without one, nothing for no prompt."""
+
+    def setUp(self):
+        super().setUp()
+        self.verdict = "prepend"
+        _patch(self, Heartbeat, "rewrite_instruction",
+               lambda name, core: (self.rewrites.append((name, core)), self.verdict)[1])
+
+        def launch(name, result_file=None, relay_dir=None, prepend_file=None):
+            self.events.append(f"launch:{name}")
+            self.launches.append((name, result_file, prepend_file))
+            if self.launch_error:
+                raise self.launch_error
+            return 4242
+        _patch(self, Heartbeat, "launch_instruction", launch)
+
+    def dispatch(self, core="Do the thing", result_file=None):
+        return Heartbeat.dispatch_trigger(
+            "telegram update 10", "ZZ Probe", core, lambda: self.events.append("consume"),
+            result_file=result_file)
+
+    def test_a_prompt_for_an_instruction_without_a_block_rides_in_a_prepend_file(self):
+        result = self.root / "tg" / "results" / "10.json"
+        self.assertEqual(self.dispatch(result_file=result), ("launched", 4242))
+        name, result_file, prepend_file = self.launches[0]
+        self.assertEqual(prepend_file, result.with_suffix(".prepend.txt"))
+        self.assertEqual(prepend_file.read_text(encoding="utf-8"), "Do the thing")
+        self.assertEqual(self.events, ["consume", "launch:ZZ Probe"])
+        self.assertIn("'ZZ Probe' has no '*****' block: 12 chars prepended for this run",
+                      self.log_text())
+
+    def test_without_a_result_file_the_prepend_file_is_a_temp_file_in_the_results_folder(self):
+        self.dispatch()
+        prepend_file = self.launches[0][2]
+        self.assertEqual(prepend_file.parent, self.root / "tg" / "results")
+        self.assertEqual(prepend_file.read_text(encoding="utf-8"), "Do the thing")
+
+    def test_a_replaced_or_unchanged_verdict_launches_without_the_flag(self):
+        for verdict, line in (("replaced", "rewrote 'ZZ Probe': 12 chars below marker"),
+                              ("unchanged", "no prompt under the name: 'ZZ Probe' runs as saved"),
+                              (None, "rewrote 'ZZ Probe'")):      # the old fakes' None
+            with self.subTest(verdict=verdict):
+                self.verdict = verdict
+                self.launches.clear()
+                self.assertEqual(self.dispatch(result_file=self.root / "r.json"),
+                                 ("launched", 4242))
+                self.assertIsNone(self.launches[0][2])
+                self.assertFalse((self.root / "r.prepend.txt").exists())
+                self.assertIn(line, self.log_text())
+
+    def test_a_launch_that_fails_removes_the_prepend_file_and_raises(self):
+        self.launch_error = OSError("no python")
+        result = self.root / "tg" / "results" / "10.json"
+        with self.assertRaises(OSError):
+            self.dispatch(result_file=result)
+        self.assertFalse(result.with_suffix(".prepend.txt").exists())
+
+    def test_the_whole_pass_hands_the_prompt_over_and_the_delivery_removes_the_file(self):
+        self.fake(_update(10, "ZZ Probe\nDo the thing"))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["confirm:10", "launch:ZZ Probe", "send:777"])
+        name, result_file, prepend_file = self.launches[0]
+        self.assertEqual(prepend_file, Path(result_file).with_suffix(".prepend.txt"))
+        self.assertTrue(prepend_file.exists())
+        # The run ends: its result is posted, and both files go.
+        Path(result_file).write_text(json.dumps({"status": "completed", "final_text": "ok"}),
+                                     encoding="utf-8")
+        _patch(self, Heartbeat, "pid_alive", lambda pid: False)
+        self.assertTrue(Heartbeat.telegram_deliver_one(self.cfg, self.pending_files()[0]))
+        self.assertFalse(Path(result_file).exists())
+        self.assertFalse(prepend_file.exists())
+
+    def test_the_usage_names_the_three_roads(self):
+        usage = Heartbeat.telegram_usage()
+        self.assertIn("replaces the instruction's ***** block", usage)
+        self.assertIn("without one gets it put in front", usage)
+        self.assertIn("no prompt runs the instruction as saved", usage)
+
+
 class LaunchCommandTests(unittest.TestCase):
+    def test_the_prepend_file_follows_too_and_the_watchdog_still_matches(self):
+        cmd = self._command(result_file=Path("C:/x/results/10.json"),
+                            relay_dir=Path("C:/x/relay/10"),
+                            prepend_file=Path("C:/x/results/10.prepend.txt"))
+        self.assertEqual(cmd[-6:], ["--result-file", str(Path("C:/x/results/10.json")),
+                                    "--relay-dir", str(Path("C:/x/relay/10")),
+                                    "--prepend-file", str(Path("C:/x/results/10.prepend.txt"))])
+        self.assertRegex(subprocess.list2cmdline(cmd), Heartbeat.watchdog_pattern("Balance Westpac"))
+
     def _command(self, **kwargs):
         seen = {}
 

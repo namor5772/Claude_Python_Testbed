@@ -264,8 +264,11 @@ TELEGRAM_HELP_COMMANDS = ("/start", "/help")
 
 def telegram_usage():
     return (f"This is Heartbeat on {HOST} ({MACHINE_CODE}). Send a text message: line 1 the "
-            f"name of a saved MyAgent instruction, the prompt below it. I confirm the "
-            f"start and post the result when the run ends.")
+            f"name of a saved MyAgent instruction, the prompt below it. The prompt "
+            f"replaces the instruction's {MARKER} block; an instruction without one "
+            f"gets it put in front of its text for that run; no prompt runs the "
+            f"instruction as saved. I confirm the start and post the result when the "
+            f"run ends.")
 
 
 def parse_telegram_trigger(text):
@@ -380,6 +383,7 @@ def telegram_deliver_one(cfg, pending):
     pending.unlink(missing_ok=True)
     if result_file.exists():
         result_file.unlink()
+    prepend_file_for(result_file).unlink(missing_ok=True)   # the run read it at start
     return True
 
 
@@ -778,26 +782,32 @@ def telegram_test():
 
 
 def rewrite_instruction(name, prompt_core):
-    """Replace everything between the first and the LAST ***** marker line;
-    atomic write.
+    """Put the trigger's prompt into the saved instruction where it has a
+    place for it, and say what the launch must do: "replaced" — the text
+    between the first and the LAST ***** marker line is now prompt_core,
+    written atomically; "prepend" — the instruction has no such block (fewer
+    than two markers), nothing is written, and the launch puts the prompt in
+    front of the saved text for that run (`--prepend-file`); "unchanged" —
+    the prompt is empty, nothing is written, the instruction runs as saved.
+    An unknown name is a LookupError (the trigger is poison-pilled).
 
-    The text keeps its header (above the first marker) and footer (below the
-    last marker); only the middle is swapped for prompt_core. The LAST, not
-    the second: a PromptCore may contain a ***** line of its own, and with the
-    second marker the next trigger replaced only the part above it — the rest
-    of the old core survived under the new one, growing with every trigger.
-    Fewer than two markers is a LookupError so the trigger email gets
-    poison-pilled instead of silently mangling the instruction."""
+    The marker form keeps the header (above the first marker) and the footer
+    (below the last marker); only the middle is swapped. The LAST, not the
+    second: a prompt may contain a ***** line of its own, and with the second
+    marker the next trigger replaced only the part above it — the rest of the
+    old core survived under the new one, growing with every trigger. Until
+    2026-10-28 fewer than two markers was poison too; the user asked that
+    such an instruction run with the prompt prepended — for the RUN, never
+    written into the store, which would grow by one prompt per trigger."""
     instructions = json.loads(INSTRUCTIONS_FILE.read_text(encoding="utf-8"))
     if name not in instructions:
         raise LookupError(f"instruction {name!r} not found")
+    if not prompt_core.strip():
+        return "unchanged"
     lines = instructions[name]["text"].split("\n")
     marker_idxs = [i for i, l in enumerate(lines) if l.strip().startswith(MARKER)]
     if len(marker_idxs) < 2:
-        raise LookupError(
-            f"instruction {name!r} needs two {MARKER!r} marker lines "
-            f"(found {len(marker_idxs)})"
-        )
+        return "prepend"
     first, last = marker_idxs[0], marker_idxs[-1]
     instructions[name]["text"] = "\n".join(
         lines[: first + 1] + [prompt_core] + lines[last:]
@@ -808,6 +818,20 @@ def rewrite_instruction(name, prompt_core):
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(instructions, f, indent=2, ensure_ascii=False)
     os.replace(tmp, INSTRUCTIONS_FILE)
+    return "replaced"
+
+
+def prepend_file_for(result_file):
+    """Where a run's prepended prompt is written: beside its result file,
+    `<update id>.prepend.txt`, so the delivery that removes the result file
+    removes it too; a caller without a result file gets a temp file in the
+    results folder."""
+    if result_file:
+        return Path(result_file).with_suffix(".prepend.txt")
+    TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(TELEGRAM_RESULTS_DIR), suffix=".prepend.txt")
+    os.close(fd)
+    return Path(tmp)
 
 
 # A previous spawn younger than this blocks a new one (skip + retry next tick);
@@ -888,10 +912,10 @@ def running_instances(name):
     return out
 
 
-def launch_instruction(name, result_file=None, relay_dir=None):
-    """Spawn the headless run, detached. ``result_file`` and ``relay_dir``
-    (the Telegram transport's) are appended AFTER --headless so the
-    watchdog's command-line pattern, which ends there, still matches."""
+def launch_instruction(name, result_file=None, relay_dir=None, prepend_file=None):
+    """Spawn the headless run, detached. ``result_file``, ``relay_dir`` and
+    ``prepend_file`` (the Telegram transport's) are appended AFTER --headless
+    so the watchdog's command-line pattern, which ends there, still matches."""
     if platform.system() == "Windows":
         python = BASE_DIR / ".venv" / "Scripts" / "python.exe"
         # start_new_session is POSIX-only; CREATE_NO_WINDOW detaches the child
@@ -907,6 +931,8 @@ def launch_instruction(name, result_file=None, relay_dir=None):
         cmd += ["--result-file", str(result_file)]
     if relay_dir:
         cmd += ["--relay-dir", str(relay_dir)]
+    if prepend_file:
+        cmd += ["--prepend-file", str(prepend_file)]
     proc = subprocess.Popen(
         cmd,
         cwd=str(BASE_DIR),
@@ -944,13 +970,29 @@ def dispatch_trigger(label, name, prompt_core, consume, result_file=None, relay_
     # order (modify text field, then run_instruction). The command must land in
     # agent_instructions.json immediately even if the spawn below is deferred.
     # Idempotent, so a deferred trigger re-rewriting on the next tick is harmless.
+    # The verdict says how the prompt reaches the run (2026-10-28): "replaced"
+    # — it is in the store's ***** block; "prepend" — the instruction has no
+    # block, so the prompt goes in a file the launch hands over as
+    # --prepend-file, put in front of the saved text for that run only;
+    # "unchanged" — no prompt, the instruction runs as saved. (A fake rewrite
+    # in the tests returns None: the old, replaced, behaviour.)
     try:
-        rewrite_instruction(name, prompt_core)
-        log(f"rewrote {name!r}: {len(prompt_core)} chars below marker ({label})")
+        verdict = rewrite_instruction(name, prompt_core) or "replaced"
     except LookupError as e:
         log(f"POISON {label}: {e} — consumed, no launch")
         consume()
         return "poison", str(e)
+    prepend_file = None
+    if verdict == "prepend":
+        prepend_file = prepend_file_for(result_file)
+        prepend_file.parent.mkdir(parents=True, exist_ok=True)
+        prepend_file.write_text(prompt_core, encoding="utf-8")
+        log(f"{name!r} has no {MARKER!r} block: {len(prompt_core)} chars "
+            f"prepended for this run ({label})")
+    elif verdict == "unchanged":
+        log(f"no prompt under the name: {name!r} runs as saved ({label})")
+    else:
+        log(f"rewrote {name!r}: {len(prompt_core)} chars below marker ({label})")
 
     # Watchdog: a recent run defers the new spawn (the trigger stays pending so
     # the next tick retries the launch). A run older than WATCHDOG_SECONDS is
@@ -964,7 +1006,15 @@ def dispatch_trigger(label, name, prompt_core, consume, result_file=None, relay_
         log(f"WATCHDOG: killed hung {name!r} run (PID {pid}, {age}s old)")
 
     consume()
-    pid = launch_instruction(name, result_file=result_file, relay_dir=relay_dir)
+    launch_kwargs = {"result_file": result_file, "relay_dir": relay_dir}
+    if prepend_file:
+        launch_kwargs["prepend_file"] = prepend_file
+    try:
+        pid = launch_instruction(name, **launch_kwargs)
+    except Exception:
+        if prepend_file:        # no run will read it, no delivery will remove it
+            prepend_file.unlink(missing_ok=True)
+        raise
     log(f"launched {name!r} headless (PID {pid}) from {label}")
     return "launched", pid
 

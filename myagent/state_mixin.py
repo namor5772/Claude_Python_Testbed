@@ -1165,6 +1165,18 @@ class StateMixin:
                 "launching process) ---\n"
                 f"{extra_text}")
 
+    @staticmethod
+    def _merge_prepend_text(instruction_text, prepend_text):
+        """Put a per-run text IN FRONT of the instruction (--prepend-file,
+        2026-10-28): the Telegram trigger's prompt for an instruction without
+        a ***** block, which Heartbeat cannot rewrite in place — so the words
+        come first, as the core of a marker instruction does, and the saved
+        instruction on disk is untouched. Plain, no label: the marker form
+        carries none either. Empty text is the identity."""
+        if not prepend_text:
+            return instruction_text
+        return f"{prepend_text}\n\n{instruction_text}"
+
     def _unattended_launch(self):
         """A --headless run, or a --result-file one (a run_instruction child,
         even with a window): nobody is there to answer a dialog."""
@@ -1195,6 +1207,9 @@ class StateMixin:
             )
             return
         self._apply_instruction_entry(name, instructions[name])
+        # The per-run texts: --prepend-file in front, --extra-file behind.
+        self.agent_instruction = self._merge_prepend_text(
+            self.agent_instruction, getattr(self, "_prepend_text", ""))
         self.agent_instruction = self._merge_extra_text(
             self.agent_instruction, getattr(self, "_extra_text", ""))
         if not self.agent_instruction.strip() and self._unattended_launch():

@@ -24,6 +24,30 @@ class MergeCase(unittest.TestCase):
         self.assertTrue(out.endswith("the specific question"))
 
 
+class PrependCase(unittest.TestCase):
+    """--prepend-file (2026-10-28): the Telegram prompt for an instruction
+    without a ***** block, put in FRONT of the saved text for one run."""
+
+    def test_empty_prepend_is_identity(self):
+        self.assertEqual(StateMixin._merge_prepend_text("base task", ""), "base task")
+        self.assertEqual(StateMixin._merge_prepend_text("base task", None), "base task")
+
+    def test_the_text_comes_first_plain_with_a_blank_line_between(self):
+        self.assertEqual(StateMixin._merge_prepend_text("base task", "Do this today"),
+                         "Do this today\n\nbase task")
+
+    def test_the_launch_prepends_before_it_appends_and_the_flag_is_wired(self):
+        import inspect
+        from pathlib import Path
+        launch = inspect.getsource(StateMixin._auto_launch)
+        self.assertLess(launch.index("_merge_prepend_text("), launch.index("_merge_extra_text("))
+        self.assertIn('getattr(self, "_prepend_text", "")', launch)
+        entry = (Path(__file__).resolve().parents[1] / "MyAgent.py").read_text(encoding="utf-8")
+        self.assertIn('"--prepend-file"', entry)
+        self.assertIn("prepend_file=args.prepend_file", entry)
+        self.assertIn("self._prepend_text = f.read()", entry)
+
+
 class _Host(SkillsMixin):
     def __init__(self):
         self.stop_requested = False

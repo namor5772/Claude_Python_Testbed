@@ -629,11 +629,33 @@ class RewriteMarkerTests(_TempLog):
         Heartbeat.rewrite_instruction("ZZ", "task B")
         self.assertEqual(self.text(), "HEADER\n*****\ntask B\n*****\nFOOTER")
 
-    def test_fewer_than_two_markers_is_still_poison(self):
-        self.store.write_text(json.dumps({"ZZ": {"text": "HEADER\n*****\nbody"}}),
-                              encoding="utf-8")
-        with self.assertRaises(LookupError):
-            Heartbeat.rewrite_instruction("ZZ", "x")
+    def test_a_rewrite_says_replaced(self):
+        self.assertEqual(Heartbeat.rewrite_instruction("ZZ", "task"), "replaced")
+
+    def test_fewer_than_two_markers_means_prepend_and_leaves_the_store_alone(self):
+        # 2026-10-28 (the user's request): such an instruction runs with the
+        # prompt in front for that run — poison until then.
+        for text in ("HEADER\n*****\nbody", "no markers at all"):
+            with self.subTest(text=text):
+                self.store.write_text(json.dumps({"ZZ": {"text": text}}), encoding="utf-8")
+                before = self.store.read_bytes()
+                self.assertEqual(Heartbeat.rewrite_instruction("ZZ", "x"), "prepend")
+                self.assertEqual(self.store.read_bytes(), before)
+
+    def test_an_empty_prompt_changes_nothing_with_or_without_markers(self):
+        for text in ("HEADER\n*****\nold core\n*****\nFOOTER", "no markers at all"):
+            for core in ("", "   \n"):
+                with self.subTest(text=text, core=core):
+                    self.store.write_text(json.dumps({"ZZ": {"text": text}}), encoding="utf-8")
+                    before = self.store.read_bytes()
+                    self.assertEqual(Heartbeat.rewrite_instruction("ZZ", core), "unchanged")
+                    self.assertEqual(self.store.read_bytes(), before)
+
+    def test_an_unknown_name_is_poison_even_with_an_empty_prompt(self):
+        for core in ("x", ""):
+            with self.subTest(core=core):
+                with self.assertRaises(LookupError):
+                    Heartbeat.rewrite_instruction("Nope", core)
 
 
 class _Exec:
