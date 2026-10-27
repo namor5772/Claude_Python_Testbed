@@ -2109,7 +2109,8 @@ class StreamingMixin(PaneNotesMixin):
                         messages.append({"role": "assistant", "content": full_text})
                         next_msg = self.do_user_prompt(
                             "Reply, or type empty / 'quit' / 'stop' to end, "
-                            "or 'exit' to end and close MyAgent.",
+                            "or 'exit' to end and close MyAgent "
+                            "('Quit.' and 'Exit!' work too).",
                             convo=True,   # an end word here ends the run: no upgrade
                         )
                         prompt_images = self._take_prompt_images()

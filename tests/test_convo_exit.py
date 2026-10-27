@@ -21,7 +21,8 @@ from myagent.helpers import _ToolBlock
 from tests.test_costlog_run_fields import _Host, _Var
 
 STOCK_PROMPT = ("Reply, or type empty / 'quit' / 'stop' to end, "
-                "or 'exit' to end and close MyAgent.")
+                "or 'exit' to end and close MyAgent "
+                "('Quit.' and 'Exit!' work too).")
 
 
 class _Root:
