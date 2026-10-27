@@ -21,7 +21,7 @@ from myagent.constants import (
     RESPONSES_REASONING_INCLUDE, XAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
     KIMI_PRICING, OLLAMA_PRICING, resolve_price,
-    APICOST_LOG_FILE, CONVO_END_WORDS, CONVO_EXIT_WORD,
+    APICOST_LOG_FILE, CONVO_END_WORDS, CONVO_EXIT_WORD, convo_end_word,
     AGENT_RUN_PREFIX,
 )
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
@@ -825,10 +825,11 @@ class StreamingMixin(PaneNotesMixin):
             if not response.strip():
                 self.stop_requested = True
                 return "[User submitted empty response — stopping agent]"
-            if response.strip().lower() == CONVO_EXIT_WORD:
-                # "exit" ends the run like an empty reply AND closes MyAgent
-                # (constants.CONVO_EXIT_WORD): the flag is read where the
-                # loop ends, beside the headless auto-close (stream_worker).
+            if convo_end_word(response) == CONVO_EXIT_WORD:
+                # "exit" — "Exit", "exit!" — ends the run like an empty reply
+                # AND closes MyAgent (constants.CONVO_EXIT_WORD): the flag is
+                # read where the loop ends, beside the headless auto-close
+                # (stream_worker).
                 self.stop_requested = True
                 self._close_after_run = True
                 return "[User typed 'exit' — stopping the agent and closing MyAgent]"
@@ -2112,9 +2113,9 @@ class StreamingMixin(PaneNotesMixin):
                             convo=True,   # an end word here ends the run: no upgrade
                         )
                         prompt_images = self._take_prompt_images()
-                        if (not next_msg
-                                or next_msg.strip().lower() in CONVO_END_WORDS):
-                            if next_msg.strip().lower() == CONVO_EXIT_WORD:
+                        end_word = convo_end_word(next_msg)
+                        if not next_msg or end_word in CONVO_END_WORDS:
+                            if end_word == CONVO_EXIT_WORD:
                                 # Ends like "quit", then closes MyAgent (the
                                 # flag is read by _close_if_due at loop end).
                                 self._close_after_run = True

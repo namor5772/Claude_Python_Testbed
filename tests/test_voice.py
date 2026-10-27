@@ -1351,10 +1351,13 @@ class WiringTests(unittest.TestCase):
 
     def test_convo_mode_and_the_voice_row_read_the_one_end_word_list(self):
         # The conversation-ending check and the transcript normaliser must
-        # not drift apart: streaming_mixin reads CONVO_END_WORDS (no literal
-        # tuple of its own), and the row normalises before it inserts.
+        # not drift apart: streaming_mixin reads CONVO_END_WORDS through the
+        # shared `convo_end_word` (no literal tuple, no reading of its own —
+        # since 2026-10-27 the typed reply takes the dictated rule), and the
+        # row normalises before it inserts.
         streaming = (REPO / "myagent" / "streaming_mixin.py").read_text(encoding="utf-8")
-        self.assertIn("next_msg.strip().lower() in CONVO_END_WORDS", streaming)
+        self.assertIn("end_word = convo_end_word(next_msg)", streaming)
+        self.assertIn("end_word in CONVO_END_WORDS", streaming)
         self.assertNotIn('("quit", "exit", "stop")', streaming)
         voice = (REPO / "myagent" / "voice_mixin.py").read_text(encoding="utf-8")
         landed = voice[voice.index("def landed(transcript):"):voice.index("dictation = _VoiceDictation(")]

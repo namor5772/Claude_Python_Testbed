@@ -75,7 +75,7 @@ from myagent.constants import (
     VOICE_OPENAI_KEYWORD_PREFIXES, VOICE_GEMINI_DEDICATED_SUBSTRING,
     VOICE_XAI_MAX_KEYTERMS, VOICE_XAI_MAX_KEYTERM_CHARS,
     VOICE_UNSUITABLE_MODELS, VOICE_MODEL_NOTES, VOICE_UNAUDITED_NOTE,
-    VOICE_PRICING_PER_MIN, VOICE_RECORDING_BG, CONVO_END_WORDS,
+    VOICE_PRICING_PER_MIN, VOICE_RECORDING_BG, convo_end_word,
 )
 from myagent.keyboard import bind_mnemonics
 
@@ -624,14 +624,16 @@ class VoiceMixin:
         """The bare Convo-ending word a transcript IS, or None (2026-09-23).
 
         A spoken "quit" comes back from a speech model as "Quit." — a
-        sentence, capitalised and closed — and streaming_mixin's end-of-
-        conversation check reads the reply case-folded but otherwise as
-        typed, so the session went on (the user's report, with Auto-send
-        ticked). Only a transcript that is NOTHING BUT one of the words —
-        whatever its case, however it is closed (. ! ? … , ; :) — is the
-        word; "Stop the payment." and "Stop stop." are dictation."""
-        word = transcript.strip().rstrip(".!?…,;:").strip().lower()
-        return word if word in CONVO_END_WORDS else None
+        sentence, capitalised and closed — and until 2026-10-27 streaming_
+        mixin's end-of-conversation check read the reply case-folded but
+        otherwise as typed, so the session went on (the user's report, with
+        Auto-send ticked). Only a transcript that is NOTHING BUT one of the
+        words — whatever its case, however it is closed (. ! ? … , ; :) — is
+        the word; "Stop the payment." and "Stop stop." are dictation. The
+        rule is `constants.convo_end_word`, which the typed checks read too
+        since 2026-10-27; landing the bare word here keeps the box showing
+        what the run will act on."""
+        return convo_end_word(transcript)
 
     @staticmethod
     def _voice_input_devices(devices, hostapi):

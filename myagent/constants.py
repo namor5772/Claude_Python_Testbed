@@ -4221,12 +4221,28 @@ VOICE_PRICING_PER_MIN = {
 }
 
 # The replies that end a Convo-mode conversation (streaming_mixin's check on
-# the Agent Request reply, which the dialog's stock prompt names) — and what a
-# DICTATED one is normalised to: a speech model writes a spoken "quit" down as
-# "Quit." (capitalised, full stop), which the check must not be taught to read,
-# so voice_mixin lands such a transcript as the bare word instead
-# (`_voice_end_word`, 2026-09-23). One tuple, so the two cannot drift.
+# the Agent Request reply, which the dialog's stock prompt names). A reply IS
+# one of them when it is nothing but the word — whatever its case, however it
+# is closed: "Quit", "exit!", "Stop." (`convo_end_word`, below — since
+# 2026-10-27 the one reading every typed check and the voice path share; until
+# then the typed checks read the reply case-folded but otherwise as typed, and
+# only a DICTATED "Quit." — a speech model's spelling of a spoken "quit" — was
+# landed as the bare word, by voice_mixin's `_voice_end_word`, 2026-09-23).
+# One tuple and one reader, so the paths cannot drift.
 CONVO_END_WORDS = ("quit", "exit", "stop")
+CONVO_END_PUNCTUATION = ".!?…,;:"
+
+
+def convo_end_word(text):
+    """The bare end word `text` IS, or None.
+
+    "Quit", "exit!", " Stop. " → "quit" / "exit" / "stop"; "Stop the payment."
+    and "Stop stop." are replies. The rule the voice path has applied to a
+    transcript since 2026-09-23, now the typed reply's too."""
+    word = (text or "").strip().rstrip(CONVO_END_PUNCTUATION).strip().lower()
+    return word if word in CONVO_END_WORDS else None
+
+
 # The one end word that also CLOSES MyAgent (2026-10-01, the user's request):
 # typed or dictated into ANY Agent Request dialog — Convo mode's own prompt or
 # the model's user_prompt tool — "exit" ends the run and then runs what the

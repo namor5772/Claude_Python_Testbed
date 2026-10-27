@@ -16,7 +16,7 @@ from pathlib import Path
 from unittest import mock
 
 import myagent.streaming_mixin as sm
-from myagent.constants import CONVO_END_WORDS, CONVO_EXIT_WORD
+from myagent.constants import CONVO_END_WORDS, CONVO_EXIT_WORD, convo_end_word
 from myagent.helpers import _ToolBlock
 from tests.test_costlog_run_fields import _Host, _Var
 
@@ -119,10 +119,31 @@ class ConvoExitTests(_CostLogCase):
         self.assertTrue(host._close_after_run)
         self.assertEqual(host.root.scheduled, [(500, host._on_close)])
 
+    def test_a_typed_end_word_closed_by_punctuation_is_the_word(self):
+        # 2026-10-27, the user's follow-up: "Quit." / "Stop!" / "exit." typed
+        # as a sentence — the rule the dictated path had since 2026-09-23.
+        for reply in ("Quit.", "Stop!", " stop . ", "quit?", "STOP…"):
+            with self.subTest(reply=reply):
+                host = self.run_convo(reply)
+                self.assertEqual(host._calls_made, 1)
+                self.assertFalse(host._close_after_run)
+                self.assertIn("Conversation ended.\n", host.notes)
+        for reply in ("Exit!", "exit.", "Exit..."):
+            with self.subTest(reply=reply):
+                host = self.run_convo(reply)
+                self.assertEqual(host._calls_made, 1)
+                self.assertTrue(host._close_after_run)
+                self.assertEqual(host.root.scheduled, [(500, host._on_close)])
+
     def test_the_word_inside_a_sentence_is_a_reply(self):
         host = self.run_convo("exit the editor first", "quit")
         self.assertEqual(host._calls_made, 2)                 # the sentence was answered
         self.assertEqual(host.root.scheduled, [])
+        for reply in ("Stop the payment.", "Stop stop.", "quit!!! now", "exit, please"):
+            with self.subTest(reply=reply):
+                host = self.run_convo(reply, "quit")
+                self.assertEqual(host._calls_made, 2)
+                self.assertEqual(host.root.scheduled, [])
 
     def test_the_flag_is_reset_at_every_run(self):
         host = self.run_convo("exit")
@@ -183,8 +204,16 @@ class UserPromptToolExitTests(unittest.TestCase):
                 self.assertEqual(
                     result, "[User typed 'exit' — stopping the agent and closing MyAgent]")
 
+    def test_a_punctuated_exit_closes_too(self):
+        for reply in ("Exit!", "exit.", " EXIT? "):
+            with self.subTest(reply=reply):
+                host, result = self.call(reply)
+                self.assertTrue(host.stop_requested and host._close_after_run)
+                self.assertEqual(
+                    result, "[User typed 'exit' — stopping the agent and closing MyAgent]")
+
     def test_quit_and_stop_still_go_to_the_model_as_text(self):
-        for reply in ("quit", "stop", "exit now please"):
+        for reply in ("quit", "stop", "Quit.", "Stop!", "exit now please", "exit, please"):
             with self.subTest(reply=reply):
                 host, result = self.call(reply)
                 self.assertFalse(host.stop_requested)
@@ -196,6 +225,39 @@ class UserPromptToolExitTests(unittest.TestCase):
         self.assertTrue(host.stop_requested)
         self.assertFalse(getattr(host, "_close_after_run", False))
         self.assertEqual(result, "[User submitted empty response — stopping agent]")
+
+
+class EndWordTests(unittest.TestCase):
+    """`constants.convo_end_word`, the ONE reading of a reply every end-word
+    check — typed or dictated — goes through since 2026-10-27."""
+
+    def test_the_bare_word_in_any_case_closed_any_way(self):
+        for text, word in (("quit", "quit"), ("Quit", "quit"), ("QUIT.", "quit"),
+                           ("Stop!", "stop"), (" stop ? ", "stop"), ("Exit…", "exit"),
+                           ("exit,", "exit"), ("exit;", "exit"), ("Exit:", "exit"),
+                           ("\n Exit!!! \n", "exit")):
+            with self.subTest(text=text):
+                self.assertEqual(convo_end_word(text), word)
+
+    def test_anything_else_is_none(self):
+        for text in ("", "   ", None, "Stop the payment.", "Stop stop.", "exit now",
+                     "quit!!! now", "exits", ".quit", "(quit)", "\"exit\""):
+            with self.subTest(text=text):
+                self.assertIsNone(convo_end_word(text))
+
+    def test_the_dictated_path_reads_the_same_rule(self):
+        from myagent.voice_mixin import VoiceMixin
+        for text in ("Quit.", "Stop stop.", "Exit!", "exit the editor", ""):
+            with self.subTest(text=text):
+                self.assertEqual(VoiceMixin._voice_end_word(text), convo_end_word(text))
+
+    def test_every_typed_check_reads_it(self):
+        import myagent.safety_mixin as safety
+        for src in (inspect.getsource(sm.StreamingMixin.stream_worker),
+                    inspect.getsource(sm.StreamingMixin._execute_tool),
+                    inspect.getsource(safety.SafetyMixin.do_user_prompt)):
+            self.assertIn("convo_end_word(", src)
+            self.assertNotIn(".strip().lower()", src)       # the old reading is gone
 
 
 class WiringTests(unittest.TestCase):

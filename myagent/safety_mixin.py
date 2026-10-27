@@ -10,7 +10,7 @@ from tkinter import messagebox
 from myagent.constants import (
     IS_WINDOWS, _SUBPROCESS_NOWND, COMMAND_BLOCKED, COMMAND_CONFIRM,
     GMAIL_CONFIRM_TOOLS, PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS,
-    MONO_FONT, CONVO_END_WORDS, CONVO_EXIT_WORD,
+    MONO_FONT, CONVO_END_WORDS, CONVO_EXIT_WORD, convo_end_word,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK,
 )
 from myagent.helpers import extract_text_from_html, input_wait_timer
@@ -765,7 +765,7 @@ class SafetyMixin(PaneNotesMixin):
             # left to serve would log the run under a model that never ran.
             # "exit" (CONVO_EXIT_WORD) ends the run from EITHER caller — and
             # closes MyAgent — so it never upgrades either.
-            word = response.strip().lower()
+            word = convo_end_word(response)
             ends_run = (convo and word in CONVO_END_WORDS) or word == CONVO_EXIT_WORD
             if result_holder[2] and response.strip() and not ends_run:
                 self._upgrade_apply(result_holder[2])
