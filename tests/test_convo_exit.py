@@ -106,6 +106,19 @@ class ConvoExitTests(_CostLogCase):
         host = self.run_convo("  EXIT \n")
         self.assertEqual(host.root.scheduled, [(500, host._on_close)])
 
+    def test_a_capitalised_end_word_works_like_the_lower_case_one(self):
+        # The user's 2026-10-27 request: "Quit" / "Stop" / "Exit", as typed at
+        # the start of a sentence, must do what the lower-case words do.
+        for reply in ("Quit", "Stop"):
+            with self.subTest(reply=reply):
+                host = self.run_convo(reply)
+                self.assertEqual(host._calls_made, 1)
+                self.assertFalse(host._close_after_run)
+                self.assertIn("Conversation ended.\n", host.notes)
+        host = self.run_convo("Exit")
+        self.assertTrue(host._close_after_run)
+        self.assertEqual(host.root.scheduled, [(500, host._on_close)])
+
     def test_the_word_inside_a_sentence_is_a_reply(self):
         host = self.run_convo("exit the editor first", "quit")
         self.assertEqual(host._calls_made, 2)                 # the sentence was answered
@@ -161,6 +174,14 @@ class UserPromptToolExitTests(unittest.TestCase):
     def test_exit_is_read_case_folded_and_stripped(self):
         host, _result = self.call(" Exit ")
         self.assertTrue(host.stop_requested and host._close_after_run)
+
+    def test_a_capitalised_exit_closes_too(self):
+        for reply in ("Exit", "EXIT", "eXit"):
+            with self.subTest(reply=reply):
+                host, result = self.call(reply)
+                self.assertTrue(host.stop_requested and host._close_after_run)
+                self.assertEqual(
+                    result, "[User typed 'exit' — stopping the agent and closing MyAgent]")
 
     def test_quit_and_stop_still_go_to_the_model_as_text(self):
         for reply in ("quit", "stop", "exit now please"):
