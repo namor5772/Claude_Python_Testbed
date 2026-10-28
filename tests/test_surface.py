@@ -25,7 +25,8 @@ from myagent.pane_notes import PaneNotesMixin
 TOOL_NAMES = {
     "TOOLS": ["web_search", "fetch_webpage", "run_command", "csv_search",
               "read_document", "user_prompt"],
-    "META_TOOLS": ["manage_instructions", "manage_skills", "run_instruction"],
+    "META_TOOLS": ["manage_instructions", "manage_skills", "run_instruction",
+                   "upgrade_model"],   # 2026-10-28: the Upgrade box, by tool
     "DESKTOP_TOOLS": ["screenshot", "mouse_click", "type_text", "press_key",
                       "mouse_scroll", "open_application", "find_window",
                       "clipboard_read", "clipboard_write", "wait_for_window",

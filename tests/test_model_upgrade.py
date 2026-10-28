@@ -584,6 +584,52 @@ class SwitchTests(unittest.TestCase):
                          "Upgraded to Claude Fable 5.1 (Max) for the rest of this run"))
 
 
+class ToolTests(unittest.TestCase):
+    """The `upgrade_model` Meta tool (2026-10-28): the Upgrade box's effect,
+    asked for by the model — for a run followed from the phone."""
+
+    def test_the_tool_moves_the_run_to_the_instructions_upgrade_target(self):
+        h = host(upgrade_target={"provider": "Anthropic", "model": "claude-fable-5-1",
+                                 "level": "Max"})
+        out = h.do_upgrade_model({})
+        self.assertEqual(out, "Upgraded: claude-sonnet-5 → claude-fable-5-1 (Max) for the rest "
+                              "of this run, from your next call on. The saved instruction "
+                              "is unchanged.")
+        self.assertEqual((h.model, h._upgrade_original["model"]), ("claude-fable-5-1", "claude-sonnet-5"))
+        self.assertEqual(h.writes, [])                        # nothing written to the store
+
+    def test_without_a_setting_the_provider_default_is_the_target(self):
+        h = host()
+        self.assertTrue(h.do_upgrade_model().startswith("Upgraded: claude-sonnet-5 → claude-fable-5-1"))
+
+    def test_the_three_refusals_use_the_boxs_own_words(self):
+        none = host(upgrade_target={"provider": "Anthropic", "model": "", "level": ""})
+        self.assertEqual(none.do_upgrade_model(),
+                         "Nothing changed — Upgrade: no upgrade model set for this instruction "
+                         "(Model Setup, on the main window).")
+        self.assertEqual(none.model, "claude-sonnet-5")
+        same = host(model="claude-fable-5-1")
+        self.assertEqual(same.do_upgrade_model(),
+                         "Nothing changed — Upgrade: this run is already on Claude Fable 5.1.")
+        twice = host()
+        twice.do_upgrade_model()
+        self.assertEqual(twice.do_upgrade_model(),
+                         "Nothing changed — Upgraded to Claude Fable 5.1 (Max) for the rest of this run.")
+        self.assertEqual(twice.model, "claude-fable-5-1")
+
+    def test_the_schema_and_the_dispatch(self):
+        tool = next(t for t in META_TOOLS if t["name"] == "upgrade_model")
+        self.assertEqual(tool["input_schema"], {"type": "object", "properties": {}})
+        self.assertIn("Upgrade to", tool["description"])
+        from myagent.constants import PARALLEL_SAFE_TOOLS
+        self.assertNotIn("upgrade_model", PARALLEL_SAFE_TOOLS)   # it changes the run's model
+        import inspect
+        import myagent.streaming_mixin as sm
+        src = inspect.getsource(sm.StreamingMixin._execute_tool)
+        self.assertIn('block.name == "upgrade_model"', src)
+        self.assertIn("self.do_upgrade_model(block.input)", src)
+
+
 class StateFileTests(unittest.TestCase):
     """While an upgrade is active the state file goes on describing the
     instruction's model — this method runs every five seconds — and the

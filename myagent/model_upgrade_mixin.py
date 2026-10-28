@@ -274,6 +274,27 @@ class ModelUpgradeMixin(PaneNotesMixin):
             root.after(0, self._update_title)
         return True
 
+    def do_upgrade_model(self, params=None):
+        """The `upgrade_model` Meta tool (2026-10-28, the user's request): the
+        Upgrade box's effect, asked for by the model — so a user following the
+        run from the phone, where the Agent Request dialog's box cannot be
+        ticked, can ask for the stronger model in a reply and have the model
+        do it. Worker thread, like every tool. Reads the same target the
+        dialog's box names (`_upgrade_target`: the instruction's own, else the
+        provider's default) and refuses in the same three cases the box is
+        disabled for, with the box's own words."""
+        target = self._upgrade_target()
+        enabled, _ticked, label = self._upgrade_box_state(target)
+        if not enabled:
+            return f"Nothing changed — {label}."
+        before = self.model
+        if not self._upgrade_apply(target):
+            return f"Nothing changed — this run stays on {before}."
+        level = self._upgrade_level_for(self.provider, self.model, target.get("level"))
+        return (f"Upgraded: {before} → {self.model}{f' ({level})' if level else ''} "
+                f"for the rest of this run, from your next call on. The saved "
+                f"instruction is unchanged.")
+
     def _upgrade_pricing_warnings(self):
         """The run-start pricing checks (streaming_mixin), for the model the
         run has just moved to — the run-start ones only ever saw the model it

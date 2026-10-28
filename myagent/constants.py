@@ -755,6 +755,23 @@ META_TOOLS = [
             "required": ["name"],
         },
     },
+    {
+        "name": "upgrade_model",
+        "description": (
+            "Move THIS run to the instruction's upgrade model — the stronger model of "
+            "the same provider that Model Setup names for it — for the rest of the run, "
+            "from your next call on. Exactly what ticking the 'Upgrade to …' box in an "
+            "Agent Request dialog does; call it when the user asks for the stronger / "
+            "upgrade model, e.g. in a reply that came from the phone, where there is no "
+            "box to tick. A run upgrades once; the result says which model it moved to, "
+            "or why nothing changed (no upgrade model set, already on it, already "
+            "upgraded). Nothing is written to the saved instruction."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 # Desktop automation tool definitions (pyautogui-based)

@@ -1036,6 +1036,9 @@ class StreamingMixin(PaneNotesMixin):
             mode = "headless" if headless else "GUI"
             self._tool_info(f"run_instruction: {name} ({mode})\n")
             return self.do_run_instruction(block.input)
+        elif block.name == "upgrade_model":
+            self._tool_info("upgrade_model: the Upgrade box, asked for by the model\n")
+            return self.do_upgrade_model(block.input)
         # Catch-all: an unknown tool name, or a family branch above (desktop/
         # browser) that matched the group test but no specific handler.
         return f"Unknown tool: {block.name}"

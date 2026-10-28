@@ -55,6 +55,7 @@ NOT_FOR_SELFBOT = {
     "web_search", "fetch_webpage",          # Anthropic's server-side web tools serve instead
     "user_prompt",                          # the chat IS the conversation
     "manage_instructions", "run_instruction",   # MyAgent's instruction system
+    "upgrade_model",                        # the Agent Request dialog's Upgrade box, by tool
     "find_element",                         # Gemini's pointing API
 }
 MYAGENT_SETS = (c.TOOLS, c.FILE_TOOLS, c.DESKTOP_TOOLS, c.BROWSER_TOOLS,
