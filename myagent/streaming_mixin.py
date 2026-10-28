@@ -820,7 +820,10 @@ class StreamingMixin(PaneNotesMixin):
         if block.name == "user_prompt":
             prompt_msg = block.input.get("message", "")
             self._tool_info("Requesting user input...\n")
-            response = self.do_user_prompt(prompt_msg)
+            # What the turn said before asking (stream_worker's `_turn_text`)
+            # goes above the question in the dialog and on the phone.
+            response = self.do_user_prompt(
+                prompt_msg, preface=getattr(self, "_turn_text", ""))
             images = self._take_prompt_images()
             if not response.strip():
                 self.stop_requested = True
@@ -2038,6 +2041,11 @@ class StreamingMixin(PaneNotesMixin):
                         )
                         self.queue.put({"type": "tool_call_debug", "content": tool_call_detail})
 
+                    # The text this turn produced before its tool calls: the
+                    # user_prompt branch of _execute_tool shows it above the
+                    # question (do_user_prompt's preface, 2026-10-28).
+                    self._turn_text = full_text
+
                     # Partition into parallel-safe vs sequential, preserving original index
                     parallel_items = []   # [(index, block), ...]
                     sequential_items = [] # [(index, block), ...]
@@ -2112,6 +2120,7 @@ class StreamingMixin(PaneNotesMixin):
                             "or 'exit' to end and close MyAgent "
                             "('Quit.' and 'Exit!' work too).",
                             convo=True,   # an end word here ends the run: no upgrade
+                            preface=full_text,   # the reply, shown above the prompt
                         )
                         prompt_images = self._take_prompt_images()
                         end_word = convo_end_word(next_msg)

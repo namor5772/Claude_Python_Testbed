@@ -268,18 +268,19 @@ class DialogTests(unittest.TestCase):
         gc.collect()
         self.root.destroy()
 
-    def run_dialog(self, message, act, auto_send=False):
+    def run_dialog(self, message, act, auto_send=False, preface=""):
         """Run the real do_user_prompt(message) on a worker thread and hand
         the dialog, once it is on screen, to act(dialog). Returns the host and
         {"reply": ...} (or {"error": ...}). `auto_send` is the applied
-        instruction's Auto-send tick as the dialog finds it."""
+        instruction's Auto-send tick as the dialog finds it; `preface` the
+        model's text shown above the message."""
         host = self.host = _DialogHost(self.root)
         host.dictation_auto_send.set(auto_send)
         outcome = {}
 
         def work():
             try:
-                outcome["reply"] = host.do_user_prompt(message)
+                outcome["reply"] = host.do_user_prompt(message, preface=preface)
             except Exception as exc:  # reported by the caller's assertions
                 outcome["error"] = exc
 
@@ -335,6 +336,24 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(outcome["reply"], DISMISSED)
         self.assertEqual(shown, [asked])
         # The pane gets the very text the dialog showed; a dismissal echoes nothing.
+        self.assertEqual(self.queued(host),
+                         [{"type": "user_prompt_request", "content": asked}])
+
+    def test_the_models_reply_is_shown_above_the_message_but_queued_nowhere(self):
+        # 2026-10-28: the box opens with the reply just given over the question,
+        # for a run followed from the phone or in headless mode; the pane's
+        # Agent Request line keeps the question alone (the reply is there).
+        asked = ("Reply, or type empty / 'quit' / 'stop' to end, "
+                 "or 'exit' to end and close MyAgent ('Quit.' and 'Exit!' work too).")
+        shown = []
+
+        def act(dialog):
+            boxes = [w for w in _walk(dialog) if isinstance(w, tk.Text)]
+            shown.append((boxes[0].get("1.0", "end-1c"), int(boxes[0].cget("height"))))
+            self.dismiss(dialog)
+
+        host, _outcome = self.run_dialog(asked, act, preface="  The total is $42.\n")
+        self.assertEqual(shown, [("The total is $42.\n\n" + asked, 14)])
         self.assertEqual(self.queued(host),
                          [{"type": "user_prompt_request", "content": asked}])
 
@@ -486,7 +505,7 @@ class RelayDialogTests(DialogTests):
         host, outcome = self._run(message, act, relay_dir)
         return host, outcome
 
-    def _run(self, message, act, relay_dir):
+    def _run(self, message, act, relay_dir, preface=""):
         # DialogTests.run_dialog builds the host itself; set the relay folder
         # on it as soon as it exists — before the worker runs do_user_prompt.
         original = _DialogHost.__init__
@@ -496,7 +515,22 @@ class RelayDialogTests(DialogTests):
             host._relay_dir = str(relay_dir) if relay_dir else None
             host._relay_seq = 0
         with mock.patch.object(_DialogHost, "__init__", init):
-            return self.run_dialog(message, act)
+            return self.run_dialog(message, act, preface=preface)
+
+    def test_the_phone_gets_the_reply_above_the_question_too(self):
+        # 2026-10-28: the relayed request is what the box shows — the model's
+        # reply, then the question — so the chat can follow the run.
+        seen = {}
+
+        def act(dialog):
+            seen["request"] = relay.read_request(self.relay_dir)
+            relay.write_reply(self.relay_dir, 1, "October please")
+        host, outcome = self._run("Which month?", act, self.relay_dir,
+                                  preface="I found three statements.")
+        self.assertEqual(outcome["reply"], "October please")
+        self.assertEqual(seen["request"]["text"], "I found three statements.\n\nWhich month?")
+        self.assertEqual(host.queue.get_nowait(),
+                         {"type": "user_prompt_request", "content": "Which month?"})
 
     def test_a_reply_from_the_relay_folder_answers_the_dialog(self):
         seen = {}

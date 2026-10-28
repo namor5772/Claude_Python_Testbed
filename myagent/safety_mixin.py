@@ -466,7 +466,7 @@ class SafetyMixin(PaneNotesMixin):
         except OSError:
             pass
 
-    def do_user_prompt(self, message, convo=False):
+    def do_user_prompt(self, message, convo=False, preface=""):
         """Pause the agent and ask the user for input via a modal dialog.
 
         Returns the reply text; any images the user attached are stashed on
@@ -474,10 +474,21 @@ class SafetyMixin(PaneNotesMixin):
         _take_prompt_images() (same thread — the streaming worker blocks on
         the dialog and reads the result synchronously). A run with a relay
         folder (--relay-dir) also takes the reply from the phone — see
-        _relay_request above."""
+        _relay_request above.
+
+        ``preface`` (2026-10-28, the user's request) is the model's text that
+        came just before the question — Convo mode's whole reply, or what the
+        `user_prompt` tool's turn said before the call — shown ABOVE the
+        message in the dialog's box and sent to the phone with it, so a run
+        can be followed from the chat or in headless mode, where the output
+        pane that already holds that text is not in view. The pane's own
+        Agent Request line keeps the message alone: the reply is there
+        already, as the Agent: paragraph above it."""
         # The model's tool input: a sloppy (local) model can send null or a
         # non-string, and Text.insert(None) raises inside the dialog builder.
         message = "" if message is None else str(message)
+        preface = "" if preface is None else str(preface).strip()
+        shown = f"{preface}\n\n{message}" if preface else message
         event = threading.Event()
         # [reply_text, [(b64, media_type, filename)], the upgrade target or None]
         result_holder = ["", [], None]
@@ -518,14 +529,14 @@ class SafetyMixin(PaneNotesMixin):
 
             msg_text = tk.Text(
                 msg_frame, wrap=tk.WORD, font=(MONO_FONT, 10),
-                relief="sunken", bd=1, height=6,
+                relief="sunken", bd=1, height=14 if preface else 6,  # room for the reply
                 takefocus=1, highlightthickness=1,  # a Tab stop though read-only
             )
             msg_text.grid(row=0, column=0, sticky="nsew")
             msg_sb = tk.Scrollbar(msg_frame, command=msg_text.yview)
             msg_sb.grid(row=0, column=1, sticky="ns")
             msg_text.config(yscrollcommand=msg_sb.set)
-            msg_text.insert("1.0", message)
+            msg_text.insert("1.0", shown)
             msg_text.config(state="disabled")
 
             tk.Label(
@@ -626,7 +637,7 @@ class SafetyMixin(PaneNotesMixin):
             # The relay (see _relay_request): the request goes out as the
             # dialog is built, the poller below looks for the phone's reply,
             # and from_relay tells the close path which side answered.
-            relay_seq = self._relay_request(message)
+            relay_seq = self._relay_request(shown)     # the phone sees what the box shows
             from_relay = [False]
             relay_poll = [None]
 

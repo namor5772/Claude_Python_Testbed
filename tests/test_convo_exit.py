@@ -46,6 +46,7 @@ class _ConvoHost(_Host):
         self.root = _Root()
         self.replies = list(replies)
         self.asked = []
+        self.prefaces = []
         self.notes = []
 
     def _stream_anthropic_call(self, messages, max_retries, label_emitted):
@@ -53,8 +54,9 @@ class _ConvoHost(_Host):
         usage = {"input_tokens": 100, "output_tokens": 10}
         return "end_turn", [], f"answer {self._calls_made}", False, True, usage
 
-    def do_user_prompt(self, message, convo=False):
+    def do_user_prompt(self, message, convo=False, preface=""):
         self.asked.append((message, convo))
+        self.prefaces.append(preface)
         return self.replies.pop(0)
 
     def _take_prompt_images(self):
@@ -162,6 +164,13 @@ class ConvoExitTests(_CostLogCase):
         host = self.run_convo("quit")
         self.assertEqual(host.asked, [(STOCK_PROMPT, True)])
 
+    def test_the_reply_just_given_is_the_dialogs_preface(self):
+        # 2026-10-28: the model's answer goes above the stock prompt in the
+        # dialog's box (and to the phone), so a Convo run can be followed from
+        # Telegram or in headless mode.
+        host = self.run_convo("go on", "quit")
+        self.assertEqual(host.prefaces, ["answer 1", "answer 2"])
+
 
 class _ToolHost(sm.StreamingMixin):
     """The user_prompt tool's branch of _execute_tool, with a scripted dialog."""
@@ -170,11 +179,13 @@ class _ToolHost(sm.StreamingMixin):
         self.reply = reply
         self.stop_requested = False
         self.notes = []
+        self.prefaces = []
 
     def _tool_info(self, msg):
         self.notes.append(msg)
 
-    def do_user_prompt(self, message, convo=False):
+    def do_user_prompt(self, message, convo=False, preface=""):
+        self.prefaces.append(preface)
         return self.reply
 
     def _take_prompt_images(self):
@@ -220,6 +231,18 @@ class UserPromptToolExitTests(unittest.TestCase):
                 self.assertFalse(host.stop_requested)
                 self.assertFalse(getattr(host, "_close_after_run", False))
                 self.assertEqual(result, reply)
+
+    def test_what_the_turn_said_before_asking_is_the_dialogs_preface(self):
+        host = _ToolHost("ok")
+        host._turn_text = "I have the figures; one question first."
+        host._execute_tool(_ToolBlock("user_prompt", "toolu_1", {"message": "Which month?"}))
+        self.assertEqual(host.prefaces, ["I have the figures; one question first."])
+        bare = _ToolHost("ok")                      # a host that never streamed text
+        bare._execute_tool(_ToolBlock("user_prompt", "toolu_1", {"message": "Which month?"}))
+        self.assertEqual(bare.prefaces, [""])
+        # The worker records the turn's text before any tool of the turn runs.
+        loop = inspect.getsource(sm.StreamingMixin.stream_worker)
+        self.assertLess(loop.index("self._turn_text = full_text"), loop.index("self._run_tool, block"))
 
     def test_an_empty_reply_stops_without_closing(self):
         host, result = self.call("   ")
