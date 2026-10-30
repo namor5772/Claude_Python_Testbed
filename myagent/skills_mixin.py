@@ -16,8 +16,10 @@ from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
                                list_skill_resources, load_skills_tree,
                                save_skills_tree, skill_dir_for,
                                skill_resource_path)
+from myagent.instruction_layout import renumber, rows
 from myagent.keyboard import bind_mnemonics
-from myagent.ui_mixin import SMALL_BUTTON_FONT, list_title_band
+from myagent.sectioned_list import SectionedList, theme_colors
+from myagent.ui_mixin import SMALL_BUTTON_FONT
 from myagent.pane_notes import PaneNotesMixin
 
 # Serializes do_run_instruction's shared-state prologue (store load, which may
@@ -596,6 +598,15 @@ class SkillsMixin(PaneNotesMixin):
             pass
         return None
 
+    def _skills_collapsed(self):
+        """The set of SKILLS-list sections the user has collapsed — kept per
+        machine in agent_state.json as skills_collapsed_sections, the
+        Instructions list's collapsed_sections twin (2026-10-31)."""
+        collapsed = getattr(self, "_skills_collapsed_sections", None)
+        if collapsed is None:
+            collapsed = self._skills_collapsed_sections = set()
+        return collapsed
+
     def open_skills_editor(self):
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
             self.skills_editor_window.lift()
@@ -616,6 +627,7 @@ class SkillsMixin(PaneNotesMixin):
             self._save_last_state()      # reads the list pane's width while it exists
             win.destroy()
             self._skills_list_pane = None
+            self._skills_list = None
 
         win.protocol("WM_DELETE_WINDOW", _on_skills_close)
 
@@ -678,6 +690,15 @@ class SkillsMixin(PaneNotesMixin):
             else:
                 entry.pop("description", None)
             self.skills[name] = entry
+            if is_new:
+                # Filed where the list's selection is — the selected skill's
+                # section, or the selected section — else unfiled, as that
+                # section's last row (the Instructions list's SAVE rule); an
+                # existing skill keeps its place through the merge above
+                section = skills_list.section_for_new(self.skills)
+                if section:
+                    entry["section"] = section
+                renumber(self.skills, rows(self.skills))
             self._save_skills()
             # Save-as: a NEW name while another skill's content is loaded
             # copies the source's bundled resource files into the new folder
@@ -690,16 +711,23 @@ class SkillsMixin(PaneNotesMixin):
                         "Bundled files copied",
                         f"Copied {len(copied)} bundled resource file(s) from "
                         f"'{src}' into the new skill's folder.", parent=win)
-            loaded["name"] = name
-            refresh_list()
+            loaded["name"] = name           # before the reselect: on_select skips the loaded skill
+            refresh_list(select=("page", name))
             self._update_skills_button()
 
         def delete_skill():
-            sel = skill_listbox.curselection()
-            if not sel:
+            row = skills_list.selected_row()
+            if row and row[0] == "section":
+                messagebox.showwarning(
+                    "Section selected",
+                    "Select a skill, not a section. A section is just the skills "
+                    "filed in it — it disappears once they are moved out or deleted.",
+                    parent=win)
+                return
+            name = row[1] if row else ""
+            if not name:
                 messagebox.showwarning("No selection", "Select a skill to delete.", parent=win)
                 return
-            name = skill_listbox.get(sel[0])[5:]
             if name in self.skills:
                 # GUI-only guard (2026-09-02): DELETE removes the skill's whole
                 # folder (SKILL.md plus any bundled files) from the OneDrive-
@@ -718,7 +746,7 @@ class SkillsMixin(PaneNotesMixin):
                 (getattr(self, "_skill_global_modes", None) or {}).pop(name, None)
                 delete_skill_tree_entry(SKILLS_DIR, name)  # _save_skills never deletes
                 self._save_skills()
-                refresh_list()
+                refresh_list()          # its row goes, and the selection with it
                 name_entry.delete(0, tk.END)
                 desc_entry.delete("1.0", tk.END)
                 text_editor.delete("1.0", tk.END)
@@ -730,7 +758,7 @@ class SkillsMixin(PaneNotesMixin):
             name_entry.delete(0, tk.END)
             desc_entry.delete("1.0", tk.END)
             text_editor.delete("1.0", tk.END)
-            skill_listbox.selection_clear(0, tk.END)
+            skills_list.select(None)
             loaded["name"] = None   # a fresh skill has no save-as source
 
         # The three buttons hug the right edge (their frame packs RIGHT; the
@@ -776,82 +804,97 @@ class SkillsMixin(PaneNotesMixin):
         right = tk.Frame(paned)
         paned.add(left, width=getattr(self, "_skills_list_width", None), minsize=150)
         paned.add(right, minsize=200)   # the stretchy pane (Tk stretches the last)
-        left.grid_rowconfigure(2, weight=1)
+        left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
         # Cycle Mode sits ABOVE the list, sized to its label and left-aligned
         toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
         toggle_btn.grid(row=0, column=0, sticky="w", pady=(0, 5))
 
-        # The SKILLS band caps the list (2026-09-12, the Instructions list's
-        # twin — see ui_mixin.list_title_band): the list proper's width, not
-        # the scrollbar's, which runs the full height beside band and list
-        skills_band = list_title_band(left, "SKILLS")
-        skills_band.grid(row=1, column=0, sticky="ew")
-        skill_listbox = tk.Listbox(left, font=("Arial", 10), width=40)
-        skill_listbox.grid(row=2, column=0, sticky="nsew")
-        list_scrollbar = tk.Scrollbar(left, command=skill_listbox.yview)
-        list_scrollbar.grid(row=1, column=1, rowspan=2, sticky="ns")
-        skill_listbox.config(yscrollcommand=list_scrollbar.set)
+        # The SKILLS list (2026-10-31): the Instructions list's twin — a
+        # SectionedList (myagent/sectioned_list.py) over self.skills, every
+        # skill a page in a section, its place carried in its SKILL.md
+        # frontmatter as section / order (datapaths.SKILL_LAYOUT_KEYS) —
+        # under the SKILLS band (2026-09-12, see ui_mixin.list_title_band),
+        # with the ▲ / ▼ / Section… buttons under the list; until then a
+        # plain Listbox in the tree's folder order. Each row still carries
+        # the skill's mode as the listbox did: an [ON] / [OD] prefix and a
+        # colour (green / blue) by tag; the row's id stays the bare name.
+        list_frame = tk.Frame(left)
+        list_frame.grid(row=1, column=0, sticky="nsew")
 
-        def refresh_list():
-            skill_listbox.delete(0, tk.END)
-            for sname, sdata in self.skills.items():
-                mode = sdata.get("mode", "disabled")
-                if mode == "enabled":
-                    prefix = "[ON] "
-                elif mode == "on_demand":
-                    prefix = "[OD] "
-                else:
-                    prefix = "     "
-                skill_listbox.insert(tk.END, f"{prefix}{sname}")
-            for i, sdata in enumerate(self.skills.values()):
-                mode = sdata.get("mode", "disabled")
-                if mode == "enabled":
-                    skill_listbox.itemconfig(i, fg="#2e7d32")
-                elif mode == "on_demand":
-                    skill_listbox.itemconfig(i, fg="#1565c0")
+        def row_text(name, entry):
+            mode = (entry or {}).get("mode", "disabled")
+            prefix = {"enabled": "[ON] ", "on_demand": "[OD] "}.get(mode, "     ")
+            return f"{prefix}{name}"
+
+        def row_tags(name, entry):
+            mode = (entry or {}).get("mode", "disabled")
+            return (mode,) if mode in ("enabled", "on_demand") else ()
+
+        def on_select(event=None):
+            # <<TreeviewSelect>>: load the selected skill into the fields. Tk
+            # QUEUES the event (every pending one sees the final selection),
+            # so the list's own reselections — after a SAVE, a move, Cycle
+            # Mode — are told apart by name: the skill already loaded is not
+            # loaded again, which also keeps an edit in progress (the
+            # Instructions list's _instr_shown_name rule).
+            name = skills_list.selected_name()
+            if not name or name == loaded["name"] or name not in self.skills:
+                return
+            name_entry.delete(0, tk.END)
+            name_entry.insert(0, name)
+            desc_entry.delete("1.0", tk.END)
+            desc_entry.insert("1.0", self.skills[name].get("description", ""))
+            text_editor.delete("1.0", tk.END)
+            text_editor.insert("1.0", self.skills[name]["content"])
+            loaded["name"] = name
+
+        def focus_text():
+            # Enter on a skill: it is loaded, so the focus goes to its text
+            text_editor.mark_set("insert", "end-1c")
+            text_editor.focus_set()
+
+        self._skills_list = skills_list = SectionedList(
+            list_frame, title="SKILLS", noun="skill",
+            load=lambda: self.skills, save=lambda store: self._save_skills(),
+            collapsed=self._skills_collapsed, parent=lambda: win,
+            place_window=lambda *args, **kwargs: self._place_window(*args, **kwargs),
+            on_select=on_select, on_return=focus_text,
+            row_text=row_text, row_tags=row_tags, colors=theme_colors(self))
+        skills_list.tree.tag_configure("enabled", foreground="#2e7d32")
+        skills_list.tree.tag_configure("on_demand", foreground="#1565c0")
+
+        def refresh_list(select=None):
+            # Rebuild the list from self.skills, keeping the selection (or
+            # moving it to `select`). Also called from outside the dialog
+            # when a mode changes (_post_skill_ui_refresh, _restore_skill_modes).
+            skills_list.refresh(self.skills, select=select)
 
         self._skills_refresh_list = refresh_list
 
-        def on_select(event):
-            sel = skill_listbox.curselection()
-            if not sel:
-                return
-            name = skill_listbox.get(sel[0])[5:]
-            if name in self.skills:
-                name_entry.delete(0, tk.END)
-                name_entry.insert(0, name)
-                desc_entry.delete("1.0", tk.END)
-                desc_entry.insert("1.0", self.skills[name].get("description", ""))
-                text_editor.delete("1.0", tk.END)
-                text_editor.insert("1.0", self.skills[name]["content"])
-                loaded["name"] = name
-
         def toggle_skill():
-            sel = skill_listbox.curselection()
-            if not sel:
+            name = skills_list.selected_name()
+            if not name:
                 messagebox.showwarning("No selection", "Select a skill to toggle.", parent=win)
                 return
-            name = skill_listbox.get(sel[0])[5:]
             if name in self.skills:
                 cycle = {"disabled": "enabled", "enabled": "on_demand", "on_demand": "disabled"}
                 cur = self.skills[name].get("mode", "disabled")
                 self._set_skill_mode(name, cycle.get(cur, "disabled"))
                 self._save_skills()
-                idx = sel[0]
-                refresh_list()
-                skill_listbox.selection_set(idx)
-                skill_listbox.see(idx)
+                refresh_list()      # the row's prefix and colour follow; the selection stays
                 self._update_skills_button()
 
         def _cycle_on_space(event):
-            # Space bar mirrors the Cycle Mode button on the selected skill.
+            # Space on a skill mirrors the Cycle Mode button; on a section
+            # header it is Tk's own fold / unfold (the Treeview class binding).
+            if not skills_list.selected_name():
+                return None
             toggle_skill()
-            return "break"  # suppress Tk's default <space> select-active binding
+            return "break"
 
-        skill_listbox.bind("<<ListboxSelect>>", on_select)
-        skill_listbox.bind("<space>", _cycle_on_space)
+        skills_list.tree.bind("<space>", _cycle_on_space)
         toggle_btn.config(command=toggle_skill)
 
         right.grid_rowconfigure(0, weight=1)
@@ -872,13 +915,15 @@ class SkillsMixin(PaneNotesMixin):
         # Keyboard operation (myagent/keyboard.py): Alt+letter for the
         # buttons and fields (the letters are tabled in the README — nothing
         # is underlined), Ctrl+S = SAVE; Space on the list cycles the
-        # selected skill's mode (above). Escape / Ctrl+Tab leave the text
-        # boxes (class binding); the window never closes on Escape, since
-        # closing discards unsaved edits.
+        # selected skill's mode (above); the list's own keys (Enter, Alt+Up /
+        # Alt+Down) are bound by SectionedList. Escape / Ctrl+Tab leave the
+        # text boxes (class binding); the window never closes on Escape,
+        # since closing discards unsaved edits.
         bind_mnemonics(win, {
             "s": save_btn, "d": delete_btn, "n": new_btn, "c": toggle_btn,
             "k": name_entry, "e": desc_entry,
-            "l": skill_listbox, "t": text_editor,
+            "l": skills_list.tree, "t": text_editor,
+            "o": skills_list.section_btn,
         })
 
         def _save_key(event):
@@ -891,4 +936,4 @@ class SkillsMixin(PaneNotesMixin):
         win.update_idletasks()
         self._place_window(win, "skills", (900, 500), parent=parent, min_size=(400, 300))
         win.deiconify()
-        skill_listbox.focus_set()  # initial focus: browse the skills with the arrow keys
+        skills_list.tree.focus_set()  # initial focus: browse the skills with the arrow keys

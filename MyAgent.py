@@ -349,6 +349,11 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self._collapsed_sections = set()
         self.skills_editor_window = None
         self._skills_refresh_list = None
+        # The Skills Manager's SKILLS list (2026-10-31), the Instructions
+        # list's twin: the list object while the dialog is open, and the
+        # sections the user collapsed, kept in agent_state.json too
+        self._skills_list = None
+        self._skills_collapsed_sections = set()
         self.skills = self._load_skills()
         self.available_models = self._fetch_models_for_provider()
 

@@ -54,13 +54,16 @@ Design invariants:
 - The SKILLS library is the one store that is NOT a JSON file (since
   2026-08-07): skills are hand-authored prose documents, so each lives as
   its own Anthropic-Agent-Skills-shaped file — <shared>/skills/<Name>/
-  SKILL.md with a small frontmatter block (name/description/mode) over the
-  markdown content. Per-file storage aligns the data unit with OneDrive's
+  SKILL.md with a small frontmatter block (name/description/mode, plus
+  since 2026-10-31 the Skills Manager list's section/order — the
+  Instructions list's layout keys, SKILL_LAYOUT_KEYS) over the markdown
+  content. Per-file storage aligns the data unit with OneDrive's
   sync unit: two machines editing different skills can no longer conflict
   at all, and a same-skill conflict forks ONE file (SKILL-<Computer>.md),
   absorbed by _scan_skills_tree the same way absorb_conflict_forks heals
-  the JSON stores (identical fork → deleted; different → materialized as a
-  "<name>__<label>" sibling skill for the user to reconcile in the UI).
+  the JSON stores (identical fork — its list placement aside — → deleted;
+  different → materialized as a "<name>__<label>" sibling skill for the
+  user to reconcile in the UI).
   load_skills_tree runs the one-shot skills.json→tree migration (via
   load_store, so the legacy repo-root union still composes) and then scans;
   save_skills_tree is diff-aware (unchanged files are not rewritten — no
@@ -668,12 +671,22 @@ def _serialize_skill_md(name, entry):
     back); the body is written verbatim, ending in one newline (added when
     missing), which _parse_skill_md strips again — a body without a trailing
     newline round-trips exactly; one WITH it loses it once and is then
-    stable (pinned by tests/test_skills_tree.py test_round_trip_exact)."""
+    stable (pinned by tests/test_skills_tree.py test_round_trip_exact).
+    The two list-layout keys (SKILL_LAYOUT_KEYS — the Skills Manager's
+    sections and row order, 2026-10-31) follow `mode:` and are written only
+    when set, so a skill nobody has filed or moved keeps its old file."""
     lines = ["---", "name: " + " ".join(name.split())]
     desc = " ".join((entry.get("description") or "").split())
     if desc:
         lines.append("description: " + desc)
     lines.append("mode: " + entry.get("mode", "disabled"))
+    section = " ".join((entry.get("section") or "").split()) \
+        if isinstance(entry.get("section"), str) else ""
+    if section:
+        lines.append("section: " + section)
+    order = entry.get("order")
+    if isinstance(order, int) and not isinstance(order, bool):
+        lines.append(f"order: {order}")
     lines.append("---")
     body = entry.get("content", "")
     if body and not body.endswith("\n"):
@@ -718,7 +731,10 @@ def _parse_skill_md(text):
 def _entry_from_md(text, fallback_name):
     """(skill name, entry dict) from SKILL.md text. Unknown frontmatter keys
     are ignored; a missing/invalid mode is 'disabled'; a missing name falls
-    back to the folder name."""
+    back to the folder name. The list-layout keys come back as the Skills
+    Manager's list reads them (instruction_layout.py): `section` a
+    non-blank string, `order` an int — anything else is left out, and the
+    skill then lands unfiled / unordered, never in error."""
     meta, content = _parse_skill_md(text)
     name = " ".join((meta.get("name") or "").split()) or fallback_name
     mode = (meta.get("mode") or "").strip().lower()
@@ -727,7 +743,33 @@ def _entry_from_md(text, fallback_name):
     desc = (meta.get("description") or "").strip()
     if desc:
         entry["description"] = desc
+    section = " ".join((meta.get("section") or "").split())
+    if section:
+        entry["section"] = section
+    order = (meta.get("order") or "").strip()
+    if re.fullmatch(r"-?\d+", order):
+        entry["order"] = int(order)
     return name, entry
+
+
+# The frontmatter keys that hold a skill's place in the Skills Manager's
+# list — its section and row order (the Instructions list's model,
+# instruction_layout.py, applied to the skills tree 2026-10-31). They are
+# the list's state, not the skill's: two copies of a skill that differ
+# only in them are the same skill (`_same_skill`), so a OneDrive fork that
+# differs only in placement heals as an identical one — the main file's
+# placement stays — instead of materializing a '<name>__<Computer>' sibling.
+SKILL_LAYOUT_KEYS = ("section", "order")
+
+
+def _same_skill(a, b):
+    """True when entries `a` and `b` are the same skill: equal once the
+    list-layout keys are set aside."""
+    def strip(entry):
+        if not isinstance(entry, dict):
+            return entry
+        return {k: v for k, v in entry.items() if k not in SKILL_LAYOUT_KEYS}
+    return strip(a) == strip(b)
 
 
 def _read_text(path):
@@ -853,7 +895,7 @@ def _absorb_skill_file_forks(d, dirpath):
         else:
             main_name, main_entry = _entry_from_md(main_text, os.path.basename(d))
             fork_name, fork_entry = _entry_from_md(fork_text, os.path.basename(d))
-            if fork_entry != main_entry or fork_name != main_name:
+            if not _same_skill(fork_entry, main_entry) or fork_name != main_name:
                 label = os.path.basename(fork)[len(stem) + 1:-len(ext)]
                 label = re.sub(r"[^A-Za-z0-9._ -]+", "_", label).strip(" _.") or "fork"
                 variant, needs_write = _variant_slot(dirpath, f"{main_name}__{label}",
@@ -965,12 +1007,13 @@ def _scan_skills_tree(dirpath):
                 name, entry = _entry_from_md(_read_text(md), sub)
             except (OSError, ValueError):
                 name = None
-            if (name is not None and name in skills and skills[name] == entry
+            if (name is not None and name in skills and _same_skill(skills[name], entry)
                     and _same_resources(folders.get(name), d)):
-                # A second folder holding an IDENTICAL entry — and the same
-                # bundled files, usually none — is junk, e.g. the numbered
-                # sibling a case-collision left behind (live 2026-08-07:
-                # Test-skill + test-skill_2 both said name: test-skill).
+                # A second folder holding an IDENTICAL entry (its list
+                # placement aside) — and the same bundled files, usually
+                # none — is junk, e.g. the numbered sibling a case-collision
+                # left behind (live 2026-08-07: Test-skill + test-skill_2
+                # both said name: test-skill).
                 # Removed like an identical conflict fork. Differing files
                 # keep it (below): resource files are part of the skill.
                 _rmtree_verified(d)

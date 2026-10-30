@@ -1221,13 +1221,20 @@ class WiringTests(unittest.TestCase):
                     self.assertNotIn(f'"{key}"', self.src("myagent", name), name)
         self.assertIn('hasattr(self, "_theme_apply")', load)
 
-    def test_the_instructions_list_takes_its_zebra_and_bands_from_the_theme(self):
-        src = self.src("myagent", "instructions_mixin.py")
-        self.assertIn('self._theme_zebra() if hasattr(self, "_theme_zebra") else LIST_ZEBRA_BG', src)
-        self.assertIn('self._theme_band() if hasattr(self, "_theme_band") else LIST_BAND_BG', src)
-        for literal in ('"#f3f3f3"', '"#e4e4e4"', '"Instr.Treeview"'):
-            self.assertNotIn(literal, src, literal)
+    def test_the_sectioned_lists_take_their_zebra_and_bands_from_the_theme(self):
+        # The one builder both lists share since 2026-10-31 (sectioned_list.py)
+        # reads the two shades off the host through theme_colors, and both
+        # editors hand them over at build
+        src = self.src("myagent", "sectioned_list.py")
+        self.assertIn('host._theme_zebra() if hasattr(host, "_theme_zebra") else LIST_ZEBRA_BG', src)
+        self.assertIn('host._theme_band() if hasattr(host, "_theme_band") else LIST_BAND_BG', src)
         self.assertEqual(src.count("INSTR_TREE_STYLE"), 3)         # the import, the style, the tree
+        for name in ("sectioned_list.py", "instructions_mixin.py", "skills_mixin.py"):
+            text = self.src("myagent", name)
+            for literal in ('"#f3f3f3"', '"#e4e4e4"', '"Instr.Treeview"'):
+                self.assertNotIn(literal, text, (name, literal))
+        for name in ("instructions_mixin.py", "skills_mixin.py"):
+            self.assertIn("colors=theme_colors(self)", self.src("myagent", name), name)
         self.assertEqual((LIST_ZEBRA_BG, LIST_BAND_BG, INSTR_TREE_STYLE),
                          ("#f3f3f3", "#e4e4e4", "Instr.Treeview"))
 

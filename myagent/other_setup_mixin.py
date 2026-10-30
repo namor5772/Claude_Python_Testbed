@@ -63,11 +63,12 @@ aqua Tk 9 drops a native MENU down (`$cb.popdown.menu`, combobox.tcl's aqua
 either; the walk's `winfo exists` check leaves it alone. A
 widget embedded in a text box (the Safety dialog's checkbuttons) wears the
 text box's colour, so it belongs to the field walk and the chrome walk skips
-it. The Instructions list's zebra stripes and section header bands become
-shades of the field colour — the bands the deeper shade, so the three levels
-keep their contrast (`_theme_zebra` / `_theme_band`; LIST_ZEBRA_BG /
-LIST_BAND_BG at the default); the list is known by its style name,
-INSTR_TREE_STYLE, so no other list is touched.
+it. The sectioned lists' zebra stripes and section header bands — the
+Instructions list's and, since 2026-10-31, the Skills Manager's SKILLS
+list's (sectioned_list.py) — become shades of the field colour — the bands
+the deeper shade, so the three levels keep their contrast (`_theme_zebra` /
+`_theme_band`; LIST_ZEBRA_BG / LIST_BAND_BG at the default); the lists are
+known by their style name, INSTR_TREE_STYLE, so no other list is touched.
 
 A third colour (the user's request, the same evening) is the **Button
 colour**: a tk.Button's face (`background`) and its pressed / hovered face
@@ -396,8 +397,8 @@ class OtherSetupMixin:
         wears `old_rgb`: the FIELD_OPTIONS classes, a widget embedded in a
         text box, a combobox's dropdown list (a Listbox under it); switch
         every combobox wearing a default style to `combo_style`; and give
-        the Instructions list — known by its style — its new zebra and band
-        shades."""
+        the sectioned lists (the Instructions list, the SKILLS list) — known
+        by their style — their new zebra and band shades."""
         try:
             cls_name = widget.winfo_class()
             options = FIELD_OPTIONS.get(cls_name, ())

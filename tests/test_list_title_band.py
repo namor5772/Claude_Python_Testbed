@@ -45,22 +45,31 @@ class BandTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
-    """Both lists wear one (a static scan, no Tk needed): the band in the
-    list's column only — never spanning the scrollbar — with the scrollbar
-    running the full height beside band and list."""
+    """Both lists wear one (a static scan, no Tk needed): since 2026-10-31
+    the one builder both lists share — sectioned_list.SectionedList — grids
+    the band in the list's column only, never spanning the scrollbar, with
+    the scrollbar running the full height beside band and list; each editor
+    names its title. (Until then the Skills Manager gridded a band of its own
+    over a Listbox.)"""
 
-    def test_the_skills_manager_list_wears_its_band_over_the_list_proper(self):
-        src = (REPO / "myagent" / "skills_mixin.py").read_text(encoding="utf-8")
-        self.assertIn('list_title_band(left, "SKILLS")', src)
-        self.assertIn('skills_band.grid(row=1, column=0, sticky="ew")', src)
-        self.assertIn('skill_listbox.grid(row=2, column=0, sticky="nsew")', src)
-        self.assertIn('list_scrollbar.grid(row=1, column=1, rowspan=2, sticky="ns")', src)
-        self.assertIn("left.grid_rowconfigure(2, weight=1)", src)
-
-    def test_the_instruction_editor_list_uses_the_same_helper(self):
-        src = (REPO / "myagent" / "instructions_mixin.py").read_text(encoding="utf-8")
-        self.assertIn('list_title_band(pane, "INSTRUCTIONS")', src)
+    def test_the_shared_builder_grids_the_band_over_the_list_proper(self):
+        src = (REPO / "myagent" / "sectioned_list.py").read_text(encoding="utf-8")
+        self.assertIn("self.band = list_title_band(pane, title)", src)
+        self.assertIn('self.band.grid(row=0, column=0, sticky="ew")', src)
+        self.assertIn('tree.grid(row=1, column=0, sticky="nsew")', src)
+        self.assertIn('scrollbar.grid(row=0, column=1, rowspan=2, sticky="ns")', src)
+        self.assertIn("pane.grid_rowconfigure(1, weight=1)", src)
         self.assertNotIn("tree.heading(", src)
+
+    def test_each_editor_names_its_band(self):
+        skills = (REPO / "myagent" / "skills_mixin.py").read_text(encoding="utf-8")
+        self.assertIn('title="SKILLS"', skills)
+        self.assertNotIn("list_title_band(", skills)        # no band of its own any more
+        self.assertNotIn("tk.Listbox(", skills)             # the list is the shared tree
+        editor = (REPO / "myagent" / "instructions_mixin.py").read_text(encoding="utf-8")
+        self.assertIn('title="INSTRUCTIONS"', editor)
+        self.assertNotIn("list_title_band(", editor)
+        self.assertNotIn("tree.heading(", editor)
 
 
 if __name__ == "__main__":

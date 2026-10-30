@@ -2,23 +2,24 @@ import os
 import json
 import threading
 import tkinter as tk
-from tkinter import font as tkfont, messagebox, ttk
+from tkinter import messagebox, ttk
 
 from myagent.constants import (
     IS_WINDOWS, INSTRUCTIONS_FILE, DEFAULT_INSTRUCTION, PROVIDERS,
-    ADAPTIVE_MODE_VALUES, MONO_FONT, INSTR_TREE_STYLE, LIST_BAND_BG, LIST_ZEBRA_BG,
+    ADAPTIVE_MODE_VALUES, MONO_FONT,
     _HAS_DESKTOP, _HAS_MCP,
     _HAS_GOOGLE, _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_PHYSICAL,
     DEFAULT_MODEL, OPENAI_DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
 from myagent.datapaths import absorb_conflict_forks, load_store, save_store, store_unreadable
-from myagent.instruction_layout import (
-    UNFILED, UNFILED_LABEL, drop, file_page, layout, move_page, move_section,
-    normalize_section, rename_section, renumber, rows, section_of, sections,
-)
+from myagent.instruction_layout import renumber, rows
 from myagent.keyboard import bind_mnemonics
-from myagent.ui_mixin import SMALL_BUTTON_FONT, list_title_band
+from myagent.sectioned_list import (
+    SectionedList, note_toggle, populate, refresh, row_of, section_for_new, select_row,
+    selected_name, selected_row, theme_colors, tree_alive,
+)
+from myagent.ui_mixin import SMALL_BUTTON_FONT
 
 
 class _UnreadableStore(dict):
@@ -730,6 +731,7 @@ class InstructionsMixin:
         self._fast_check = None
         self.ps_safety_button = None
         self._notes_button = None
+        self._instr_list = None
         self._instr_tree = None
         self._instr_list_pane = None
 
@@ -934,76 +936,40 @@ class InstructionsMixin:
 
     def _build_instruction_list(self, pane):
         """Build the list inside `pane`: the INSTRUCTIONS band, the tree under
-        it with its scrollbar, and the ▲ / ▼ / Section… buttons under those.
-        Gestures: selecting a page loads
-        it into the editor (as choosing it in the old combobox did), Enter on
-        a page jumps to the text, Alt+Up / Alt+Down move the selected page
-        (or section) a step, a row can be dragged onto another row, and each
+        it with its scrollbar, and the ▲ / ▼ / Section… buttons under those —
+        a SectionedList (myagent/sectioned_list.py: the widget half, shared
+        with the Skills Manager's SKILLS list since 2026-10-31) over the
+        instruction store. Gestures: selecting a page loads it into the
+        editor (as choosing it in the old combobox did), Enter on a page
+        jumps to the text, Alt+Up / Alt+Down move the selected page (or
+        section) a step, a row can be dragged onto another row, and each
         section's open / closed state is remembered in agent_state.json."""
-        pane.grid_rowconfigure(1, weight=1)
-        pane.grid_columnconfigure(0, weight=1)
-        style = ttk.Style(pane)
-        row_font = tkfont.Font(root=pane, font=("Arial", 10))
-        # The title is a fixed band, not a ttk heading (since 2026-09-12; the
-        # why is at ui_mixin.list_title_band). Its first text, "Load
-        # Instruction" (the old combobox's label carried over), read like a
-        # button to press, when selecting a page IS the load. It covers the
-        # list proper only — not the scrollbar, which runs the full height
-        # beside band and tree as it did beside the old heading (the first
-        # cut spanned the scrollbar too; the user asked for the list's width
-        # the same day).
-        self._instr_heading = list_title_band(pane, "INSTRUCTIONS")
-        self._instr_heading.grid(row=0, column=0, sticky="ew")
-        # A shallow indent (Tk's default is 20 px) leaves long names more room
-        style.configure(INSTR_TREE_STYLE, font=("Arial", 10), indent=10,
-                        rowheight=row_font.metrics("linespace") + 6)
-        tree = ttk.Treeview(pane, show="tree", selectmode="browse",
-                            style=INSTR_TREE_STYLE)
-        tree.column("#0", stretch=True, minwidth=80)
-        tree.grid(row=1, column=0, sticky="nsew")
-        list_scrollbar = tk.Scrollbar(pane, command=tree.yview)
-        list_scrollbar.grid(row=0, column=1, rowspan=2, sticky="ns")
-        tree.config(yscrollcommand=list_scrollbar.set)
-        # Section headers are bold on a grey band, the Unfiled header italic
-        # on the same band, and pages alternate white / off-white — the row
-        # separation a Tk 8.6 Treeview has no rule lines for.
-        # The bands and the alternate-row fill follow Other Setup's field
-        # colour (other_setup_mixin._theme_band / _theme_zebra; the
-        # constants on a bare host).
-        band = self._theme_band() if hasattr(self, "_theme_band") else LIST_BAND_BG
-        zebra = self._theme_zebra() if hasattr(self, "_theme_zebra") else LIST_ZEBRA_BG
-        tree.tag_configure("section", font=("Arial", 10, "bold"), background=band)
-        tree.tag_configure("unfiled", font=("Arial", 10, "italic"),
-                           foreground="#555555", background=band)
-        tree.tag_configure("odd", background=zebra)
-        self._instr_tree = tree
+        self._instr_list = lst = SectionedList(
+            pane, title="INSTRUCTIONS", noun="instruction",
+            load=self._load_saved_instructions, save=self._save_instructions_to_disk,
+            collapsed=self._collapsed,
+            parent=lambda: self.instruction_editor_window,
+            place_window=lambda *args, **kwargs: self._place_window(*args, **kwargs),
+            on_select=self._on_instruction_selected,
+            on_return=self._focus_instruction_text,
+            colors=theme_colors(self))
+        # The widgets the editor wires by name: the band, the tree (Alt+L,
+        # SAVE's existence check, the delegates below) and the Section…
+        # button (Alt+T)
+        self._instr_heading = lst.band
+        self._instr_tree = lst.tree
+        self._instr_section_btn = lst.section_btn
 
-        btn_row = tk.Frame(pane)
-        btn_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(5, 0))
-        up_btn = tk.Button(btn_row, text="▲", width=3, font=SMALL_BUTTON_FONT,
-                           command=lambda: self._move_selected_instruction(-1))
-        up_btn.pack(side=tk.LEFT)
-        down_btn = tk.Button(btn_row, text="▼", width=3, font=SMALL_BUTTON_FONT,
-                             command=lambda: self._move_selected_instruction(1))
-        down_btn.pack(side=tk.LEFT, padx=(3, 0))
-        self._instr_section_btn = tk.Button(
-            btn_row, text="Section…", command=self._open_section_dialog, padx=6,
-            font=SMALL_BUTTON_FONT)
-        self._instr_section_btn.pack(side=tk.LEFT, padx=(8, 0))
+    def _focus_instruction_text(self):
+        """Enter on a page: it is already loaded (selection loads), so the
+        focus goes to the text with the cursor at its end."""
+        self._instr_text.mark_set("insert", "end-1c")
+        self._instr_text.focus_set()
 
-        tree.bind("<<TreeviewSelect>>", self._on_instruction_selected)
-        tree.bind("<<TreeviewOpen>>", lambda e: self._on_section_toggled(opened=True))
-        tree.bind("<<TreeviewClose>>", lambda e: self._on_section_toggled(opened=False))
-        for seq in ("<Return>", "<KP_Enter>"):
-            tree.bind(seq, self._on_tree_return)
-        # Widget-level bindings run before the Treeview class ones and
-        # break, so Alt+Up does not ALSO step the selection like a plain Up.
-        tree.bind("<Alt-Up>", lambda e: (self._move_selected_instruction(-1), "break")[1])
-        tree.bind("<Alt-Down>", lambda e: (self._move_selected_instruction(1), "break")[1])
-        tree.bind("<ButtonPress-1>", self._on_tree_press)
-        tree.bind("<B1-Motion>", self._on_tree_motion)
-        tree.bind("<ButtonRelease-1>", self._on_tree_release)
-        self._instr_drag = None
+    # The list helpers below are the editor's names for sectioned_list.py's
+    # functions, written against self._instr_tree and the persisted
+    # collapsed set so a bare host holding only a Treeview can drive them
+    # (tests/test_instruction_list.py).
 
     @staticmethod
     def _populate_instruction_tree(tree, instructions, collapsed=()):
@@ -1011,20 +977,12 @@ class InstructionsMixin:
         "s:<section>", the unfiled pseudo-section's is "s:"), its pages
         beneath (id "p:<name>"), in instruction_layout order; sections named
         in `collapsed` start closed."""
-        tree.delete(*tree.get_children(""))
-        for section, names in layout(instructions):
-            header = tree.insert(
-                "", "end", iid=f"s:{section}", text=section or UNFILED_LABEL,
-                open=(section not in collapsed),
-                tags=("section",) if section else ("unfiled",))
-            for k, name in enumerate(names):
-                tree.insert(header, "end", iid=f"p:{name}", text=name,
-                            tags=("odd",) if k % 2 else ())
+        populate(tree, instructions, collapsed)
 
     @staticmethod
     def _row_of(iid):
         """("page", name) or ("section", section) for a list row id."""
-        return ("page", iid[2:]) if iid.startswith("p:") else ("section", iid[2:])
+        return row_of(iid)
 
     def _collapsed(self):
         """The set of section names the user has collapsed (persisted)."""
@@ -1038,30 +996,19 @@ class InstructionsMixin:
         `select` — a ("page", name) / ("section", section) row — or, when
         None, whatever was selected before if it still exists."""
         tree = getattr(self, "_instr_tree", None)
-        try:
-            if tree is None or not tree.winfo_exists():
-                return
-        except tk.TclError:
+        if not tree_alive(tree):
             return
         if instructions is None:
             instructions = self._load_saved_instructions()
-        if select is None:
-            select = self._selected_instruction_row()
-        self._populate_instruction_tree(tree, instructions, self._collapsed())
-        self._select_instruction_row(select)
+        refresh(tree, instructions, self._collapsed(), select)
 
     def _selected_instruction_row(self):
         """The selected list row as ("page", name) / ("section", section), or None."""
-        try:
-            sel = self._instr_tree.selection()
-        except (AttributeError, tk.TclError):
-            return None
-        return self._row_of(sel[0]) if sel else None
+        return selected_row(getattr(self, "_instr_tree", None))
 
     def _selected_instruction_name(self):
         """The selected page's name, or "" (nothing, or a section header, selected)."""
-        row = self._selected_instruction_row()
-        return row[1] if row and row[0] == "page" else ""
+        return selected_name(getattr(self, "_instr_tree", None))
 
     def _select_instruction_row(self, row):
         """Select the list row `row` (("page", name) / ("section", section)),
@@ -1069,195 +1016,17 @@ class InstructionsMixin:
         clear the selection when `row` is None or names no row. Selection
         events this queues are ignored by _on_instruction_selected while the
         page is the one already shown."""
-        tree = self._instr_tree
-        iid = None
-        if row:
-            kind, key = row
-            iid = f"{'p' if kind == 'page' else 's'}:{key}"
-            if not tree.exists(iid):
-                iid = None
-        if iid is None:
-            if tree.selection():
-                tree.selection_set(())
-            return
-        parent = tree.parent(iid)
-        if parent:
-            self._collapsed().discard(parent[2:])   # `see` opens it — keep the set true
-        tree.selection_set(iid)
-        tree.focus(iid)
-        tree.see(iid)
-
-    def _on_tree_return(self, event=None):
-        """Enter on a page: it is already loaded (selection loads), so jump
-        to the text with the cursor at its end. On a section header Tk's own
-        binding toggles it open / closed."""
-        if not self._selected_instruction_name():
-            return None
-        self._instr_text.mark_set("insert", "end-1c")
-        self._instr_text.focus_set()
-        return "break"
+        select_row(self._instr_tree, row, self._collapsed())
 
     def _on_section_toggled(self, opened):
         """<<TreeviewOpen>> / <<TreeviewClose>>: remember the user's choice.
         Tk sets the focus item to the toggled row before generating them."""
-        try:
-            iid = self._instr_tree.focus()
-        except (AttributeError, tk.TclError):
-            return
-        if iid.startswith("s:"):
-            (self._collapsed().discard if opened else self._collapsed().add)(iid[2:])
-
-    def _move_selected_instruction(self, delta):
-        """▲ / ▼, Alt+Up / Alt+Down: move the selected page (or section) one
-        step — a page steps into the neighbouring section at its section's
-        edge — and save the new order to the shared store."""
-        row = self._selected_instruction_row()
-        if row is None:
-            return
-        kind, key = row
-        instructions = self._load_saved_instructions()
-        if kind == "page":
-            moved = move_page(instructions, key, delta)
-        else:
-            moved = move_section(instructions, key, delta)
-        if moved:
-            self._save_instructions_to_disk(instructions)
-            self._refresh_instruction_list(instructions, select=row)
+        note_toggle(getattr(self, "_instr_tree", None), self._collapsed(), opened)
 
     def _section_for_new_page(self, instructions):
         """Where a newly SAVEd name is filed: the section of the selected
         page (or the selected section itself), else unfiled."""
-        row = self._selected_instruction_row()
-        if row is None:
-            return UNFILED
-        kind, key = row
-        return key if kind == "section" else section_of(instructions.get(key, {}))
-
-    # Drag-and-drop within the list: press on a row, release on another.
-    # The press still selects (the class binding runs after this one), so a
-    # dragged page is loaded like a clicked one; a release on the row that
-    # was pressed is a plain click, so a click never reorders anything.
-
-    def _on_tree_press(self, event):
-        tree = self._instr_tree
-        iid = tree.identify_row(event.y)
-        region = tree.identify_region(event.x, event.y)
-        self._instr_drag = iid if iid and region in ("tree", "cell") else None
-
-    def _on_tree_motion(self, event):
-        if self._instr_drag:
-            tree = self._instr_tree
-            over = tree.identify_row(event.y)
-            tree.config(cursor="hand2" if over and over != self._instr_drag else "")
-
-    def _on_tree_release(self, event):
-        tree = self._instr_tree
-        source, self._instr_drag = self._instr_drag, None
-        tree.config(cursor="")
-        target = tree.identify_row(event.y) if source else ""
-        if not target or target == source:
-            return
-        kind, key = self._row_of(source)
-        target_kind, target_key = self._row_of(target)
-        instructions = self._load_saved_instructions()
-        if drop(instructions, kind, key, target_kind, target_key):
-            self._save_instructions_to_disk(instructions)
-            self._refresh_instruction_list(instructions, select=(kind, key))
-
-    def _open_section_dialog(self):
-        """Section…: file the selected page into a section (an existing one,
-        a new name, or Unfiled), or rename the selected section (onto an
-        existing name = merge into it)."""
-        win = self.instruction_editor_window
-        row = self._selected_instruction_row()
-        if row is None:
-            messagebox.showwarning(
-                "No selection", "Select an instruction to move, or a section to rename.",
-                parent=win)
-            return
-        kind, key = row
-        instructions = self._load_saved_instructions()
-        choices = sections(instructions) + [UNFILED_LABEL]
-        if kind == "page":
-            if key not in instructions:
-                return
-            answer = self._ask_section(
-                "Move to section",
-                f"Section for '{key}' — pick one, or type a new name:",
-                choices, section_of(instructions[key]) or UNFILED_LABEL)
-            changed = answer is not None and file_page(instructions, key, answer)
-            select = row
-        else:
-            if key == UNFILED:
-                messagebox.showwarning(
-                    UNFILED_LABEL,
-                    f"'{UNFILED_LABEL}' holds the instructions not filed in any section "
-                    "and cannot be renamed — move its instructions into a section instead.",
-                    parent=win)
-                return
-            answer = self._ask_section(
-                "Rename section",
-                f"New name for section '{key}' (an existing name merges into that section):",
-                choices, key)
-            changed = answer is not None and rename_section(instructions, key, answer)
-            select = ("section", normalize_section(answer)) if changed else row
-        if changed:
-            self._save_instructions_to_disk(instructions)
-            self._refresh_instruction_list(instructions, select=select)
-
-    def _ask_section(self, title, prompt, choices, initial):
-        """A small modal prompt over the editor: a label, an editable
-        dropdown pre-filled with `initial` (existing sections and Unfiled to
-        pick from, or type a new name), OK / Cancel. Returns the text, or
-        None on Cancel. Enter is OK (on a button, that button), Escape
-        cancels from anywhere — the one field here holds at most a section
-        name, so unlike the editor there is no draft to protect; Alt+O /
-        Alt+C press the buttons."""
-        parent = self.instruction_editor_window
-        dlg = tk.Toplevel(parent)
-        dlg.withdraw()
-        dlg.title(title)
-        dlg.transient(parent)
-        dlg.resizable(False, False)
-        result = [None]
-
-        tk.Label(dlg, text=prompt, font=("Arial", 10), wraplength=360, justify="left").grid(
-            row=0, column=0, sticky="w", padx=15, pady=(12, 4))
-        var = tk.StringVar(value=initial)
-        combo = ttk.Combobox(dlg, textvariable=var, values=choices, font=("Arial", 10), width=36)
-        combo.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 10))
-
-        def ok(event=None):
-            result[0] = var.get()
-            dlg.destroy()
-
-        def cancel(event=None):
-            dlg.destroy()
-            return "break"
-
-        btn_row = tk.Frame(dlg)
-        btn_row.grid(row=2, column=0, pady=(0, 12))
-        ok_btn = tk.Button(btn_row, text="OK", width=8, command=ok)
-        ok_btn.pack(side=tk.LEFT, padx=8)
-        cancel_btn = tk.Button(btn_row, text="Cancel", width=8, command=cancel)
-        cancel_btn.pack(side=tk.LEFT, padx=8)
-        dlg.protocol("WM_DELETE_WINDOW", cancel)
-        dlg.bind("<Return>", ok)
-        dlg.bind("<KP_Enter>", ok)
-        dlg.bind("<Escape>", cancel)
-        combo.bind("<Escape>", cancel)   # before the leave-the-field class binding
-        bind_mnemonics(dlg, {"o": ok_btn, "c": cancel_btn})
-
-        dlg.update_idletasks()
-        self._place_window(dlg, "section_prompt",
-                           (dlg.winfo_reqwidth(), dlg.winfo_reqheight()), parent=parent)
-        dlg.deiconify()
-        combo.focus_set()
-        combo.selection_range(0, tk.END)
-        dlg.wait_visibility()
-        dlg.grab_set()
-        dlg.wait_window()
-        return result[0]
+        return section_for_new(self._instr_tree, instructions)
 
     def _commit_editor_state(self):
         """Copy the editor's draft onto the live state — the attached images

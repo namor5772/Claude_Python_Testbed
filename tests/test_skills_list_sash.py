@@ -93,10 +93,11 @@ class WiringTests(unittest.TestCase):
         self.assertLess(body.index("paned.add(left,"), body.index("paned.add(right,"))
         self.assertNotIn("left.grid(row=2", body)        # the panes are the sash's, not the grid's
         self.assertNotIn("right.grid(row=2", body)
-        # The SKILLS band and list keep their rows inside the pane (pinned by
-        # tests/test_list_title_band.py too)
-        self.assertIn('skills_band.grid(row=1, column=0, sticky="ew")', body)
-        self.assertIn("left.grid_rowconfigure(2, weight=1)", body)
+        # The SKILLS list — a SectionedList in its own frame since 2026-10-31
+        # — keeps its row inside the pane, under Cycle Mode, the stretchy one
+        self.assertIn('list_frame.grid(row=1, column=0, sticky="nsew")', body)
+        self.assertIn("left.grid_rowconfigure(1, weight=1)", body)
+        self.assertIn('list_frame, title="SKILLS", noun="skill",', body)
         # The close saves the state BEFORE destroying the window, so the width
         # is read off a live pane, and lets the pane go after
         close = body[body.index("def _on_skills_close():"):body.index("win.protocol(")]
