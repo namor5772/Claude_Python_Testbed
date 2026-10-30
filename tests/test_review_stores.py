@@ -254,7 +254,7 @@ class EditorSaveTests(unittest.TestCase):
         h = stub(InstructionsMixin, instruction_editor_window=None, _instr_shown_name=shown)
         h._instr_name_entry = _Field(typed)
         h._instr_text = _Field("the text")
-        h._instr_notes = _Field("")      # the Notes box (2026-10-20), read on every save
+        h._instr_notes_text = ""         # the notes draft (2026-10-20; its dialog closed), read on every save
         h._instr_tree = mock.Mock(exists=mock.Mock(return_value=exists))
         h._editor_images = []
         h._editor_desktop = _Field(False)

@@ -32,6 +32,7 @@ GEOMETRY_KINDS = {
     "prompt": "prompt_dialog_geometry",
     "confirm": "confirm_dialog_geometry",
     "skills": "skills_dialog_geometry",
+    "notes": "notes_dialog_geometry",       # the Instruction Editor's Notes dialog (2026-10-30)
 }
 # A saved position is usable only if enough of the window's title bar lands on
 # a real monitor to grab it: at least GEOMETRY_VISIBLE_W px wide, and at least
@@ -486,7 +487,7 @@ class StateMixin:
 
     # ── Window Geometry Persistence (main window + every dialog) ───────
     #
-    # One mechanism for all six persisted windows: `_remember_geometry`
+    # One mechanism for all seven persisted windows: `_remember_geometry`
     # captures a window's REAL geometry into a per-process cache,
     # `_place_window` positions a dialog from that cache (or its default),
     # `_set_geometry` is the one way any of them is sized (the Windows
@@ -686,7 +687,8 @@ class StateMixin:
                  ("skills", getattr(self, "skills_editor_window", None)),
                  ("ps_safety", getattr(self, "_ps_safety_dialog", None)),
                  ("prompt", getattr(self, "_prompt_dialog", None)),
-                 ("confirm", getattr(self, "_confirm_dialog", None)))
+                 ("confirm", getattr(self, "_confirm_dialog", None)),
+                 ("notes", getattr(self, "_notes_dialog", None)))
         out = []
         for kind, win in pairs:
             try:

@@ -498,8 +498,21 @@ class InstructionsMixin:
             buttons_frame, text="Safety", command=self._open_ps_safety_dialog, padx=10,
             font=SMALL_BUTTON_FONT,
         )
-        self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 5))
         self._update_ps_safety_button()
+
+        # Notes (2026-10-20; its own dialog since 2026-10-30, the user's
+        # request): the button opens the Notes dialog over the instruction's
+        # notes draft — general information about the instruction, stored in
+        # its entry as "notes", never sent to the model. The draft itself
+        # lives in _instr_notes_text while the dialog is closed (see
+        # _notes_draft); until 2026-10-30 it was a three-row box over the
+        # instruction text.
+        self._notes_button = tk.Button(
+            buttons_frame, text="Notes", command=self._open_notes_dialog, padx=10,
+            font=SMALL_BUTTON_FONT,
+        )
+        self._notes_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # Row 5: the bottom row (since 2026-09-10) and the only weighted one,
         # so resizing the window grows it alone. Since 2026-09-11 it is a
@@ -518,17 +531,18 @@ class InstructionsMixin:
                   minsize=150)
         paned.add(text_pane, minsize=200)   # the stretchy pane (Tk stretches the last)
 
-        # Each pane's first row (2026-10-23) is a box the sash divides with
-        # the two below it: the attached-images list over the Instructions
-        # list — as wide as the list, scrollbar included, whatever the sash
-        # position — and the Notes box over the instruction text. The two
-        # rows are held to one height (the taller box's, each stretched to
-        # it), so the INSTRUCTIONS band and the text box start level. Before
-        # it the images list was the window's own row at the full width and
-        # Notes the text pane's first row alone, a different height. The
-        # images list is created first: Tab order is creation order, and it
-        # runs image list → Instructions list → ▲ → ▼ → Section… → Notes →
-        # text, the text the editor's last stop.
+        # The list pane's first row (2026-10-23) is the attached-images
+        # list, which the sash divides with the Instructions list below it —
+        # as wide as the list, scrollbar included, whatever the sash
+        # position. Before that day the images list was the window's own row
+        # at the full width. The text pane holds the instruction text alone
+        # since 2026-10-30: the three-row Notes box that stood over it from
+        # 2026-10-20 (its row and the images row held to one height, so the
+        # INSTRUCTIONS band and the text started level) became the Notes
+        # dialog, opened by the Notes button on the row above. The images
+        # list is created first: Tab order is creation order, and it runs
+        # image list → Instructions list → ▲ → ▼ → Section… → text, the text
+        # the editor's last stop.
         list_pane.grid_rowconfigure(1, weight=1)
         list_pane.grid_columnconfigure(0, weight=1)
         img_frame = tk.Frame(list_pane)
@@ -547,34 +561,12 @@ class InstructionsMixin:
         list_frame.grid(row=1, column=0, sticky="nsew")
         self._build_instruction_list(list_frame)
 
-        text_pane.grid_rowconfigure(1, weight=1)
+        text_pane.grid_rowconfigure(0, weight=1)
         text_pane.grid_columnconfigure(0, weight=1)
-        # Notes (2026-10-20): a three-row box ABOVE the instruction text for
-        # general information about the instruction — stored in its entry as
-        # "notes", shown here and never sent to the model. Created before the
-        # text so the text stays the editor's last Tab stop.
-        notes_frame = tk.Frame(text_pane)
-        notes_frame.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, 4))
-        notes_frame.grid_rowconfigure(0, weight=1)
-        notes_frame.grid_columnconfigure(1, weight=1)
-        tk.Label(notes_frame, text="Notes:").grid(row=0, column=0, sticky="nw", padx=(0, 5))
-        self._instr_notes = tk.Text(notes_frame, height=3, wrap=tk.WORD, font=(MONO_FONT, 10))
-        self._instr_notes.grid(row=0, column=1, sticky="nsew")
-        notes_scrollbar = tk.Scrollbar(notes_frame, command=self._instr_notes.yview)
-        notes_scrollbar.grid(row=0, column=2, sticky="ns")   # the text box's scrollbar, one row up
-        self._instr_notes.config(yscrollcommand=notes_scrollbar.set)
-        # One height for the two first rows: the taller of the two boxes
-        # (three lines of Arial 9 against three of the monospace 10) plus the
-        # 4 px under each, as a row minimum both panes carry.
-        win.update_idletasks()
-        top_row = max(self._instr_image_listbox.winfo_reqheight(),
-                      self._instr_notes.winfo_reqheight()) + 4
-        list_pane.grid_rowconfigure(0, minsize=top_row)
-        text_pane.grid_rowconfigure(0, minsize=top_row)
         self._instr_text = tk.Text(text_pane, wrap=tk.WORD, font=(MONO_FONT, 10))
-        self._instr_text.grid(row=1, column=0, sticky="nsew")
+        self._instr_text.grid(row=0, column=0, sticky="nsew")
         instr_scrollbar = tk.Scrollbar(text_pane, command=self._instr_text.yview)
-        instr_scrollbar.grid(row=1, column=1, sticky="ns")
+        instr_scrollbar.grid(row=0, column=1, sticky="ns")
         self._instr_text.config(yscrollcommand=instr_scrollbar.set)
         # Ctrl+V with an image on the clipboard attaches it (text pastes normally)
         self._instr_text.bind("<Control-v>", self._on_editor_paste_image)
@@ -602,7 +594,7 @@ class InstructionsMixin:
             "p": self._provider_combo,
             "k": self.skills_button, "f": self.ps_safety_button,
             "i": attach_btn, "r": remove_btn,
-            "o": self._instr_notes,
+            "o": self._notes_button,
             "e": self._instr_text,
         })
 
@@ -628,7 +620,7 @@ class InstructionsMixin:
         # copy, which is what _instr_shown_name guards (see
         # _on_instruction_selected).
         self._instr_text.insert("1.0", self.agent_instruction)
-        self._instr_notes.insert("1.0", getattr(self, "agent_instruction_notes", "") or "")
+        self._set_notes_draft(getattr(self, "agent_instruction_notes", "") or "")
         self._instr_shown_name = self.agent_instruction_name
         if self.agent_instruction_name:
             self._instr_name_entry.insert(0, self.agent_instruction_name)
@@ -737,6 +729,7 @@ class InstructionsMixin:
         self._verbosity_combo = None
         self._fast_check = None
         self.ps_safety_button = None
+        self._notes_button = None
         self._instr_tree = None
         self._instr_list_pane = None
 
@@ -756,6 +749,10 @@ class InstructionsMixin:
         ps_dlg = getattr(self, '_ps_safety_dialog', None)
         if ps_dlg is not None:
             self._remember_geometry("ps_safety", ps_dlg)
+        # The Notes dialog too — closed first, so its text lands in the draft
+        # the editor's close discards with the rest (nothing is lost that the
+        # old inline box would have kept: the box went with the editor too).
+        self._close_notes_dialog()
         self.instruction_editor_window.destroy()
         self._ps_safety_dialog = None
         self._nullify_editor_widgets()
@@ -772,6 +769,159 @@ class InstructionsMixin:
             self._save_last_state()
         except Exception:
             pass
+
+    # ── Notes: the instruction's notes draft and its dialog (2026-10-30) ──
+    #
+    # An instruction's notes (2026-10-20) are free text ABOUT it — what it is
+    # for, caveats, what a run taught — stored in its entry as "notes" and
+    # never sent to the model. They are a draft of the editor like the
+    # instruction text: SAVE stores them, Apply makes them the applied
+    # instruction's, a page selection loads the page's, CLEAR empties them,
+    # [X] discards them with the rest. Until 2026-10-30 the draft was a
+    # three-row box over the instruction text; now it is the string
+    # `_instr_notes_text`, and the Notes dialog — the Notes button right of
+    # Safety, Alt+O — is a window onto it: while open, its text box IS the
+    # draft (the editor's SAVE with the dialog still open takes what is typed
+    # there), and closing it — Close, [X], or the editor closing — writes the
+    # box back into the string. Nothing here reaches the disk: the editor's
+    # SAVE does, as before, so the dialog has no Cancel; and by the keyboard
+    # contract (a window holding a draft never closes on Escape) Escape
+    # leaves the text box for the Close button, which Return presses. One
+    # dialog at a time (a second press raises it), placed and remembered like
+    # the other persisted windows (`_place_window` / `_remember_geometry`,
+    # kind "notes" — `notes_dialog_geometry` in the state file), coloured
+    # and title-barred by Other Setup like every Toplevel.
+
+    def _notes_box(self):
+        """The open Notes dialog's text widget, or None."""
+        dlg = getattr(self, "_notes_dialog", None)
+        box = getattr(self, "_notes_text", None)
+        try:
+            if dlg is not None and box is not None and dlg.winfo_exists():
+                return box
+        except tk.TclError:
+            pass
+        return None
+
+    def _notes_draft(self):
+        """The editor's notes draft: the dialog's text while it is open, else
+        the string the editor's open, a page selection, CLEAR or the last
+        dialog close left."""
+        box = self._notes_box()
+        if box is not None:
+            return box.get("1.0", "end-1c")
+        return getattr(self, "_instr_notes_text", "") or ""
+
+    def _set_notes_draft(self, text):
+        """Replace the draft — and what an open dialog shows, title included."""
+        self._instr_notes_text = text or ""
+        box = self._notes_box()
+        if box is not None:
+            box.delete("1.0", tk.END)
+            box.insert("1.0", self._instr_notes_text)
+            self._notes_dialog.title(self._notes_title())
+
+    def _notes_title(self):
+        """"Notes — <instruction>" after the editor's name box (the page shown,
+        or the name being typed for a new one); "Notes" with no name."""
+        name = ""
+        entry = getattr(self, "_instr_name_entry", None)
+        try:
+            if entry is not None:
+                name = entry.get().strip()
+        except (AttributeError, tk.TclError):
+            name = ""
+        name = name or (getattr(self, "_instr_shown_name", "") or "")
+        return f"Notes — {name}" if name else "Notes"
+
+    def _open_notes_dialog(self):
+        """The Notes button: open the dialog over the editor on the draft, or
+        raise the one already open."""
+        existing = getattr(self, "_notes_dialog", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                self._notes_text.focus_set()
+                return
+        except tk.TclError:
+            pass
+        parent = self.instruction_editor_window if (
+            self.instruction_editor_window and self.instruction_editor_window.winfo_exists()
+        ) else self.root
+        dlg = tk.Toplevel(parent)
+        self._notes_dialog = dlg
+        dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
+        dlg.title(self._notes_title())
+        if IS_WINDOWS:
+            dlg.transient(parent)
+        dlg.resizable(True, True)
+        dlg.grid_rowconfigure(1, weight=1)
+        dlg.grid_columnconfigure(0, weight=1)
+
+        # The hint wraps to the dialog's width (Model Setup's pattern): a
+        # label wider than the window is centred and clipped at both ends.
+        hint = tk.Label(
+            dlg, text="General information about the instruction — what it is for, caveats, "
+                      "what a run taught. Kept with it by the editor's SAVE; never sent to the model.",
+            font=("Arial", 9), anchor="w", justify="left", wraplength=440,
+        )
+        hint.bind("<Configure>", lambda e: hint.config(wraplength=max(e.width - 4, 200)))
+        hint.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(12, 6))
+        self._notes_text = tk.Text(dlg, wrap=tk.WORD, font=(MONO_FONT, 10))
+        self._notes_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 5))
+        notes_scrollbar = tk.Scrollbar(dlg, command=self._notes_text.yview)
+        notes_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 5))
+        self._notes_text.config(yscrollcommand=notes_scrollbar.set)
+        self._notes_text.insert("1.0", getattr(self, "_instr_notes_text", "") or "")
+
+        def close(event=None):
+            self._close_notes_dialog(save_state=True)
+            return "break"
+
+        close_btn = tk.Button(dlg, text="Close", width=10, command=close)
+        close_btn.grid(row=2, column=0, columnspan=2, pady=(5, 12))
+
+        dlg.protocol("WM_DELETE_WINDOW", close)
+        # Keyboard operation: Alt+N the text, Alt+C Close; Escape in the text
+        # lands on Close (the class binding) and Return presses it — no
+        # Escape-to-close, since the box is a draft.
+        bind_mnemonics(dlg, {"n": self._notes_text, "c": close_btn})
+
+        # Restore geometry AFTER all content is laid out, then show
+        dlg.update_idletasks()
+        self._place_window(dlg, "notes", (560, 320), parent=parent, min_size=(300, 150))
+        dlg.deiconify()
+        # Initial focus: the text, cursor at the end of the notes
+        self._notes_text.mark_set("insert", "end-1c")
+        self._notes_text.focus_set()
+
+    def _close_notes_dialog(self, save_state=False):
+        """Take the dialog's text into the draft, remember its geometry and
+        destroy it; a no-op with no dialog open. `save_state` writes the
+        state file at once (the dialog's own Close / [X], as the Safety
+        dialog's and the Skills Manager's do); the editor's close, which
+        saves itself, passes nothing."""
+        dlg = getattr(self, "_notes_dialog", None)
+        box = getattr(self, "_notes_text", None)
+        self._notes_dialog = None
+        self._notes_text = None
+        if dlg is None:
+            return
+        try:
+            if not dlg.winfo_exists():
+                return
+            if box is not None:
+                self._instr_notes_text = box.get("1.0", "end-1c")
+            self._remember_geometry("notes", dlg)
+            dlg.destroy()
+        except tk.TclError:
+            return
+        if save_state:
+            try:
+                self._save_last_state()
+            except Exception:
+                pass
 
     # ── Instructions list: sections and pages (2026-09-11) ──────────────
     #
@@ -1134,7 +1284,7 @@ class InstructionsMixin:
         if not text:
             messagebox.showwarning("Empty", "The instruction text is empty.", parent=self.instruction_editor_window)
             return
-        notes = self._instr_notes.get("1.0", "end-1c").strip()
+        notes = self._notes_draft().strip()
         # SAVE under the name of a DIFFERENT existing instruction replaces it
         # wholesale — text, images, settings — so it asks first, as DELETE
         # does (default No). Re-saving the page the editor shows asks nothing.
@@ -1275,9 +1425,9 @@ class InstructionsMixin:
             return
         self._editor_env_replaced = True    # [X] puts the environment back
         self._instr_text.delete("1.0", tk.END)
-        self._instr_notes.delete("1.0", tk.END)
         self._instr_name_entry.delete(0, tk.END)
         self._instr_shown_name = ""
+        self._set_notes_draft("")       # after the name: the Notes dialog's title follows it
         self._select_instruction_row(None)
         self._editor_images.clear()
         self._editor_desktop.set(False)
@@ -1354,10 +1504,9 @@ class InstructionsMixin:
             entry = instructions[name]
             self._instr_text.delete("1.0", tk.END)
             self._instr_text.insert("1.0", entry["text"])
-            self._instr_notes.delete("1.0", tk.END)
-            self._instr_notes.insert("1.0", entry.get("notes", "") or "")
             self._instr_name_entry.delete(0, tk.END)
             self._instr_name_entry.insert(0, name)
+            self._set_notes_draft(entry.get("notes", "") or "")    # after the name: the dialog's title follows it
             # Load this instruction's saved images and tool toggles into editor
             self._editor_images = [
                 (img["data"], img["media_type"], img["filename"])
@@ -1394,7 +1543,7 @@ class InstructionsMixin:
         self._commit_editor_state()
         self.agent_instruction = text
         self.agent_instruction_name = self._instr_name_entry.get().strip()
-        self.agent_instruction_notes = self._instr_notes.get("1.0", "end-1c").strip()
+        self.agent_instruction_notes = self._notes_draft().strip()
         # Restore skill modes from whichever instruction is loaded in editor
         instructions = self._load_saved_instructions()
         instr_name = self.agent_instruction_name
