@@ -1117,6 +1117,35 @@ def install_scrollbar_defaults(root):
     root.option_add("*Scrollbar.takeFocus", "0")
 
 
+# macOS: Cmd+Q is the same close as [X] (2026-10-31). Tk's application-menu
+# Quit calls ::tk::mac::Quit when the command exists and plain exit when it
+# does not — measured on the M4 Mac Mini: Cmd+Q ended the process at once,
+# WM_DELETE_WINDOW never ran, so the state file, the chat save, the cost line
+# and the peer's close were all skipped. Both byte-identical to
+# myagent/keyboard.py's by tests/test_selfbot_focus_ring.py; the handler is
+# installed in __init__ right after the WM_DELETE_WINDOW protocol, with the
+# same handler. SelfBot has no Alt+letter mnemonics, so MyAgent's Command
+# mnemonic layer of the same day has nothing to apply to here.
+def is_aqua(widget):
+    """True on macOS (Tk's aqua windowing system)."""
+    return widget.tk.call("tk", "windowingsystem") == "aqua"
+
+
+def install_quit_handler(root, handler):
+    """macOS: Cmd+Q runs `handler` instead of ending the process.
+
+    Tk's application menu calls ::tk::mac::Quit when the command exists and
+    plain exit when it does not, so without this a Cmd+Q skipped MyAgent's
+    whole close sequence. Installed beside the WM_DELETE_WINDOW protocol with
+    the same handler, so [X], Cmd+W and Cmd+Q are one close. Returns True
+    where installed; a no-op elsewhere.
+    """
+    if not is_aqua(root):
+        return False
+    root.createcommand("::tk::mac::Quit", handler)
+    return True
+
+
 def _get_window_pid(hwnd):
     """Get the process ID that owns a given window handle."""
     if IS_WINDOWS:
@@ -1357,6 +1386,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         self.root.after(50, self.check_queue)
         self.root.after(5000, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # macOS: Cmd+Q (Tk's application-menu Quit) is the same close — Tk
+        # would otherwise end the process at once, skipping the state file,
+        # the chat save, the cost line and the peer's close (a no-op elsewhere).
+        install_quit_handler(self.root, self._on_close)
         if not IS_WINDOWS:
             # macOS: a SIGTERM (peer duo-shutdown, kill/pkill) runs the same
             # graceful close as [X] — Windows gets this for free via WM_CLOSE.
