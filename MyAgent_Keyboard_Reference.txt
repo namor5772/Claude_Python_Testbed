@@ -1,0 +1,766 @@
+MyAgent KEYBOARD REFERENCE
+==========================
+
+Every keypress needed to operate and navigate MyAgent with the keyboard alone:
+no mouse, no touchpad, no touch screen. Voice input appears where it is one of
+the options the keyboard drives (the Mike button), never as a requirement.
+
+Windows is the verified platform. Section 21 covers what is known about the
+Mac. Keys are written as pressed together with a plus sign (Alt+S) and one
+after the other with a comma (Alt+Space, M).
+
+Sources of truth: the per-window tables under "Keyboard operation" in
+README.md, the shared helpers in myagent/keyboard.py, and the key bindings in
+each window's builder. This file is kept in step with them by hand: when a key
+changes, change the README table and this file together.
+
+Last revised: 2026-10-31 (the Notes and Description dialogs, the sectioned
+Skills list).
+
+
+CONTENTS
+--------
+   1. The three rules
+   2. Keys that work in every window
+   3. Starting, switching, moving and closing windows (Windows itself)
+   4. Main window
+   5. Instruction Editor
+   6. Instructions list (inside the editor)
+   7. Section... prompt (editor and Skills Manager)
+   8. Notes dialog
+   9. Skills Manager
+  10. Description dialog
+  11. Safety dialog
+  12. Confirm Command dialog
+  13. Agent Request dialog
+  14. Voice Setup
+  15. Model Setup
+  16. Other Setup
+  17. Native message boxes and system dialogs
+  18. Closing every window: the summary
+  19. Walkthroughs
+  20. What the keyboard cannot do
+  21. macOS notes
+
+
+1. THE THREE RULES
+------------------
+
+Rule 1. Tab and Shift+Tab move between controls, forwards and backwards, in
+the order the controls were created, which is the visual order almost
+everywhere. The focused control is marked: a button or checkbox gets a dotted
+ring, a text field shows the blinking cursor, a list highlights its active
+row. Read-only panes (the main window's output pane, the Confirm Command
+dialog's command box, the Agent Request dialog's message) are Tab stops too,
+so they can be scrolled and copied from; scrollbars are never Tab stops.
+A disabled control is skipped.
+
+Rule 2. Escape leaves the field you are in. Inside a text box Tab TYPES a tab,
+so Escape is the way out: it moves the focus to the next control and never
+inserts, deletes, submits or closes anything. The same Escape leaves a
+single-line entry, the temperature spinbox, a dropdown (closing its open list
+first) and the Instructions or Skills list. Inside a text box Ctrl+Tab and
+Ctrl+Shift+Tab do the same forwards and backwards.
+
+   Because Escape means "leave the field", NO window that holds a draft closes
+   on Escape: the Instruction Editor, the Skills Manager, the Notes dialog and
+   the Description dialog close only through their own keys (section 18).
+   Windows where nothing can be lost DO close on Escape: the Safety dialog,
+   the Confirm Command dialog (Escape = Deny), Voice Setup and Model Setup
+   (Escape outside a field = Cancel), Other Setup and the Section... prompt
+   (Escape anywhere = Cancel).
+
+Rule 3. Enter presses the focused button (Space does too). Space toggles the
+focused checkbox. Alt+letter presses a button or jumps to a field from
+anywhere in its window. The letters belong to one window each and are listed
+per window below; they are deliberately not underlined on the screen.
+A disabled button ignores Enter, Space and its Alt+letter exactly as it
+ignores a click. A dialog's Alt+letters never reach the window behind it.
+
+
+2. KEYS THAT WORK IN EVERY WINDOW
+---------------------------------
+
+  Tab / Shift+Tab ............. next / previous control
+  Escape (in a text box, entry, spinbox, dropdown, or the Instructions /
+      Skills list) ............ leave the field: the focus moves on, nothing
+                                changes
+  Ctrl+Tab / Ctrl+Shift+Tab (in a text box) ... the same, forwards / backwards
+  Enter ....................... press the focused button (the keypad Enter too)
+  Space ....................... press the focused button / toggle the focused
+                                checkbox
+  Alt+letter .................. press that button / jump to that field (the
+                                per-window tables below)
+  Down (on a dropdown) ........ open the list; Up / Down move, Enter picks,
+                                Escape closes the list
+  Up / Down (on the temperature spinbox) ... step the value by 0.1
+  Arrows, PgUp / PgDn, Ctrl+Home / Ctrl+End, Shift+arrows, Ctrl+C
+      (in a read-only pane) ... scroll, select, copy
+  Alt+F4 ...................... close the window, exactly as its title-bar X
+                                does (the same handler runs)
+
+Inside an editable text box the usual editing keys apply: arrows, Home / End,
+Ctrl+Home / Ctrl+End, Shift+arrows to select, Ctrl+A, Ctrl+C / Ctrl+X /
+Ctrl+V, Ctrl+Z / Ctrl+Y where the box keeps an undo history (the Description
+dialog's does), Delete / Backspace, Ctrl+Left / Ctrl+Right by word.
+
+
+3. STARTING, SWITCHING, MOVING AND CLOSING WINDOWS (WINDOWS ITSELF)
+-------------------------------------------------------------------
+
+Starting MyAgent
+  Win, type the shortcut's name, Enter ... a Desktop shortcut made by
+      desktop_launchers/MyAgent_Win.ps1 is found by the Start menu search
+  From a terminal (the venv activated):
+      python MyAgent.py                          the GUI
+      python MyAgent.py -l "Instruction Name"    start that saved instruction
+                                                 at once
+      python MyAgent.py -l "Name" --headless     run it with no window and
+                                                 close when it is done
+      LaunchMyAgent.bat                          the Windows launcher
+
+Switching windows
+  Alt+Tab ..................... switch between windows. Every MyAgent window
+                                is a separate top-level window: the main
+                                window, the Instruction Editor, the Notes
+                                dialog, the Skills Manager and so on, and each
+                                MyAgent instance is its own process
+  Alt+Esc ..................... cycle windows without the switcher
+
+Moving and resizing a window
+  Alt+Space ................... the window menu
+  Alt+Space, M, arrows, Enter . move the window (Escape cancels)
+  Alt+Space, S, arrows, Enter . resize it
+  Win+Up / Win+Down ........... maximise / restore (then minimise)
+  Win+Left / Win+Right ........ snap to a half of the screen
+  MyAgent remembers every window's and dialog's size and position per monitor
+  layout, so an adjustment is made once.
+
+Closing a window
+  Alt+F4 ...................... close the active window as its X does. On the
+                                main window that closes MyAgent: a running
+                                run is stopped, the state and the chat are
+                                saved, the instance lock is released
+
+Scrolling
+  No wheel is needed: Tab to the pane or list and use the arrows, PgUp / PgDn,
+  Ctrl+Home / Ctrl+End.
+
+
+4. MAIN WINDOW
+--------------
+
+Layout, top to bottom: the toolbar (START, STOP, Instruction, the "Save Chat
+as" name box), the output pane, and the bottom row (the Voice, Model and
+Other setup buttons at the left, the six checkboxes Tool Calls, Activity,
+Show Thinking, Save Thinking, Diag, Debug).
+
+The window opens with the focus on Instruction, deliberately not on START:
+Enter presses the focused button, so a stray Enter opens the editor instead
+of starting a run.
+
+Tab order: START -> Instruction -> Save Chat as -> output pane -> Voice ->
+Model -> Other -> Tool Calls -> Activity -> Show Thinking -> Save Thinking ->
+Diag -> Debug -> (back to START). STOP is skipped while no run is active;
+during a run START and Instruction are disabled and STOP takes their place.
+
+  Alt+S ....................... START: run the applied instruction (not
+                                during a run)
+  Alt+T ....................... STOP the run (only during a run)
+  Alt+I ....................... Instruction: open the Instruction Editor
+                                (section 5; not during a run)
+  Alt+C ....................... jump to the "Save Chat as" box. Type a name
+                                before START to save the chat under it; left
+                                empty, START names it <Instruction>_<timestamp>
+  Alt+V ....................... Voice: the Voice Setup dialog (section 14)
+  Alt+M ....................... Model: the Model Setup dialog (section 15)
+  Alt+O ....................... Other: the Other Setup dialog (section 16)
+  Tab to a checkbox, Space .... toggle it
+  In the output pane .......... Up / Down, PgUp / PgDn, Ctrl+Home /
+                                Ctrl+End scroll; Shift+arrows select; Ctrl+C
+                                copies
+  Alt+F4 ...................... close MyAgent
+
+The six checkboxes: Tool Calls shows each tool call in the pane; Activity
+shows the activity lines, the per-call cost line among them; Show Thinking
+shows the model's thinking; Save Thinking keeps it in the saved chat; Diag
+shows the coordinate-mapping trail of desktop screenshots and clicks; Debug
+shows the payload sent to the API. Every run saves its chat whether or not a
+name was typed.
+
+
+5. INSTRUCTION EDITOR
+---------------------
+
+Opened from the main window with Alt+I (or Enter on Instruction). The window
+opens with the focus in the instruction text, cursor at the end.
+
+Layout, top to bottom: the name row (the Instruction name box, SAVE, DELETE,
+CLEAR, Apply); the model row (Provider, Model, and the parameter controls the
+chosen model shows: Temp, Thinking, its strength or mode, Reasoning,
+Verbosity, Fast); the tool checkboxes (Desktop, Browser, Excel, Physical,
+Meta, MCP, Gmail, IMAP, Outlook, Convo; a greyed one lacks its package); the
+button row (Attach Images, Remove Selected, Skills, Safety, Notes); and the
+bottom row, a two-pane split: the attached-images list over the INSTRUCTIONS
+list at the left, the instruction text at the right.
+
+Tab order: text -> name -> SAVE -> DELETE -> CLEAR -> Apply -> Provider ->
+Model -> the parameter controls the model shows -> the tool checkboxes ->
+Attach Images -> Remove Selected -> Skills -> Safety -> Notes -> image list ->
+Instructions list -> up-arrow button -> down-arrow button -> Section... ->
+back to the text. Escape in the text lands on the name box (the text is the
+last stop, so it wraps); Shift+Tab from the name box returns to the text.
+
+  Alt+E ....................... the instruction text
+  Alt+N ....................... the Instruction name box
+  Alt+S, Ctrl+S ............... SAVE to the shared store. Saving under the
+                                name of ANOTHER existing page asks "Replace
+                                instruction?" (opens on No); re-saving the
+                                page shown asks nothing
+  Alt+D ....................... DELETE the selected instruction. Asks first
+                                (opens on No); permanent, on every synced
+                                machine
+  Alt+C ....................... CLEAR. NOT "Close": it empties the editor
+                                for a fresh instruction and resets the
+                                environment settings (model parameters,
+                                Safety bypasses, blocked tools, Auto-send,
+                                upgrade model) at once, WITHOUT asking. The
+                                saved copy on disk is untouched; selecting
+                                its page in the list brings it back
+  Alt+A, Ctrl+Enter ........... Apply: commit the draft to the session and
+                                close the editor. Ctrl+Enter works inside the
+                                text too, where plain Enter is a newline
+  Alt+P / Alt+M ............... the Provider / Model dropdowns
+  Alt+L ....................... the Instructions list (section 6)
+  Alt+T ....................... Section...: file the selected instruction
+                                into a section, or rename the selected
+                                section (section 7)
+  Alt+K ....................... Skills: the Skills Manager (section 9)
+  Alt+F ....................... Safety: the Safety dialog (section 11)
+  Alt+O ....................... Notes: the Notes dialog (section 8)
+  Alt+I ....................... Attach Images: the system file dialog
+                                (section 17)
+  Alt+R ....................... Remove Selected: removes the images selected
+                                in the image list (Up / Down and Shift+Up /
+                                Shift+Down select there)
+  Ctrl+V (in the text) ........ an image on the clipboard becomes an
+                                attachment; text pastes as text
+  Enter (in the Temp spinbox) . commit a typed temperature (leaving the box
+                                commits it too); Up / Down step by 0.1
+  Space (on a checkbox) ....... toggle it: Thinking, Fast, or a tool box
+  Down (on a dropdown) ........ open it: Provider, Model, the Thinking mode
+                                or strength, Reasoning, Verbosity
+  Alt+F4 ...................... close the editor as its X does: the draft's
+                                unsaved changes are dropped, and the
+                                environment a browsed page had replaced is
+                                put back. There is no Close button and
+                                Escape never closes the editor
+
+During a run the Instruction button is disabled, so the editor cannot be
+opened. An editor opened before the run started stays open, but selecting a
+page or CLEAR shows "Run in progress" and does nothing.
+
+Selecting a page in the list REPLACES the editor's contents with that page,
+without asking: SAVE (Ctrl+S) first if an edit is to be kept.
+
+
+6. INSTRUCTIONS LIST (INSIDE THE EDITOR)
+----------------------------------------
+
+Alt+L puts the focus on the list (or Tab round to it). The list shows one
+header row per section with its pages beneath, the way OneNote shows pages
+in sections; unfiled pages sit last, under "Unfiled".
+
+  Up / Down ................... browse. Selecting a page LOADS it: its text,
+                                images, tool toggles, model settings, Safety
+                                bypasses and notes draft come with it
+  Left / Right ................ fold / unfold a section (Left on a page jumps
+                                to its header)
+  PgUp / PgDn ................. scroll the list a page
+  Enter (on a page) ........... jump into the instruction text (the page is
+                                already loaded)
+  Enter (on a header) ......... fold / unfold the section
+  Alt+Up / Alt+Down ........... move the selected page or section one step;
+                                a page at its section's edge steps into the
+                                neighbouring section. The up-arrow and
+                                down-arrow buttons do the same
+  Alt+T, or Enter on Section... file the selected page into a section, or
+                                rename the selected section (section 7)
+  Escape ...................... leave the list for the next control
+
+Folded sections and the width of the list pane are remembered per machine.
+
+
+7. SECTION... PROMPT (EDITOR AND SKILLS MANAGER)
+------------------------------------------------
+
+A small modal prompt: a label, an editable dropdown pre-filled with the
+current section (the existing sections and Unfiled to pick from, or type a
+new name), OK and Cancel. It opens with the focus in the field and its text
+selected, so typing replaces it.
+
+  Type a name ................. a new section is created after the last one;
+                                an existing name files the page there (or,
+                                when renaming, merges the sections)
+  Down ........................ open the list of sections; Up / Down, Enter
+  Enter ....................... OK (on a button, that button)
+  Escape ...................... Cancel, from anywhere, the field included
+  Alt+O / Alt+C ............... OK / Cancel
+  Alt+F4 ...................... Cancel
+
+
+8. NOTES DIALOG
+---------------
+
+Opened from the editor with Alt+O (or Enter on Notes). Free text ABOUT the
+instruction: what it is for, caveats, what a run taught. It is saved with the
+instruction by the editor's SAVE and never sent to the model. The dialog
+opens with the focus in the notes text, cursor at the end; its title names
+the instruction in the editor's name box.
+
+Tab order: text -> Close.
+
+  Alt+N ....................... the notes text
+  Alt+C ....................... Close: keeps the text as the editor's Notes
+                                draft and remembers the window's size and
+                                position
+  Escape (in the text) ........ leaves the text and lands on Close
+  Enter (on Close) ............ presses it
+  Alt+F4 ...................... Close, exactly as the button
+
+What is typed is the editor's draft: SAVE in the editor stores it whether the
+dialog is open or closed; Close and X keep it. One Notes dialog at a time;
+Alt+O in the editor brings the open one to the front with the focus in its
+text. Closing the editor closes it too. Escape never closes the dialog.
+
+
+9. SKILLS MANAGER
+-----------------
+
+Opened from the editor with Alt+K (or Enter on Skills). The window opens
+with the focus on the SKILLS list.
+
+Layout: the name row (the Skill name box, SAVE, DELETE, NEW); the mode row
+(Cycle Mode, Description); the SKILLS list at the left with its up-arrow,
+down-arrow and Section... buttons; the skill text at the right. List rows
+carry [ON] for an enabled skill and [OD] for an on-demand one.
+
+Tab order: list -> up-arrow -> down-arrow -> Section... -> skill text ->
+name -> SAVE -> DELETE -> NEW -> Cycle Mode -> Description -> list.
+
+  Up / Down (in the list) ..... browse; the selected skill loads into the
+                                name box, the description draft and the text
+  Left / Right (in the list) .. fold / unfold a section
+  Enter (in the list) ......... on a skill, jump to its text; on a section
+                                header, fold / unfold it
+  Space (in the list) ......... on a skill, cycle its mode: disabled -> on ->
+                                on-demand -> disabled, saved at once; on a
+                                header, fold / unfold it
+  Alt+Up / Alt+Down ........... move the selected skill or section one step
+  Alt+C ....................... Cycle Mode: the same cycle, from anywhere in
+                                the window. NOT "Close"
+  Alt+E ....................... Description: the Description dialog
+                                (section 10)
+  Alt+K ....................... the Skill name box
+  Alt+T ....................... the skill text
+  Alt+L ....................... the list
+  Alt+O ....................... Section...: file the selected skill into a
+                                section, or rename the section (section 7)
+  Alt+S, Ctrl+S ............... SAVE. A NEW name that is not kebab-case
+                                (lowercase letters, digits, hyphens) is
+                                offered as one: "Create as 'x-y' instead?"
+                                (opens on Yes). Saving under a new name while
+                                another skill is loaded copies that skill's
+                                bundled files to the new one
+  Alt+D ....................... DELETE the selected skill. Asks first (opens
+                                on No); removes its folder on every synced
+                                machine
+  Alt+N ....................... NEW: clears the fields for a fresh skill,
+                                without asking
+  Alt+F4 ...................... close the Skills Manager as its X does. There
+                                is no Close button and Escape never closes
+                                it. Its Description dialog closes with it
+
+Space on a skill writes the mode to the shared skills tree at once (it is
+every instruction's default for that skill); an instruction's own per-skill
+modes are what it restores when applied.
+
+
+10. DESCRIPTION DIALOG
+----------------------
+
+Opened from the Skills Manager with Alt+E (or Enter on Description). One or
+two sentences: what the skill does and when to use it, the trigger the
+system prompt's on-demand index lists. The dialog opens with the focus in
+the description text, cursor at the end; its title names the skill.
+
+Tab order: text -> Close.
+
+  Alt+E ....................... the description text
+  Alt+C ....................... Close: keeps the text as the Skills Manager's
+                                description draft and remembers the window's
+                                size and position
+  Escape (in the text) ........ leaves the text and lands on Close
+  Enter (on Close) ............ presses it
+  Alt+F4 ...................... Close, exactly as the button
+
+SAVE in the Skills Manager stores the text whether the dialog is open or
+closed (line breaks become spaces); selecting another skill replaces it; NEW
+and DELETE clear it; an open dialog follows, title included. Escape never
+closes the dialog.
+
+
+11. SAFETY DIALOG
+-----------------
+
+Opened from the editor with Alt+F (or Enter on Safety). A scrolled list of
+checkboxes in sections: the PowerShell command patterns, then the Gmail, IMAP
+and Outlook destructive tools (a section appears only when its package is
+installed). Ticked means the run asks for confirmation before that command
+or tool; unticked bypasses the question. The dialog opens with the focus on
+the first checkbox and has no buttons.
+
+  Tab / Shift+Tab, Down / Up .. next / previous checkbox, scrolled into view
+  Space ....................... toggle. It takes effect at once for the
+                                session; SAVE the instruction in the editor
+                                to keep it with the instruction
+  Escape ...................... close
+  Alt+F4 ...................... close
+
+
+12. CONFIRM COMMAND DIALOG
+--------------------------
+
+Appears during a run when a guarded shell command wants approval. It shows
+the pattern that triggered it, the command (read-only, scrollable, a Tab
+stop) and Deny / Allow. It opens with the focus on Deny, so a reflexive
+Enter is the safe answer, and it blocks the main window until answered.
+
+Tab order: Deny -> Allow -> the command text.
+
+  Enter ....................... press the focused button (Deny unless you
+                                moved)
+  Alt+D / Alt+A ............... Deny / Allow
+  Escape (from the buttons) ... Deny (in the command text the first Escape
+                                leaves the text)
+  Alt+F4 ...................... Deny
+  In the command text ......... arrows / PgUp / PgDn scroll, Shift+arrows
+                                select, Ctrl+C copies
+
+Deny tells the agent "user denied" and the run goes on.
+
+
+13. AGENT REQUEST DIALOG
+------------------------
+
+Appears when the agent asks you something (the user_prompt tool) and, in an
+instruction with the Convo box ticked, after every reply of the model. It
+shows the agent's message (read-only, scrollable), the reply box, the Mike
+button with the Auto-send box and a status line, the Upgrade box, and
+Attach Images / Remove Selected with the image list.
+
+It opens with the focus in the reply box, or on Mike when Auto-send is
+ticked, in which case "Agent Request" is spoken aloud (the bell rings where
+the machine cannot speak).
+
+Tab order: reply -> Mike -> Auto-send -> Upgrade -> Attach Images -> Remove
+Selected -> image list -> the agent's message -> reply.
+
+  Enter ....................... send the reply and close the dialog. While
+                                Mike is recording, Enter ENDS the recording
+                                instead (the transcript then lands in the
+                                reply box); while it is transcribing, Enter
+                                does nothing
+  Ctrl+Enter .................. a newline inside the reply
+  Escape (in the reply) ....... leave the reply box without sending (Tab on
+                                to the buttons, Shift+Tab back)
+  Ctrl+V ...................... an image on the clipboard becomes an
+                                attachment; text pastes as text
+  Alt+M ....................... Mike: start recording, or stop and
+                                transcribe. The transcript is inserted at the
+                                cursor in the reply box, to be edited before
+                                Enter sends it; the focus stays in the reply
+                                box. Its settings are Voice Setup (section 14)
+  Space or Enter (on Mike) .... the same, when Mike has the focus
+  Alt+A ....................... Auto-send: toggle. Ticked, a transcript is
+                                sent the moment it lands, as if Enter had been
+                                pressed; ticking it moves the focus to Mike.
+                                The setting is saved with the applied
+                                instruction
+  Alt+U ....................... Upgrade: toggle. Ticked, this reply and the
+                                rest of the run go to the instruction's
+                                upgrade model (Model Setup, section 15); the
+                                label names it, and the box is disabled with
+                                a reason when there is nothing to move to or
+                                the run has already moved
+  Alt+I / Alt+R ............... Attach Images / Remove Selected (Up / Down
+                                select in the image list)
+  Alt+F4 ...................... dismiss: the agent is told you did not
+                                respond and the run goes on; a recording in
+                                progress is discarded
+
+Replies with a meaning of their own, typed or dictated (any case, a closing
+. ! ? allowed; "Stop the payment." is an ordinary reply):
+
+  (empty) ..................... Enter on an empty reply box with no images
+                                attached STOPS the run
+  quit, stop .................. in a Convo-mode conversation, end it (and the
+                                run); in a user_prompt question they are
+                                ordinary replies
+  exit ........................ ends the run from either kind of request and
+                                then CLOSES MyAgent, once the cost-log line is
+                                written
+
+Hands-free reply, with Auto-send ticked: the dialog opens on Mike, so it is
+Enter (start recording), speak, Enter (stop); the transcript is sent as it
+lands. Shift+Tab reaches the reply box to type instead. A dictated "quit",
+"stop" or "exit" lands as the bare word and counts as above.
+
+A reply sent from the phone through Heartbeat's Telegram relay closes the
+dialog as if it had been typed here.
+
+
+14. VOICE SETUP
+---------------
+
+Opened from the main window with Alt+V (or Enter on Voice): the speech-to-
+text settings behind the Mike button and the microphone_listen tool. It
+opens with the focus on Provider.
+
+Tab order: Provider -> Model -> Language -> Vocabulary hint -> Microphone ->
+Test -> the test transcript -> Save -> Cancel.
+
+  Alt+P / Alt+M ............... the Provider / Model dropdowns
+  Alt+L / Alt+V ............... the Language / Vocabulary hint boxes
+  Alt+I ....................... the Microphone dropdown
+  Alt+T ....................... Test: start / stop a trial dictation with the
+                                settings as they stand, unsaved; the
+                                transcript and its cost appear below
+  Alt+S ....................... Save and close
+  Alt+C ....................... Cancel: nothing is saved
+  Escape ...................... Cancel, once outside a field (inside one, the
+                                first Escape leaves the field)
+  Alt+F4 ...................... Cancel
+
+The settings are per user, shared by every instruction.
+
+
+15. MODEL SETUP
+---------------
+
+Opened from the main window with Alt+M (or Enter on Model): the upgrade
+model of ONE instruction, named in the title (the page the editor shows
+while the editor is open, otherwise the applied instruction). It opens with
+the focus on Upgrade model.
+
+Tab order: Upgrade model -> Thinking -> Save -> Cancel.
+
+  Alt+M / Alt+T ............... the Upgrade model / Thinking dropdowns (the
+                                model list has an explicit "(none)" entry for
+                                no upgrade)
+  Alt+S ....................... Save: written into the instruction at once,
+                                and close
+  Alt+C ....................... Cancel: nothing is saved
+  Escape ...................... Cancel, once outside a field
+  Alt+F4 ...................... Cancel
+
+
+16. OTHER SETUP
+---------------
+
+Opened from the main window with Alt+O (or Enter on Other): three colours,
+each with Choose... and Default. The window colour is the background of the
+main window and every dialog (their title bars too, on Windows 11); the
+field colour is the background of the text boxes, entries, lists and
+dropdowns; the button colour is the face of every button. Choose... opens
+the system colour picker and Default restores the platform colour; either
+previews on every open window at once. It opens with the focus on the
+window colour's Choose....
+
+Tab order: Choose... -> Default (window) -> Choose... -> Default (field) ->
+Choose... -> Default (button) -> Save -> Cancel.
+
+  Alt+B / Alt+D ............... window colour: Choose... / Default
+  Alt+T / Alt+E ............... field colour: Choose... / Default
+  Alt+U / Alt+R ............... button colour: Choose... / Default
+  Alt+S ....................... Save: all three colours kept in this
+                                instance's state file at once, and close
+  Alt+C ....................... Cancel: the colours the dialog opened on
+                                come back
+  Escape ...................... Cancel, from anywhere (the dialog has no
+                                field)
+  Alt+F4 ...................... Cancel
+
+In the Windows colour picker: Tab moves between the basic-colour grid, the
+Define Custom Colors button and the Red / Green / Blue boxes; the arrows
+move in the grid; Enter is OK and Escape is Cancel.
+
+
+17. NATIVE MESSAGE BOXES AND SYSTEM DIALOGS
+-------------------------------------------
+
+Yes / No questions (Replace instruction?, Delete instruction, Delete skill,
+the skill-name offer, the destructive mail-action confirmations during a
+run):
+  Tab or Left / Right ......... move between the buttons
+  Enter ....................... press the highlighted button
+  Y / N ....................... answer directly (Windows)
+  Escape ...................... does nothing on a Yes / No box on Windows
+  The DELETE, Replace and mail-action questions open on No, so a reflexive
+  Enter declines; the skill-name offer opens on Yes.
+
+Warnings and notices (No selection, Empty, Not found, Run in progress, an
+unreadable store): Enter, Space or Escape dismisses the single OK button.
+
+The file dialog (Attach Images, in the editor and the Agent Request dialog):
+the system Open dialog. Type a path or file name in the File name box and
+Enter; Tab to the file list and use the arrows, Shift+arrows and Ctrl+A to
+select several; Alt+N returns to File name; Escape cancels.
+
+
+18. CLOSING EVERY WINDOW: THE SUMMARY
+-------------------------------------
+
+Alt+F4 closes any MyAgent window as its X does. Where a window has a draft,
+Alt+F4 is what "Close" means for it; where it has Cancel, Alt+F4 cancels.
+
+  Main window ................. Alt+F4 (MyAgent closes: a run stopped, the
+                                state and chat saved)
+  Instruction Editor .......... Alt+F4 (drops unsaved draft changes), or
+                                Alt+A / Ctrl+Enter = Apply (commits and
+                                closes). No Close button; Escape never closes
+                                it; Alt+C is CLEAR
+  Notes dialog ................ Alt+C, or Escape then Enter, or Alt+F4; the
+                                draft is kept
+  Skills Manager .............. Alt+F4 only. No Close button; Escape never
+                                closes it; Alt+C is Cycle Mode
+  Description dialog .......... Alt+C, or Escape then Enter, or Alt+F4; the
+                                draft is kept
+  Section... prompt ........... Enter = OK; Escape (anywhere), Alt+C or
+                                Alt+F4 = Cancel
+  Safety dialog ............... Escape or Alt+F4
+  Confirm Command ............. Enter on Deny, Escape, Alt+D or Alt+F4 =
+                                Deny; Alt+A = Allow
+  Agent Request ............... Enter sends the reply; Alt+F4 dismisses
+                                (the agent is told you did not respond);
+                                an empty reply or "exit" ends the run
+  Voice Setup, Model Setup .... Alt+S saves and closes; Alt+C, Escape
+                                (outside a field) or Alt+F4 cancels
+  Other Setup ................. Alt+S saves and closes; Alt+C, Escape
+                                (anywhere) or Alt+F4 cancels
+  Message boxes ............... Enter on the highlighted button; Y / N;
+                                Escape only on a single-OK box
+
+
+19. WALKTHROUGHS
+----------------
+
+A. Run a saved instruction
+   Alt+I (the editor) -> Alt+L (the list) -> Up / Down to the instruction
+   (it loads as you go; Left / Right fold and unfold a section) -> Alt+A
+   (apply and close) -> Alt+S (START). Tab to the output pane to scroll
+   while it runs. Alt+T stops it.
+
+B. Write a new instruction, with notes, filed into a section
+   Alt+I -> Alt+C (CLEAR: an empty editor) -> Alt+N, type the name -> Alt+E,
+   type the text -> Escape -> Tab to the tool checkboxes, Space on each one
+   wanted -> Alt+O (Notes), type them, Alt+C (Close) -> Alt+S (SAVE; the new
+   page lands where the list's selection is) -> Alt+L, Alt+T (Section...),
+   type or pick the section, Enter -> Alt+A to apply, or Alt+F4 to leave it
+   saved but not applied.
+
+C. Edit an existing instruction's text
+   Alt+I -> Alt+L -> Up / Down to the page -> Enter (into the text) -> edit
+   -> Ctrl+S -> Alt+F4 (the saved page stays the one shown; nothing is lost).
+
+D. Change which skills a run may use
+   Alt+I -> Alt+K (Skills Manager) -> Up / Down to the skill -> Space cycles
+   disabled -> on -> on-demand -> Alt+F4. SAVE the instruction (Alt+S in the
+   editor) to keep the modes with it.
+
+E. Edit a skill and its description
+   Alt+I -> Alt+K -> Up / Down to the skill -> Enter (into its text) -> edit
+   -> Alt+E (Description), type, Alt+C (Close) -> Ctrl+S -> Alt+F4 -> Alt+F4.
+
+F. Let an instruction run a guarded command without asking
+   Alt+I -> Alt+L, pick the page -> Alt+F (Safety) -> Down to the pattern ->
+   Space (untick) -> Escape -> Alt+S (SAVE keeps the bypass with the
+   instruction) -> Alt+A.
+
+G. Answer an Agent Request
+   Type the reply, Enter. By voice: Alt+M, speak, Alt+M, check the
+   transcript, Enter. Hands-free (Auto-send ticked): Enter, speak, Enter.
+
+H. Allow or deny a guarded command during a run
+   Enter denies (the focus starts on Deny); Alt+A allows.
+
+I. Move a run to a stronger model from one reply on
+   Beforehand: Alt+M (Model Setup), Down to pick the upgrade model, Alt+T for
+   its thinking level, Alt+S. At an Agent Request: Alt+U (tick Upgrade), type
+   the reply, Enter.
+
+J. End a conversational run
+   At its Agent Request type quit (or stop) and Enter. Typing exit instead
+   ends the run and closes MyAgent.
+
+K. Change the colours
+   Alt+O (Other) -> Enter on Choose... (or Alt+B / Alt+T / Alt+U for the
+   window / field / button colour) -> pick in the system dialog, Enter ->
+   Alt+S to keep, Alt+C to put the old colours back.
+
+L. Set up dictation
+   Alt+V (Voice) -> Alt+P, Down, pick the provider -> Alt+M, Down, pick the
+   model -> Alt+I for the microphone -> Alt+T to test (speak, Alt+T again)
+   -> Alt+S.
+
+M. Rearrange the Instructions list
+   Alt+I -> Alt+L -> Up / Down to the page or section -> Alt+Up / Alt+Down to
+   move it -> Alt+T to file it into a section or rename the section.
+
+N. Save a chat under a name of your own
+   Alt+C (main window), type the name, then Alt+S to START; the chat is
+   saved under that name as the run goes and when MyAgent closes.
+
+O. Close everything and quit
+   Alt+F4 in any dialog or editor still open (section 18), then Alt+F4 on the
+   main window. A run in progress is stopped first.
+
+
+20. WHAT THE KEYBOARD CANNOT DO
+-------------------------------
+
+  The pane dividers ........... the sash between the Instructions list and
+                                the text, the one between the image list and
+                                the Instructions list, and the Skills
+                                Manager's list / text sash can only be
+                                dragged. Their positions are remembered per
+                                machine, so one adjustment lasts; everything
+                                the dividers separate is reached by Tab
+  Drag-and-drop in the lists .. has a keyboard twin: Alt+Up / Alt+Down and
+                                Section...
+  The mouse wheel ............. has one: Tab to the pane, then the arrows or
+                                PgUp / PgDn
+  Window moving and sizing .... Windows' own Alt+Space menu (section 3)
+
+Nothing else in MyAgent needs a pointer: every button, box, list and field is
+a Tab stop or has an Alt+letter, and every window closes from the keyboard.
+
+
+21. macOS NOTES
+---------------
+
+The keys above are verified on Windows, and the README's tables name Windows
+keys only. What is known about the Mac:
+
+  - Tk reports the Option key as Alt, so the Alt+letter shortcuts are
+    Option+letter in principle; this is unverified, and on many layouts
+    Option+letter also types an accented character.
+  - Alt+F4 does not exist there. Nothing in MyAgent binds Cmd+W or Cmd+Q, and
+    whether Tk's own menus supply them has not been checked; the title-bar
+    close button remains the documented way to close a draft window.
+  - A focused button shows the system's rounded blue ring; a focused checkbox
+    shows no cue at all.
+  - Scrollbars are kept out of the Tab order on both platforms since
+    2026-09-26.
+  - Tab, Shift+Tab, Escape (leave the field), Enter and Space behave as on
+    Windows: they are Tk's own bindings and MyAgent's class bindings.
