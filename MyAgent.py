@@ -354,6 +354,13 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # sections the user collapsed, kept in agent_state.json too
         self._skills_list = None
         self._skills_collapsed_sections = set()
+        # The Skills Manager's Description dialog (2026-10-31, the Notes
+        # dialog's twin): the dialog and its text box while open, the draft
+        # string while closed, and the name box its title follows
+        self._desc_dialog = None
+        self._desc_text = None
+        self._skill_desc_text = ""
+        self._skills_name_entry = None
         self.skills = self._load_skills()
         self.available_models = self._fetch_models_for_provider()
 

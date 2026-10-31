@@ -416,11 +416,11 @@ class DialogTests(_TkCase):
         self.lst = host._skills_list
         self.tree = self.lst.tree
         self.name_entry = _find(self.win, "Entry")
-        self.desc = _find(self.win, "Text", height="3")
-        self.text = next(w for w in _walk(self.win)
-                         if w.winfo_class() == "Text" and str(w.cget("height")) != "3")
+        # The skill text: the window's one text box since the description
+        # moved into the Description dialog (2026-10-31, tests/test_skill_description.py)
+        self.text = _find(self.win, "Text")
         self.buttons = {t: _find(self.win, "Button", text=t)
-                        for t in ("SAVE", "DELETE", "NEW", "Cycle Mode")}
+                        for t in ("SAVE", "DELETE", "NEW", "Cycle Mode", "Description")}
 
     def pump(self):
         self.root.update()
@@ -444,7 +444,7 @@ class DialogTests(_TkCase):
         self.lst.select(("page", "bank-b"))
         self.pump()
         self.assertEqual(self.name_entry.get(), "bank-b")
-        self.assertEqual(self.desc.get("1.0", "end-1c"), "Second bank skill.")
+        self.assertEqual(self.host._desc_draft(), "Second bank skill.")    # behind the Description button
         self.assertEqual(self.text.get("1.0", "end-1c"), "body b")
         self.text.insert("end", " DRAFT")
         self.buttons["Cycle Mode"].invoke()                       # on_demand → disabled

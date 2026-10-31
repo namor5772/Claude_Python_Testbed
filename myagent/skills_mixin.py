@@ -607,6 +607,155 @@ class SkillsMixin(PaneNotesMixin):
             collapsed = self._skills_collapsed_sections = set()
         return collapsed
 
+    # ── The Description dialog (2026-10-31) ─────────────────────────────
+    #
+    # A skill's description — the what + when trigger signal listed in the
+    # system prompt's on-demand skills index, one or two sentences, stored in
+    # its frontmatter as `description` — is edited in its own dialog, the
+    # Instruction Editor's Notes dialog's twin (the user's request; until then
+    # a three-row box under the Skills Manager's name row). The DRAFT is the
+    # string `_skill_desc_text` while the dialog is closed and the dialog's
+    # text box while it is open (`_desc_draft`), so SAVE reads what is typed
+    # either way; a skill selection, NEW and DELETE replace it
+    # (`_set_desc_draft`). One dialog at a time, over the Skills Manager,
+    # opened by the Description button right of Cycle Mode (Alt+E), placed
+    # and remembered like the other persisted windows (kind "skill_desc" →
+    # `skill_desc_dialog_geometry`), coloured and title-barred by Other Setup
+    # like every Toplevel.
+
+    def _desc_box(self):
+        """The open Description dialog's text widget, or None."""
+        dlg = getattr(self, "_desc_dialog", None)
+        box = getattr(self, "_desc_text", None)
+        try:
+            if dlg is not None and box is not None and dlg.winfo_exists():
+                return box
+        except tk.TclError:
+            pass
+        return None
+
+    def _desc_draft(self):
+        """The Skills Manager's description draft: the dialog's text while it
+        is open, else the string the last skill selection, NEW, DELETE or
+        dialog close left."""
+        box = self._desc_box()
+        if box is not None:
+            return box.get("1.0", "end-1c")
+        return getattr(self, "_skill_desc_text", "") or ""
+
+    def _set_desc_draft(self, text):
+        """Replace the draft — and what an open dialog shows, title included."""
+        self._skill_desc_text = text or ""
+        box = self._desc_box()
+        if box is not None:
+            box.delete("1.0", tk.END)
+            box.insert("1.0", self._skill_desc_text)
+            self._desc_dialog.title(self._desc_title())
+
+    def _desc_title(self):
+        """"Description — <skill>" after the Skills Manager's name box (the
+        skill loaded, or the name being typed for a new one); "Description"
+        with no name."""
+        name = ""
+        entry = getattr(self, "_skills_name_entry", None)
+        try:
+            if entry is not None:
+                name = entry.get().strip()
+        except (AttributeError, tk.TclError):
+            name = ""
+        return f"Description — {name}" if name else "Description"
+
+    def _open_desc_dialog(self):
+        """The Description button: open the dialog over the Skills Manager on
+        the draft, or raise the one already open."""
+        existing = getattr(self, "_desc_dialog", None)
+        try:
+            if existing is not None and existing.winfo_exists():
+                existing.lift()
+                existing.focus_force()
+                self._desc_text.focus_set()
+                return
+        except tk.TclError:
+            pass
+        parent = self.skills_editor_window if (
+            self.skills_editor_window and self.skills_editor_window.winfo_exists()
+        ) else self.root
+        dlg = tk.Toplevel(parent)
+        self._desc_dialog = dlg
+        dlg.withdraw()  # Hide until geometry is set to prevent flicker/repositioning
+        dlg.title(self._desc_title())
+        if IS_WINDOWS:
+            dlg.transient(parent)
+        dlg.resizable(True, True)
+        dlg.grid_rowconfigure(1, weight=1)
+        dlg.grid_columnconfigure(0, weight=1)
+
+        # The hint wraps to the dialog's width (the Notes dialog's pattern)
+        hint = tk.Label(
+            dlg, text="One or two sentences: what the skill does and when to use it — the trigger "
+                      "the system prompt's on-demand index lists. SAVE keeps it with the skill; "
+                      "line breaks become spaces.",
+            font=("Arial", 9), anchor="w", justify="left", wraplength=440,
+        )
+        hint.bind("<Configure>", lambda e: hint.config(wraplength=max(e.width - 4, 200)))
+        hint.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(12, 6))
+        # Prose, in the font the old box had (the Notes dialog's text is code-like)
+        self._desc_text = tk.Text(dlg, wrap=tk.WORD, font=("Arial", 10), undo=True)
+        self._desc_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 5))
+        desc_scrollbar = tk.Scrollbar(dlg, command=self._desc_text.yview)
+        desc_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 5))
+        self._desc_text.config(yscrollcommand=desc_scrollbar.set)
+        self._desc_text.insert("1.0", getattr(self, "_skill_desc_text", "") or "")
+
+        def close(event=None):
+            self._close_desc_dialog(save_state=True)
+            return "break"
+
+        close_btn = tk.Button(dlg, text="Close", width=10, command=close)
+        close_btn.grid(row=2, column=0, columnspan=2, pady=(5, 12))
+
+        dlg.protocol("WM_DELETE_WINDOW", close)
+        # Keyboard operation: Alt+E the text, Alt+C Close; Escape in the text
+        # lands on Close (the class binding) and Return presses it — no
+        # Escape-to-close, since the box is a draft.
+        bind_mnemonics(dlg, {"e": self._desc_text, "c": close_btn})
+
+        # Restore geometry AFTER all content is laid out, then show
+        dlg.update_idletasks()
+        # Room for the hint and four or five wrapped lines at the default:
+        # a two-sentence description runs to that at this width
+        self._place_window(dlg, "skill_desc", (560, 280), parent=parent, min_size=(300, 120))
+        dlg.deiconify()
+        # Initial focus: the text, cursor at the end of the description
+        self._desc_text.mark_set("insert", "end-1c")
+        self._desc_text.focus_set()
+
+    def _close_desc_dialog(self, save_state=False):
+        """Take the dialog's text into the draft, remember its geometry and
+        destroy it; a no-op with no dialog open. `save_state` writes the
+        state file at once (the dialog's own Close / [X]); the Skills
+        Manager's close, which saves itself, passes nothing."""
+        dlg = getattr(self, "_desc_dialog", None)
+        box = getattr(self, "_desc_text", None)
+        self._desc_dialog = None
+        self._desc_text = None
+        if dlg is None:
+            return
+        try:
+            if not dlg.winfo_exists():
+                return
+            if box is not None:
+                self._skill_desc_text = box.get("1.0", "end-1c")
+            self._remember_geometry("skill_desc", dlg)
+            dlg.destroy()
+        except tk.TclError:
+            return
+        if save_state:
+            try:
+                self._save_last_state()
+            except Exception:
+                pass
+
     def open_skills_editor(self):
         if self.skills_editor_window and self.skills_editor_window.winfo_exists():
             self.skills_editor_window.lift()
@@ -623,11 +772,16 @@ class SkillsMixin(PaneNotesMixin):
         self.skills_editor_window = win
 
         def _on_skills_close():
+            # The Description dialog first — its text lands in the draft the
+            # close discards with the rest, its geometry is remembered —
+            # then the window, which this close saves the state for itself
+            self._close_desc_dialog()
             self._remember_geometry("skills", win)
             self._save_last_state()      # reads the list pane's width while it exists
             win.destroy()
             self._skills_list_pane = None
             self._skills_list = None
+            self._skills_name_entry = None
 
         win.protocol("WM_DELETE_WINDOW", _on_skills_close)
 
@@ -637,6 +791,8 @@ class SkillsMixin(PaneNotesMixin):
         tk.Label(top, text="Skill", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5))
         name_entry = tk.Entry(top, font=("Arial", 10), width=20)
         name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self._skills_name_entry = name_entry     # the Description dialog's title follows it
+        self._set_desc_draft("")                  # a fresh Skills Manager: nothing loaded yet
 
         # The skill whose content the editor currently shows (set by the list
         # selection, cleared by NEW). SAVE under a DIFFERENT, NEW name is a
@@ -684,7 +840,9 @@ class SkillsMixin(PaneNotesMixin):
             entry = dict(self.skills.get(name, {}))
             entry["content"] = content
             entry.setdefault("mode", "disabled")
-            desc = " ".join(desc_entry.get("1.0", "end-1c").split())
+            # The description draft — the Description dialog's text while it
+            # is open — whitespace-collapsed: descriptions are single-line
+            desc = " ".join(self._desc_draft().split())
             if desc:
                 entry["description"] = desc
             else:
@@ -748,7 +906,7 @@ class SkillsMixin(PaneNotesMixin):
                 self._save_skills()
                 refresh_list()          # its row goes, and the selection with it
                 name_entry.delete(0, tk.END)
-                desc_entry.delete("1.0", tk.END)
+                self._set_desc_draft("")
                 text_editor.delete("1.0", tk.END)
                 if loaded["name"] == name:
                     loaded["name"] = None   # its fields were just cleared too
@@ -756,7 +914,7 @@ class SkillsMixin(PaneNotesMixin):
 
         def new_skill():
             name_entry.delete(0, tk.END)
-            desc_entry.delete("1.0", tk.END)
+            self._set_desc_draft("")
             text_editor.delete("1.0", tk.END)
             skills_list.select(None)
             loaded["name"] = None   # a fresh skill has no save-as source
@@ -779,27 +937,18 @@ class SkillsMixin(PaneNotesMixin):
                             font=SMALL_BUTTON_FONT)
         new_btn.pack(side=tk.LEFT, padx=2)
 
-        # Description row: the what+when trigger signal shown in the system
-        # prompt for on_demand skills (Agent-Skills style). Optional.
-        desc_row = tk.Frame(win)
-        desc_row.grid(row=1, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 5))
-        tk.Label(desc_row, text="Description", font=("Arial", 10)).pack(side=tk.LEFT, padx=(0, 5), anchor="n")
-        # Three word-wrapped rows so long what+when descriptions are readable
-        # (they routinely run to two sentences); newlines a user types here
-        # are normalized to spaces on SAVE — descriptions are single-line.
-        desc_entry = tk.Text(desc_row, font=("Arial", 10), height=3, wrap="word", undo=True)
-        desc_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
         # The list and the skill text share a sash (2026-10-23 — the
         # Instruction Editor's bottom row's twin): a PanedWindow whose list
         # pane's width is remembered per instance in agent_state.json as
         # skills_list_width (_save_last_state reads it off the pane while
         # the dialog is open, so the close and the periodic save both keep
         # it) and restored here; the first opening takes the 40-column
-        # list's natural width (tkinter drops a None option).
+        # list's natural width (tkinter drops a None option). Row 1 since
+        # 2026-10-31: the three-row Description box that stood between the
+        # name row and the panes became the Description dialog (below).
         paned = tk.PanedWindow(win, orient=tk.HORIZONTAL, sashwidth=5,
                                sashrelief="raised", bd=0)
-        paned.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
+        paned.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=10, pady=(0, 10))
         self._skills_list_pane = left = tk.Frame(paned)
         right = tk.Frame(paned)
         paned.add(left, width=getattr(self, "_skills_list_width", None), minsize=150)
@@ -807,9 +956,20 @@ class SkillsMixin(PaneNotesMixin):
         left.grid_rowconfigure(1, weight=1)
         left.grid_columnconfigure(0, weight=1)
 
-        # Cycle Mode sits ABOVE the list, sized to its label and left-aligned
-        toggle_btn = tk.Button(left, text="Cycle Mode", font=("Arial", 9))
-        toggle_btn.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        # Cycle Mode sits ABOVE the list, sized to its label and left-aligned,
+        # and since 2026-10-31 the Description button (the user's request)
+        # sits to its right: the Instruction Editor's Notes button's twin, it
+        # opens the Description dialog over the description draft
+        # (_open_desc_dialog) — where a three-row box under the name row
+        # showed the description until then. Created in that order, so Tab
+        # runs Cycle Mode → Description → the list.
+        mode_row = tk.Frame(left)
+        mode_row.grid(row=0, column=0, sticky="w", pady=(0, 5))
+        toggle_btn = tk.Button(mode_row, text="Cycle Mode", font=("Arial", 9))
+        toggle_btn.pack(side=tk.LEFT)
+        desc_btn = tk.Button(mode_row, text="Description", font=("Arial", 9),
+                             command=self._open_desc_dialog)
+        desc_btn.pack(side=tk.LEFT, padx=(5, 0))
 
         # The SKILLS list (2026-10-31): the Instructions list's twin — a
         # SectionedList (myagent/sectioned_list.py) over self.skills, every
@@ -844,8 +1004,8 @@ class SkillsMixin(PaneNotesMixin):
                 return
             name_entry.delete(0, tk.END)
             name_entry.insert(0, name)
-            desc_entry.delete("1.0", tk.END)
-            desc_entry.insert("1.0", self.skills[name].get("description", ""))
+            # After the name: the Description dialog's title follows it
+            self._set_desc_draft(self.skills[name].get("description", ""))
             text_editor.delete("1.0", tk.END)
             text_editor.insert("1.0", self.skills[name]["content"])
             loaded["name"] = name
@@ -908,7 +1068,7 @@ class SkillsMixin(PaneNotesMixin):
 
         win.grid_columnconfigure(0, weight=0)
         win.grid_columnconfigure(1, weight=1)
-        win.grid_rowconfigure(2, weight=1)
+        win.grid_rowconfigure(1, weight=1)
 
         refresh_list()
 
@@ -916,12 +1076,13 @@ class SkillsMixin(PaneNotesMixin):
         # buttons and fields (the letters are tabled in the README — nothing
         # is underlined), Ctrl+S = SAVE; Space on the list cycles the
         # selected skill's mode (above); the list's own keys (Enter, Alt+Up /
-        # Alt+Down) are bound by SectionedList. Escape / Ctrl+Tab leave the
+        # Alt+Down) are bound by SectionedList; Alt+E, the description box's
+        # letter, presses the Description button. Escape / Ctrl+Tab leave the
         # text boxes (class binding); the window never closes on Escape,
         # since closing discards unsaved edits.
         bind_mnemonics(win, {
             "s": save_btn, "d": delete_btn, "n": new_btn, "c": toggle_btn,
-            "k": name_entry, "e": desc_entry,
+            "k": name_entry, "e": desc_btn,
             "l": skills_list.tree, "t": text_editor,
             "o": skills_list.section_btn,
         })

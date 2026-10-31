@@ -102,7 +102,8 @@ class ParseAndVisibility(unittest.TestCase):
             "main": "geometry", "editor": "editor_geometry",
             "ps_safety": "ps_safety_dialog_geometry", "prompt": "prompt_dialog_geometry",
             "confirm": "confirm_dialog_geometry", "skills": "skills_dialog_geometry",
-            "notes": "notes_dialog_geometry"})      # the editor's Notes dialog, 2026-10-30
+            "notes": "notes_dialog_geometry",       # the editor's Notes dialog, 2026-10-30
+            "skill_desc": "skill_desc_dialog_geometry"})   # the Skills Manager's Description dialog, 2026-10-31
 
     def test_config_key_is_the_sorted_rects(self):
         with rects(DUAL):

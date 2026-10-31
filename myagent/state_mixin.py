@@ -33,6 +33,7 @@ GEOMETRY_KINDS = {
     "confirm": "confirm_dialog_geometry",
     "skills": "skills_dialog_geometry",
     "notes": "notes_dialog_geometry",       # the Instruction Editor's Notes dialog (2026-10-30)
+    "skill_desc": "skill_desc_dialog_geometry",   # the Skills Manager's Description dialog (2026-10-31)
 }
 # A saved position is usable only if enough of the window's title bar lands on
 # a real monitor to grab it: at least GEOMETRY_VISIBLE_W px wide, and at least
@@ -688,7 +689,8 @@ class StateMixin:
                  ("ps_safety", getattr(self, "_ps_safety_dialog", None)),
                  ("prompt", getattr(self, "_prompt_dialog", None)),
                  ("confirm", getattr(self, "_confirm_dialog", None)),
-                 ("notes", getattr(self, "_notes_dialog", None)))
+                 ("notes", getattr(self, "_notes_dialog", None)),
+                 ("skill_desc", getattr(self, "_desc_dialog", None)))
         out = []
         for kind, win in pairs:
             try:
