@@ -14,8 +14,8 @@ README.md, the shared helpers in myagent/keyboard.py, and the key bindings in
 each window's builder. This file is kept in step with them by hand: when a key
 changes, change the README table and this file together.
 
-Last revised: 2026-10-31 (the Notes and Description dialogs, the sectioned
-Skills list).
+Last revised: 2026-10-31 (the Notes and Description dialogs without their Close
+buttons, the sectioned Skills list).
 
 
 CONTENTS
@@ -64,7 +64,8 @@ Ctrl+Shift+Tab do the same forwards and backwards.
 
    Because Escape means "leave the field", NO window that holds a draft closes
    on Escape: the Instruction Editor, the Skills Manager, the Notes dialog and
-   the Description dialog close only through their own keys (section 18).
+   the Description dialog close only through Alt+F4, the editor also through
+   Apply (section 18).
    Windows where nothing can be lost DO close on Escape: the Safety dialog,
    the Confirm Command dialog (Escape = Deny), Voice Setup and Model Setup
    (Escape outside a field = Cancel), Other Setup and the Section... prompt
@@ -318,20 +319,18 @@ instruction by the editor's SAVE and never sent to the model. The dialog
 opens with the focus in the notes text, cursor at the end; its title names
 the instruction in the editor's name box.
 
-Tab order: text -> Close.
+The text is the dialog's only control; there is no Close button.
 
   Alt+N ....................... the notes text
-  Alt+C ....................... Close: keeps the text as the editor's Notes
-                                draft and remembers the window's size and
-                                position
-  Escape (in the text) ........ leaves the text and lands on Close
-  Enter (on Close) ............ presses it
-  Alt+F4 ...................... Close, exactly as the button
+  Alt+F4 ...................... close, exactly as the title-bar X: keeps the
+                                text as the editor's Notes draft and remembers
+                                the window's size and position
 
 What is typed is the editor's draft: SAVE in the editor stores it whether the
-dialog is open or closed; Close and X keep it. One Notes dialog at a time;
+dialog is open or closed; X and Alt+F4 keep it. One Notes dialog at a time;
 Alt+O in the editor brings the open one to the front with the focus in its
-text. Closing the editor closes it too. Escape never closes the dialog.
+text. Closing the editor closes it too. Escape does nothing here: it never
+closes the dialog, and the text has no neighbour to leave for.
 
 
 9. SKILLS MANAGER
@@ -394,20 +393,19 @@ two sentences: what the skill does and when to use it, the trigger the
 system prompt's on-demand index lists. The dialog opens with the focus in
 the description text, cursor at the end; its title names the skill.
 
-Tab order: text -> Close.
+The text is the dialog's only control; there is no Close button.
 
   Alt+E ....................... the description text
-  Alt+C ....................... Close: keeps the text as the Skills Manager's
-                                description draft and remembers the window's
-                                size and position
-  Escape (in the text) ........ leaves the text and lands on Close
-  Enter (on Close) ............ presses it
-  Alt+F4 ...................... Close, exactly as the button
+  Alt+F4 ...................... close, exactly as the title-bar X: keeps the
+                                text as the Skills Manager's description
+                                draft and remembers the window's size and
+                                position
 
 SAVE in the Skills Manager stores the text whether the dialog is open or
 closed (line breaks become spaces); selecting another skill replaces it; NEW
-and DELETE clear it; an open dialog follows, title included. Escape never
-closes the dialog.
+and DELETE clear it; an open dialog follows, title included. Escape does
+nothing here: it never closes the dialog, and the text has no neighbour to
+leave for.
 
 
 11. SAFETY DIALOG
@@ -630,12 +628,12 @@ Alt+F4 is what "Close" means for it; where it has Cancel, Alt+F4 cancels.
                                 Alt+A / Ctrl+Enter = Apply (commits and
                                 closes). No Close button; Escape never closes
                                 it; Alt+C is CLEAR
-  Notes dialog ................ Alt+C, or Escape then Enter, or Alt+F4; the
-                                draft is kept
+  Notes dialog ................ Alt+F4 only (no Close button); the draft is
+                                kept
   Skills Manager .............. Alt+F4 only. No Close button; Escape never
                                 closes it; Alt+C is Cycle Mode
-  Description dialog .......... Alt+C, or Escape then Enter, or Alt+F4; the
-                                draft is kept
+  Description dialog .......... Alt+F4 only (no Close button); the draft is
+                                kept
   Section... prompt ........... Enter = OK; Escape (anywhere), Alt+C or
                                 Alt+F4 = Cancel
   Safety dialog ............... Escape or Alt+F4
@@ -664,7 +662,7 @@ A. Run a saved instruction
 B. Write a new instruction, with notes, filed into a section
    Alt+I -> Alt+C (CLEAR: an empty editor) -> Alt+N, type the name -> Alt+E,
    type the text -> Escape -> Tab to the tool checkboxes, Space on each one
-   wanted -> Alt+O (Notes), type them, Alt+C (Close) -> Alt+S (SAVE; the new
+   wanted -> Alt+O (Notes), type them, Alt+F4 (close) -> Alt+S (SAVE; the new
    page lands where the list's selection is) -> Alt+L, Alt+T (Section...),
    type or pick the section, Enter -> Alt+A to apply, or Alt+F4 to leave it
    saved but not applied.
@@ -680,7 +678,7 @@ D. Change which skills a run may use
 
 E. Edit a skill and its description
    Alt+I -> Alt+K -> Up / Down to the skill -> Enter (into its text) -> edit
-   -> Alt+E (Description), type, Alt+C (Close) -> Ctrl+S -> Alt+F4 -> Alt+F4.
+   -> Alt+E (Description), type, Alt+F4 (close) -> Ctrl+S -> Alt+F4 -> Alt+F4.
 
 F. Let an instruction run a guarded command without asking
    Alt+I -> Alt+L, pick the page -> Alt+F (Safety) -> Down to the pattern ->

@@ -830,11 +830,12 @@ class InstructionsMixin:
     # `_instr_notes_text`, and the Notes dialog — the Notes button right of
     # Safety, Alt+O — is a window onto it: while open, its text box IS the
     # draft (the editor's SAVE with the dialog still open takes what is typed
-    # there), and closing it — Close, [X], or the editor closing — writes the
-    # box back into the string. Nothing here reaches the disk: the editor's
-    # SAVE does, as before, so the dialog has no Cancel; and by the keyboard
-    # contract (a window holding a draft never closes on Escape) Escape
-    # leaves the text box for the Close button, which Return presses. One
+    # there), and closing it — [X] / Alt+F4, or the editor closing — writes
+    # the box back into the string. Nothing here reaches the disk: the
+    # editor's SAVE does, as before, so the dialog has no Cancel, and since
+    # 2026-10-31 no Close button either (the user's request: the keys do it) —
+    # the text is its only control; by the keyboard contract (a window holding
+    # a draft never closes on Escape) Escape never closes it. One
     # dialog at a time (a second press raises it), placed and remembered like
     # the other persisted windows (`_place_window` / `_remember_geometry`,
     # kind "notes" — `notes_dialog_geometry` in the state file), coloured
@@ -917,9 +918,9 @@ class InstructionsMixin:
         hint.bind("<Configure>", lambda e: hint.config(wraplength=max(e.width - 4, 200)))
         hint.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(12, 6))
         self._notes_text = tk.Text(dlg, wrap=tk.WORD, font=(MONO_FONT, 10))
-        self._notes_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 5))
+        self._notes_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 15))
         notes_scrollbar = tk.Scrollbar(dlg, command=self._notes_text.yview)
-        notes_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 5))
+        notes_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 15))
         self._notes_text.config(yscrollcommand=notes_scrollbar.set)
         self._notes_text.insert("1.0", getattr(self, "_instr_notes_text", "") or "")
 
@@ -927,14 +928,13 @@ class InstructionsMixin:
             self._close_notes_dialog(save_state=True)
             return "break"
 
-        close_btn = tk.Button(dlg, text="Close", width=10, command=close)
-        close_btn.grid(row=2, column=0, columnspan=2, pady=(5, 12))
-
+        # The text is the dialog's only control: no Close button (2026-10-31,
+        # the user's request — the keys do it), as its parent the editor has
+        # none. [X] and Alt+F4 are the close (WM_DELETE_WINDOW), keeping the
+        # draft; no Escape-to-close, since the box is a draft (keyboard.py's
+        # rule), and Escape in the text goes nowhere — there is nothing else.
         dlg.protocol("WM_DELETE_WINDOW", close)
-        # Keyboard operation: Alt+N the text, Alt+C Close; Escape in the text
-        # lands on Close (the class binding) and Return presses it — no
-        # Escape-to-close, since the box is a draft.
-        bind_mnemonics(dlg, {"n": self._notes_text, "c": close_btn})
+        bind_mnemonics(dlg, {"n": self._notes_text})
 
         # Restore geometry AFTER all content is laid out, then show
         dlg.update_idletasks()
@@ -947,7 +947,7 @@ class InstructionsMixin:
     def _close_notes_dialog(self, save_state=False):
         """Take the dialog's text into the draft, remember its geometry and
         destroy it; a no-op with no dialog open. `save_state` writes the
-        state file at once (the dialog's own Close / [X], as the Safety
+        state file at once (the dialog's own [X] / Alt+F4, as the Safety
         dialog's and the Skills Manager's do); the editor's close, which
         saves itself, passes nothing."""
         dlg = getattr(self, "_notes_dialog", None)

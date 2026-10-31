@@ -847,9 +847,9 @@ class SkillsMixin(PaneNotesMixin):
         hint.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(12, 6))
         # Prose, in the font the old box had (the Notes dialog's text is code-like)
         self._desc_text = tk.Text(dlg, wrap=tk.WORD, font=("Arial", 10), undo=True)
-        self._desc_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 5))
+        self._desc_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 15))
         desc_scrollbar = tk.Scrollbar(dlg, command=self._desc_text.yview)
-        desc_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 5))
+        desc_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 15))
         self._desc_text.config(yscrollcommand=desc_scrollbar.set)
         self._desc_text.insert("1.0", getattr(self, "_skill_desc_text", "") or "")
 
@@ -857,14 +857,13 @@ class SkillsMixin(PaneNotesMixin):
             self._close_desc_dialog(save_state=True)
             return "break"
 
-        close_btn = tk.Button(dlg, text="Close", width=10, command=close)
-        close_btn.grid(row=2, column=0, columnspan=2, pady=(5, 12))
-
+        # The text is the dialog's only control: no Close button (2026-10-31,
+        # the user's request — the keys do it), as its parent the Skills
+        # Manager has none. [X] and Alt+F4 are the close (WM_DELETE_WINDOW),
+        # keeping the draft; no Escape-to-close, since the box is a draft
+        # (keyboard.py's rule), and Escape in the text goes nowhere.
         dlg.protocol("WM_DELETE_WINDOW", close)
-        # Keyboard operation: Alt+E the text, Alt+C Close; Escape in the text
-        # lands on Close (the class binding) and Return presses it — no
-        # Escape-to-close, since the box is a draft.
-        bind_mnemonics(dlg, {"e": self._desc_text, "c": close_btn})
+        bind_mnemonics(dlg, {"e": self._desc_text})
 
         # Restore geometry AFTER all content is laid out, then show
         dlg.update_idletasks()
@@ -879,7 +878,7 @@ class SkillsMixin(PaneNotesMixin):
     def _close_desc_dialog(self, save_state=False):
         """Take the dialog's text into the draft, remember its geometry and
         destroy it; a no-op with no dialog open. `save_state` writes the
-        state file at once (the dialog's own Close / [X]); the Skills
+        state file at once (the dialog's own [X] / Alt+F4); the Skills
         Manager's close, which saves itself, passes nothing."""
         dlg = getattr(self, "_desc_dialog", None)
         box = getattr(self, "_desc_text", None)

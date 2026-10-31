@@ -17,7 +17,8 @@ root; every disk-touching call stubbed):
   dropping the key;
 * the REAL dialog: opened on the draft with the cursor at the end and titled
   after the skill, a second press raising the one open, a skill selection
-  replacing what it shows (title included), Close and [X] taking the text
+  replacing what it shows (title included), [X] / Alt+F4 (no Close button
+  since 2026-10-31: the text is the only control) taking the text
   into the draft, remembering the geometry under the "skill_desc" kind and
   saving the state, the Skills Manager's close taking it along (text kept,
   geometry remembered, the manager's own save);
@@ -115,9 +116,13 @@ class _ManagerCase(unittest.TestCase):
         return self.host._desc_dialog
 
     @staticmethod
-    def close_button(dlg):
-        return next(w for w in dlg.winfo_children()
-                    if w.winfo_class() == "Button" and w.cget("text") == "Close")
+    def dialog_buttons(dlg):
+        return [w for w in dlg.winfo_children() if w.winfo_class() == "Button"]
+
+    @staticmethod
+    def close_as_x(dlg):
+        """What [X] and Alt+F4 do: the dialog's WM_DELETE_WINDOW handler."""
+        dlg.tk.call(dlg.protocol("WM_DELETE_WINDOW"))
 
 
 class LayoutTests(_ManagerCase):
@@ -152,7 +157,7 @@ class DraftTests(_ManagerCase):
         self.assertEqual(self.host.skills["bank-b"]["description"], "two lines")   # single-line in the store
         self.assertTrue(dlg.winfo_exists())                                 # SAVE leaves the dialog open
         self.assertEqual(self.host._desc_text.get("1.0", "end-1c"), "  two\n  lines  ")
-        self.close_button(dlg).invoke()
+        self.close_as_x(dlg)                                                # [X] / Alt+F4: no Close button
         self.assertEqual(self.host._skill_desc_text, "  two\n  lines  ")    # raw in the draft …
         self.buttons["SAVE"].invoke()
         self.assertEqual(self.host.skills["bank-b"]["description"], "two lines")   # … collapsed again
@@ -204,7 +209,11 @@ class DialogTests(_ManagerCase):
         self.assertEqual(box.index("insert"), box.index("end-1c"))
         # (the initial focus — the text — is pinned by the wiring scan: an
         # unmapped dialog on a withdrawn root records no focus to read back)
-        self.assertEqual(self.close_button(dlg).cget("text"), "Close")
+        # No Close button since 2026-10-31 (the user's request: the keys do it):
+        # the text is the dialog's only control, [X] / Alt+F4 the close.
+        self.assertEqual(self.dialog_buttons(dlg), [])
+        self.assertEqual([w.winfo_class() for w in dlg.winfo_children()
+                          if w.winfo_class() not in ("Label", "Scrollbar")], ["Text"])
         self.assertTrue(any(w.winfo_class() == "Scrollbar" for w in dlg.winfo_children()))
         self.buttons["Description"].invoke()                                # a second press
         self.assertIs(self.host._desc_dialog, dlg)
@@ -224,10 +233,10 @@ class DialogTests(_ManagerCase):
         self.pump()
         self.assertEqual(dlg.title(), "Description — bank-b")
 
-    def test_close_and_x_take_the_text_into_the_draft_remember_the_geometry_and_save_the_state(self):
+    def test_x_and_alt_f4_take_the_text_into_the_draft_remember_the_geometry_and_save_the_state(self):
         dlg = self.open()
         self.host._desc_text.insert("1.0", "kept on close")
-        self.close_button(dlg).invoke()
+        self.close_as_x(dlg)
         self.assertIsNone(self.host._desc_dialog)
         self.assertIsNone(self.host._desc_text)
         self.assertFalse(dlg.winfo_exists())
@@ -422,7 +431,9 @@ class WiringTests(unittest.TestCase):
         self.assertIn("dlg.resizable(True, True)", opened)
         self.assertIn("dlg.transient(parent)", opened)
         self.assertIn('dlg.protocol("WM_DELETE_WINDOW", close)', opened)
-        self.assertIn('bind_mnemonics(dlg, {"e": self._desc_text, "c": close_btn})', opened)
+        self.assertIn('bind_mnemonics(dlg, {"e": self._desc_text})', opened)
+        self.assertNotIn("tk.Button(", opened)                  # no Close button (2026-10-31): [X] / Alt+F4 close it
+        self.assertNotIn("close_btn", opened)
         self.assertNotIn("<Escape>", opened)                    # a draft: no Escape-to-close (keyboard.py's rule)
         self.assertIn("self._close_desc_dialog(save_state=True)", opened)
         self.assertRegex(opened, r'self\._desc_text = tk\.Text\(dlg, wrap=tk\.WORD, font=\("Arial", 10\), undo=True\)')

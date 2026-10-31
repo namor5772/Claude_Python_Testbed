@@ -616,7 +616,7 @@ DATE/TIME           MACHINE               PROVIDER  COST(USD) TIME(sec) CALLS   
 Every MyAgent window — the main window and every dialog — can be driven entirely from the keyboard. The same material as a plain-text reference of every keypress, with the Windows window keys, the end words, how each window closes and fifteen walkthroughs, is [`MyAgent_Keyboard_Reference.txt`](MyAgent_Keyboard_Reference.txt) in the repo root; the tables below and that file are kept in step by hand. Tk already makes every control a Tab stop; `myagent/keyboard.py` adds what Tk leaves out (a way out of a text box, Enter on buttons, Alt+letter shortcuts, and traversal of the Safety dialog's scrolled checkboxes). Three rules cover everything:
 
 1. **Tab / Shift+Tab move between controls**, in creation order — which is the visual order almost everywhere. The focused control is marked: buttons get a ring (on macOS the system's blue one; Windows also dots one around a focused checkbox), text fields show the blinking cursor, lists highlight the active row. Read-only panes (the main output pane, the confirm dialog's command box, the Agent Request's message) are Tab stops too, so they scroll and copy from the keyboard; scrollbars are not.
-2. **Escape leaves the field you are in — the safe way out of a text box.** Inside a text box Tab *types* a tab, so Escape moves the focus to the next control instead; it never inserts, deletes, submits or closes anything (Ctrl+Tab / Ctrl+Shift+Tab do the same forwards / backwards). The same Escape leaves a single-line entry, the temperature spinbox, a dropdown or the Instructions list. Because Escape is reserved for that, **no window that holds a draft closes on Escape**: the Instruction Editor and Skills Manager close only via [X] or Alt+F4 (and the editor via Apply). The dialogs where nothing can be lost do close on Escape — the Safety dialog (every toggle takes effect as it happens), the command-confirmation dialog (Escape = Deny), and Voice Setup, Model Setup and Other Setup (Escape = Cancel once you are out of a field).
+2. **Escape leaves the field you are in — the safe way out of a text box.** Inside a text box Tab *types* a tab, so Escape moves the focus to the next control instead; it never inserts, deletes, submits or closes anything (Ctrl+Tab / Ctrl+Shift+Tab do the same forwards / backwards). The same Escape leaves a single-line entry, the temperature spinbox, a dropdown or the Instructions list. Because Escape is reserved for that, **no window that holds a draft closes on Escape**: the Instruction Editor, the Skills Manager and their Notes and Description dialogs close only via [X] or Alt+F4 (and the editor via Apply) — the two dialogs have had no Close button since 2026-10-31, the keys being enough. The dialogs where nothing can be lost do close on Escape — the Safety dialog (every toggle takes effect as it happens), the command-confirmation dialog (Escape = Deny), and Voice Setup, Model Setup and Other Setup (Escape = Cancel once you are out of a field).
 3. **Enter presses the focused button, Space toggles the focused checkbox, and Alt+letter presses a button or jumps to a field from anywhere in its window.** The letters are listed per window below; they are deliberately not underlined, to keep the plain look. A disabled button ignores Enter and its Alt+letter just as it ignores a click.
 
 **Keys that work everywhere**
@@ -664,12 +664,12 @@ Every MyAgent window — the main window and every dialog — can be driven enti
 | Alt+O | Notes — opens the Notes dialog (below) on the instruction's notes: general information about it (what it is for, caveats, history), saved with it and never sent to the model |
 | Alt+E | the instruction text |
 
-**Notes dialog** (the editor's Notes button) — opens with the focus in the notes text, cursor at the end. Tab order: text → Close. What is typed is the editor's draft: SAVE in the editor stores it, with the dialog open or closed; Close and [X] keep it. Escape leaves the text and never closes the dialog (the text is a draft).
+**Notes dialog** (the editor's Notes button) — opens with the focus in the notes text, cursor at the end. The text is the dialog's only control: there is no Close button (since 2026-10-31). What is typed is the editor's draft: SAVE in the editor stores it, with the dialog open or closed; [X] and Alt+F4 keep it. Escape never closes the dialog (the text is a draft), and in the text it has nowhere else to go.
 
 | Key | Does |
 |---|---|
 | Alt+N | the notes text |
-| Alt+C, Enter on Close | Close — keeps the text as the editor's Notes draft and remembers the window's size and position |
+| Alt+F4 | close, exactly as the X — keeps the text as the editor's Notes draft and remembers the window's size and position |
 
 **Skills Manager** — opens with the focus on the skill list. Tab order: list → ▲ → ▼ → Section… → skill text → name → SAVE → DELETE → NEW → Cycle Mode → Description → list.
 
@@ -688,12 +688,12 @@ Every MyAgent window — the main window and every dialog — can be driven enti
 | Alt+D | DELETE (asks first) |
 | Alt+N | NEW — clears the fields for a fresh skill |
 
-**Description dialog** (the Skills Manager's Description button) — opens with the focus in the description text, cursor at the end. Tab order: text → Close. What is typed is the Skills Manager's draft: SAVE stores it, with the dialog open or closed (line breaks become spaces); Close and [X] keep it; selecting another skill replaces it. Escape leaves the text and never closes the dialog (the text is a draft).
+**Description dialog** (the Skills Manager's Description button) — opens with the focus in the description text, cursor at the end. The text is the dialog's only control: there is no Close button (since 2026-10-31). What is typed is the Skills Manager's draft: SAVE stores it, with the dialog open or closed (line breaks become spaces); [X] and Alt+F4 keep it; selecting another skill replaces it. Escape never closes the dialog (the text is a draft), and in the text it has nowhere else to go.
 
 | Key | Does |
 |---|---|
 | Alt+E | the description text |
-| Alt+C, Enter on Close | Close — keeps the text as the Skills Manager's description draft and remembers the window's size and position |
+| Alt+F4 | close, exactly as the X — keeps the text as the Skills Manager's description draft and remembers the window's size and position |
 
 **Safety dialog** — opens with the focus on the first checkbox.
 

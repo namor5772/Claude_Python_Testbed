@@ -14,7 +14,8 @@ Apply sets the live value without a store write); the REAL Notes dialog on a
 mapped transparent root — opened on the draft with the cursor at the end and
 titled after the instruction, its text the draft the editor's SAVE reads
 while it is open, a page selection replacing what it shows (title included),
-Close and [X] taking the text into the draft, remembering the geometry under
+[X] / Alt+F4 taking the text into the draft (no Close button since
+2026-10-31, the user's request: the text is the only control), remembering the geometry under
 the "notes" kind and saving the state, a second press raising the one open,
 the editor's close taking it along with its text kept and its geometry
 remembered; the -l / relaunch restore; and a wiring scan — the button
@@ -245,9 +246,13 @@ class NotesDialogTests(_WidgetCase):
         return dlg
 
     @staticmethod
-    def close_button(dlg):
-        return next(w for w in dlg.winfo_children()
-                    if w.winfo_class() == "Button" and w.cget("text") == "Close")
+    def dialog_buttons(dlg):
+        return [w for w in dlg.winfo_children() if w.winfo_class() == "Button"]
+
+    @staticmethod
+    def close_as_x(dlg):
+        """What [X] and Alt+F4 do: the dialog's WM_DELETE_WINDOW handler."""
+        dlg.tk.call(dlg.protocol("WM_DELETE_WINDOW"))
 
     def test_opens_on_the_draft_cursor_at_the_end_titled_after_the_instruction(self):
         h = self.editor_host({})
@@ -259,7 +264,11 @@ class NotesDialogTests(_WidgetCase):
         self.assertEqual(dlg.title(), "Notes — Page")
         self.assertIs(dlg.focus_lastfor(), h._notes_text)       # the initial focus: the text
         self.assertEqual(str(dlg.cget("width")) if False else dlg.winfo_class(), "Toplevel")
-        self.assertEqual(self.close_button(dlg).cget("text"), "Close")
+        # No Close button since 2026-10-31 (the user's request: the keys do it):
+        # the text is the dialog's only control, [X] / Alt+F4 the close.
+        self.assertEqual(self.dialog_buttons(dlg), [])
+        self.assertEqual([w.winfo_class() for w in dlg.winfo_children()
+                          if w.winfo_class() not in ("Label", "Scrollbar")], ["Text"])
 
     def test_without_a_name_the_title_is_notes_alone(self):
         h = self.editor_host({})
@@ -302,11 +311,11 @@ class NotesDialogTests(_WidgetCase):
         h._set_notes_draft("")
         self.assertEqual((h._notes_text.get("1.0", "end-1c"), dlg.title()), ("", "Notes"))
 
-    def test_close_takes_the_text_into_the_draft_remembers_the_geometry_and_saves_the_state(self):
+    def test_x_and_alt_f4_take_the_text_into_the_draft_remember_the_geometry_and_save_the_state(self):
         h = self.editor_host({})
         dlg = self.shown(h)
         h._notes_text.insert("1.0", "kept on close")
-        self.close_button(dlg).invoke()
+        self.close_as_x(dlg)
         self.assertIsNone(h._notes_dialog)
         self.assertIsNone(h._notes_text)
         self.assertFalse(dlg.winfo_exists())
@@ -315,7 +324,7 @@ class NotesDialogTests(_WidgetCase):
         self.assertRegex(h._geo_cache().get("notes", ""), r"^\d+x\d+[+-]\d+[+-]\d+$")
         self.assertEqual(h.saved, [1])
 
-    def test_x_goes_the_same_way_and_the_draft_reopens_in_a_new_dialog(self):
+    def test_the_draft_reopens_in_a_new_dialog(self):
         h = self.editor_host({})
         dlg = self.shown(h)
         h._notes_text.insert("1.0", "typed, then [X]")
@@ -400,7 +409,9 @@ class WiringTests(unittest.TestCase):
         self.assertIn("dlg.resizable(True, True)", opened)
         self.assertIn("dlg.transient(parent)", opened)
         self.assertIn('dlg.protocol("WM_DELETE_WINDOW", close)', opened)
-        self.assertIn('bind_mnemonics(dlg, {"n": self._notes_text, "c": close_btn})', opened)
+        self.assertIn('bind_mnemonics(dlg, {"n": self._notes_text})', opened)
+        self.assertNotIn("tk.Button(", opened)                  # no Close button (2026-10-31): [X] / Alt+F4 close it
+        self.assertNotIn("close_btn", opened)
         self.assertNotIn("<Escape>", opened)                    # a draft: no Escape-to-close (keyboard.py's rule)
         self.assertIn('self._close_notes_dialog(save_state=True)', opened)
         self.assertRegex(opened, r"self\._notes_text = tk\.Text\(dlg, wrap=tk\.WORD, font=\(MONO_FONT, 10\)\)")
