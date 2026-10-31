@@ -17,7 +17,21 @@ adds only the three things Tk leaves out, plus two workarounds:
 * **Alt+letter accelerators** (`bind_mnemonics`): Alt+<letter> anywhere in a
   window presses a button or focuses a field. No underline cue is drawn on
   the widgets (the user prefers the plain look); the letters are documented
-  per window in the README's Keyboard operation section.
+  per window in the README's Keyboard operation section. **On macOS the key
+  is Command** (`mnemonic_sequence`): Tk on aqua has no Alt modifier at all —
+  an `<Alt-…>` binding never fires there, and Option+letter arrives as the
+  layout's accented character (measured 2026-10-31) — and the letters whose
+  Cmd+letter macOS or Tk's own menus already own (`MAC_COMMAND_RESERVED`:
+  Select All, Copy, Paste, Cut, Undo, Close, Quit, Minimize, Hide) take
+  Cmd+Shift+letter, so Cmd+C still copies and Cmd+M still minimises. The
+  sectioned lists' Alt+Up / Alt+Down are Cmd+Up / Cmd+Down there
+  (`list_move_sequences`).
+* `install_quit_handler`: on macOS Cmd+Q (the application menu's Quit) runs
+  the window's close handler instead of ending the process. Tk calls
+  `::tk::mac::Quit` when that command exists and plain `exit` when it does
+  not — measured 2026-10-31: Cmd+Q ended MyAgent at once, WM_DELETE_WINDOW
+  never ran, so the state file, the chat save and the instance lock were all
+  skipped.
 * `link_embedded_checkbuttons`: the Safety dialog keeps its checkbuttons inside
   a scrolled Text, and Tk's Tab traversal skips a widget scrolled out of view,
   so Tab / Shift+Tab / Down / Up step through them and scroll each into view.
@@ -52,6 +66,64 @@ _INVOKE = {
 }
 
 _FIELD_CLASSES = ("Text", "Entry", "Spinbox", "TCombobox", "Treeview")
+
+# The bit Tk sets in event.state for Shift, on every platform.
+SHIFT_MASK = 0x1
+
+# Command+letter combinations macOS and Tk's own aqua menus already own:
+# Select All / Copy / Paste / Cut / Undo (the Edit menu), Close, Quit,
+# Minimize, Hide. A mnemonic on one of these letters is Cmd+Shift+letter on
+# the Mac, so the system meaning stays: a Cmd+C in a text box copies and a
+# Cmd+M minimises the window — both ALSO reach Tk's key bindings (measured
+# 2026-10-31), which is why the plain combination must be left alone here.
+MAC_COMMAND_RESERVED = frozenset("acvxzwqmh")
+
+
+def is_aqua(widget):
+    """True on macOS (Tk's aqua windowing system)."""
+    return widget.tk.call("tk", "windowingsystem") == "aqua"
+
+
+def mnemonic_sequence(widget):
+    """The event a window's mnemonics are bound to: Alt+key on Windows / X11,
+    Command+key on macOS — Tk on aqua has no Alt modifier (an <Alt-…>
+    binding never fires; Option is its own modifier, Mod2, and Option+S
+    arrives as ß), while Cmd+S arrives as keysym `s` with the Command bit."""
+    return "<Command-KeyPress>" if is_aqua(widget) else "<Alt-KeyPress>"
+
+
+def list_move_sequences(widget):
+    """The two events that move a row in the sectioned lists: Alt+Up /
+    Alt+Down, or Cmd+Up / Cmd+Down on macOS, for the same reason."""
+    if is_aqua(widget):
+        return ("<Command-Up>", "<Command-Down>")
+    return ("<Alt-Up>", "<Alt-Down>")
+
+
+def mnemonic_letter(keysym, state, aqua):
+    """The mnemonic letter a key event asks for — lower-cased, so Shift does
+    not matter — or None when the event is not a mnemonic at all: on the Mac
+    a reserved letter WITHOUT Shift (the system's own Cmd+C, Cmd+M …), which
+    is left to Tk's and macOS's bindings."""
+    letter = keysym.lower()
+    if aqua and letter in MAC_COMMAND_RESERVED and not state & SHIFT_MASK:
+        return None
+    return letter
+
+
+def install_quit_handler(root, handler):
+    """macOS: Cmd+Q runs `handler` instead of ending the process.
+
+    Tk's application menu calls ::tk::mac::Quit when the command exists and
+    plain exit when it does not, so without this a Cmd+Q skipped MyAgent's
+    whole close sequence. Installed beside the WM_DELETE_WINDOW protocol with
+    the same handler, so [X], Cmd+W and Cmd+Q are one close. Returns True
+    where installed; a no-op elsewhere.
+    """
+    if not is_aqua(root):
+        return False
+    root.createcommand("::tk::mac::Quit", handler)
+    return True
 
 
 def install_focus_ring_defaults(root):
@@ -150,14 +222,17 @@ def press(widget):
 
 
 def bind_mnemonics(window, mapping):
-    """Alt+<letter> accelerators for one window.
+    """Alt+<letter> accelerators for one window — Cmd+<letter> on macOS.
 
     `mapping` maps a letter to a target widget. Alt+<letter> anywhere in
     `window` presses the target if it is a button / checkbutton (a no-op
     while it is disabled, like a click), or focuses it otherwise. Letters
     are case-insensitive and must be unique within the window. Nothing is
     drawn on the widgets: no underline cue (the user prefers the plain
-    look), so the letters are documented per window in the README.
+    look), so the letters are documented per window in the README. On the
+    Mac the modifier is Command (`mnemonic_sequence`) and a letter in
+    `MAC_COMMAND_RESERVED` needs Shift as well (`mnemonic_letter`), so the
+    same letters serve both platforms.
     """
     targets = {}
     for letter, target in mapping.items():
@@ -165,9 +240,11 @@ def bind_mnemonics(window, mapping):
         if letter in targets:
             raise ValueError(f"duplicate mnemonic {letter!r} in {window}")
         targets[letter] = target
+    aqua = is_aqua(window)
 
-    def on_alt(event):
-        target = targets.get(event.keysym.lower())
+    def on_key(event):
+        state = event.state if isinstance(event.state, int) else 0
+        target = targets.get(mnemonic_letter(event.keysym, state, aqua))
         if target is None or not target.winfo_exists():
             return None
         if target.winfo_class() in _INVOKE:
@@ -176,7 +253,7 @@ def bind_mnemonics(window, mapping):
             target.focus_set()
         return "break"
 
-    window.bind("<Alt-KeyPress>", on_alt)
+    window.bind(mnemonic_sequence(window), on_key)
     return targets
 
 

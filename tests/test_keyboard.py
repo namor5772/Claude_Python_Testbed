@@ -175,6 +175,15 @@ class MnemonicTests(_TkCase):
             "i": self.button, "h": self.check, "c": self.entry, "e": self.text, "p": self.combo,
         })
 
+    def mn(self, letter):
+        """The sequence that is this letter's mnemonic on THIS platform:
+        Alt+letter, or on the Mac Cmd+letter — Cmd+Shift+letter for a letter
+        macOS owns (the test's "c" and "h" are two of them)."""
+        if keyboard.is_aqua(self.root):
+            shift = "Shift-" if letter.lower() in keyboard.MAC_COMMAND_RESERVED else ""
+            return f"<Command-{shift}{letter}>"
+        return f"<Alt-{letter}>"
+
     def test_no_underline_cue_is_drawn(self):
         # The user prefers plain buttons: the letters live in the README, not
         # on the widgets. Tk's "no underline" reads back as -1 on Tk 8.6 and
@@ -184,32 +193,111 @@ class MnemonicTests(_TkCase):
 
     def test_alt_letter_presses_toggles_or_focuses_from_anywhere_in_the_window(self):
         self.focus(self.entry)
-        self.key(self.entry, "<Alt-i>", seconds=0.25)
+        self.key(self.entry, self.mn("i"), seconds=0.25)
         self.assertEqual(self.pressed, ["instruction"])
-        self.key(self.entry, "<Alt-h>")
+        self.key(self.entry, self.mn("h"))
         self.assertTrue(self.flag.get())
         self.focus(self.text)
-        self.key(self.text, "<Alt-c>")
+        self.key(self.text, self.mn("c"))
         self.assertIs(self.root.focus_get(), self.entry)
-        self.key(self.entry, "<Alt-E>")  # case-insensitive
+        self.key(self.entry, self.mn("E"))  # case-insensitive
         self.assertIs(self.root.focus_get(), self.text)
 
     def test_a_combobox_target_is_focused(self):
         self.focus(self.entry)
-        self.key(self.entry, "<Alt-p>")
+        self.key(self.entry, self.mn("p"))
         self.assertIs(self.root.focus_get(), self.combo)
 
     def test_a_disabled_button_and_an_unbound_letter_do_nothing(self):
         self.button.config(state="disabled")
         self.focus(self.entry)
-        self.key(self.entry, "<Alt-i>", seconds=0.25)
-        self.key(self.entry, "<Alt-z>")
+        self.key(self.entry, self.mn("i"), seconds=0.25)
+        self.key(self.entry, self.mn("y"))
         self.assertEqual(self.pressed, [])
         self.assertIs(self.root.focus_get(), self.entry)
 
     def test_duplicate_letters_are_rejected(self):
         with self.assertRaises(ValueError):
             keyboard.bind_mnemonics(self.root, {"a": self.button, "A": self.entry})
+
+    def test_the_binding_is_command_on_the_mac_and_alt_elsewhere(self):
+        seq = keyboard.mnemonic_sequence(self.root)
+        self.assertEqual(seq, "<Command-KeyPress>" if keyboard.is_aqua(self.root) else "<Alt-KeyPress>")
+        self.assertTrue(self.root.bind(seq))
+        other = "<Alt-KeyPress>" if seq.startswith("<Command") else "<Command-KeyPress>"
+        self.assertFalse(self.root.bind(other))
+
+    def test_on_the_mac_a_reserved_letter_without_shift_is_left_to_the_system(self):
+        # Cmd+C in a text box must still copy (and Cmd+M minimise): the plain
+        # combination reaches Tk's bindings too, so the mnemonic steps aside
+        # and Cmd+Shift+C is the window's "c".
+        if not keyboard.is_aqua(self.root):
+            self.skipTest("the reserved letters are a macOS rule")
+        self.focus(self.text)
+        self.key(self.text, "<Command-c>")
+        self.assertIs(self.root.focus_get(), self.text)
+        self.key(self.text, "<Command-Shift-C>")
+        self.assertIs(self.root.focus_get(), self.entry)
+        self.key(self.entry, "<Command-e>")                     # not reserved: no Shift needed
+        self.assertIs(self.root.focus_get(), self.text)
+
+
+class MnemonicLetterTests(unittest.TestCase):
+    """The pure rule behind the handler, no Tk: which letter an event asks for."""
+
+    def test_windows_takes_every_letter_shift_or_not(self):
+        for keysym, state in (("c", 0), ("C", keyboard.SHIFT_MASK), ("m", 0), ("s", 0)):
+            self.assertEqual(keyboard.mnemonic_letter(keysym, state, aqua=False), keysym.lower())
+
+    def test_the_mac_leaves_a_reserved_letter_to_the_system_unless_shifted(self):
+        for letter in sorted(keyboard.MAC_COMMAND_RESERVED):
+            self.assertIsNone(keyboard.mnemonic_letter(letter, 0, aqua=True), letter)
+            self.assertIsNone(keyboard.mnemonic_letter(letter, 0x8, aqua=True), letter)   # Command alone
+            self.assertEqual(keyboard.mnemonic_letter(letter.upper(), 0x9, aqua=True), letter)
+        for letter in "sdeiokl":                                  # the rest: Shift optional
+            self.assertEqual(keyboard.mnemonic_letter(letter, 0x8, aqua=True), letter)
+            self.assertEqual(keyboard.mnemonic_letter(letter.upper(), 0x9, aqua=True), letter)
+
+    def test_the_reserved_set_is_what_macos_and_tk_own(self):
+        # Edit menu (a c v x z), Close (w), Quit (q), Minimize (m), Hide (h) —
+        # and it covers every letter MyAgent's windows use among them.
+        self.assertEqual(keyboard.MAC_COMMAND_RESERVED, frozenset("acvxzwqmh"))
+        self.assertEqual(keyboard.SHIFT_MASK, 1)
+
+
+class QuitHandlerTests(unittest.TestCase):
+    """Cmd+Q runs the close handler on the Mac; nothing is installed elsewhere."""
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.withdraw()
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_the_mac_gets_tk_mac_quit_bound_to_the_handler(self):
+        calls = []
+        installed = keyboard.install_quit_handler(self.root, lambda: calls.append("close"))
+        exists = self.root.tk.splitlist(self.root.tk.call("info", "commands", "::tk::mac::Quit"))
+        if keyboard.is_aqua(self.root):
+            self.assertTrue(installed)
+            self.assertEqual(exists, ("::tk::mac::Quit",))
+            self.root.tk.call("::tk::mac::Quit")        # what Tk's Quit menu item calls
+            self.assertEqual(calls, ["close"])
+        else:
+            self.assertFalse(installed)
+            self.assertEqual(exists, ())
+            self.assertEqual(calls, [])
+
+    def test_the_list_moves_follow_the_platform(self):
+        seqs = keyboard.list_move_sequences(self.root)
+        if keyboard.is_aqua(self.root):
+            self.assertEqual(seqs, ("<Command-Up>", "<Command-Down>"))
+        else:
+            self.assertEqual(seqs, ("<Alt-Up>", "<Alt-Down>"))
 
 
 class EmbeddedCheckbuttonTests(_TkCase):
@@ -355,6 +443,19 @@ class WiringTests(unittest.TestCase):
         for name, text in src.items():
             self.assertIn("bind_mnemonics(", text, name)
         self.assertIn("link_embedded_checkbuttons(text_widget, cbs)", src["safety_mixin.py"])
+        # The Mac has no Alt modifier: every mnemonic goes through
+        # bind_mnemonics (which picks Command there) and the lists' moves
+        # through list_move_sequences — no literal <Alt-…> binding anywhere.
+        package = {p.name: p.read_text(encoding="utf-8") for p in (REPO / "myagent").glob("*.py")}
+        for name, text in package.items():
+            if name != "keyboard.py":
+                self.assertNotIn("<Alt-", text, name)
+        self.assertIn("list_move_sequences(tree)", package["sectioned_list.py"])
+        # Cmd+Q is the same close as [X]: the Quit hook sits beside the
+        # WM_DELETE_WINDOW protocol, with the same handler.
+        entry = (REPO / "MyAgent.py").read_text(encoding="utf-8")
+        protocol = entry.index('protocol("WM_DELETE_WINDOW", self._on_close)')
+        self.assertIn("install_quit_handler(self.root, self._on_close)", entry[protocol:protocol + 400])
         # The read-only panes stay Tab stops (a disabled widget is skipped otherwise).
         self.assertEqual(src["ui_mixin.py"].count("takefocus=1,"), 1)
         self.assertEqual(src["safety_mixin.py"].count("takefocus=1,"), 2)

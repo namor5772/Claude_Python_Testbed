@@ -5,9 +5,14 @@ Every keypress needed to operate and navigate MyAgent with the keyboard alone:
 no mouse, no touchpad, no touch screen. Voice input appears where it is one of
 the options the keyboard drives (the Mike button), never as a requirement.
 
-Windows is the verified platform. Section 21 covers what is known about the
-Mac. Keys are written as pressed together with a plus sign (Alt+S) and one
-after the other with a comma (Alt+Space, M).
+Sections 1-20 are written for Windows, the verified platform. Section 21 is
+the Mac, measured on 2026-10-31: Tk there has no Alt modifier, so since that
+day MyAgent binds the shortcuts to Command on the Mac — read every Alt+letter
+below as Cmd+letter, with Shift added for the four letters macOS owns (A, C,
+M, V: Cmd+Shift+C is CLEAR), Alt+Up / Alt+Down as Cmd+Up / Cmd+Down, and Alt+F4
+as Cmd+W; Cmd+Q is the main window's close too. Keys are written as pressed
+together with a plus sign (Alt+S) and one after the other with a comma
+(Alt+Space, M).
 
 Sources of truth: the per-window tables under "Keyboard operation" in
 README.md, the shared helpers in myagent/keyboard.py, and the key bindings in
@@ -15,7 +20,9 @@ each window's builder. This file is kept in step with them by hand: when a key
 changes, change the README table and this file together.
 
 Last revised: 2026-10-31 (the Notes and Description dialogs without their Close
-buttons, the sectioned Skills list).
+buttons, the sectioned Skills list; section 21 rewritten from measurements on
+the M4 Mac Mini — Tk 9.0.3 / aqua, macOS 26 — and the Mac's Command layer
+and Cmd+Q close, added the same day).
 
 
 CONTENTS
@@ -77,6 +84,8 @@ anywhere in its window. The letters belong to one window each and are listed
 per window below; they are deliberately not underlined on the screen.
 A disabled button ignores Enter, Space and its Alt+letter exactly as it
 ignores a click. A dialog's Alt+letters never reach the window behind it.
+(On the Mac the key is Cmd+letter, Cmd+Shift+letter for A, C, M and V —
+section 21.1.)
 
 
 2. KEYS THAT WORK IN EVERY WINDOW
@@ -98,12 +107,14 @@ ignores a click. A dialog's Alt+letters never reach the window behind it.
   Arrows, PgUp / PgDn, Ctrl+Home / Ctrl+End, Shift+arrows, Ctrl+C
       (in a read-only pane) ... scroll, select, copy
   Alt+F4 ...................... close the window, exactly as its title-bar X
-                                does (the same handler runs)
+                                does (the same handler runs). The Mac: Cmd+W
+                                (section 21.2)
 
 Inside an editable text box the usual editing keys apply: arrows, Home / End,
 Ctrl+Home / Ctrl+End, Shift+arrows to select, Ctrl+A, Ctrl+C / Ctrl+X /
 Ctrl+V, Ctrl+Z / Ctrl+Y where the box keeps an undo history (the Description
-dialog's does), Delete / Backspace, Ctrl+Left / Ctrl+Right by word.
+dialog's does), Delete / Backspace, Ctrl+Left / Ctrl+Right by word. On the
+Mac these are Command keys (section 21.3).
 
 
 3. STARTING, SWITCHING, MOVING AND CLOSING WINDOWS (WINDOWS ITSELF)
@@ -284,7 +295,8 @@ in sections; unfiled pages sit last, under "Unfiled".
   Alt+Up / Alt+Down ........... move the selected page or section one step;
                                 a page at its section's edge steps into the
                                 neighbouring section. The up-arrow and
-                                down-arrow buttons do the same
+                                down-arrow buttons do the same (the Mac:
+                                Cmd+Up / Cmd+Down)
   Alt+T, or Enter on Section... file the selected page into a section, or
                                 rename the selected section (section 7)
   Escape ...................... leave the list for the next control
@@ -356,6 +368,7 @@ name -> SAVE -> DELETE -> NEW -> Cycle Mode -> Description -> list.
                                 on-demand -> disabled, saved at once; on a
                                 header, fold / unfold it
   Alt+Up / Alt+Down ........... move the selected skill or section one step
+                                (the Mac: Cmd+Up / Cmd+Down)
   Alt+C ....................... Cycle Mode: the same cycle, from anywhere in
                                 the window. NOT "Close"
   Alt+E ....................... Description: the Description dialog
@@ -599,7 +612,7 @@ move in the grid; Enter is OK and Escape is Cancel.
 
 Yes / No questions (Replace instruction?, Delete instruction, Delete skill,
 the skill-name offer, the destructive mail-action confirmations during a
-run):
+run) — on Windows (the Mac's boxes: section 21.8):
   Tab or Left / Right ......... move between the buttons
   Enter ....................... press the highlighted button
   Y / N ....................... answer directly (Windows)
@@ -621,6 +634,9 @@ select several; Alt+N returns to File name; Escape cancels.
 
 Alt+F4 closes any MyAgent window as its X does. Where a window has a draft,
 Alt+F4 is what "Close" means for it; where it has Cancel, Alt+F4 cancels.
+On the Mac read Cmd+W for Alt+F4 throughout this section, Cmd+Shift+C for
+Alt+C and Cmd+Shift+A for Alt+A; Cmd+Q is the main window's close as well
+(section 21.2).
 
   Main window ................. Alt+F4 (MyAgent closes: a run stopped, the
                                 state and chat saved)
@@ -738,7 +754,8 @@ O. Close everything and quit
                                 Section...
   The mouse wheel ............. has one: Tab to the pane, then the arrows or
                                 PgUp / PgDn
-  Window moving and sizing .... Windows' own Alt+Space menu (section 3)
+  Window moving and sizing .... Windows' own Alt+Space menu (section 3); the
+                                Mac has no keyboard window-move (21.2)
 
 Nothing else in MyAgent needs a pointer: every button, box, list and field is
 a Tab stop or has an Alt+letter, and every window closes from the keyboard.
@@ -747,18 +764,238 @@ a Tab stop or has an Alt+letter, and every window closes from the keyboard.
 21. macOS NOTES
 ---------------
 
-The keys above are verified on Windows, and the README's tables name Windows
-keys only. What is known about the Mac:
+Measured on the M4 Mac Mini on 2026-10-31 — macOS 26, Tk 9.0.3 (aqua), the
+Australian keyboard layout — by sending real keystrokes to a Tk window built
+from MyAgent's widget classes with MyAgent's own keyboard helpers installed;
+the Command layer and the Cmd+Q close of 21.1 / 21.2 were added the same day
+from what was found. One thing resisted measurement: the native Yes / No
+boxes (21.8). Where this section and sections 1-20 differ, this section is
+the Mac.
 
-  - Tk reports the Option key as Alt, so the Alt+letter shortcuts are
-    Option+letter in principle; this is unverified, and on many layouts
-    Option+letter also types an accented character.
-  - Alt+F4 does not exist there. Nothing in MyAgent binds Cmd+W or Cmd+Q, and
-    whether Tk's own menus supply them has not been checked; the title-bar
-    close button remains the documented way to close a draft window.
-  - A focused button shows the system's rounded blue ring; a focused checkbox
-    shows no cue at all.
-  - Scrollbars are kept out of the Tab order on both platforms since
-    2026-09-26.
-  - Tab, Shift+Tab, Escape (leave the field), Enter and Space behave as on
-    Windows: they are Tk's own bindings and MyAgent's class bindings.
+21.1 The shortcuts are Cmd+letter — Cmd+Shift+letter for A, C, M and V
+
+  Tk on macOS has no Alt modifier. Option arrives as a modifier of its own
+  (Tk calls it Option, or Mod2) and TYPES: Tk sees the character the layout
+  gives the combination (Option+S is ß, Option+A å, Option+C ç) or a dead
+  key (Option+E, I, N, U), and in a text box that character is inserted. A
+  binding written for Alt never fires there, which until 2026-10-31 left
+  every Alt+letter of sections 4-16 and the lists' Alt+Up / Alt+Down dead on
+  the Mac. Since that day MyAgent binds them to Command on the Mac
+  (keyboard.py: mnemonic_sequence, list_move_sequences):
+
+    Cmd+letter ................ every shortcut written Alt+letter in sections
+                                4-16, the same letter — except
+    Cmd+Shift+letter .......... for the letters macOS and Tk's own menus
+                                already own with Command: A (Select All),
+                                C (Copy), M (Minimize), V (Paste) — and H, Q,
+                                W, X, Z, which no window uses. So Alt+C is
+                                Cmd+Shift+C, Alt+A Cmd+Shift+A, Alt+M
+                                Cmd+Shift+M, Alt+V Cmd+Shift+V, while plain
+                                Cmd+C still copies, Cmd+A selects all, Cmd+M
+                                minimises and Cmd+V pastes (each of those
+                                reaches MyAgent's binding too, measured, so
+                                the plain combination is deliberately left
+                                to the system)
+    Cmd+Up / Cmd+Down ......... the lists' Alt+Up / Alt+Down: move the
+                                selected page, skill or section one step (the
+                                plain Up / Down selection step is suppressed,
+                                measured)
+    Cmd+W ..................... Alt+F4: close the window as its X does (21.2)
+
+  Shift does no harm on a letter that is not reserved (Cmd+Shift+S is SAVE
+  too). Sections 4-19 therefore read for the Mac with Cmd for Alt and Shift
+  added on A, C, M and V. The main window: Cmd+S START, Cmd+T STOP, Cmd+I
+  Instruction, Cmd+Shift+C the Save Chat as box, Cmd+Shift+V Voice,
+  Cmd+Shift+M Model, Cmd+O Other. The editor: Cmd+Shift+C CLEAR (it still
+  asks nothing), Cmd+Shift+A Apply, Cmd+Shift+M the Model dropdown, Cmd+E the
+  text, Cmd+N the name, Cmd+L the list, Cmd+T Section..., Cmd+K Skills, Cmd+F
+  Safety, Cmd+O Notes. The Agent Request: Cmd+Shift+M Mike, Cmd+Shift+A
+  Auto-send, Cmd+U Upgrade. The Confirm Command dialog: Cmd+D Deny,
+  Cmd+Shift+A Allow. Every Cancel is Cmd+Shift+C. A dialog's Cmd+letters
+  never reach the window behind it, as on Windows. Do not use Option:
+  Option+S in the editor's text inserts ß.
+
+  Unchanged, because they were never Alt: Ctrl+S (SAVE, in the editor and
+  the Skills Manager), Ctrl+Enter (Apply, from inside the text too; a
+  newline in the Agent Request's reply box), Ctrl+Tab / Ctrl+Shift+Tab
+  (leave a text box forwards / backwards), Escape in every field — a text
+  box, an entry, the spinbox, a dropdown, a list and the read-only panes all
+  measured — Enter and Space on a button, Space on a checkbox, Up / Down on
+  the temperature spinbox (steps of 0.1) and Tab / Shift+Tab everywhere.
+
+21.2 Starting, switching and closing (the Mac itself)
+
+  Starting MyAgent
+    Cmd+Space, type My Agent, Enter ... Spotlight opens the My Agent.app
+        launcher that desktop_launchers/rebuild.sh builds
+    From a terminal (the venv activated): the python MyAgent.py lines of
+        section 3 unchanged; ./LaunchMyAgent.sh; "My Agent.command" from
+        the Finder
+
+  Switching windows
+    Cmd+Tab ................... switch between APPS. Each MyAgent instance is
+                                its own process and appears as its own
+                                "Python" app in the switcher
+    Cmd+` (backtick) .......... the next window of the SAME instance: the
+                                main window, the editor, the Notes dialog, the
+                                Skills Manager ... (measured)
+    Cmd+M ..................... minimise the active window (measured). Nothing
+                                on the keyboard un-minimises it: the Dock, or
+                                Cmd+Tab to the app
+    Cmd+H ..................... hide the whole instance; Cmd+Tab brings it back
+
+  Moving and resizing
+    macOS has no keyboard window-move or resize. MyAgent remembers every
+    window's size and position per monitor layout, so one adjustment with the
+    mouse lasts.
+
+  Closing a window
+    Cmd+W ..................... close the active window exactly as its
+                                title-bar X does — the same handler runs
+                                (measured). So in every window Cmd+W is what
+                                Alt+F4 is in sections 4-18: the editor's
+                                unsaved draft dropped, the Notes / Description
+                                draft kept, a setup dialog cancelled, the
+                                Agent Request dismissed, and on the main
+                                window MyAgent closed properly — a run
+                                stopped, the state and the chat saved, the
+                                instance lock released
+    Cmd+Q ..................... close MyAgent exactly as Cmd+W on the main
+                                window does, from any of its windows: the
+                                run stopped, the state and the chat saved,
+                                the lock released (since 2026-10-31: MyAgent
+                                hands Tk's application-menu Quit to its close
+                                handler — keyboard.py's install_quit_handler.
+                                Before that day Cmd+Q ended the process at
+                                once, measured: no state file, the chat as of
+                                the last 10-second save, the lock file left
+                                behind)
+    Option+F4 ................. nothing
+
+21.3 Text boxes: Command edits, Control does not
+
+  In every editable text box (the instruction text, the notes, the
+  description, the skill text, the reply box) and, where it applies, every
+  single-line entry, the editing keys are the Mac's:
+
+    Cmd+A ..................... select all (Ctrl+A is "line start" here)
+    Cmd+C / Cmd+X / Cmd+V ..... copy / cut / paste. Ctrl+C, Ctrl+X and Ctrl+V
+                                do nothing with text; Ctrl+V with an IMAGE on
+                                the clipboard still attaches it (MyAgent's
+                                own binding), and Cmd+V does both
+    Cmd+Z / Shift+Cmd+Z ....... undo / redo, where the box keeps a history
+    Cmd+Left / Cmd+Right ...... line start / end (Home / End and Ctrl+A /
+                                Ctrl+E do the same)
+    Option+Left / Option+Right  a word left / right
+    Option+Up / Option+Down ... paragraph start / end
+    Ctrl+Home / Ctrl+End ...... start / end of the whole text. Cmd+Up /
+                                Cmd+Down move ONE line here, not to the ends
+    Shift + any of the above .. extend the selection (Shift+Down a line,
+                                Shift+End to the line end, Shift+Ctrl+End to
+                                the end of the text)
+    PgUp / PgDn ............... scroll
+    Option+Delete, Cmd+Delete . delete backwards by word (Tk's rule: a lone
+                                space is a word of its own)
+    Fn+Delete, Ctrl+D ......... delete forwards; Ctrl+K deletes to the line end
+    Ctrl+Left / Right / Up / Down ... nothing
+    Tab ....................... types a tab (Escape or Ctrl+Tab leave the box)
+    Enter ..................... a newline; Ctrl+Enter keeps its MyAgent
+                                meaning (Apply in the editor, a newline in the
+                                reply box)
+
+  In a single-line entry (the names, the Save Chat as box, the Language and
+  Vocabulary boxes): Cmd+A selects all, Ctrl+A moves to the start, Escape
+  leaves.
+
+21.4 The read-only panes (the output pane, the Confirm Command dialog's
+     command box, the Agent Request's message)
+
+    Up / Down, PgUp / PgDn .... scroll (the cursor moves with them)
+    Ctrl+Home / Ctrl+End ...... the start / the end; Option+Down reaches the
+                                end too
+    Shift+arrows .............. select; Cmd+A selects everything
+    Cmd+C ..................... copy the selection
+    Escape, Tab ............... leave the pane (Tab cannot type here, so it
+                                moves on)
+
+21.5 Dropdowns
+
+  Down drops a NATIVE menu (measured; Up and Space do not open it). The menu
+  opens with no entry highlighted: Down highlights the first, Up / Down move,
+  typing a letter jumps to the entry starting with it, Enter picks and
+  closes, Escape closes with the value unchanged. The focus stays on the
+  dropdown throughout; Escape on a CLOSED dropdown leaves it, as everywhere.
+  Because the menu is the system's, Other Setup's field colour does not reach
+  it.
+
+21.6 The Instructions and SKILLS lists
+
+  Up / Down, Left / Right, Enter, PgUp / PgDn, Space (cycle a skill's mode)
+  and Escape behave as in sections 6 and 9. The moves are Cmd+Up / Cmd+Down
+  (21.1); Option+Up / Option+Down merely step the selection. Cmd+L is the
+  list, Cmd+T (editor) / Cmd+O (Skills Manager) Section... .
+
+21.7 Focus cues
+
+  A focused button wears the system's rounded blue ring (3 px, which is the
+  width from which Tk hands the drawing to Aqua — keyboard.py's
+  install_focus_ring_defaults). A focused CHECKBOX shows no cue at all: count
+  the Tabs from the nearest button, or watch the Space toggle. A text field
+  shows its cursor; a dropdown and a list show their system highlight. Aqua
+  draws button faces itself, so Other Setup's button colour does not apply
+  on the Mac and the idle STOP may look faded although it never does on
+  Windows. Scrollbars are never Tab stops, on either platform.
+
+21.8 Native message boxes and system dialogs — NOT verified
+
+  The Yes / No boxes (Replace instruction?, Delete, the skill-name offer, the
+  mail-action confirmations) and the single-OK notices are the system's
+  alerts, and the automation harness could not read their keys reliably: the
+  same keystroke gave different answers from one try to the next, so nothing
+  here is measured. What macOS does by its own rules, to be checked by hand:
+  Enter presses the highlighted (default) button; Escape presses a Cancel-type
+  button only where the box has one; Y and N answer nothing; Tab moves
+  between the buttons only with Full Keyboard Access on (System Settings >
+  Keyboard > Keyboard navigation — OFF on the Mac Mini as of 2026-10-31).
+  Until checked, LOOK before pressing Enter on a Delete or Replace question
+  on the Mac: whether Tk's "opens on No" survives there is exactly what was
+  not established.
+
+  The file dialog (Attach Images) is the macOS Open panel: Cmd+Shift+G and a
+  typed path, the arrows in the file list, Enter opens, Escape cancels — the
+  system's own keys. The colour picker (Other Setup's Choose...) is the macOS
+  Colors panel.
+
+21.9 The walkthroughs on the Mac
+
+  Read section 19 with Cmd for Alt, Shift added on A, C, M and V, Cmd+Up /
+  Cmd+Down for Alt+Up / Alt+Down and Cmd+W for Alt+F4. Two of them written
+  out, to show the pattern:
+
+  A. Run a saved instruction
+     Cmd+I (the editor) -> Cmd+L (the list) -> Up / Down to the instruction
+     -> Cmd+Shift+A or Ctrl+Enter (apply and close) -> Cmd+S (START). Tab to
+     the output pane to scroll while it runs. Cmd+T stops it.
+
+  B. Write a new instruction, with notes, filed into a section
+     Cmd+I -> Cmd+Shift+C (CLEAR) -> Cmd+N, type the name -> Cmd+E, type the
+     text -> Escape -> Tab to the tool checkboxes, Space on each one wanted
+     -> Cmd+O (Notes), type them, Cmd+W -> Cmd+S or Ctrl+S (SAVE) -> Cmd+L,
+     Cmd+T (Section...), type or pick, Enter -> Cmd+Shift+A to apply, or
+     Cmd+W to leave it saved but not applied.
+
+  And the three whose keys change most: G, answer by voice — Cmd+Shift+M,
+  speak, Cmd+Shift+M, check, Enter (hands-free with Auto-send ticked is
+  unchanged: Enter, speak, Enter); I, the upgrade — Cmd+Shift+M (Model
+  Setup) beforehand, Cmd+U at the Agent Request; O, close everything — Cmd+W
+  per window, or Cmd+Q from anywhere, which is the main window's close.
+
+21.10 Other Mac differences worth knowing
+
+  - The Agent Request's spoken cue is the Mac's own voice (the say command);
+    the bell is the fallback for a machine that cannot speak.
+  - Each MyAgent instance is a separate "Python" app to macOS: Cmd+Tab shows
+    one entry per instance, and the Dock does too.
+  - On the Mac the picker dropdowns, the alerts, the file dialog and the
+    colour panel are system controls; everything else in this file is Tk's
+    and behaves alike on both platforms.

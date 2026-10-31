@@ -20,7 +20,8 @@ gives it
     row_text / row_tags   decorate a page's row (the Skills list's mode
                       prefix and colour); a page's id stays its name
 
-and the gestures — ▲ / ▼ and Alt+Up / Alt+Down, drag-and-drop, the Section…
+and the gestures — ▲ / ▼ and Alt+Up / Alt+Down (Cmd+Up / Cmd+Down on the
+Mac), drag-and-drop, the Section…
 prompt, the folded-section memory — are the class's, identical in both
 lists. The Instructions list's contract is the **Instructions list**
 paragraph of .claude/rules/CLAUDE_MYAGENT.md (tests/test_instruction_list.py,
@@ -39,7 +40,7 @@ from myagent.instruction_layout import (
     UNFILED, UNFILED_LABEL, drop, file_page, layout, move_page, move_section,
     normalize_section, rename_section, section_of, sections,
 )
-from myagent.keyboard import bind_mnemonics
+from myagent.keyboard import bind_mnemonics, list_move_sequences
 from myagent.ui_mixin import SMALL_BUTTON_FONT, list_title_band
 
 
@@ -240,8 +241,10 @@ class SectionedList:
             tree.bind(seq, self._on_return)
         # Widget-level bindings run before the Treeview class ones and
         # break, so Alt+Up does not ALSO step the selection like a plain Up.
-        tree.bind("<Alt-Up>", lambda e: (self.move(-1), "break")[1])
-        tree.bind("<Alt-Down>", lambda e: (self.move(1), "break")[1])
+        # Cmd+Up / Cmd+Down on the Mac, where Tk has no Alt modifier.
+        up_seq, down_seq = list_move_sequences(tree)
+        tree.bind(up_seq, lambda e: (self.move(-1), "break")[1])
+        tree.bind(down_seq, lambda e: (self.move(1), "break")[1])
         tree.bind("<ButtonPress-1>", self._on_press)
         tree.bind("<B1-Motion>", self._on_motion)
         tree.bind("<ButtonRelease-1>", self._on_release)

@@ -280,7 +280,8 @@ class SectionedListTests(_TkCase):
         (btn_row,) = pane.grid_slaves(row=2, column=0)
         self.assertEqual([b.cget("text") for b in btn_row.pack_slaves()], ["▲", "▼", "Section…"])
         self.assertIs(btn_row.pack_slaves()[2], lst.section_btn)
-        for seq in ("<Alt-Up>", "<Alt-Down>", "<Return>", "<KP_Enter>", "<ButtonPress-1>",
+        from myagent.keyboard import list_move_sequences      # Alt+Up / Down; Cmd+ on the Mac
+        for seq in (*list_move_sequences(lst.tree), "<Return>", "<KP_Enter>", "<ButtonPress-1>",
                     "<B1-Motion>", "<ButtonRelease-1>", "<<TreeviewOpen>>", "<<TreeviewClose>>"):
             self.assertTrue(lst.tree.bind(seq), seq)
         self.assertFalse(lst.tree.bind("<<TreeviewSelect>>"))     # none given: nothing bound

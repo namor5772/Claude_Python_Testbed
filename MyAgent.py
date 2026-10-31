@@ -67,6 +67,7 @@ from myagent.model_upgrade_mixin import ModelUpgradeMixin
 from myagent.other_setup_mixin import OtherSetupMixin
 from myagent.chat_mixin import ChatMixin
 from myagent.event_loop_mixin import EventLoopMixin
+from myagent.keyboard import install_quit_handler
 
 if _HAS_OLLAMA:
     import ollama
@@ -404,6 +405,10 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         self.root.after(50, self.check_queue)
         self.root.after(PERIODIC_SAVE_MS, self._periodic_save)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        # macOS: Cmd+Q (Tk's application-menu Quit) is the same close — Tk
+        # would otherwise end the process at once, skipping the state file,
+        # the chat save and the instance lock (keyboard.py; a no-op elsewhere).
+        install_quit_handler(self.root, self._on_close)
 
         # Connect MCP servers once the UI is built. The connect WAITS on the Tk
         # thread (up to 300 s) for every server's handshake — deliberately, so
