@@ -395,7 +395,8 @@ class DialogTests(unittest.TestCase):
         # not yet mapped, and Tk then defers the whole thing to the window's
         # VisibilityNotify (tkFocus.c, focusOnMapPtr): until that event
         # -lastfor still names the toplevel, so the reader polls. Since
-        # 2026-10-23 the cue is the spoken "Agent Request" (speech.speak),
+        # 2026-10-23 the cue is spoken (speech.speak; "Please Reply to
+        # Agent" since 2026-11-01, "Agent Request" until then),
         # with the bell as the fallback where nothing can speak: speech is
         # patched to say it could not, so the bell is what is counted — and
         # the suite stays quiet either way.
@@ -428,7 +429,7 @@ class DialogTests(unittest.TestCase):
                 # Spoken once, with the box ticked; never without — and with
                 # speech unavailable the bell rings once, on the dialog.
                 self.assertEqual([c.args for c in say.call_args_list],
-                                 [("Agent Request",)] if ticked else [])
+                                 [("Please Reply to Agent",)] if ticked else [])
                 self.assertEqual([str(c.args[0]) for c in bell.call_args_list],
                                  [seen["dialog"]] if ticked else [])
 
@@ -484,7 +485,7 @@ class DialogTests(unittest.TestCase):
 
     def test_the_cue_is_repeated_until_the_reply_is_sent_and_then_stops(self):
         # 2026-10-31, the user's request: with Auto-send ticked the dialog
-        # says "Agent Request" when it opens, then "Please Respond" at the
+        # says "Please Reply to Agent" when it opens, then "Please Respond" at the
         # first repeat and "Please Respond Now" at every later one, every
         # REQUEST_REMINDER_MS, until it is answered. The REAL dialog here,
         # the interval cut to 120 ms and speech patched to a recorder: the
@@ -506,7 +507,7 @@ class DialogTests(unittest.TestCase):
             self.root.after(500, self.root.quit)
             self.root.mainloop()
         self.assertEqual(outcome["reply"], "the joint account")
-        self.assertEqual(spoken_at_close[0], "Agent Request")
+        self.assertEqual(spoken_at_close[0], "Please Reply to Agent")
         self.assertGreaterEqual(len(spoken_at_close), 3, spoken_at_close)
         self.assertEqual(spoken_at_close[1], "Please Respond")
         self.assertEqual(set(spoken_at_close[2:]), {"Please Respond Now"})

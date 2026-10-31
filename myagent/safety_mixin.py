@@ -25,8 +25,9 @@ RELAY_POLL_MS = 500
 
 # How long an Agent Request dialog opened on Mike waits between its spoken
 # reminders ("Please Respond", then "Please Respond Now") while nobody has
-# answered — see _remind_request (2026-10-31, the user's request).
-REQUEST_REMINDER_MS = 15_000
+# answered — see _remind_request (2026-10-31, the user's request; 60 s
+# since 2026-11-01, the user's request again — 15 s until then).
+REQUEST_REMINDER_MS = 60_000
 
 from ddgs import DDGS
 import httpx
@@ -730,12 +731,13 @@ class SafetyMixin(PaneNotesMixin):
             # Mike's own toggle and the transcript sent as it lands.
             # Shift+Tab is the reply box, for typing instead. And the cue to
             # start speaking — a request can arrive while the user is looking
-            # elsewhere: since 2026-10-23 the words "Agent Request", spoken
-            # through the platform's text-to-speech (the user's request; it
-            # was the display bell), with the bell kept for a machine that
-            # cannot speak — and since 2026-10-31 repeated every
-            # REQUEST_REMINDER_MS as "Please Respond", then "Please Respond
-            # Now", until the dialog is answered (_remind_request).
+            # elsewhere: since 2026-10-23 the words "Please Reply to Agent"
+            # ("Agent Request" until 2026-11-01), spoken through the
+            # platform's text-to-speech (the user's request; it was the
+            # display bell), with the bell kept for a machine that cannot
+            # speak — and since 2026-10-31 repeated every REQUEST_REMINDER_MS
+            # (60 s) as "Please Respond", then "Please Respond Now", until the
+            # dialog is answered (_remind_request).
             hands_free = self.dictation_auto_send.get()
             (mike_btn if hands_free else resp_text).focus_set()
             if hands_free:
@@ -813,7 +815,7 @@ class SafetyMixin(PaneNotesMixin):
     def _remind_request(self, dlg, dictation):
         """Repeat the cue every REQUEST_REMINDER_MS until the dialog closes.
 
-        The user's request (2026-10-31): the opening "Agent Request" alerts
+        The user's request (2026-10-31): the opening cue alerts
         whoever started the run that the agent is waiting, but they may be
         out of the room — so while nobody answers the dialog keeps asking:
         "Please Respond" at the first repeat, "Please Respond Now" at every

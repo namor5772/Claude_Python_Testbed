@@ -1,14 +1,16 @@
-"""The spoken "Agent Request" cue (2026-10-23).
+"""The spoken "Please Reply to Agent" cue (2026-10-23).
 
 Until that day the Agent Request dialog, opened with the Auto-send box ticked,
 rang the display bell as the cue to start speaking; the user asked for MyAgent
-to say "Agent Request" aloud instead. `myagent/speech.py` is the one speaker —
+to say the cue aloud instead ("Agent Request" then, "Please Reply to Agent"
+since 2026-11-01). `myagent/speech.py` is the one speaker —
 `speak(text)`: SAPI on a daemon thread (pywin32) else a hidden PowerShell
 System.Speech child on Windows, `say` on macOS, spd-say / espeak elsewhere,
 False where nothing can speak — and `SafetyMixin._announce_request(dlg)` says
 the words or, when it cannot, rings the bell as before. Since 2026-10-31 the
 cue is repeated while nobody answers (the user's request): every
-`REQUEST_REMINDER_MS` (15 s) `_remind_request`'s Tk timer says "Please
+`REQUEST_REMINDER_MS` (60 s since 2026-11-01, 15 s until then)
+`_remind_request`'s Tk timer says "Please
 Respond" at the first repeat and "Please Respond Now" at every later one,
 through the same helper, until the dialog closes.
 
@@ -42,20 +44,23 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 class WordsTests(unittest.TestCase):
     def test_the_announcement_and_the_voice_settings(self):
-        self.assertEqual(speech.AGENT_REQUEST_ANNOUNCEMENT, "Agent Request")
+        # "Agent Request" from 2026-10-23; the user asked for these words on
+        # 2026-11-01.
+        self.assertEqual(speech.AGENT_REQUEST_ANNOUNCEMENT, "Please Reply to Agent")
         self.assertEqual(speech.SPEECH_VOLUME, 100)          # as loud as the voice goes
         self.assertTrue(-10 <= speech.SPEECH_RATE <= 0)      # not faster than the default
 
     def test_the_reminders_first_please_respond_then_please_respond_now(self):
         # 2026-10-31, the user's words: the first repeat is "Please Respond",
-        # any later one "Please Respond Now" — every 15 seconds.
+        # any later one "Please Respond Now" — every 60 seconds since
+        # 2026-11-01 (15 until then).
         self.assertEqual(speech.AGENT_REQUEST_REMINDERS, ("Please Respond", "Please Respond Now"))
         self.assertEqual(speech.reminder_text(0), "Please Respond")
         self.assertEqual(speech.reminder_text(1), "Please Respond Now")
         self.assertEqual(speech.reminder_text(2), "Please Respond Now")
         self.assertEqual(speech.reminder_text(40), "Please Respond Now")
         self.assertEqual(speech.reminder_text(-3), "Please Respond")    # never an IndexError
-        self.assertEqual(safety_mixin.REQUEST_REMINDER_MS, 15_000)
+        self.assertEqual(safety_mixin.REQUEST_REMINDER_MS, 60_000)
 
     def test_nothing_is_said_for_an_empty_text(self):
         with mock.patch.object(speech, "_speak_sapi") as sapi, \
@@ -207,7 +212,7 @@ class AnnounceTests(unittest.TestCase):
         dlg = mock.Mock()
         with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
             SafetyMixin._announce_request(dlg)
-        say.assert_called_once_with("Agent Request")
+        say.assert_called_once_with("Please Reply to Agent")
         dlg.bell.assert_not_called()
 
     def test_where_nothing_can_speak_the_bell_rings_as_before(self):
@@ -275,8 +280,8 @@ class ReminderTests(unittest.TestCase):
         with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
             self.host._remind_request(self.dlg, self.dictation)
             # Armed once at the interval, nothing said yet: the opening
-            # "Agent Request" is the caller's.
-            self.assertEqual([ms for _h, ms, _cb in self.dlg.scheduled], [15_000])
+            # cue is the caller's.
+            self.assertEqual([ms for _h, ms, _cb in self.dlg.scheduled], [60_000])
             say.assert_not_called()
             for _ in range(4):
                 self.dlg.fire_last()
@@ -284,7 +289,7 @@ class ReminderTests(unittest.TestCase):
                          ["Please Respond", "Please Respond Now",
                           "Please Respond Now", "Please Respond Now"])
         # Every tick re-arms at the same interval.
-        self.assertEqual([ms for _h, ms, _cb in self.dlg.scheduled], [15_000] * 5)
+        self.assertEqual([ms for _h, ms, _cb in self.dlg.scheduled], [60_000] * 5)
         self.assertEqual(self.dlg.bells, 0)
 
     def test_cancel_silences_the_pending_tick_and_is_safe_twice(self):
