@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -9,6 +10,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox
 
+from myagent import relay
 from myagent.constants import (IS_WINDOWS, _BASE_DIR, SKILLS_DIR, CHATS_DIR, MONO_FONT,
                                COMMAND_CONFIRM, GMAIL_CONFIRM_TOOLS,
                                PROTON_CONFIRM_TOOLS, OUTLOOK_CONFIRM_TOOLS)
@@ -344,11 +346,28 @@ class SkillsMixin(PaneNotesMixin):
         so waited children overlap (parallel fan-out) — each blocks only its
         own worker thread. Only the prologue below is serialized (_SPAWN_LOCK);
         children can't collide on instance slots because the lock-file claim is
-        O_EXCL-atomic (state_mixin._claim_instance_number)."""
+        O_EXCL-atomic (state_mixin._claim_instance_number).
+
+        Since 2026-10-31 three more of MyAgent.py's flags are reachable:
+        `prepend_text` (--prepend-file, the text in front of the saved
+        instruction, extra_text's twin), `show_window` (--show-window, the
+        child's window kept on screen under --headless) and `answers`
+        (--relay-dir: the child's Agent Requests answered from a list, in
+        order, through the relay folder Heartbeat's listener uses — the list
+        spent, the empty reply, which stops the child; see _relay_serve)."""
         name = params.get("name", "")
         headless = params.get("headless", True)
         wait = bool(params.get("wait", False))
         extra_text = params.get("extra_text") or ""
+        prepend_text = params.get("prepend_text") or ""
+        show_window = bool(params.get("show_window", False))
+        answers = params.get("answers")
+        if isinstance(answers, str):
+            answers = [answers]             # one reply, given bare
+        if answers is not None and (not isinstance(answers, list)
+                                    or not all(isinstance(a, str) for a in answers)):
+            return ("Error: 'answers' must be a list of strings — the replies to the "
+                    "child's Agent Requests, in order ([] stops it at its first question).")
         try:
             timeout_s = int(params.get("timeout_seconds") or 600)
         except (TypeError, ValueError):
@@ -371,6 +390,8 @@ class SkillsMixin(PaneNotesMixin):
             cmd = [sys.executable, script_path, "-l", name]
             if headless:
                 cmd.append("--headless")
+                if show_window:
+                    cmd.append("--show-window")     # after --headless, the flag it qualifies
 
             result_path = None
             if wait:
@@ -383,12 +404,28 @@ class SkillsMixin(PaneNotesMixin):
             # leak this parent's extra_text into any grandchild the child spawns.
             # The parent deletes it after a waited child exits; a fire-and-forget
             # child's file stays in %TEMP% (the child must still be able to read it).
+            # prepend_text travels the same way, in front (--prepend-file).
             extra_path = None
             if extra_text:
                 fd, extra_path = tempfile.mkstemp(prefix="myagent_extra_", suffix=".txt")
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(extra_text)
                 cmd += ["--extra-file", extra_path]
+            prepend_path = None
+            if prepend_text:
+                fd, prepend_path = tempfile.mkstemp(prefix="myagent_prepend_", suffix=".txt")
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(prepend_text)
+                cmd += ["--prepend-file", prepend_path]
+
+            # `answers`: the child's Agent Requests are answered through a relay
+            # folder of its own (myagent/relay.py — the protocol Heartbeat's
+            # listener uses for the phone), served by _relay_serve: inside the
+            # wait loop below, or by a daemon thread for a fire-and-forget child.
+            relay_dir = None
+            if answers is not None:
+                relay_dir = tempfile.mkdtemp(prefix="myagent_relay_")
+                cmd += ["--relay-dir", relay_dir]
 
             try:
                 proc = subprocess.Popen(
@@ -398,23 +435,35 @@ class SkillsMixin(PaneNotesMixin):
                     stderr=subprocess.DEVNULL,
                 )
             except Exception as e:
-                for p in (result_path, extra_path):
+                for p in (result_path, extra_path, prepend_path):
                     if p:
                         try:
                             os.remove(p)
                         except OSError:
                             pass
+                if relay_dir:
+                    shutil.rmtree(relay_dir, ignore_errors=True)
                 return f"Error launching instruction '{name}': {e}"
 
         if not wait:
+            if relay_dir:
+                threading.Thread(target=self._relay_server, args=(proc, relay_dir, answers),
+                                 name=f"relay-{proc.pid}", daemon=True).start()
             mode = "headless" if headless else "GUI"
             noted = " with extra task context" if extra_text else ""
-            return f"Launched instruction '{name}' in {mode} mode{noted} (PID {proc.pid})."
+            if prepend_text:
+                noted += " with a prompt in front of its instruction"
+            relayed = ""
+            if relay_dir:
+                relayed = (f"; its Agent Requests are answered from the {len(answers)} "
+                           "answer(s) given, the next one with an empty reply, which stops it")
+            return f"Launched instruction '{name}' in {mode} mode{noted} (PID {proc.pid}){relayed}."
 
         # Blocking wait: poll so STOP stays responsive and the timeout is
         # enforced. Child-process exit is the synchronization point — the
         # result file is fully written before the headless close runs.
         start = time.time()
+        served = []
         try:
             while proc.poll() is None:
                 if self.stop_requested:
@@ -426,6 +475,8 @@ class SkillsMixin(PaneNotesMixin):
                     return (f"Error: instruction '{name}' did not finish within "
                             f"{timeout_s}s; child process terminated. Its partial "
                             f"transcript ({name}_<timestamp>.txt) is in {CHATS_DIR}.")
+                if relay_dir:
+                    self._relay_serve(relay_dir, answers, served)
                 time.sleep(1)
             elapsed = int(time.time() - start)
             try:
@@ -442,15 +493,80 @@ class SkillsMixin(PaneNotesMixin):
             out = f"Instruction '{name}' finished (status={status}, {elapsed}s)."
             if result.get("error"):
                 out += f"\nChild error: {result['error']}"
+            if relay_dir:
+                out += self._relay_report(served, answers)
             out += f"\nFinal report:\n{final_text}" if final_text else "\n(No final text.)"
             return out
         finally:
-            for p in (result_path, extra_path):
+            for p in (result_path, extra_path, prepend_path):
                 if p:
                     try:
                         os.remove(p)
                     except OSError:
                         pass
+            if relay_dir:
+                shutil.rmtree(relay_dir, ignore_errors=True)
+
+    @staticmethod
+    def _relay_serve(relay_dir, answers, served):
+        """One tick of answering a child's Agent Requests from `answers`
+        (run_instruction, 2026-10-31). The open request — when its seq is one
+        the child has not been answered for yet — gets the next unused answer,
+        or, the list spent, the EMPTY reply: the child's run then stops as it
+        does on an empty reply typed at the PC (streaming_mixin's user_prompt
+        branch and Convo mode alike). A request the PC answered first (the
+        child left answered.json) is recorded as such and consumes no answer.
+        `served` is the per-child record: dicts of seq / question / answer /
+        outcome ("answered", "stopped", "pc"). Returns True when it wrote."""
+        seq_pc = relay.take_answered(relay_dir)
+        if seq_pc is not None and not any(r["seq"] == seq_pc for r in served):
+            served.append({"seq": seq_pc, "question": None, "answer": None, "outcome": "pc"})
+        req = relay.read_request(relay_dir)
+        if req is None:
+            return False
+        seq = int(req.get("seq", 0))
+        if any(r["seq"] == seq for r in served):
+            return False                    # answered; the dialog has not closed yet
+        used = sum(1 for r in served if r["outcome"] == "answered")
+        if used < len(answers):
+            answer, outcome = answers[used], "answered"
+        else:
+            answer, outcome = "", "stopped"
+        relay.write_reply(relay_dir, seq, answer)
+        served.append({"seq": seq, "question": str(req.get("text", "")),
+                       "answer": answer, "outcome": outcome})
+        return True
+
+    def _relay_server(self, proc, relay_dir, answers):
+        """A fire-and-forget child's answers, served until it exits — then its
+        relay folder goes (a daemon thread; the parent is not waiting)."""
+        served = []
+        try:
+            while proc.poll() is None:
+                self._relay_serve(relay_dir, answers, served)
+                time.sleep(1)
+        finally:
+            shutil.rmtree(relay_dir, ignore_errors=True)
+
+    @staticmethod
+    def _relay_report(served, answers):
+        """The waited report's account of the child's Agent Requests."""
+        def clip(text, n=120):
+            text = " ".join((text or "").split())
+            return text if len(text) <= n else text[:n - 1] + "…"
+        if not served:
+            spare = f" ({len(answers)} answer(s) given, none needed)" if answers else ""
+            return f"\nAgent Requests: none{spare}."
+        lines = [f"\nAgent Requests: {len(served)}"]
+        for r in served:
+            if r["outcome"] == "answered":
+                lines.append(f'  #{r["seq"]} "{clip(r["question"])}" → answered "{clip(r["answer"])}"')
+            elif r["outcome"] == "stopped":
+                lines.append(f'  #{r["seq"]} "{clip(r["question"])}" → no answer left: '
+                             "the empty reply stopped the run")
+            else:
+                lines.append(f'  #{r["seq"]} answered at the PC')
+        return "\n".join(lines)
 
     def _post_skill_ui_refresh(self):
         """Thread-safe refresh of Skills button and Skills Manager listbox."""

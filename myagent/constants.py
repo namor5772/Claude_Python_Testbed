@@ -740,7 +740,10 @@ META_TOOLS = [
             "parallel, issue all the spawns in one turn (each with its own "
             "extra_text and timeout) instead of one per turn; total wait is the "
             "slowest child, not the sum. Use manage_instructions(action='list') "
-            "first to see available names."
+            "first to see available names. A child's Agent Requests can be answered "
+            "in advance with `answers` (so an unattended child never waits on a "
+            "dialog), `prepend_text` puts a prompt in front of its saved instruction, "
+            "and `show_window` keeps its window on screen."
         ),
         "input_schema": {
             "type": "object",
@@ -769,6 +772,40 @@ META_TOOLS = [
                         "parameterize a generic saved instruction per spawn (the specific "
                         "question, target, or data for THIS child). The saved instruction "
                         "on disk is unchanged."
+                    ),
+                },
+                "prepend_text": {
+                    "type": "string",
+                    "description": (
+                        "Optional text put IN FRONT of the child's saved instruction, plain, "
+                        "for this run only — the prompt a run should act on when the saved "
+                        "instruction is a standing procedure (how Heartbeat hands a phone "
+                        "message to an instruction). extra_text is the labelled block AFTER "
+                        "the instruction; both may be given. The saved instruction on disk is "
+                        "unchanged."
+                    ),
+                },
+                "show_window": {
+                    "type": "boolean",
+                    "description": (
+                        "With headless (the default): keep the child's main window on screen "
+                        "while it works, everything else staying headless (no state file, "
+                        "auto-close at the end). Ignored with headless=false, where the window "
+                        "shows anyway. Default false."
+                    ),
+                },
+                "answers": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Replies to the child's Agent Requests (its user_prompt questions and "
+                        "Convo-mode turns), in order: each question is answered with the next "
+                        "entry the moment it appears, through a relay folder the child is "
+                        "launched with, so nothing waits on the desktop. When the list is spent "
+                        "the next question gets the EMPTY reply, which stops the child's run "
+                        "cleanly ([] = stop it at its first question). Without this parameter a "
+                        "child's question opens a dialog on this machine's screen and waits for "
+                        "a person. A waited call's report lists each question and what it got."
                     ),
                 },
             },
