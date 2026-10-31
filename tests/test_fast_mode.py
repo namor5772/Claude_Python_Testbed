@@ -384,8 +384,10 @@ class PersistenceScan(unittest.TestCase):
         self.assertEqual(src.count('"fast_mode": self.fast_mode,'), 2)
         # manage_instructions read reports it
         self.assertIn('"fast_mode": entry.get("fast_mode", False),', src)
-        # manage_instructions update: in the updatable gate AND the copy loop
-        self.assertEqual(src.count('"fast_mode", "blocked_tools")'), 2)
+        # manage_instructions update: in the updatable gate (which ends with
+        # "section" since 2026-10-31 — tests/test_meta_layout.py) AND the copy loop
+        self.assertEqual(src.count('"fast_mode", "blocked_tools", "section")'), 1)
+        self.assertEqual(src.count('"fast_mode", "blocked_tools")'), 1)
 
     def test_state_and_snapshot_sites(self):
         src = self._src("myagent/state_mixin.py")
