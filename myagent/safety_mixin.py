@@ -17,11 +17,16 @@ from myagent.helpers import extract_text_from_html, input_wait_timer
 from myagent.keyboard import bind_mnemonics, link_embedded_checkbuttons
 from myagent.pane_notes import PaneNotesMixin
 from myagent import relay
-from myagent.speech import AGENT_REQUEST_ANNOUNCEMENT, speak
+from myagent.speech import AGENT_REQUEST_ANNOUNCEMENT, reminder_text, speak
 
 # How often an open Agent Request dialog looks for a reply relayed from the
 # phone (a run the Telegram listener launched — see myagent/relay.py).
 RELAY_POLL_MS = 500
+
+# How long an Agent Request dialog opened on Mike waits between its spoken
+# reminders ("Please Respond", then "Please Respond Now") while nobody has
+# answered — see _remind_request (2026-10-31, the user's request).
+REQUEST_REMINDER_MS = 15_000
 
 from ddgs import DDGS
 import httpx
@@ -640,10 +645,15 @@ class SafetyMixin(PaneNotesMixin):
             relay_seq = self._relay_request(shown)     # the phone sees what the box shows
             from_relay = [False]
             relay_poll = [None]
+            # The spoken reminders' cancel (set below, with the box ticked):
+            # every way the dialog closes — Enter, [X], a relayed reply —
+            # runs _capture_and_close, so that is where they fall silent.
+            stop_reminders = [lambda: None]
 
             def _capture_and_close():
                 """Cache the dialog geometry before destroying."""
                 dictation.shutdown()   # release the microphone, drop a pending transcript
+                stop_reminders[0]()
                 if relay_poll[0] is not None:
                     dlg.after_cancel(relay_poll[0])
                     relay_poll[0] = None
@@ -723,11 +733,14 @@ class SafetyMixin(PaneNotesMixin):
             # elsewhere: since 2026-10-23 the words "Agent Request", spoken
             # through the platform's text-to-speech (the user's request; it
             # was the display bell), with the bell kept for a machine that
-            # cannot speak.
+            # cannot speak — and since 2026-10-31 repeated every
+            # REQUEST_REMINDER_MS as "Please Respond", then "Please Respond
+            # Now", until the dialog is answered (_remind_request).
             hands_free = self.dictation_auto_send.get()
             (mike_btn if hands_free else resp_text).focus_set()
             if hands_free:
                 self._announce_request(dlg)
+                stop_reminders[0] = self._remind_request(dlg, dictation)
             if relay_seq is not None:
                 relay_poll[0] = dlg.after(RELAY_POLL_MS, poll_relay)
 
@@ -783,17 +796,58 @@ class SafetyMixin(PaneNotesMixin):
         return response
 
     @staticmethod
-    def _announce_request(dlg):
-        """The Agent Request dialog's audible cue: say "Agent Request" aloud.
+    def _announce_request(dlg, text=AGENT_REQUEST_ANNOUNCEMENT):
+        """The Agent Request dialog's audible cue: say ``text`` aloud.
 
         `speech.speak` hands the words to the platform's text-to-speech and
         returns at once; where nothing on the machine can speak it returns
         False and the display bell rings instead, as the dialog did before
         2026-10-23 — so the cue is never silent. Called with the Auto-send
-        box ticked only, like the bell it replaced.
+        box ticked only, like the bell it replaced — with the opening words
+        when the dialog appears, and with each reminder's words by
+        _remind_request after it.
         """
-        if not speak(AGENT_REQUEST_ANNOUNCEMENT):
+        if not speak(text):
             dlg.bell()
+
+    def _remind_request(self, dlg, dictation):
+        """Repeat the cue every REQUEST_REMINDER_MS until the dialog closes.
+
+        The user's request (2026-10-31): the opening "Agent Request" alerts
+        whoever started the run that the agent is waiting, but they may be
+        out of the room — so while nobody answers the dialog keeps asking:
+        "Please Respond" at the first repeat, "Please Respond Now" at every
+        one after (`speech.reminder_text`), each through `_announce_request`
+        so a machine that cannot speak rings its bell instead. A Tk timer on
+        the dialog (`after`), the relay poller's shape — nothing blocks, and
+        the speech itself is handed off by `speak`. Returns the cancel the
+        close path calls: a reply sent, the dialog dismissed, or a reply from
+        the phone all run _capture_and_close, and the reminders stop there.
+        A tick that finds a dictation under way (recording or transcribing)
+        says nothing and waits for the next — the microphone would hear the
+        reminder and transcribe it into the reply — and a tick after the
+        dialog is gone (a failed build torn down without the close path)
+        does nothing at all.
+        """
+        handle = [None]
+        repeats = [0]
+
+        def tick():
+            handle[0] = None
+            if not dlg.winfo_exists():
+                return
+            if dictation.state == "idle":
+                self._announce_request(dlg, reminder_text(repeats[0]))
+                repeats[0] += 1
+            handle[0] = dlg.after(REQUEST_REMINDER_MS, tick)
+
+        def cancel():
+            if handle[0] is not None:
+                dlg.after_cancel(handle[0])
+                handle[0] = None
+
+        handle[0] = dlg.after(REQUEST_REMINDER_MS, tick)
+        return cancel
 
     def _take_prompt_images(self):
         """Pop the images attached in the last Agent Request dialog."""

@@ -472,7 +472,10 @@ Attach Images / Remove Selected with the image list.
 
 It opens with the focus in the reply box, or on Mike when Auto-send is
 ticked, in which case "Agent Request" is spoken aloud (the bell rings where
-the machine cannot speak).
+the machine cannot speak) and then repeated every 15 seconds until you
+answer: "Please Respond" the first time, "Please Respond Now" every time
+after. The reminders stop the moment the dialog closes (Enter, Alt+F4, or a
+reply from the phone); one due while you are dictating is skipped.
 
 Tab order: reply -> Mike -> Auto-send -> Upgrade -> Attach Images -> Remove
 Selected -> image list -> the agent's message -> reply.
@@ -992,8 +995,9 @@ the Mac.
 
 21.10 Other Mac differences worth knowing
 
-  - The Agent Request's spoken cue is the Mac's own voice (the say command);
-    the bell is the fallback for a machine that cannot speak.
+  - The Agent Request's spoken cue, and its 15-second reminders, are the
+    Mac's own voice (the say command); the bell is the fallback for a
+    machine that cannot speak.
   - Each MyAgent instance is a separate "Python" app to macOS: Cmd+Tab shows
     one entry per instance, and the Dock does too.
   - On the Mac the picker dropdowns, the alerts, the file dialog and the

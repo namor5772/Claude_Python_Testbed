@@ -482,6 +482,37 @@ class DialogTests(unittest.TestCase):
                          [{"type": "user_prompt_request", "content": asked},
                           {"type": "user_prompt_echo", "content": "the joint account"}])
 
+    def test_the_cue_is_repeated_until_the_reply_is_sent_and_then_stops(self):
+        # 2026-10-31, the user's request: with Auto-send ticked the dialog
+        # says "Agent Request" when it opens, then "Please Respond" at the
+        # first repeat and "Please Respond Now" at every later one, every
+        # REQUEST_REMINDER_MS, until it is answered. The REAL dialog here,
+        # the interval cut to 120 ms and speech patched to a recorder: the
+        # reply is sent after ~700 ms, and once the dialog has closed the
+        # mainloop runs on for another ~500 ms to prove nothing more is said.
+        said = []
+
+        def act(dialog):
+            def send():
+                _reply_box(dialog).insert("1.0", "the joint account")
+                self.host.send()
+            self.root.after(700, send)
+
+        with mock.patch("myagent.safety_mixin.REQUEST_REMINDER_MS", 120), \
+                mock.patch("myagent.safety_mixin.speak",
+                           side_effect=lambda text: said.append(text) or True):
+            host, outcome = self.run_dialog("Which account?", act, auto_send=True)
+            spoken_at_close = list(said)
+            self.root.after(500, self.root.quit)
+            self.root.mainloop()
+        self.assertEqual(outcome["reply"], "the joint account")
+        self.assertEqual(spoken_at_close[0], "Agent Request")
+        self.assertGreaterEqual(len(spoken_at_close), 3, spoken_at_close)
+        self.assertEqual(spoken_at_close[1], "Please Respond")
+        self.assertEqual(set(spoken_at_close[2:]), {"Please Respond Now"})
+        # Silence after the reply: the close path cancelled the timer.
+        self.assertEqual(said, spoken_at_close)
+
 
 def _reply_box(dialog):
     """The dialog's editable Text — the reply box (the message box is disabled)."""

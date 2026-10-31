@@ -6,14 +6,22 @@ to say "Agent Request" aloud instead. `myagent/speech.py` is the one speaker —
 `speak(text)`: SAPI on a daemon thread (pywin32) else a hidden PowerShell
 System.Speech child on Windows, `say` on macOS, spd-say / espeak elsewhere,
 False where nothing can speak — and `SafetyMixin._announce_request(dlg)` says
-the words or, when it cannot, rings the bell as before.
+the words or, when it cannot, rings the bell as before. Since 2026-10-31 the
+cue is repeated while nobody answers (the user's request): every
+`REQUEST_REMINDER_MS` (15 s) `_remind_request`'s Tk timer says "Please
+Respond" at the first repeat and "Please Respond Now" at every later one,
+through the same helper, until the dialog closes.
 
 Pinned here: the words and the voice settings; every backend's exact launch
 over fakes (no sound in the suite, nothing reaches a real voice); the
-fallbacks and refusals; the announce helper's two branches; and a wiring scan
-of the dialog — the cue after the focus, under the Auto-send gate, no bare
-bell left on the dialog path. The real dialog is driven in
-tests/test_agent_request_display.py with speech patched out.
+fallbacks and refusals; the announce helper's two branches; the reminder
+timer over a fake dialog (the words in order, the re-arm, the cancel, a tick
+mid-dictation saying nothing, a tick after the dialog is gone, the bell
+fallback); and a wiring scan of the dialog — the cue after the focus, under
+the Auto-send gate, the reminders armed beside it and stopped on the close
+path, no bare bell left on the dialog path. The real dialog is driven in
+tests/test_agent_request_display.py with speech patched out — including the
+reminders at a shortened interval, stopping when the reply is sent.
 """
 
 import pathlib
@@ -25,7 +33,7 @@ import types
 import unittest
 from unittest import mock
 
-from myagent import speech
+from myagent import safety_mixin, speech
 from myagent.constants import _SUBPROCESS_NOWND
 from myagent.safety_mixin import SafetyMixin
 
@@ -37,6 +45,17 @@ class WordsTests(unittest.TestCase):
         self.assertEqual(speech.AGENT_REQUEST_ANNOUNCEMENT, "Agent Request")
         self.assertEqual(speech.SPEECH_VOLUME, 100)          # as loud as the voice goes
         self.assertTrue(-10 <= speech.SPEECH_RATE <= 0)      # not faster than the default
+
+    def test_the_reminders_first_please_respond_then_please_respond_now(self):
+        # 2026-10-31, the user's words: the first repeat is "Please Respond",
+        # any later one "Please Respond Now" — every 15 seconds.
+        self.assertEqual(speech.AGENT_REQUEST_REMINDERS, ("Please Respond", "Please Respond Now"))
+        self.assertEqual(speech.reminder_text(0), "Please Respond")
+        self.assertEqual(speech.reminder_text(1), "Please Respond Now")
+        self.assertEqual(speech.reminder_text(2), "Please Respond Now")
+        self.assertEqual(speech.reminder_text(40), "Please Respond Now")
+        self.assertEqual(speech.reminder_text(-3), "Please Respond")    # never an IndexError
+        self.assertEqual(safety_mixin.REQUEST_REMINDER_MS, 15_000)
 
     def test_nothing_is_said_for_an_empty_text(self):
         with mock.patch.object(speech, "_speak_sapi") as sapi, \
@@ -197,22 +216,145 @@ class AnnounceTests(unittest.TestCase):
             SafetyMixin._announce_request(dlg)
         dlg.bell.assert_called_once_with()
 
+    def test_the_helper_says_whatever_words_it_is_given(self):
+        # The reminders go through the same helper, so they share its fallback.
+        dlg = mock.Mock()
+        with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
+            SafetyMixin._announce_request(dlg, "Please Respond Now")
+        say.assert_called_once_with("Please Respond Now")
+        with mock.patch("myagent.safety_mixin.speak", return_value=False):
+            SafetyMixin._announce_request(dlg, "Please Respond Now")
+        dlg.bell.assert_called_once_with()
+
+
+class _FakeDialog:
+    """A stand-in Toplevel: records `after` calls and hands back their
+    callbacks, so a test fires the ticks itself with no clock."""
+
+    def __init__(self):
+        self.exists = True
+        self.scheduled = []          # (ms, callback) in order
+        self.cancelled = []
+        self.bells = 0
+        self._next = 0
+
+    def winfo_exists(self):
+        return self.exists
+
+    def after(self, ms, callback):
+        self._next += 1
+        handle = f"after#{self._next}"
+        self.scheduled.append((handle, ms, callback))
+        return handle
+
+    def after_cancel(self, handle):
+        self.cancelled.append(handle)
+
+    def bell(self):
+        self.bells += 1
+
+    def fire_last(self):
+        """Run the most recently scheduled callback, as Tk would at its time."""
+        _handle, _ms, callback = self.scheduled[-1]
+        callback()
+
+
+class _FakeDictation:
+    state = "idle"
+
+
+class ReminderTests(unittest.TestCase):
+    """SafetyMixin._remind_request over the fake dialog (2026-10-31)."""
+
+    def setUp(self):
+        self.host = SafetyMixin.__new__(SafetyMixin)
+        self.dlg = _FakeDialog()
+        self.dictation = _FakeDictation()
+
+    def test_please_respond_then_please_respond_now_every_interval(self):
+        with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
+            self.host._remind_request(self.dlg, self.dictation)
+            # Armed once at the interval, nothing said yet: the opening
+            # "Agent Request" is the caller's.
+            self.assertEqual([ms for _h, ms, _cb in self.dlg.scheduled], [15_000])
+            say.assert_not_called()
+            for _ in range(4):
+                self.dlg.fire_last()
+        self.assertEqual([c.args[0] for c in say.call_args_list],
+                         ["Please Respond", "Please Respond Now",
+                          "Please Respond Now", "Please Respond Now"])
+        # Every tick re-arms at the same interval.
+        self.assertEqual([ms for _h, ms, _cb in self.dlg.scheduled], [15_000] * 5)
+        self.assertEqual(self.dlg.bells, 0)
+
+    def test_cancel_silences_the_pending_tick_and_is_safe_twice(self):
+        with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
+            cancel = self.host._remind_request(self.dlg, self.dictation)
+            self.dlg.fire_last()                      # "Please Respond"
+            pending = self.dlg.scheduled[-1][0]
+            cancel()
+            cancel()                                  # the close path may run it again
+        self.assertEqual(self.dlg.cancelled, [pending])
+        self.assertEqual(say.call_count, 1)
+
+    def test_a_tick_during_a_dictation_says_nothing_and_waits(self):
+        # The microphone would transcribe the reminder into the reply.
+        with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
+            self.host._remind_request(self.dlg, self.dictation)
+            self.dictation.state = "recording"
+            self.dlg.fire_last()
+            self.dictation.state = "transcribing"
+            self.dlg.fire_last()
+            say.assert_not_called()
+            self.assertEqual(len(self.dlg.scheduled), 3)      # still re-armed each time
+            self.dictation.state = "idle"
+            self.dlg.fire_last()
+        # The skipped ticks did not count as repeats: the first words are still first.
+        self.assertEqual([c.args[0] for c in say.call_args_list], ["Please Respond"])
+
+    def test_a_tick_after_the_dialog_is_gone_does_nothing(self):
+        # A failed build is torn down without the close path (_abandon_dialog).
+        with mock.patch("myagent.safety_mixin.speak", return_value=True) as say:
+            self.host._remind_request(self.dlg, self.dictation)
+            self.dlg.exists = False
+            self.dlg.fire_last()
+        say.assert_not_called()
+        self.assertEqual(len(self.dlg.scheduled), 1)          # not re-armed
+
+    def test_where_nothing_can_speak_each_reminder_rings_the_bell(self):
+        with mock.patch("myagent.safety_mixin.speak", return_value=False):
+            self.host._remind_request(self.dlg, self.dictation)
+            self.dlg.fire_last()
+            self.dlg.fire_last()
+        self.assertEqual(self.dlg.bells, 2)
+
 
 class WiringTests(unittest.TestCase):
     def test_the_dialog_announces_after_the_focus_under_the_auto_send_gate(self):
         src = (ROOT / "myagent" / "safety_mixin.py").read_text(encoding="utf-8")
-        self.assertIn("from myagent.speech import AGENT_REQUEST_ANNOUNCEMENT, speak", src)
+        self.assertIn("from myagent.speech import AGENT_REQUEST_ANNOUNCEMENT, reminder_text, speak", src)
         prompt = src[src.index("def do_user_prompt("):src.index("def _announce_request(")]
         focus = "(mike_btn if hands_free else resp_text).focus_set()"
         self.assertIn(focus, prompt)
-        gate = re.search(r"if hands_free:\n\s+self\._announce_request\(dlg\)", prompt)
+        # The opening words, then the reminders armed, under the one gate.
+        gate = re.search(r"if hands_free:\n\s+self\._announce_request\(dlg\)\n"
+                         r"\s+stop_reminders\[0\] = self\._remind_request\(dlg, dictation\)", prompt)
         self.assertIsNotNone(gate)
         self.assertLess(prompt.index(focus), gate.start())
+        # The close path — every way out of the dialog — stops them.
+        close = prompt[prompt.index("def _capture_and_close("):prompt.index("def poll_relay(")]
+        self.assertIn("stop_reminders[0]()", close)
         # No bare bell on the dialog path: the fallback lives in the helper.
         self.assertNotIn("dlg.bell()", prompt)
-        helper = src[src.index("def _announce_request("):src.index("def _take_prompt_images(")]
-        self.assertIn("if not speak(AGENT_REQUEST_ANNOUNCEMENT):", helper)
+        helper = src[src.index("def _announce_request("):src.index("def _remind_request(")]
+        self.assertIn("def _announce_request(dlg, text=AGENT_REQUEST_ANNOUNCEMENT):", helper)
+        self.assertIn("if not speak(text):", helper)
         self.assertIn("dlg.bell()", helper)
+        remind = src[src.index("def _remind_request("):src.index("def _take_prompt_images(")]
+        self.assertIn("dlg.after(REQUEST_REMINDER_MS, tick)", remind)
+        self.assertIn("self._announce_request(dlg, reminder_text(repeats[0]))", remind)
+        self.assertIn('if dictation.state == "idle":', remind)
+        self.assertNotIn("speak(", remind)          # the words go through the helper
 
     def test_helpers_stays_stdlib_only(self):
         # speech.py is its own module because helpers.py is imported by the
