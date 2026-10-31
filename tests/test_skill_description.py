@@ -44,6 +44,7 @@ import pathlib
 import queue
 import tempfile
 import tkinter as tk
+import tkinter.font as tkfont
 import unittest
 from unittest import mock
 
@@ -267,6 +268,18 @@ class DialogTests(_ManagerCase):
         self.assertEqual(self.state_saves, [1])                             # the manager's own save, once
         self.assertEqual(self.host._desc_title(), "Description")           # no name box any more
 
+    def test_the_text_wears_the_notes_dialogs_font(self):
+        # 2026-11-01, the user's request: the two dialogs are twins, so the
+        # Description text is (MONO_FONT, 10) like the Notes dialog's text —
+        # it had kept the Arial of the three-row box it replaced
+        from myagent.constants import MONO_FONT
+        self.select("bank-b")
+        self.open()
+        box = self.host._desc_text
+        actual = tkfont.Font(font=box.cget("font")).actual()
+        expected = tkfont.Font(font=(MONO_FONT, 10)).actual()
+        self.assertEqual((actual["family"], actual["size"]), (expected["family"], expected["size"]))
+
 
 class _E2EHost(StreamingMixin, SkillsMixin):
     """The tool dispatch over the real Skills Manager: what a run's
@@ -436,7 +449,7 @@ class WiringTests(unittest.TestCase):
         self.assertNotIn("close_btn", opened)
         self.assertNotIn("<Escape>", opened)                    # a draft: no Escape-to-close (keyboard.py's rule)
         self.assertIn("self._close_desc_dialog(save_state=True)", opened)
-        self.assertRegex(opened, r'self\._desc_text = tk\.Text\(dlg, wrap=tk\.WORD, font=\("Arial", 10\), undo=True\)')
+        self.assertRegex(opened, r'self\._desc_text = tk\.Text\(dlg, wrap=tk\.WORD, font=\(MONO_FONT, 10\), undo=True\)')
         # The initial focus: the text, cursor at the end — the dialog's last two lines
         self.assertTrue(opened.rstrip().endswith('self._desc_text.mark_set("insert", "end-1c")\n'
                                                  '        self._desc_text.focus_set()'))

@@ -845,8 +845,9 @@ class SkillsMixin(PaneNotesMixin):
         )
         hint.bind("<Configure>", lambda e: hint.config(wraplength=max(e.width - 4, 200)))
         hint.grid(row=0, column=0, columnspan=2, sticky="ew", padx=15, pady=(12, 6))
-        # Prose, in the font the old box had (the Notes dialog's text is code-like)
-        self._desc_text = tk.Text(dlg, wrap=tk.WORD, font=("Arial", 10), undo=True)
+        # The Notes dialog's font (MONO_FONT, 10) since 2026-11-01, the user's request:
+        # the two dialogs are twins, and the box had worn the old three-row box's Arial
+        self._desc_text = tk.Text(dlg, wrap=tk.WORD, font=(MONO_FONT, 10), undo=True)
         self._desc_text.grid(row=1, column=0, sticky="nsew", padx=(15, 0), pady=(0, 15))
         desc_scrollbar = tk.Scrollbar(dlg, command=self._desc_text.yview)
         desc_scrollbar.grid(row=1, column=1, sticky="ns", padx=(0, 15), pady=(0, 15))
