@@ -13,7 +13,7 @@ from myagent.constants import (
     GEMINI_DEFAULT_MODEL, XAI_DEFAULT_MODEL, KIMI_DEFAULT_MODEL, OLLAMA_DEFAULT_MODEL,
 )
 from myagent.datapaths import absorb_conflict_forks, load_store, save_store, store_unreadable
-from myagent.instruction_layout import renumber, rows
+from myagent.instruction_layout import file_page, normalize_section, renumber, rows, section_of
 from myagent.keyboard import bind_mnemonics
 from myagent.sectioned_list import (
     SectionedList, note_toggle, populate, refresh, row_of, section_for_new, select_row,
@@ -124,7 +124,9 @@ class InstructionsMixin:
                 flags = " ".join(f for f in [desktop, browser, excel, physical, meta, mcp, google,
                                              proton, outlook, convo] if f)
                 preview = entry.get("text", "")[:100].replace("\n", " ")
-                lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}\n  {preview}...")
+                section = section_of(entry)     # "" = unfiled: no tag
+                tag = f"  (section: {section})" if section else ""
+                lines.append(f"• {n}  [{provider}/{model}]{' [' + flags + ']' if flags else ''}{tag}\n  {preview}...")
             return "\n".join(lines)
 
         if not name:
@@ -138,6 +140,7 @@ class InstructionsMixin:
                 "name": name,
                 "text": entry.get("text", ""),
                 "notes": entry.get("notes", ""),
+                "section": section_of(entry),   # "" = unfiled
                 "desktop": entry.get("desktop", False),
                 "browser": entry.get("browser", False),
                 "excel": entry.get("excel", False),
@@ -171,6 +174,9 @@ class InstructionsMixin:
             text = params.get("text", "")
             if not text:
                 return "Error: 'text' is required when creating an instruction."
+            section = params.get("section")
+            if section is not None and not isinstance(section, str):
+                return self._SECTION_TYPE_ERROR
             entry = {
                 "text": text,
                 "notes": params.get("notes") or "",
@@ -203,8 +209,15 @@ class InstructionsMixin:
                                  else sorted(getattr(self, "_blocked_tools", [])),
             }
             instructions[name] = entry
+            # Filing (2026-10-31): the list's own rule — the section's last
+            # page, every page renumbered — so the tool and the editor's
+            # Section… prompt leave the same layout behind.
+            if section is not None:
+                file_page(instructions, name, section)
             self._save_instructions_to_disk(instructions)
-            return f"Instruction '{name}' created successfully."
+            self._post_instruction_ui_refresh(instructions)
+            return (f"Instruction '{name}' created successfully."
+                    + self._filing_note(section))
 
         if action == "update":
             if name not in instructions:
@@ -214,7 +227,7 @@ class InstructionsMixin:
                          "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
-                         "fast_mode", "blocked_tools")
+                         "fast_mode", "blocked_tools", "section")
             if all(params.get(k) is None for k in updatable):
                 # Built from `updatable` itself, so it can never again name
                 # fewer fields than update accepts.
@@ -244,21 +257,54 @@ class InstructionsMixin:
                 # call changes it (the loop above ran first).
                 entry["upgrade_target"] = self._upgrade_sanitize_target(
                     upgrade, entry.get("provider", "Anthropic"))
+            section = params.get("section")
+            if section is not None:
+                if not isinstance(section, str):
+                    return self._SECTION_TYPE_ERROR
+                file_page(instructions, name, section)
             self._save_instructions_to_disk(instructions)
+            self._post_instruction_ui_refresh(instructions)
             if name == self.agent_instruction_name:
-                return f"Instruction '{name}' updated on disk. Changes will take effect next time it is loaded."
-            return f"Instruction '{name}' updated successfully."
+                return (f"Instruction '{name}' updated on disk. Changes will take effect "
+                        "next time it is loaded." + self._filing_note(section))
+            return f"Instruction '{name}' updated successfully." + self._filing_note(section)
 
         if action == "delete":
             if name not in instructions:
                 return f"Error: Instruction '{name}' not found."
             del instructions[name]
             self._save_instructions_to_disk(instructions)
+            self._post_instruction_ui_refresh(instructions)
             if self.agent_instruction_name == name:
                 self.agent_instruction_name = ""
             return f"Instruction '{name}' deleted."
 
         return f"Error: Unknown action '{action}'."
+
+    _SECTION_TYPE_ERROR = ("Error: 'section' must be a string — the section name to file "
+                           "under, '' or 'Unfiled' to unfile.")
+
+    @staticmethod
+    def _filing_note(section):
+        """The sentence a create / update's reply ends with when the call
+        named a section: where the page now is. '' when it named none."""
+        if section is None:
+            return ""
+        section = normalize_section(section)
+        return f" Filed under '{section}'." if section else " Unfiled."
+
+    def _post_instruction_ui_refresh(self, instructions):
+        """A tool-driven store change (manage_instructions create / update /
+        delete) reaching an open Instruction Editor's list — on the Tk thread,
+        since the tool runs on the worker; the skills tool's
+        _post_skill_ui_refresh twin (2026-10-31; until then the open list went
+        stale on every tool change). Nothing to do on a host without a root
+        (a bare test host); _refresh_instruction_list itself does nothing
+        while no editor is open."""
+        root = getattr(self, "root", None)
+        if root is None:
+            return
+        root.after(0, lambda: self._refresh_instruction_list(instructions))
 
     def open_instruction_editor(self):
         if self.instruction_editor_window and self.instruction_editor_window.winfo_exists():

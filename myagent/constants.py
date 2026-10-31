@@ -634,6 +634,16 @@ META_TOOLS = [
                         "enum": ["disabled", "enabled", "on_demand"],
                     },
                 },
+                "section": {
+                    "type": "string",
+                    "description": (
+                        "The section of the Instruction Editor's Instructions list to file "
+                        "this instruction under, as that section's last page (a name no "
+                        "section has yet creates one). '' or 'Unfiled' unfiles it. Omitted: "
+                        "unfiled on create, unchanged on update. read reports it; list tags "
+                        "each filed row with it."
+                    ),
+                },
             },
             "required": ["action"],
         },
@@ -701,6 +711,16 @@ META_TOOLS = [
                     "type": "string",
                     "enum": ["disabled", "enabled", "on_demand"],
                     "description": "Skill mode (default: disabled on create)",
+                },
+                "section": {
+                    "type": "string",
+                    "description": (
+                        "The section of the Skills Manager's SKILLS list to file this skill "
+                        "under, as that section's last entry (a name no section has yet "
+                        "creates one). '' or 'Unfiled' unfiles it. Omitted: unfiled on "
+                        "create, unchanged on update. read reports it; list tags each filed "
+                        "row with it."
+                    ),
                 },
             },
             "required": ["action"],

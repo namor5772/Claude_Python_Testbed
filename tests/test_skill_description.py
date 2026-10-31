@@ -365,8 +365,9 @@ class RoundTripTests(unittest.TestCase):
         self.assertIn('"description": "From the tool. Use for tools."', read)
         listing = self.tool("manage_skills", action="list")
         self.assertIn("• tool-skill  [on_demand]\n  From the tool. Use for tools.", listing)
-        self.assertIn("• bank-b  [on_demand]\n  Second bank skill.", listing)
-        self.assertIn("• bank-a  [disabled]\n  body a...", listing)       # no description: the preview
+        # (the filed rows carry their section tag since 2026-10-31 — tests/test_meta_layout.py)
+        self.assertIn("• bank-b  [on_demand]  (section: Bank)\n  Second bank skill.", listing)
+        self.assertIn("• bank-a  [disabled]  (section: Bank)\n  body a...", listing)   # no description: the preview
         # An update on a FILED skill changes the description alone
         out = self.tool("manage_skills", action="update", name="bank-a",
                         description="Added by the tool.")

@@ -16,7 +16,7 @@ from myagent.datapaths import (copy_skill_resources, delete_skill_tree_entry,
                                list_skill_resources, load_skills_tree,
                                save_skills_tree, skill_dir_for,
                                skill_resource_path)
-from myagent.instruction_layout import renumber, rows
+from myagent.instruction_layout import file_page, normalize_section, renumber, rows, section_of
 from myagent.keyboard import bind_mnemonics
 from myagent.sectioned_list import SectionedList, theme_colors
 from myagent.ui_mixin import SMALL_BUTTON_FONT
@@ -116,7 +116,9 @@ class SkillsMixin(PaneNotesMixin):
                 mode = sd.get("mode", "disabled")
                 desc = (sd.get("description") or "").strip()
                 info = desc or sd.get("content", "")[:100].replace("\n", " ") + "..."
-                lines.append(f"• {sn}  [{mode}]\n  {info}")
+                section = section_of(sd)        # "" = unfiled: no tag
+                tag = f"  (section: {section})" if section else ""
+                lines.append(f"• {sn}  [{mode}]{tag}\n  {info}")
             return "\n".join(lines)
 
         if not name:
@@ -128,7 +130,8 @@ class SkillsMixin(PaneNotesMixin):
             sd = self.skills[name]
             return json.dumps({"name": name, "content": sd.get("content", ""),
                                "mode": sd.get("mode", "disabled"),
-                               "description": sd.get("description", "")}, indent=2)
+                               "description": sd.get("description", ""),
+                               "section": section_of(sd)}, indent=2)   # "" = unfiled
 
         # --- Bundled resource files (2026-09-25): the folder IS the skill —
         # SKILL.md may sit beside references/, scripts/, tests/, … which sync,
@@ -254,15 +257,24 @@ class SkillsMixin(PaneNotesMixin):
             mode = params.get("mode", "disabled")
             if mode not in ("disabled", "enabled", "on_demand"):
                 return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
+            section = params.get("section")
+            if section is not None and not isinstance(section, str):
+                return self._SECTION_TYPE_ERROR
             entry = {"content": content, "mode": mode}
             desc = (params.get("description") or "").strip()
             if desc:
                 entry["description"] = desc
             self.skills[name] = entry
             self._set_skill_mode(name, mode)
+            # Filing (2026-10-31): the SKILLS list's own rule — the section's
+            # last entry, every skill renumbered — the layout keys riding in
+            # each SKILL.md's frontmatter through _save_skills.
+            if section is not None:
+                file_page(self.skills, name, section)
             self._save_skills()
             self._post_skill_ui_refresh()
-            return f"Skill '{name}' created successfully." + self._desc_length_warning(desc)
+            return (f"Skill '{name}' created successfully." + self._filing_note(section)
+                    + self._desc_length_warning(desc))
 
         if action == "update":
             if name not in self.skills:
@@ -270,11 +282,14 @@ class SkillsMixin(PaneNotesMixin):
             content = params.get("content")
             mode = params.get("mode")
             description = params.get("description")
-            if content is None and mode is None and description is None:
-                return ("Error: At least one of 'content', 'mode' or 'description' "
-                        "must be provided for update.")
+            section = params.get("section")
+            if content is None and mode is None and description is None and section is None:
+                return ("Error: At least one of 'content', 'mode', 'description' or "
+                        "'section' must be provided for update.")
             if mode is not None and mode not in ("disabled", "enabled", "on_demand"):
                 return f"Error: Invalid mode '{mode}'. Valid modes: disabled, enabled, on_demand."
+            if section is not None and not isinstance(section, str):
+                return self._SECTION_TYPE_ERROR
             if content is not None:
                 self.skills[name]["content"] = content
             if mode is not None:
@@ -286,9 +301,12 @@ class SkillsMixin(PaneNotesMixin):
                     self.skills[name]["description"] = desc
                 else:
                     self.skills[name].pop("description", None)  # "" clears it
+            if section is not None:
+                file_page(self.skills, name, section)
             self._save_skills()
             self._post_skill_ui_refresh()
-            return f"Skill '{name}' updated successfully." + self._desc_length_warning(desc)
+            return (f"Skill '{name}' updated successfully." + self._filing_note(section)
+                    + self._desc_length_warning(desc))
 
         if action == "delete":
             if name not in self.skills:
@@ -301,6 +319,18 @@ class SkillsMixin(PaneNotesMixin):
             return f"Skill '{name}' deleted."
 
         return f"Error: Unknown action '{action}'."
+
+    _SECTION_TYPE_ERROR = ("Error: 'section' must be a string — the section name to file "
+                           "under, '' or 'Unfiled' to unfile.")
+
+    @staticmethod
+    def _filing_note(section):
+        """The sentence a create / update's reply ends with when the call
+        named a section: where the skill now is. '' when it named none."""
+        if section is None:
+            return ""
+        section = normalize_section(section)
+        return f" Filed under '{section}'." if section else " Unfiled."
 
     def do_run_instruction(self, params):
         """Launch a saved instruction as a separate MyAgent process.

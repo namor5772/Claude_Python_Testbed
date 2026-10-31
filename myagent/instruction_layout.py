@@ -13,9 +13,12 @@ That layout is stored ON THE ENTRIES, not beside them: an entry may carry
 
 so it rides along with the instruction through the OneDrive sync and the
 key-level union that heals conflict forks, and every other reader of the
-store — the manage_instructions tool, Heartbeat.py — keeps working
-unchanged: an entry written without the two keys simply lands unfiled, at the
-end, in alphabetical order.
+store — Heartbeat.py, the manage_instructions tool until 2026-10-31 — keeps
+working unchanged: an entry written without the two keys simply lands
+unfiled, at the end, in alphabetical order. Since 2026-10-31 the
+manage_instructions and manage_skills tools file a page through `file_page`
+when a call names a `section`, leaving the same layout the editors' Section…
+prompt does.
 
 A section exists exactly while some page names it (there is no separate
 section list to keep consistent), sections appear in the order of their
