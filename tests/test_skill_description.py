@@ -24,18 +24,34 @@ root; every disk-touching call stubbed):
 * a wiring scan: GEOMETRY_KINDS / _open_geometry_windows, the dialog placed
   like the other persisted windows, no Escape-to-close (a draft), Alt+E on
   the button and in the dialog, MyAgent's init defaults, nothing of the old
-  box left.
+  box left;
+* the description's behaviour, editing and access are what they were before
+  the dialog (RoundTripTests, the user's question of 2026-10-31): through the
+  REAL tree writer into a temp tree, the manager's SAVE stores the dialog's
+  text — open or closed — whitespace-collapsed between `name:` and `mode:`,
+  a blank one dropping the line, the skill's content, mode and list placement
+  untouched; the `manage_skills` tool's create / read / list / update /
+  clear and `get_skill` (the content alone, as ever) through the REAL
+  `_execute_tool` on the same tree; and a tool update reaching the open
+  manager's list, the draft at the next selection and the system prompt's
+  on-demand index.
 """
 
 import copy
+import os
 import pathlib
+import queue
+import tempfile
 import tkinter as tk
 import unittest
 from unittest import mock
 
+from myagent import datapaths as dp
 from myagent import skills_mixin
+from myagent.helpers import _ToolBlock
 from myagent.skills_mixin import SkillsMixin
 from myagent.state_mixin import GEOMETRY_KINDS
+from myagent.streaming_mixin import StreamingMixin
 from tests._util import stub
 from tests.test_skills_list import _Button, _find, _skills, _walk
 
@@ -241,6 +257,154 @@ class DialogTests(_ManagerCase):
         self.assertEqual(self.remembered, ["skill_desc", "skills"])        # the dialog first, then the window
         self.assertEqual(self.state_saves, [1])                             # the manager's own save, once
         self.assertEqual(self.host._desc_title(), "Description")           # no name box any more
+
+
+class _E2EHost(StreamingMixin, SkillsMixin):
+    """The tool dispatch over the real Skills Manager: what a run's
+    manage_skills / get_skill call and the dialog's SAVE share."""
+
+
+class RoundTripTests(unittest.TestCase):
+    """The description through the REAL tree writer and reader on a temp
+    tree (the data dir redirected, so the shared tree is never touched),
+    from the manager's SAVE, from the manage_skills tool, into get_skill and
+    the system prompt — behaviour, editing and access unchanged by the
+    Description dialog."""
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.withdraw()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        os.environ[dp.DATA_DIR_ENV] = tmp.name
+        self.addCleanup(os.environ.pop, dp.DATA_DIR_ENV, None)
+        self.tree = os.path.join(tmp.name, "skills")
+        dp.save_skills_tree(self.tree, _skills())              # the seed, as a launch finds it
+        patcher = mock.patch.object(skills_mixin, "SKILLS_DIR", self.tree)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        host = self.host = stub(
+            _E2EHost, root=self.root, queue=queue.Queue(), system_prompt="BASE",
+            _run_system_prompt=None, skills_editor_window=None, instruction_editor_window=None,
+            _skills_refresh_list=None, _skills_list_width=None, _skills_collapsed_sections=set(),
+            skills_button=_Button(), _desc_dialog=None, _desc_text=None, _skill_desc_text="",
+            _skills_name_entry=None)
+        host.skills = host._load_skills()                      # REAL: the temp tree, global modes noted
+        host._remember_geometry = lambda kind, win: None
+        host._save_last_state = lambda: None
+        host._place_window = lambda *a, **k: None               # _save_skills is the REAL one
+
+    def tearDown(self):
+        self.host._close_desc_dialog()
+        self.root.destroy()
+
+    def reload(self, name):
+        return dp.load_skills_tree(self.tree)[name]
+
+    def frontmatter(self, name):
+        with open(os.path.join(self.tree, name, dp.SKILL_BASENAME), encoding="utf-8") as fh:
+            text = fh.read()
+        return text.split("\n---\n", 1)[0].split("\n")[1:]
+
+    def manager(self):
+        host = self.host
+        host.open_skills_editor()
+        win = host.skills_editor_window
+        return win, host._skills_list, _find(win, "Button", text="SAVE"), _find(win, "Button", text="Description")
+
+    def tool(self, tool_name, **params):
+        return self.host._execute_tool(_ToolBlock(tool_name, "toolu_1", params))
+
+    def test_the_managers_save_stores_the_dialogs_text_as_the_box_did(self):
+        win, lst, save_btn, desc_btn = self.manager()
+        lst.select(("page", "bank-b"))
+        self.root.update()
+        self.assertEqual(self.host._desc_draft(), "Second bank skill.")     # loaded from the tree
+        desc_btn.invoke()
+        self.host._desc_text.delete("1.0", tk.END)
+        self.host._desc_text.insert("1.0", "  Pays  bills.\nUse for  ANZ. ")
+        save_btn.invoke()                                                   # the dialog open
+        entry = self.reload("bank-b")
+        self.assertEqual(entry["description"], "Pays bills. Use for ANZ.")  # single-line, collapsed
+        self.assertEqual((entry["content"], entry["mode"], entry["section"], entry["order"]),
+                         ("body b", "on_demand", "Bank", 1))                # nothing else moved
+        self.assertEqual(self.frontmatter("bank-b"),
+                         ["name: bank-b", "description: Pays bills. Use for ANZ.", "mode: on_demand",
+                          "section: Bank", "order: 1"])                     # the line where it always was
+        self.host._close_desc_dialog()
+        self.host._set_desc_draft("Edited with the dialog closed")
+        save_btn.invoke()                                                   # the dialog closed
+        self.assertEqual(self.reload("bank-b")["description"], "Edited with the dialog closed")
+        self.host._set_desc_draft(" \n ")
+        save_btn.invoke()                                                   # a blank one drops the line
+        self.assertNotIn("description", self.reload("bank-b"))
+        self.assertEqual(self.frontmatter("bank-b"),
+                         ["name: bank-b", "mode: on_demand", "section: Bank", "order: 1"])
+        # Cycle Mode and a plain re-save leave a description alone
+        lst.select(("page", "mail-a"))
+        self.root.update()
+        self.host._set_desc_draft("Mail skill. Use for mail.")
+        save_btn.invoke()
+        _find(win, "Button", text="Cycle Mode").invoke()
+        save_btn.invoke()
+        self.assertEqual(self.reload("mail-a")["description"], "Mail skill. Use for mail.")
+        self.assertEqual(self.reload("mail-a")["mode"], "on_demand")       # enabled → on_demand
+
+    def test_manage_skills_and_get_skill_work_on_the_same_tree(self):
+        out = self.tool("manage_skills", action="create", name="tool-skill", content="tool body",
+                        mode="on_demand", description=" From the tool. Use for tools. ")
+        self.assertIn("created successfully", out)
+        self.assertEqual(self.frontmatter("tool-skill"),
+                         ["name: tool-skill", "description: From the tool. Use for tools.",
+                          "mode: on_demand"])                               # unfiled: no layout keys
+        self.assertNotIn("section", self.reload("tool-skill"))
+        read = self.tool("manage_skills", action="read", name="tool-skill")
+        self.assertIn('"description": "From the tool. Use for tools."', read)
+        listing = self.tool("manage_skills", action="list")
+        self.assertIn("• tool-skill  [on_demand]\n  From the tool. Use for tools.", listing)
+        self.assertIn("• bank-b  [on_demand]\n  Second bank skill.", listing)
+        self.assertIn("• bank-a  [disabled]\n  body a...", listing)       # no description: the preview
+        # An update on a FILED skill changes the description alone
+        out = self.tool("manage_skills", action="update", name="bank-a",
+                        description="Added by the tool.")
+        self.assertIn("updated successfully", out)
+        self.assertEqual(self.frontmatter("bank-a"),
+                         ["name: bank-a", "description: Added by the tool.", "mode: disabled",
+                          "section: Bank", "order: 0"])
+        self.tool("manage_skills", action="update", name="bank-a", description="")
+        self.assertEqual(self.frontmatter("bank-a"),
+                         ["name: bank-a", "mode: disabled", "section: Bank", "order: 0"])
+        self.assertEqual(self.reload("bank-a")["content"], "body a")
+        # get_skill hands over the content alone, for an on_demand skill, as ever
+        self.assertEqual(self.tool("get_skill", skill_name="tool-skill"), "tool body")
+        self.assertEqual(self.tool("get_skill", skill_name="bank-b"), "body b")
+        self.assertEqual(self.tool("get_skill", skill_name="bank-a"),
+                         "Skill not found or not on-demand: bank-a")
+
+    def test_a_tool_update_reaches_the_open_manager_and_the_prompt(self):
+        win, lst, save_btn, desc_btn = self.manager()
+        lst.select(("page", "bank-b"))
+        self.root.update()
+        desc_btn.invoke()
+        self.assertEqual(self.host._desc_text.get("1.0", "end-1c"), "Second bank skill.")
+        self.tool("manage_skills", action="update", name="bank-b", description="Updated by the tool.")
+        self.root.update()                                                  # the after(0) UI refresh
+        self.assertEqual(lst.selected_row(), ("page", "bank-b"))            # the list kept its selection
+        self.assertEqual(self.host._desc_text.get("1.0", "end-1c"), "Second bank skill.")   # the draft is what the last selection loaded (as the box was)
+        lst.select(("page", "mail-a"))
+        self.root.update()
+        lst.select(("page", "bank-b"))
+        self.root.update()
+        self.assertEqual(self.host._desc_text.get("1.0", "end-1c"), "Updated by the tool.")
+        self.assertEqual(self.reload("bank-b")["description"], "Updated by the tool.")
+        prompt = self.host._build_system_prompt()
+        self.assertIn("## On-Demand Skills", prompt)
+        self.assertIn("- bank-b — Updated by the tool.", prompt)
+        self.assertNotIn("body b", prompt)                                  # on_demand content is fetched, not injected
+        self.assertNotIn("bank-a", prompt)                                  # a disabled skill is not listed
 
 
 class WiringTests(unittest.TestCase):
