@@ -539,3 +539,34 @@ foreach ($v in @(
     $lnk.Save()
 }
 ```
+
+### The `general` share folder (Windows shortcut icon)
+
+`icon_general.ico` (2026-11-02) is the icon of a plain **folder shortcut**, not a
+launcher: the Desktop `general.lnk` targets `<OneDrive>\MyAppShare\general`, the
+folder agent runs save into (photos, bank exports, dockets), and Explorer opens
+it directly, so there is no `.ps1` twin and no conhost wrapper. The same folder
+is pinned to Explorer's Quick Access on the desktop PC (right-click a folder →
+*Pin to Quick access*, or `(New-Object -ComObject Shell.Application).Namespace($path).Self.InvokeVerb('pintohome')`).
+The icon is a manila folder with the family's googly eyes peering over the front
+flap and a white cloud on the flap for the OneDrive share; rendered from the
+1024px master `icon_general_master.png` (`make_general_icon.py`). Regenerate with:
+
+```powershell
+.venv\Scripts\python.exe desktop_launchers\make_general_icon.py
+.venv\Scripts\python.exe -c "from PIL import Image; Image.open(r'desktop_launchers\icon_general_master.png').convert('RGBA').save(r'desktop_launchers\icon_general.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+```
+
+Recreate the Desktop shortcut on a new machine (run from the repo root; the
+Desktop is OneDrive-backed, so the `.lnk` syncs to every machine and works
+wherever the OneDrive root is the same):
+
+```powershell
+$repo = (Get-Location).Path
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'general.lnk'))
+$lnk.TargetPath = "$env:OneDrive\MyAppShare\general"
+$lnk.WorkingDirectory = "$env:OneDrive\MyAppShare\general"
+$lnk.IconLocation = "$repo\desktop_launchers\icon_general.ico,0"
+$lnk.Save()
+```
