@@ -580,7 +580,7 @@ META_TOOLS = [
                         "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 and Mythos 5 / 5.1 have "
                         "ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
                         "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh (max on 5.6+); "
-                        "gpt-6-sol / gpt-6-luna: none..max like 5.6; gpt-6-astra and "
+                        "gpt-6-sol / gpt-6-luna / gpt-6.1-terra: none..max like 5.6; gpt-6-astra and "
                         "gpt-6.1-sol are ALWAYS-reasoning — low/medium/high/xhigh/max, "
                         "'none' is invalid there. Lower-cased to match the stored value."
                     ),
@@ -1710,9 +1710,13 @@ BUDGET_PRESETS = {"1K": 1024, "4K": 4096, "8K": 8192, "16K": 16384, "32K": 32768
 # always-reasoning — probed live 2026-09-30: "none" is HTTP 400 "not supported
 # with the 'gpt-6.1-sol' model. Supported values are: 'low', 'medium', 'high',
 # 'xhigh', and 'max'", temperature 400 "Unsupported parameter" at low — so it
-# joins astra here, unlike the gpt-6-sol it succeeds.
+# joins astra here, unlike the gpt-6-sol it succeeds. GPT-6.1 Terra
+# (gpt-6.1-terra, created 2026-10-13, $1/$5) did NOT — probed live
+# 2026-11-02: none accepted (0 reasoning tokens), temperature at none only,
+# minimal 400 — so it stays off this list and gets the None rung.
 OPENAI_ALWAYS_REASONING_PREFIXES = ("gpt-6-astra", "gpt-6.1-sol")
-OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna",
+OPENAI_FALLBACK_MODELS = ["gpt-5.6-terra", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol",
+                          "gpt-6-luna",
                           "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4"]
 OPENAI_DEFAULT_MODEL = OPENAI_FALLBACK_MODELS[0]
 # The Responses API `include` values the OpenAI and xAI requests carry (the
@@ -3920,6 +3924,15 @@ OPENAI_PRICING = {
     # Without this row it matched nothing (gpt-6-sol is not its prefix), so
     # a run on it would have been unpriced and unlogged.
     "gpt-6.1-sol":         (2.00, 10.00, 0.10, 2.50),
+    # GPT-6.1 Terra (gpt-6.1-terra, created 2026-10-13 by the listing's
+    # timestamp, announced 2026-10-26; pricing page + model page read
+    # 2026-11-02, after a westpac-login run on it showed "no pricing row"
+    # and reached no log): $1/$5, cached $0.05, write $1.25 — half of
+    # gpt-6.1-sol on every bucket. NOT always-reasoning (probed live the
+    # same day: none accepted with 0 reasoning tokens, temperature only at
+    # none, minimal 400 — the 5.6 rule), so it stays off
+    # OPENAI_ALWAYS_REASONING_PREFIXES and keeps the None rung.
+    "gpt-6.1-terra":       (1.00, 5.00, 0.05, 1.25),
     "gpt-6-luna":          (0.10, 0.50, 0.01, 0.125),
     # GPT-5.6 family — no bare "gpt-5.6" id exists (only the three tiers), so
     # there is deliberately no family fallback row: an unknown future 5.6 id
