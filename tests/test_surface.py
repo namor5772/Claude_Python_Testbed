@@ -98,7 +98,7 @@ METHODS = {
     "StreamingMixin": {
         "_execute_tool", "_generic_pricing_warning", "_get_pricing", "_get_tools",
         "_log_api_cost", "_make_serializable", "_messages_to_responses",
-        "_payload_for_display", "_pricing_match",
+        "_payload_for_display", "_priced_dict", "_pricing_match",
         "_tools_to_responses", "_weak_desktop_combo_warning", "stream_worker",
     },
     # 2026-10-19: _tool_info moved to the base class every posting mixin

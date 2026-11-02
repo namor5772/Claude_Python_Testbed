@@ -261,7 +261,7 @@ class CostArithmeticCase(unittest.TestCase):
         # A 0.0 rate would silently price cached tokens FREE; absence makes the
         # accumulator's .get("cache_read", 0) the explicit, auditable choice.
         self.assertNotIn("cache_read",
-                         StreamingMixin._get_pricing("OpenAI", "gpt-5-pro"))
+                         StreamingMixin._get_pricing("OpenAI", "gpt-5.5-pro"))
 
 
 if __name__ == "__main__":

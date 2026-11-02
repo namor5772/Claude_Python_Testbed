@@ -16,7 +16,7 @@ from myagent.constants import (
     _HAS_PROTONMAIL, _HAS_OUTLOOK, _HAS_EXCEL, _HAS_CAMERA, _HAS_MICROPHONE,
     _HAS_PHYSICAL,
     ANTHROPIC_PRICING, ANTHROPIC_FAST_PRICING, ANTHROPIC_WEB_SEARCH_FEE,
-    ANTHROPIC_LONG_CONTEXT_PRICING,
+    LONG_CONTEXT_PRICING,
     OPENAI_PRICING, GEMINI_PRICING, XAI_PRICING, OPENAI_RESPONSES_INCLUDE,
     RESPONSES_REASONING_INCLUDE, XAI_RESPONSES_INCLUDE,
     GENERIC_PRICING_PREFIXES,
@@ -498,7 +498,11 @@ class StreamingMixin(PaneNotesMixin):
                 # real call sends an explicit disable for "Off" — show it.
                 if (self.provider == "Anthropic"
                         and self._anthropic_thinking_on_by_default()):
-                    payload["thinking"] = {"type": "disabled"}
+                    # ...a bare between_tools on Sonnet 5.5+, which refuses
+                    # the disable (2026-11-02) — the live call's rule.
+                    payload["thinking"] = ({"type": "between_tools"}
+                                           if self._is_anthropic_sonnet_55()
+                                           else {"type": "disabled"})
                 # Opus 4.7+ / Fable 5 reject temperature — mirror the real call's skip
                 if (self.provider != "Anthropic"
                         or (not self._anthropic_rejects_temperature()
@@ -1139,7 +1143,11 @@ class StreamingMixin(PaneNotesMixin):
         needs the prefix, to tell a model's own row from a family catch-all.
         An explicit ``table`` overrides the provider's standard one — how the
         fast-mode lookup (ANTHROPIC_FAST_PRICING) reuses this one
-        longest-prefix implementation."""
+        longest-prefix implementation.
+        A None entry is an explicit "unpriced" (a retiring sub-tier whose
+        family row survives): it is returned as the match, so a reader
+        deciding whether a model is priced must test the ENTRY.
+        """
         if table is None:
             table = {"Anthropic": ANTHROPIC_PRICING,
                      "OpenAI": OPENAI_PRICING,
@@ -1193,9 +1201,9 @@ class StreamingMixin(PaneNotesMixin):
         if provider in ("Ollama", "xAI"):
             return None
         if fast and provider == "Anthropic":
-            prefix, _entry = StreamingMixin._pricing_match(
+            _prefix, entry = StreamingMixin._pricing_match(
                 provider, model_name, table=ANTHROPIC_FAST_PRICING)
-            if prefix is not None:
+            if entry is not None:
                 return None
             return (f"{model_name} will run in FAST mode but has no row in "
                     f"ANTHROPIC_FAST_PRICING (myagent/constants.py), so its calls "
@@ -1204,8 +1212,8 @@ class StreamingMixin(PaneNotesMixin):
                     f"would claim it was free — and the standard row would bill it "
                     f"at half the fast rate). Token counts are still shown per "
                     f"call. Add the model's fast row.")
-        prefix, _entry = StreamingMixin._pricing_match(provider, model_name)
-        if prefix is not None:
+        _prefix, entry = StreamingMixin._pricing_match(provider, model_name)
+        if entry is not None:            # a None entry is an explicit "unpriced"
             return None
         return (f"{model_name} has no row in the {provider} pricing table "
                 f"(myagent/constants.py), so its calls cannot be priced: no cost "
@@ -1239,11 +1247,15 @@ class StreamingMixin(PaneNotesMixin):
         _generic_pricing_warning.
         ``prompt_tokens`` (2026-10-08) is the call's whole prompt — the
         uncached input plus both cache buckets — and selects a model's
-        SECOND rate card where it has one (ANTHROPIC_LONG_CONTEXT_PRICING:
-        Haiku 5.5 above 100K tokens, $0.50 / $2.50): the returned dict then
-        carries that card's four rates plus ``long_context`` = the
-        threshold crossed. None, or a prompt at or under the line, is the
-        base card; the fast lookup and every other provider ignore it."""
+        SECOND rate card where it has one (LONG_CONTEXT_PRICING, per
+        provider: Haiku 5.5 above 100K tokens, $0.50 / $2.50; since
+        2026-11-02 the OpenAI 5.4 / 5.5 / 5.6 / 6 tiers above 272K and
+        Gemini 3.1 Pro above 200K): the returned dict then carries that
+        card's rates, in the provider's shape, plus ``long_context`` = the
+        threshold crossed. A card applies only by the SAME prefix as the
+        base row — gpt-5.4-mini prices by its own row and never inherits
+        the gpt-5.4 card. None, or a prompt at or under the line, is the
+        base card; the fast lookup and xAI / Moonshot ignore it."""
         if provider == "Anthropic" and speed == "fast":
             _prefix, fast_match = StreamingMixin._pricing_match(
                 provider, model_name, table=ANTHROPIC_FAST_PRICING)
@@ -1252,40 +1264,46 @@ class StreamingMixin(PaneNotesMixin):
             per_token = tuple(p / 1_000_000 for p in fast_match)
             return {"input": per_token[0], "output": per_token[1],
                     "cache_write": per_token[2], "cache_read": per_token[3]}
-        _prefix, best_match = StreamingMixin._pricing_match(provider, model_name)
+        prefix, best_match = StreamingMixin._pricing_match(provider, model_name)
         if best_match is None:
             return None
-        best_match = resolve_price(best_match, today)
-        # Convert from per-million to per-token. A None slot (an OpenAI -pro
-        # tier with no cached-input rate) passes through untouched — dividing
-        # it would raise.
-        per_token = tuple(None if p is None else p / 1_000_000 for p in best_match)
+        priced = StreamingMixin._priced_dict(provider, resolve_price(best_match, today))
+        # The second rate card by prompt length (Haiku 5.5 since 2026-10-08;
+        # OpenAI's >272K and Gemini 3.1 Pro's >200K tiers since 2026-11-02),
+        # only where the card's prefix IS the base row's: a tier the page
+        # gives no long-context rate (gpt-5.4-mini) has its own base row and
+        # must not inherit the family's card by a shorter prefix.
+        table = LONG_CONTEXT_PRICING.get(provider) if prompt_tokens is not None else None
+        if table:
+            card_prefix, card = StreamingMixin._pricing_match(provider, model_name, table=table)
+            if card is not None and card_prefix == prefix and prompt_tokens > card[0]:
+                priced = StreamingMixin._priced_dict(provider, card[1])
+                priced["long_context"] = card[0]
+        return priced
+
+    @staticmethod
+    def _priced_dict(provider, row):
+        """A table row (per million) as the per-token dict the accumulator
+        reads, in the provider's shape. Anthropic rows are (input, output,
+        cache_write, cache_read), every key present. OpenAI / Gemini rows
+        carry a 3rd cached-input element — a None there (the OpenAI -pro
+        tiers) means no cached tier, so the key is left out entirely and the
+        accumulator's pricing.get("cache_read", 0) falls back to unpriced,
+        never to a silent 0.0 rate — and, from GPT-5.6 on, a 4th element,
+        the BILLED cache-write rate (1.25x input; 2026-09-06), exposed only
+        when present: _openai_usage_dict moves written tokens into
+        cache_creation_input_tokens only for these rows
+        (_openai_bills_cache_writes), so a 3-tuple family never sees a
+        cache_write key and its writes stay full-rate input. The same
+        shapes serve the long-context cards."""
+        per_token = tuple(None if p is None else p / 1_000_000 for p in row)
         if provider == "Anthropic":
-            priced = {"input": per_token[0], "output": per_token[1],
-                      "cache_write": per_token[2], "cache_read": per_token[3]}
-            if prompt_tokens is not None:
-                _lc_prefix, card = StreamingMixin._pricing_match(
-                    provider, model_name, table=ANTHROPIC_LONG_CONTEXT_PRICING)
-                if card is not None and prompt_tokens > card[0]:
-                    long_rates = tuple(p / 1_000_000 for p in card[1])
-                    priced = {"input": long_rates[0], "output": long_rates[1],
-                              "cache_write": long_rates[2],
-                              "cache_read": long_rates[3],
-                              "long_context": card[0]}
-            return priced
+            return {"input": per_token[0], "output": per_token[1],
+                    "cache_write": per_token[2], "cache_read": per_token[3]}
         priced = {"input": per_token[0], "output": per_token[1]}
-        # OpenAI/Gemini carry a 3rd cached-input element; a None entry means the
-        # model has no cached tier, so the key is left out entirely and the
-        # accumulator's pricing.get("cache_read", 0) falls back to unpriced.
-        if len(per_token) > 2 and best_match[2] is not None:
+        if len(per_token) > 2 and row[2] is not None:
             priced["cache_read"] = per_token[2]
-        # A 4th element is a BILLED cache-write rate (OpenAI from GPT-5.6 on:
-        # 1.25x input — terra $2.50/M, gpt-6-astra $12.50/M; added
-        # 2026-09-06). Exposed only when present:
-        # _openai_usage_dict moves written tokens into cache_creation_input_tokens
-        # only for these rows (see _openai_bills_cache_writes), so a 3-tuple
-        # family never sees a cache_write key and its writes stay full-rate input.
-        if len(per_token) > 3 and best_match[3] is not None:
+        if len(per_token) > 3 and row[3] is not None:
             priced["cache_write"] = per_token[3]
         return priced
 

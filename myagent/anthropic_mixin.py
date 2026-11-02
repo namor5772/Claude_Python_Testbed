@@ -135,6 +135,12 @@ class AnthropicMixin(PaneNotesMixin):
         learns once and stops sending it. Also drives the Debug payload dump
         (_payload_for_display), so the dump shows what is really sent."""
         always_on = self._is_anthropic_always_on_thinking()
+        # Sonnet 5.5+ (2026-11-02 in MyAgent; probed 2026-10-14 for SelfBot)
+        # takes both surfaces: the binding beside adaptive thinking (refused
+        # beside between_tools — the same adaptive-branch rule as Haiku's)
+        # and `fallbacks: "default"` beside either shape (a model list is
+        # refused there).
+        sonnet55 = self._is_anthropic_sonnet_55()
         # Haiku 5.5+ (2026-10-08) runs the preserved-thinking check too —
         # the binding is accepted beside adaptive thinking and refused
         # beside a disable ('thinking.disabled.block_binding: Extra inputs
@@ -142,14 +148,14 @@ class AnthropicMixin(PaneNotesMixin):
         # adaptive branch only — but it has NO server-side fallback: a
         # fallbacks list is a 400 and "default" is accepted and does
         # nothing (the migration guide says not to send it). Probed live.
-        if not (always_on or self._is_anthropic_haiku_5()):
+        if not (always_on or sonnet55 or self._is_anthropic_haiku_5()):
             return None
         unsupported = getattr(self, "_anthropic_unsupported", set())
         features = {"betas": [], "block_binding": None, "fallbacks": None}
         if "block_binding" not in unsupported:
             features["betas"].append(ANTHROPIC_THINKING_BINDING_BETA)
             features["block_binding"] = dict(ANTHROPIC_THINKING_BLOCK_BINDING)
-        if always_on and "fallbacks" not in unsupported:
+        if (always_on or sonnet55) and "fallbacks" not in unsupported:
             features["betas"].append(ANTHROPIC_SERVER_FALLBACK_BETA)
             features["fallbacks"] = ANTHROPIC_SERVER_FALLBACKS
         return features
@@ -291,7 +297,14 @@ class AnthropicMixin(PaneNotesMixin):
             # sends no effort); the always-on Fable/Mythos models (where it is HTTP
             # 400) never reach this branch.
             if self._anthropic_thinking_on_by_default():
-                api_kwargs["thinking"] = {"type": "disabled"}
+                # Sonnet 5.5+ refuses the explicit disable; its off switch is
+                # a bare between_tools (display or the binding beside it is
+                # a 400) with no effort — "Off" never sends one, and
+                # between_tools takes high or below only (2026-11-02; see
+                # _is_anthropic_sonnet_55, which has the probe).
+                api_kwargs["thinking"] = ({"type": "between_tools"}
+                                          if self._is_anthropic_sonnet_55()
+                                          else {"type": "disabled"})
             if fable and fable["block_binding"]:
                 # The binding rides only beside adaptive thinking (Haiku 5.5
                 # refuses it beside a disable: thinking.disabled.block_binding

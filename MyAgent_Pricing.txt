@@ -3,7 +3,10 @@
   All prices in USD per million tokens
   Verified: April 12, 2026 — rate audits 2026-07-31 and 2026-08-25, Claude
   Fable 5.1 row added 2026-09-02, Gemini 3.8 Flash row 2026-09-16, Anthropic
-  fast-mode rows 2026-09-24 (see the dated notes in each section;
+  fast-mode rows 2026-09-24, the five-provider audit of 2026-11-02 (every
+  picker model's row re-read against its provider's card: all correct; the
+  OpenAI deprecation sweep and the OpenAI / Gemini long-context cards —
+  docs/model-audit-2026-11-02.md) (see the dated notes in each section;
   constants.py is the source of truth)
 ================================================================================
 
@@ -172,8 +175,9 @@
   sat at exactly HALF the Standard rate (Batch-tier numbers); gpt-5.6-terra
   carried gpt-5.4's numbers; gpt-5.6-luna was 5x too high.
   2026-08-25 RATE AUDIT — gpt-5.6-sol was carrying gpt-5.5's $5/$30; it bills
-  $4/$20 (cached $0.40), corrected below. The 5.5/5.6 tiers bill 2x input /
-  1.5x output above 272K input tokens (table keeps the ≤272K tier). All three
+  $4/$20 (cached $0.40), corrected below. The 5.4/5.5/5.6/6 tiers bill 2x input
+  and cache / 1.5x output above 272K input tokens — OPENAI_LONG_CONTEXT_PRICING
+  since 2026-11-02, selected per call by the prompt size. All three
   5.6 tiers accept reasoning.effort "max" (5.5 / 5.4 reject it) — MyAgent's
   Reasoning combobox offers Max on 5.6+.
   KNOWN STALE: this file still lists models the 2026-07 audit removed from
@@ -210,8 +214,9 @@
   gpt-6-luna             $0.10    $0.50     $0.01    $0.125  ("our most efficient
                                                               model for focused,
                                                               high-volume tasks")
-  (Standard tier, ≤272K input. Above 272K: 2x input & cache, 1.5x output;
-   Fast mode 2x everything — neither modelled. All three 1.05M context, 128K
+  (Standard tier, ≤272K input. Above 272K: 2x input & cache, 1.5x output —
+   OPENAI_LONG_CONTEXT_PRICING since 2026-11-02, one ⚠ per run at the
+   crossing; Fast mode 2x everything — not modelled. All three 1.05M context, 128K
    output, vision. Astra is always-reasoning: effort low/medium/high/xhigh/
    max — "none"/"minimal" are HTTP 400 — and temperature is rejected. Sol and
    luna are NOT: none/low/medium/high/xhigh/max ("minimal" HTTP 400) and
@@ -258,15 +263,17 @@
   gpt-5.4-pro            $30.00   $180.00
   gpt-5.4                $2.50    $15.00
   gpt-5.4-mini           $0.75    $4.50
-  gpt-5.4-nano           $0.20    $1.25
+  gpt-5.4-nano           UNPRICED 2026-11-02 (deprecated 2026-10-01, shutdown
+                         2027-04-01 → gpt-6-luna; an explicit None row, or the
+                         gpt-5.4 row would price it 12x over)
 
   GPT-5.3 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────
-  gpt-5.3-chat           $1.75    $14.00
-  gpt-5.3-codex          $1.75    $14.00
-  gpt-5.3                $1.75    $14.00
+  gpt-5.3-chat-latest    UNPRICED 2026-11-02 (shut down 2026-08-10)
+  gpt-5.3-codex          UNPRICED 2026-11-02 (deprecated 2026-10-01, shutdown
+                         2027-04-01 → gpt-6-sol)
 
   GPT-5.2 Family
   ──────────────────────────────────────────────────────────────────────────
@@ -274,24 +281,28 @@
   ──────────────────────────────────────────────────────────────────────────
   gpt-5.2-pro            $21.00   $168.00   (none)   [was $10.50/$84.00]
   gpt-5.2                $1.75    $14.00    $0.175   [was $0.875/$7.00]
-  gpt-5.2-chat           $1.75    $14.00    $0.175
-  gpt-5.2-codex          $1.75    $14.00    $0.175
+  gpt-5.2-chat-latest    UNPRICED 2026-11-02 (shut down 2026-08-10; an explicit
+                         None row under the surviving gpt-5.2 prefix)
+  gpt-5.2-codex          UNPRICED 2026-11-02 (shut down 2026-07-23; the same)
 
   GPT-5.1 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output    Cached
   ──────────────────────────────────────────────────────────────────────────
-  gpt-5.1                $1.25    $10.00    $0.125   [was $0.625/$5.00]
-  gpt-5.1-chat           $1.25    $10.00    $0.125   (retired 2026-07-23)
-  gpt-5.1-codex          $1.25    $10.00    $0.125   (retired 2026-07-23)
-  gpt-5.1-codex-max      $1.25    $10.00    $0.125
-  gpt-5.1-codex-mini     $0.25    $2.00     $0.025
+  gpt-5.1                UNPRICED 2026-11-02 (deprecated 2026-10-01, shutdown
+                         2027-04-01 → gpt-6-sol; was $1.25 / $10.00 / $0.125)
+  gpt-5.1-chat           UNPRICED (retired 2026-07-23)
+  gpt-5.1-codex          UNPRICED (retired 2026-07-23)
+  gpt-5.1-codex-max      UNPRICED 2026-11-02 (shut down 2026-07-23, still listed)
+  gpt-5.1-codex-mini     UNPRICED 2026-11-02 (shut down 2026-07-23, still listed)
 
   GPT-5.0 Family
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output
   ──────────────────────────────────────────────────────────────────────────
-  gpt-5-pro              $15.00   $120.00
+  gpt-5-pro              UNPRICED 2026-11-02 (deprecated 2026-06-11 — missed by
+                         the July audit — shutdown 2026-12-11 → gpt-5.6-sol;
+                         was $15.00 / $120.00)
   gpt-5                  $0.625   $5.00
   gpt-5-chat             $1.25    $10.00
   gpt-5-codex            $1.25    $10.00
@@ -302,9 +313,10 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output    Cached
   ──────────────────────────────────────────────────────────────────────────
-  gpt-4.1                $2.00    $8.00     $0.50
-  gpt-4.1-mini           $0.40    $1.60     $0.10    [was $0.20/$0.80]
-  gpt-4.1-nano           $0.10    $0.40     $0.025   [was $0.05/$0.20]
+  gpt-4.1                UNPRICED 2026-11-02 (deprecated 2026-10-14, shutdown
+                         2027-01-14 → gpt-6-luna; was $2.00 / $8.00 / $0.50)
+  gpt-4.1-mini           UNPRICED 2026-11-02 (the same; was $0.40 / $1.60 / $0.10)
+  gpt-4.1-nano           UNPRICED 2026-11-02 (shut down 2026-10-23, still listed)
 
   GPT-4o Family
   ──────────────────────────────────────────────────────────────────────────
@@ -335,8 +347,8 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output    Cached
   ──────────────────────────────────────────────────────────────────────────
-  codex-mini             $1.50    $6.00     $0.375   [was $0.75/$3.00;
-                                            listed as codex-mini-latest]
+  codex-mini             UNPRICED 2026-11-02 (codex-mini-latest on the
+                         deprecations page; was $1.50 / $6.00 / $0.375)
 
   Sources:
     https://developers.openai.com/api/docs/pricing
@@ -466,8 +478,10 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
-  gemini-3.1-pro         $2.00    $12.00   $0.20   (doubles above 200k input
-                                                    tokens; table keeps ≤200k;
+  gemini-3.1-pro         $2.00    $12.00   $0.20   (above 200K input tokens
+                                                    $4.00 / $18.00 / $0.40 —
+                                                    GEMINI_LONG_CONTEXT_PRICING
+                                                    since 2026-11-02, per call;
                                                     -customtools prices here)
   gemini-3.1-flash-lite  $0.25    $1.50    $0.025  (DEPRECATED 2026-10-17 →
                                                     3.5-flash-lite, shutdown
@@ -739,9 +753,12 @@
   - To update pricing: edit the tables in myagent/constants.py and regenerate
     this file.
 
-  Last updated: October 26, 2026 (Moonshot audit: kimi-k3.1-pro / -highspeed rows
-                with cache-write rates; the K2 line unpriced on its retirement notice)
-  Before that:  October 17, 2026 (xAI audit: catalog, ladders and rates re-verified
+  Last updated: November 2, 2026 (the five-provider audit: every picker model's
+                row re-read against its provider's card — all correct; gpt-6.1-terra
+                row; the OpenAI deprecation sweep; OPENAI_ and GEMINI_LONG_CONTEXT_PRICING)
+  Before that:  October 26, 2026 (Moonshot audit: kimi-k3.1-pro / -highspeed rows
+                with cache-write rates; the K2 line unpriced on its retirement notice);
+                October 17, 2026 (xAI audit: catalog, ladders and rates re-verified
                 against /v1/language-models and docs.x.ai — no change, no retirement);
                 September 23, 2026 (xAI audit: grok-4.7 row, grok-latest → 4.7;
                 OpenAI audit: gpt-6-sol / gpt-6-luna rows; Gemini audit: re-verified;

@@ -5,9 +5,11 @@ these helpers gate provider param logic and are easy to perturb. Every value is
 an ACTUAL captured output from current code (note: _parse_gpt5_minor parses the
 minor even for -chat models, though _is_gpt5_family excludes them)."""
 import unittest
+from types import SimpleNamespace
 
 from tests._util import stub
 from myagent.openai_mixin import OpenAIMixin
+from myagent.streaming_mixin import StreamingMixin
 
 # model -> (minor, family, reasoning, none, xhigh, max, temp_at_none, chat, verbosity)
 # `max` (reasoning.effort='max') is a GPT-5.6 addition: live-probed 2026-08-25,
@@ -123,6 +125,40 @@ class TestOpenAIDetect(unittest.TestCase):
                                     ("", "none"), ("minimal", "low"), ("max", "max")):
                 p.thinking_effort = stale
                 self.assertEqual(p._openai_effective_effort(), expected, (mid, stale))
+
+    def test_deprecated_ids_leave_the_picker_and_stay_served(self):
+        # The retirement policy over a fake listing, through the REAL
+        # _fetch_openai_models (2026-11-02: every id the deprecations page
+        # names leaves the picker and the price table; the served set keeps
+        # it for a pinned instruction, and its param wiring still answers).
+        listing = ["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-5", "gpt-5-pro",
+                   "gpt-5.1", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-5.1-chat-latest",
+                   "gpt-5.2", "gpt-5.2-pro", "gpt-5.2-chat-latest", "gpt-5.2-codex",
+                   "gpt-5.3-chat-latest", "gpt-5.3-codex", "gpt-5.4", "gpt-5.4-mini",
+                   "gpt-5.4-nano", "gpt-5.4-pro", "gpt-5.5", "gpt-5.5-pro",
+                   "gpt-5.6-terra", "gpt-6-astra", "gpt-6.1-terra", "gpt-5-search-api",
+                   "o3", "gpt-4o", "text-embedding-3-small"]
+        data = [SimpleNamespace(id=mid) for mid in listing]
+        host = stub(OpenAIMixin, openai_client=SimpleNamespace(
+            models=SimpleNamespace(list=lambda: SimpleNamespace(data=data))))
+        picker = host._fetch_openai_models()
+        self.assertEqual(picker, ["gpt-5.2", "gpt-5.2-pro", "gpt-5.4", "gpt-5.4-mini",
+                                  "gpt-5.4-pro", "gpt-5.5", "gpt-5.5-pro", "gpt-5.6-terra",
+                                  "gpt-6-astra", "gpt-6.1-terra"])
+        self.assertEqual(host._served_model_ids["OpenAI"], set(listing))
+        for mid in ("gpt-4.1", "gpt-4.1-mini", "gpt-5-pro", "gpt-5.1", "gpt-5.1-codex-max",
+                    "gpt-5.2-chat-latest", "gpt-5.2-codex", "gpt-5.3-codex", "gpt-5.4-nano"):
+            self.assertIsNone(StreamingMixin._get_pricing("OpenAI", mid), mid)
+        self.assertEqual(host._openai_reasoning_values("gpt-5.1"), ["None", "Low", "Medium", "High"])
+        self.assertTrue(host._is_gpt5_family("gpt-5.1"))
+        # A retiring sub-tier whose family row survives is an explicit None
+        # row — unpriced AND warned, never priced by the family's row (nano at
+        # gpt-5.4's $2.50 would be 12x over) — while the family itself is fine.
+        self.assertIsNotNone(StreamingMixin._unpriced_model_warning("OpenAI", "gpt-5.4-nano"))
+        self.assertIsNotNone(StreamingMixin._unpriced_model_warning("OpenAI", "gpt-5.2-codex"))
+        self.assertIsNone(StreamingMixin._unpriced_model_warning("OpenAI", "gpt-5.4"))
+        self.assertIsNone(StreamingMixin._unpriced_model_warning("OpenAI", "gpt-5.4-mini"))
+        self.assertFalse(host._openai_bills_cache_writes("gpt-5.4-nano"))
 
     def test_cache_write_billing_follows_the_pricing_row(self):
         # OpenAI bills cache writes from GPT-5.6 on (1.25x input): the 5.6

@@ -122,23 +122,32 @@ class TestGetPricing(unittest.TestCase):
                                      "cache_write": 0.25 / 1_000_000},
         ("OpenAI", "gpt-5.2"): {"input": 1.75e-06, "output": 1.4e-05,
                                 "cache_read": 1.75e-07},
-        ("OpenAI", "gpt-5.1"): {"input": 1.25e-06, "output": 1e-05,
-                                "cache_read": 1.25e-07},
+        # gpt-5.1: deprecated 2026-10-01 (shutdown 2027-04-01) — unpriced
+        # under the retirement policy since the 2026-11-02 audit, with the
+        # rest of its family, gpt-5.4-nano, the 5.3 ids, the 5.2 -chat /
+        # -codex ids and codex-mini-latest
+        ("OpenAI", "gpt-5.1"): None,
+        ("OpenAI", "gpt-5.1-codex-max"): None,
+        ("OpenAI", "gpt-5.4-nano"): None,
+        ("OpenAI", "gpt-5.3-codex"): None,
+        ("OpenAI", "gpt-5.2-chat-latest"): None,
+        ("OpenAI", "gpt-5.2-codex"): None,
+        ("OpenAI", "codex-mini-latest"): None,
+        ("OpenAI", "gpt-5.4-mini"): {"input": 0.75 / 1_000_000, "output": 4.50 / 1_000_000,
+                                     "cache_read": 0.075 / 1_000_000},
         ("OpenAI", "gpt-5.5"): {"input": 5e-06, "output": 3e-05,
                                 "cache_read": 5e-07},
-        # GPT-4.1 discounts cached input by 1/4, not the GPT-5 families' 1/10
-        ("OpenAI", "gpt-4.1"): {"input": 2e-06, "output": 8e-06,
-                                "cache_read": 5e-07},
-        ("OpenAI", "gpt-4.1-mini"): {"input": 0.40 / 1_000_000,
-                                     "output": 1.60 / 1_000_000,
-                                     "cache_read": 0.10 / 1_000_000},
+        # The GPT-4.1 family retires 2027-01-14 (announced 2026-10-14; 4.1-nano
+        # shut down 2026-10-23) — unpriced since the 2026-11-02 audit
+        ("OpenAI", "gpt-4.1"): None,
+        ("OpenAI", "gpt-4.1-mini"): None,
         # The -pro tiers have NO cached tier — the key must be absent entirely,
         # not present as 0 (which would silently price cached tokens free)
         ("OpenAI", "gpt-5.5-pro"): {"input": 3e-05, "output": 0.00018},
         ("OpenAI", "gpt-5.2-pro"): {"input": 2.1e-05, "output": 0.000168},
-        # gpt-5-pro survives (no announced retirement) and must not fall to
-        # None now that the bare "gpt-5" fallback entry is gone
-        ("OpenAI", "gpt-5-pro"): {"input": 1.5e-05, "output": 0.00012},
+        # gpt-5-pro retires 2026-12-11 (announced 2026-06-11 — the July audit
+        # had it as unannounced) — unpriced since the 2026-11-02 audit
+        ("OpenAI", "gpt-5-pro"): None,
         # Retired / scheduled-retirement ids are unpriced (2026-07 audit):
         # gpt-4o retired 2026-02-16; the gpt-5.0 base tiers retire 2026-12-11;
         # the o-series retires 2026-10-23 / 2026-12-11 → gpt-5.6
@@ -393,12 +402,53 @@ class TestLongContextCard(unittest.TestCase):
     def test_models_without_a_second_card_ignore_the_prompt_size(self):
         for provider, model in (("Anthropic", "claude-opus-5-5"),
                                 ("Anthropic", "claude-haiku-4-5"),
-                                ("OpenAI", "gpt-6-astra"),
-                                ("Google", "gemini-3.8-flash")):
+                                ("OpenAI", "gpt-5.4-mini"),      # its own row, no card
+                                ("OpenAI", "gpt-5.2"),
+                                ("Google", "gemini-3.8-flash"),
+                                ("Google", "gemini-4-argon")):
             with self.subTest(model=model):
                 big = StreamingMixin._get_pricing(provider, model, prompt_tokens=900_000)
                 self.assertEqual(big, StreamingMixin._get_pricing(provider, model))
                 self.assertNotIn("long_context", big)
+
+    def test_openai_cards_above_272k(self):
+        # 2026-11-02: the pricing page's long-context rows — 2x input and
+        # cache, 1.5x output — for the 5.4 / 5.5 / 5.6 / 6 tiers, the -pro
+        # tiers still without a cached key, a dated snapshot by its prefix.
+        cases = {
+            "gpt-6-astra": {"input": 20.00, "output": 75.00, "cache_read": 2.00, "cache_write": 25.00},
+            "gpt-6.1-terra": {"input": 2.00, "output": 7.50, "cache_read": 0.10, "cache_write": 2.50},
+            "gpt-5.6-terra": {"input": 4.00, "output": 18.00, "cache_read": 0.40, "cache_write": 5.00},
+            "gpt-5.5": {"input": 10.00, "output": 45.00, "cache_read": 1.00},
+            "gpt-5.5-2026-04-23": {"input": 10.00, "output": 45.00, "cache_read": 1.00},
+            "gpt-5.5-pro": {"input": 60.00, "output": 270.00},
+            "gpt-5.4": {"input": 5.00, "output": 22.50, "cache_read": 0.50},
+        }
+        for model, rates in cases.items():
+            expected = {k: v / 1_000_000 for k, v in rates.items()}
+            expected["long_context"] = 272_000
+            for n in (272_001, 900_000):
+                with self.subTest(model=model, prompt_tokens=n):
+                    self.assertEqual(StreamingMixin._get_pricing("OpenAI", model, prompt_tokens=n),
+                                     expected)
+            with self.subTest(model=model, prompt_tokens=272_000):
+                at_line = StreamingMixin._get_pricing("OpenAI", model, prompt_tokens=272_000)
+                self.assertEqual(at_line, StreamingMixin._get_pricing("OpenAI", model))
+                self.assertNotIn("long_context", at_line)
+
+    def test_gemini_pro_card_above_200k(self):
+        # 2026-11-02: 3.1 Pro's >200K tier — $4 / $18, cached $0.40 — the
+        # -customtools variant by the same prefix and the floating pro
+        # alias (→ 3.1-pro-preview, verified live that day) by its own entry.
+        expected = {"input": 4.00 / 1_000_000, "output": 18.00 / 1_000_000,
+                    "cache_read": 0.40 / 1_000_000, "long_context": 200_000}
+        for model in ("gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools",
+                      "gemini-pro-latest"):
+            with self.subTest(model=model):
+                self.assertEqual(StreamingMixin._get_pricing("Google", model, prompt_tokens=200_001),
+                                 expected)
+                self.assertNotIn("long_context",
+                                 StreamingMixin._get_pricing("Google", model, prompt_tokens=200_000))
 
     def test_fast_lookup_is_untouched(self):
         self.assertEqual(

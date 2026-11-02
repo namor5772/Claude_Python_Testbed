@@ -1751,14 +1751,27 @@ OPENAI_RESPONSES_PREFIXES = ("gpt-4.1", "gpt-5", "gpt-6")
 # _fetch_openai_models drops them from the picker even though the API still
 # serves some of them (policy: retiring models are removed ahead of their
 # shutdown date). The GPT-5.0 base/mini/nano tiers retire 2026-12-11 →
-# gpt-5.6; the -chat / -codex ids already retired 2026-07-23. Two ids must be
-# EXACT matches (OPENAI_DEPRECATED_MODEL_IDS) because as prefixes they would
-# also kill surviving longer ids: bare "gpt-5" (would match everything) and
-# bare "gpt-5.1-codex" (would match the still-served -codex-max / -codex-mini).
-# gpt-5-pro and gpt-4.1 have no announced retirement and stay.
+# gpt-5.6; the -chat / -codex ids already retired 2026-07-23. The bare
+# "gpt-5" must be an EXACT match (OPENAI_DEPRECATED_MODEL_IDS): as a prefix
+# it would match everything. The 2026-11-02 audit (the deprecations page,
+# developers.openai.com/api/docs/deprecations) added everything announced
+# since the 2026-07 one: gpt-5-pro (announced 2026-06-11, shutdown
+# 2026-12-11 → gpt-5.6-sol — missed in July), the WHOLE gpt-5.1 family
+# (the base id announced 2026-10-01 → 2027-04-01 → gpt-6-sol; -chat /
+# -codex / -codex-max / -codex-mini shut down 2026-07-23, yet still
+# listed), gpt-5.2-chat-latest (shut down 2026-08-10) and gpt-5.2-codex
+# (2026-07-23), the gpt-5.3 ids (5.3-codex announced 2026-10-01 →
+# 2027-04-01; 5.3-chat-latest shut down 2026-08-10), gpt-5.4-nano
+# (announced 2026-10-01 → 2027-04-01 → gpt-6-luna) and the WHOLE gpt-4.1
+# family (4.1 and 4.1-mini announced 2026-10-14 → 2027-01-14 → gpt-6-luna;
+# 4.1-nano shut down 2026-10-23) — all of them still in the live listing
+# and, until that day, in the picker. Their pricing rows went with them
+# (OPENAI_PRICING); their param wiring stays for a pinned instruction.
 OPENAI_DEPRECATED_MODEL_PREFIXES = ("gpt-5-mini", "gpt-5-nano", "gpt-5-chat",
-                                    "gpt-5-codex", "gpt-5-2025", "gpt-5.1-chat")
-OPENAI_DEPRECATED_MODEL_IDS = {"gpt-5", "gpt-5.1-codex"}
+                                    "gpt-5-codex", "gpt-5-2025", "gpt-5-pro",
+                                    "gpt-5.1", "gpt-5.2-chat", "gpt-5.2-codex",
+                                    "gpt-5.3", "gpt-5.4-nano", "gpt-4.1")
+OPENAI_DEPRECATED_MODEL_IDS = {"gpt-5"}
 # Gemini 2.5 is the legacy generation — Google's deprecations page (read
 # 2026-10-17) now says it is "not deprecated" and served "until further
 # notice" to accounts that used it, with 3.x / 4 for new work; it had been
@@ -3854,13 +3867,52 @@ ANTHROPIC_FAST_PRICING = {
 # prompt size — the uncached input plus BOTH cache buckets, which is what
 # the API counted — and the lookup returns this card above the line (with
 # a "long_context" key the one-shot ⚠ in stream_worker reads). An ordinary
-# agentic run crosses 100K within a dozen calls, so leaving it out — the
-# choice still made for the Gemini 3.1 Pro (>200K) and GPT-6 (>272K)
-# tiers, whose rows are unverified — would have logged every long Haiku
-# 5.5 run at a fifth of its cost. Longest prefix, like every table.
+# agentic run crosses 100K within a dozen calls, so leaving it out would
+# have logged every long Haiku 5.5 run at a fifth of its cost. Longest
+# prefix, like every table — and a card applies only by the SAME prefix
+# as the base row (_get_pricing), so a tier without a card of its own
+# never inherits its family's. The OpenAI >272K and Gemini 3.1 Pro >200K
+# tiers followed on 2026-11-02 (below), read off the pricing pages that
+# day; until then every long OpenAI run on a 1M-context tier was logged
+# at the base rates past the line.
 ANTHROPIC_LONG_CONTEXT_PRICING = {
     "claude-haiku-5-5":    (100_000, (0.50, 2.50, 0.625, 0.05)),
 }
+# OpenAI's long-context tier (developers.openai.com/api/docs/pricing, read
+# 2026-11-02): above 272K input tokens — the WHOLE request, cached and
+# uncached alike, which is the prompt size stream_worker hands over — the
+# 5.4 / 5.5 / 5.6 / 6 tiers bill 2x input and cache (reads and writes) and
+# 1.5x output; the -pro tiers 2x / 1.5x with no cached rate. Each card has
+# the tuple shape of the model's OPENAI_PRICING row (a 4th element where
+# writes are billed). gpt-5.4-mini and -nano, which the page gives no
+# long-context rate, have no card and keep their row at any size.
+OPENAI_LONG_CONTEXT_PRICING = {
+    "gpt-6-astra":   (272_000, (20.00, 75.00, 2.00, 25.00)),
+    "gpt-6.1-sol":   (272_000, (4.00, 15.00, 0.20, 5.00)),
+    "gpt-6.1-terra": (272_000, (2.00, 7.50, 0.10, 2.50)),
+    "gpt-6-sol":     (272_000, (4.00, 15.00, 0.40, 5.00)),
+    "gpt-6-luna":    (272_000, (0.20, 0.75, 0.02, 0.25)),
+    "gpt-5.6-sol":   (272_000, (8.00, 30.00, 0.80, 10.00)),
+    "gpt-5.6-terra": (272_000, (4.00, 18.00, 0.40, 5.00)),
+    "gpt-5.6-luna":  (272_000, (0.40, 1.80, 0.04, 0.50)),
+    "gpt-5.5-pro":   (272_000, (60.00, 270.00, None)),
+    "gpt-5.5":       (272_000, (10.00, 45.00, 1.00)),
+    "gpt-5.4-pro":   (272_000, (60.00, 270.00, None)),
+    "gpt-5.4":       (272_000, (5.00, 22.50, 0.50)),
+}
+# Gemini 3.1 Pro's long-context tier (ai.google.dev/gemini-api/docs/pricing,
+# read 2026-11-02): a prompt over 200K tokens bills $4 / $18, cached $0.40
+# — the -customtools variant by the same prefix, and the floating
+# gemini-pro-latest alias (→ 3.1-pro-preview, verified live that day) by
+# its own entry, its base row being its own too.
+GEMINI_LONG_CONTEXT_PRICING = {
+    "gemini-3.1-pro":     (200_000, (4.00, 18.00, 0.40)),
+    "gemini-pro-latest":  (200_000, (4.00, 18.00, 0.40)),
+}
+# The one map _get_pricing reads: provider → its second-card table.
+LONG_CONTEXT_PRICING = {"Anthropic": ANTHROPIC_LONG_CONTEXT_PRICING,
+                        "OpenAI": OPENAI_LONG_CONTEXT_PRICING,
+                        "Google": GEMINI_LONG_CONTEXT_PRICING}
 
 # Anthropic's server-side web_search bills a flat fee per EXECUTED search
 # ($10 per 1,000, pricing page read 2026-09-25) on top of the token costs;
@@ -3946,38 +3998,32 @@ OPENAI_PRICING = {
     # GPT-5.4 family
     "gpt-5.4-pro":         (30.00, 180.00, None),
     "gpt-5.4-mini":        (0.75, 4.50, 0.075),
-    "gpt-5.4-nano":        (0.20, 1.25, 0.02),
     "gpt-5.4":             (2.50, 15.00, 0.25),
-    # GPT-5.3 family
-    "gpt-5.3-chat":        (1.75, 14.00, 0.175),
-    "gpt-5.3-codex":       (1.75, 14.00, 0.175),
-    "gpt-5.3":             (1.75, 14.00, 0.175),
-    # GPT-5.2 family
+    # GPT-5.2: the base tier and -pro (no announced retirement).
     "gpt-5.2-pro":         (21.00, 168.00, None),
-    "gpt-5.2-chat":        (1.75, 14.00, 0.175),
-    "gpt-5.2-codex":       (1.75, 14.00, 0.175),
     "gpt-5.2":             (1.75, 14.00, 0.175),
-    # GPT-5.1 family (gpt-5.1-chat-latest and bare gpt-5.1-codex retired
-    # 2026-07-23 → gpt-5.6-sol; the surviving -codex-max/-codex-mini ids
-    # keep their own entries)
-    "gpt-5.1-codex-mini":  (0.25, 2.00, 0.025),
-    "gpt-5.1-codex-max":   (1.25, 10.00, 0.125),
-    "gpt-5.1":             (1.25, 10.00, 0.125),
-    # GPT-5.0 family — only gpt-5-pro survives (no announced retirement).
-    # The bare gpt-5 / -mini / -nano tiers (retire 2026-12-11), the -chat /
-    # -codex ids (retired 2026-07-23), the whole o-series (o1 / o1-pro /
-    # o3-mini / o4-mini shut down 2026-10-23, o3 / o3-pro 2026-12-11), plus
-    # the already-retired gpt-4o / gpt-4.5 / o1-mini were all unpriced in the
-    # 2026-07 audit — retiring models are removed ahead of their shutdown
-    # date, so a pinned instruction running one gets no cost line.
-    "gpt-5-pro":           (15.00, 120.00, None),
-    # GPT-4.1 family — still served (no announced API shutdown). Note the
-    # cached discount here is 1/4, not the GPT-5 families' 1/10.
-    "gpt-4.1-mini":        (0.40, 1.60, 0.10),
-    "gpt-4.1-nano":        (0.10, 0.40, 0.025),
-    "gpt-4.1":             (2.00, 8.00, 0.50),
-    # Codex (no announced retirement) — listed as codex-mini-latest
-    "codex-mini":          (1.50, 6.00, 0.375),
+    # UNPRICED under the retirement policy — a retiring model leaves the
+    # picker and this table at once, its param wiring stays, and a pinned
+    # instruction running it gets no cost line plus the run-start ⚠.
+    # The 2026-07 audit removed the bare gpt-5 / -mini / -nano tiers, the
+    # -chat / -codex ids, the whole o-series and the already-retired
+    # gpt-4o / gpt-4.5 / o1-mini; the 2026-11-02 audit (the deprecations
+    # page) removed gpt-5.4-nano, the gpt-5.3 ids, gpt-5.2-chat-latest and
+    # gpt-5.2-codex, the whole gpt-5.1 family (-codex-max / -codex-mini
+    # included), gpt-5-pro (announced 2026-06-11, shutdown 2026-12-11 —
+    # the July audit had it as unannounced), the whole gpt-4.1 family
+    # (retires 2027-01-14; 4.1-nano shut down 2026-10-23) and
+    # codex-mini-latest — see OPENAI_DEPRECATED_MODEL_PREFIXES for the
+    # dates. No gpt-4.1 cached-input rule survives: it was the one family
+    # discounting cached input by 1/4 rather than 1/10.
+    # An explicit None is a retiring sub-tier whose FAMILY row survives:
+    # without its own entry the longest-prefix rule would price it by the
+    # family's — gpt-5.4-nano at gpt-5.4's $2.50 / $15, 12x over — so the
+    # entry stays and says "unpriced" (_get_pricing returns None on it,
+    # _unpriced_model_warning reads the entry, not the prefix).
+    "gpt-5.4-nano":        None,
+    "gpt-5.2-chat":        None,
+    "gpt-5.2-codex":       None,
 }
 
 # Gemini API pricing (USD per million tokens)
@@ -4061,9 +4107,10 @@ GEMINI_PRICING = {
     # pricing page) and picker-hidden; the row stays while served, for the
     # catch-all reason the 3.7 row gives.
     "gemini-3.5-flash":    (1.50, 9.00, 0.15),
-    # Gemini 3.1 family  (3.1-pro doubles input above 200k tokens — the table
-    # keeps the ≤200k tier, matching the 2.5-pro entry's convention; the
-    # -customtools variant prices by the same prefix). 3.1-flash-lite:
+    # Gemini 3.1 family  (3.1-pro's >200K card — $4 / $18, cached $0.40 —
+    # is GEMINI_LONG_CONTEXT_PRICING since 2026-11-02, selected per call by
+    # the prompt size; the -customtools variant prices by the same prefix).
+    # 3.1-flash-lite:
     # DEPRECATED 2026-10-17 (shutdown 2027-05-07, replaced by 3.5-flash-lite)
     # and picker-hidden; the row stays until then — the catch-all reason.
     "gemini-3.1-flash-lite": (0.25, 1.50, 0.025),

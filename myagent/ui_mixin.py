@@ -901,6 +901,39 @@ class UIMixin(PaneNotesMixin):
         version = self._parse_claude_major_minor(mid, ("claude-haiku-",))
         return version is not None and version >= (5, 0)
 
+    def _is_anthropic_sonnet_55(self, model_id=None):
+        """True for Claude Sonnet 5.5 (claude-sonnet-5-5, live 2026-09-28)
+        and any later Sonnet — version-parsed as Sonnet (5, 5) or above, a
+        dated snapshot's date in the minor slot not counting — the Sonnet
+        that changed the off switch. The Models API tree (read 2026-11-02:
+        thinking.types.disabled unsupported, between_tools supported — the
+        only served model with that pair) and the 15-request probe of
+        2026-10-14 (for SelfBot, US$0.03) agree: an explicit disable is HTTP
+        400 ('To turn thinking off on this model, send "thinking": {"type":
+        "between_tools"}'); `between_tools` — no extended thinking, the short
+        notes between tool calls back as thinking blocks — is accepted at
+        effort high or below only and with NO other field inside `thinking`
+        (display / budget / block_binding each a 400; the binding's beta
+        HEADER alone tolerated); adaptive thinking takes the binding and the
+        summarized display; `fallbacks: "default"` is accepted beside either
+        shape (a model list refused); the budget form and any temperature
+        but 1 are 400; the 20260209 triple is accepted. Read by the Anthropic
+        caller's off branch and the Debug dump (the Off shape) and by
+        _anthropic_fable_features (the binding and the fallbacks); the Off
+        rung stays in the picker. Until 2026-11-02 MyAgent sent it the
+        explicit disable — a 400 on call 1 for an instruction pinned to it
+        with Thinking Off (none of the four pinned that day was)."""
+        if self.provider != "Anthropic":
+            return False
+        mid = model_id or self.model or ""
+        version = self._parse_claude_major_minor(mid, ("claude-sonnet-",))
+        if version is None:
+            return False
+        major, minor = version
+        if minor >= 100:
+            minor = 0   # claude-sonnet-5-20260629: a date, not a minor
+        return (major, minor) >= (5, 5)
+
     def _is_anthropic_adaptive_model(self, model_id=None):
         """True for Anthropic models that use ADAPTIVE thinking (the {type:adaptive}
         + output_config effort API) rather than a manual token budget — Opus 4.6+,
