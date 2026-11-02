@@ -386,14 +386,19 @@ class WiringTests(unittest.TestCase):
         src = _read("myagent", "instructions_mixin.py")
         self.assertNotRegex(src, r"_instr_notes\b")             # the box of 2026-10-20 is gone
         body = src[src.index("def open_instruction_editor"):src.index("def _editor_env_snapshot")]
-        safety = body.index("self.ps_safety_button = tk.Button(")
+        # 2026-11-03 (the user's request): the button leads the Auto-send /
+        # Announce row — created after the tool toggles and before the two
+        # boxes, so Tab reaches it next; right of Safety until then.
+        convo = body.index('text="Convo", variable=self._editor_conversational')
         notes = body.index("self._notes_button = tk.Button(")
-        paned = body.index("paned = tk.PanedWindow(")
-        self.assertLess(safety, notes)                          # right of Safety …
-        self.assertLess(notes, paned)                           # … and before the bottom row: Tab order is creation order
-        self.assertRegex(body, r'self\._notes_button = tk\.Button\(\s*buttons_frame, text="Notes", '
+        auto = body.index('text="Auto-send", variable=self.dictation_auto_send')
+        buttons = body.index("buttons_frame = tk.Frame(win)")
+        self.assertLess(convo, notes)
+        self.assertLess(notes, auto)
+        self.assertLess(auto, buttons)
+        self.assertRegex(body, r'self\._notes_button = tk\.Button\(\s*dialog_frame, text="Notes", '
                                r'command=self\._open_notes_dialog, padx=10,\s*font=SMALL_BUTTON_FONT,')
-        self.assertIn('self._notes_button.pack(side=tk.LEFT, padx=(5, 0))', body)
+        self.assertIn('self._notes_button.pack(side=tk.LEFT, padx=(0, 10))', body)
         self.assertIn('self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 5))', body)
         self.assertIn('"o": self._notes_button', body)          # Alt+O, the box's letter
         self.assertNotIn('"Notes:"', body)

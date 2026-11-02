@@ -528,9 +528,23 @@ class InstructionsMixin:
         # takes effect for the session at once, SAVE / Apply carry it into
         # the entry, a page selection sets it from the page, and [X] after
         # a browse puts the applied values back (_editor_discard_env).
-        # Created after the tool toggles, so Tab reaches them next.
+        # Created after the tool toggles, so Tab reaches them next — the
+        # Notes button first, at the row's left (2026-11-03, the user's
+        # request; right of Safety on the button row from 2026-10-30).
         dialog_frame = tk.Frame(win)
         dialog_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        # Notes (2026-10-20; its own dialog since 2026-10-30, the user's
+        # request): the button opens the Notes dialog over the instruction's
+        # notes draft — general information about the instruction, stored in
+        # its entry as "notes", never sent to the model. The draft itself
+        # lives in _instr_notes_text while the dialog is closed (see
+        # _notes_draft); until 2026-10-30 it was a three-row box over the
+        # instruction text.
+        self._notes_button = tk.Button(
+            dialog_frame, text="Notes", command=self._open_notes_dialog, padx=10,
+            font=SMALL_BUTTON_FONT,
+        )
+        self._notes_button.pack(side=tk.LEFT, padx=(0, 10))
         auto_send_cb = tk.Checkbutton(
             dialog_frame, text="Auto-send", variable=self.dictation_auto_send,
             font=("Arial", 9),
@@ -543,6 +557,7 @@ class InstructionsMixin:
         announce_cb.pack(side=tk.LEFT, padx=(5, 0))
 
         # Row 4: Attach Images, Remove Selected, Skills, Safety — one row of
+        # buttons (Notes left it for row 3 on 2026-11-03). One row of
         # buttons, 10 px apart. The two image buttons opened the row below
         # until 2026-10-23 (stacked at its left, the Agent Request dialog's
         # layout, then side by side); they are created first, ahead of
@@ -574,19 +589,6 @@ class InstructionsMixin:
         )
         self.ps_safety_button.pack(side=tk.LEFT, padx=(5, 5))
         self._update_ps_safety_button()
-
-        # Notes (2026-10-20; its own dialog since 2026-10-30, the user's
-        # request): the button opens the Notes dialog over the instruction's
-        # notes draft — general information about the instruction, stored in
-        # its entry as "notes", never sent to the model. The draft itself
-        # lives in _instr_notes_text while the dialog is closed (see
-        # _notes_draft); until 2026-10-30 it was a three-row box over the
-        # instruction text.
-        self._notes_button = tk.Button(
-            buttons_frame, text="Notes", command=self._open_notes_dialog, padx=10,
-            font=SMALL_BUTTON_FONT,
-        )
-        self._notes_button.pack(side=tk.LEFT, padx=(5, 0))
 
         # Row 5: the bottom row (since 2026-09-10) and the only weighted one,
         # so resizing the window grows it alone. Since 2026-09-11 it is a

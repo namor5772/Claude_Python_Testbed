@@ -212,16 +212,16 @@ CLEAR, Apply); the model row (Provider, Model, and the parameter controls the
 chosen model shows: Temp, Thinking, its strength or mode, Reasoning,
 Verbosity, Fast); the tool checkboxes (Desktop, Browser, Excel, Physical,
 Meta, MCP, Gmail, IMAP, Outlook, Convo; a greyed one lacks its package); the
-Agent Request row (Auto-send, Announce: what the dialog does with a dictated
-reply, and whether it speaks — section 13); the button row (Attach Images,
-Remove Selected, Skills, Safety, Notes); and the
+Notes button with the Agent Request boxes (Auto-send, Announce: what the
+dialog does with a dictated reply, and whether it speaks — section 13); the
+button row (Attach Images, Remove Selected, Skills, Safety); and the
 bottom row, a two-pane split: the attached-images list over the INSTRUCTIONS
 list at the left, the instruction text at the right.
 
 Tab order: text -> name -> SAVE -> DELETE -> CLEAR -> Apply -> Provider ->
 Model -> the parameter controls the model shows -> the tool checkboxes ->
-Auto-send -> Announce -> Attach Images -> Remove Selected -> Skills -> Safety
--> Notes -> image list ->
+Notes -> Auto-send -> Announce -> Attach Images -> Remove Selected -> Skills
+-> Safety -> image list ->
 Instructions list -> up-arrow button -> down-arrow button -> Section... ->
 back to the text. Escape in the text lands on the name box (the text is the
 last stop, so it wraps); Shift+Tab from the name box returns to the text.
