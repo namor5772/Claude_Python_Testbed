@@ -492,8 +492,11 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cached
   ──────────────────────────────────────────────────────────────────────────
-  gemini-3-flash         $0.50    $3.00    $0.05   (3-flash-preview, still a
-                                                    current preview)
+  gemini-3-flash         $0.50    $3.00    $0.05   (3-flash-preview — picker-
+                                                    hidden since 2026-11-02,
+                                                    superseded by 3.6-flash on
+                                                    Google's deprecations page;
+                                                    the row stays while served)
   gemini-3  (fallback)   $0.50    $3.00    $0.05
   (The gemini-3-pro / gemini-3-pro-image rows left 2026-10-17: 3-pro-preview
    shut down 2026-03-09, and 3-pro-image is an image model MyAgent's picker

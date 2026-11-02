@@ -40,7 +40,7 @@ LISTING = [
     ("gemini-3.1-pro-preview-customtools", GEN),                   # kept
     ("gemini-3.1-flash-lite", GEN),                                # deprecated, shutdown 2027-05-07
     ("gemini-3.1-flash-lite-preview", GEN),                        # its preview, shut down 2026-05-25
-    ("gemini-3-flash-preview", GEN),                               # kept — a current preview
+    ("gemini-3-flash-preview", GEN),                               # deprecated → 3.6 (EXACT id), 2026-11-02
     ("gemini-3-pro-preview", GEN),                                 # shut down 2026-03-09
     ("gemini-flash-latest", GEN), ("gemini-flash-lite-latest", GEN), ("gemini-pro-latest", GEN),
     ("gemini-2.5-pro", GEN), ("gemini-2.5-flash", GEN),            # legacy generation
@@ -55,7 +55,6 @@ LISTING = [
 ]
 
 PICKER = [
-    "gemini-3-flash-preview",
     "gemini-3.1-pro-preview",
     "gemini-3.1-pro-preview-customtools",
     "gemini-3.5-flash-lite",
@@ -102,6 +101,7 @@ class PickerFilter(unittest.TestCase):
         served = host._served_model_ids["Google"]
         for hidden in ("gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite",
                        "gemini-3.1-flash-lite-preview", "gemini-3-pro-preview",
+                       "gemini-3-flash-preview",        # → 3.6-flash, 2026-11-02
                        "gemini-2.5-pro", "gemini-2.5-flash"):
             with self.subTest(model=hidden):
                 self.assertNotIn(hidden, picker)

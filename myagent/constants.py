@@ -1890,12 +1890,16 @@ GEMINI_NON_AGENTIC_SUBSTRINGS = (
 # page) and gemini-3-pro-preview (shut down 2026-03-09). gemini-3.5-flash
 # (replaced by 3.6-flash, no date, gone from the pricing page) must be an
 # EXACT id — a prefix would take the still-current gemini-3.5-flash-lite.
-# Their PRICING rows stay (see GEMINI_PRICING): Google's bare "gemini-3"
-# catch-all would otherwise price a pinned run, wrongly, instead of
-# leaving it unpriced.
+# gemini-3-flash-preview joined the exact ids 2026-11-02 (the user asked for
+# every model with an announced succession gone): the deprecations page
+# lists it with gemini-3.6-flash as its replacement and no date, the rule
+# that hid 3.7-flash; an exact id so the bare "gemini-3" catch-all prefix
+# below is not confused with it. Their PRICING rows stay (see
+# GEMINI_PRICING): Google's bare "gemini-3" catch-all would otherwise
+# price a pinned run, wrongly, instead of leaving it unpriced.
 GEMINI_DEPRECATED_MODEL_PREFIXES = ("gemini-3.1-flash-lite", "gemini-3.7-flash",
                                     "gemini-3-pro-preview")
-GEMINI_DEPRECATED_MODEL_IDS = {"gemini-3.5-flash"}
+GEMINI_DEPRECATED_MODEL_IDS = {"gemini-3.5-flash", "gemini-3-flash-preview"}
 # Ollama (local inference) — no API key needed; availability probed at startup.
 # Order is the curated preference: [0] is OLLAMA_DEFAULT_MODEL (initial model,
 # instruction-create default, and the drift-fallback target when a saved model

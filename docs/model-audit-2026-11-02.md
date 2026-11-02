@@ -108,7 +108,19 @@ knob and vision come from the listing. Moonshot: the K3 line's ladder from the
 listing, None the measured off switch. Nothing changed in the request
 builders beyond Sonnet 5.5.
 
-### Left as is, for the user
+### Follow-up the same day: every model with an announced succession gone
+
+The user asked for every model that will be deprecated to go. The sweep
+above had already done it for OpenAI; the one tier still offered was
+`gemini-3-flash-preview`, which Google's deprecations page lists with
+`gemini-3.6-flash` as its replacement and no date — the rule that hid 3.7
+Flash — so it joined `GEMINI_DEPRECATED_MODEL_IDS` (picker-hidden, served,
+its row kept). xAI's models page carries no retirement for any language
+model; Moonshot's names only the K2 line, hidden since 2026-10-26. The two
+instructions below had been re-pointed by the user before the follow-up:
+AgentRun_Test3 to Sonnet 5.5, Test1 to kimi-k3.1-pro.
+
+### Left as is at the audit (since re-pointed by the user)
 
 - **AgentRun_Test3** pins `claude-sonnet-4-5-20250929`: deprecated, retires
   2026-11-30 → Sonnet 5.5; runs unlogged today.
