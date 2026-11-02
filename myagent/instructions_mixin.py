@@ -152,6 +152,7 @@ class InstructionsMixin:
                 "outlook": entry.get("outlook", False),
                 "conversational": entry.get("conversational", False),
                 "dictation_auto_send": entry.get("dictation_auto_send", False),
+                "announce_request": entry.get("announce_request", True),
                 "provider": entry.get("provider", "Anthropic"),
                 "model": entry.get("model", ""),
                 "temperature": entry.get("temperature", 1.0),
@@ -192,6 +193,7 @@ class InstructionsMixin:
                 "outlook": params.get("outlook", False),
                 "conversational": params.get("conversational", False),
                 "dictation_auto_send": params.get("dictation_auto_send", False),
+                "announce_request": params.get("announce_request", True),
                 "provider": self.provider,
                 # (the instruction's model, never a Model upgrade's)
                 **self._store_model_fields(),
@@ -224,6 +226,7 @@ class InstructionsMixin:
                 return f"Error: Instruction '{name}' not found. Use 'create' to add it."
             updatable = ("text", "notes", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
                          "proton", "outlook", "conversational", "dictation_auto_send", "upgrade_target",
+                         "announce_request",
                          "skill_modes", "provider", "model",
                          "temperature", "thinking_enabled", "thinking_effort",
                          "thinking_budget", "thinking_mode", "text_verbosity",
@@ -236,7 +239,8 @@ class InstructionsMixin:
                         + " must be provided for update.")
             entry = instructions[name]
             for key in ("text", "notes", "desktop", "browser", "excel", "physical", "meta", "mcp", "google",
-                        "proton", "outlook", "conversational", "dictation_auto_send", "provider",
+                        "proton", "outlook", "conversational", "dictation_auto_send", "announce_request",
+                        "provider",
                         "model", "temperature",
                         "thinking_enabled", "thinking_effort",
                         "thinking_budget", "thinking_mode", "text_verbosity",
@@ -719,6 +723,7 @@ class InstructionsMixin:
             "disabled_confirm_patterns": sorted(self._disabled_confirm_patterns),
             "blocked_tools": sorted(getattr(self, "_blocked_tools", set())),
             "dictation_auto_send": bool(self.dictation_auto_send.get()),
+            "announce_request": bool(self.announce_request.get()),
             "upgrade_target": getattr(self, "upgrade_target", None),
         }
 
@@ -734,8 +739,8 @@ class InstructionsMixin:
         a page selection or CLEAR has replaced it since — the [X] close, and
         the app's close with the editor still open. Never while a run is
         streaming: it reads these settings on every call (the rule behind
-        _editor_run_guard). Auto-send and the upgrade model are written
-        through to the applied instruction's store entry, so a saved
+        _editor_run_guard). Auto-send, Announce and the upgrade model are
+        written through to the applied instruction's store entry, so a saved
         instruction's values are read back from there."""
         snap = getattr(self, "_editor_env", None)
         replaced = getattr(self, "_editor_env_replaced", False)
@@ -751,13 +756,16 @@ class InstructionsMixin:
         self._disabled_confirm_patterns = set(snap["disabled_confirm_patterns"])
         self._blocked_tools = set(snap["blocked_tools"])
         auto, target = snap["dictation_auto_send"], snap["upgrade_target"]
+        announce = snap.get("announce_request", True)
         name = getattr(self, "agent_instruction_name", "")
         if name:
             entry = self._load_saved_instructions().get(name)
             if isinstance(entry, dict):
                 auto = entry.get("dictation_auto_send", auto)
+                announce = entry.get("announce_request", announce)
                 target = entry.get("upgrade_target", target)
         self.dictation_auto_send.set(bool(auto))
+        self.announce_request.set(bool(announce))
         self.upgrade_target = target
         self._update_ps_safety_button()
         self._update_title()
@@ -1142,9 +1150,10 @@ class InstructionsMixin:
             "proton": self.proton_enabled.get(),
             "outlook": self.outlook_enabled.get(),
             "conversational": self.conversational_enabled.get(),
-            # The Agent Request dialog's Auto-send box: live state like the
-            # model params — it has no editor widget.
+            # The Agent Request dialog's Auto-send and Announce boxes: live
+            # state like the model params — they have no editor widget.
             "dictation_auto_send": self.dictation_auto_send.get(),
+            "announce_request": self.announce_request.get(),
             "provider": self.provider,
             # The instruction's model — the stashed original while a run is
             # upgraded, so a SAVE in an editor left open over the run never
@@ -1258,6 +1267,7 @@ class InstructionsMixin:
         self._disabled_confirm_patterns = set()
         self._blocked_tools = set()
         self.dictation_auto_send.set(False)
+        self.announce_request.set(True)
         self.upgrade_target = None      # a new instruction starts on the provider default
         self._update_ps_safety_button()
         # Reset model controls to defaults
@@ -1344,6 +1354,7 @@ class InstructionsMixin:
             # Environment-level like the model params (no draft widget), so
             # they are restored at once rather than on Apply.
             self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
+            self.announce_request.set(entry.get("announce_request", True))
             self.upgrade_target = entry.get("upgrade_target")
             self._editor_env_replaced = True    # [X] puts the environment back
             self._update_ps_safety_button()

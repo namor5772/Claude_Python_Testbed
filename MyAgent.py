@@ -303,6 +303,13 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # were pressed. Per instruction like the toggles above — but set from
         # the dialog itself, which writes it through (voice_mixin).
         self.dictation_auto_send = tk.BooleanVar(value=False)
+        # The dialog's Announce box (right of Auto-send, 2026-11-02): whether
+        # the dialog says "Please Reply to Agent" aloud as it opens and
+        # repeats its reminders until it is answered. Per instruction, set
+        # from the dialog and written through like Auto-send (voice_mixin);
+        # ON by default, so an instruction saved before the box existed
+        # announces — and the cue is no longer tied to the Auto-send tick.
+        self.announce_request = tk.BooleanVar(value=True)
         self._disabled_confirm_patterns = set()
         # Per-instruction hard tool blocklist: names here are stripped from the
         # offered tools AND refused at _execute_tool dispatch — a deterministic

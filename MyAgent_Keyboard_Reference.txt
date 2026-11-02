@@ -236,7 +236,8 @@ last stop, so it wraps); Shift+Tab from the name box returns to the text.
                                 for a fresh instruction and resets the
                                 environment settings (model parameters,
                                 Safety bypasses, blocked tools, Auto-send,
-                                upgrade model) at once, WITHOUT asking. The
+                                Announce, upgrade model) at once, WITHOUT
+                                asking. The
                                 saved copy on disk is untouched; selecting
                                 its page in the list brings it back
   Alt+A, Ctrl+Enter ........... Apply: commit the draft to the session and
@@ -467,19 +468,20 @@ Deny tells the agent "user denied" and the run goes on.
 Appears when the agent asks you something (the user_prompt tool) and, in an
 instruction with the Convo box ticked, after every reply of the model. It
 shows the agent's message (read-only, scrollable), the reply box, the Mike
-button with the Auto-send box and a status line, the Upgrade box, and
-Attach Images / Remove Selected with the image list.
+button with the Auto-send and Announce boxes and a status line, the Upgrade
+box, and Attach Images / Remove Selected with the image list.
 
 It opens with the focus in the reply box, or on Mike when Auto-send is
-ticked, in which case "Please Reply to Agent" is spoken aloud (the bell
-rings where the machine cannot speak) and then repeated every 60 seconds
-until you
+ticked. With Announce ticked (it is, unless the instruction turned it off)
+"Please Reply to Agent" is spoken aloud as it opens (the bell rings where
+the machine cannot speak) and then repeated every 60 seconds until you
 answer: "Please Respond" the first time, "Please Respond Now" every time
 after. The reminders stop the moment the dialog closes (Enter, Alt+F4, or a
-reply from the phone); one due while you are dictating is skipped.
+reply from the phone); one due while you are dictating is skipped. With
+Announce unticked the dialog opens and waits in silence.
 
-Tab order: reply -> Mike -> Auto-send -> Upgrade -> Attach Images -> Remove
-Selected -> image list -> the agent's message -> reply.
+Tab order: reply -> Mike -> Auto-send -> Announce -> Upgrade -> Attach
+Images -> Remove Selected -> image list -> the agent's message -> reply.
 
   Enter ....................... send the reply and close the dialog. While
                                 Mike is recording, Enter ENDS the recording
@@ -502,6 +504,11 @@ Selected -> image list -> the agent's message -> reply.
                                 pressed; ticking it moves the focus to Mike.
                                 The setting is saved with the applied
                                 instruction
+  Alt+N ....................... Announce: toggle. Ticked, the dialog speaks
+                                its cue and reminders (above); unticked
+                                while it is asking, it falls silent at once,
+                                and ticked, the reminders start. Saved with
+                                the applied instruction; on by default
   Alt+U ....................... Upgrade: toggle. Ticked, this reply and the
                                 rest of the run go to the instruction's
                                 upgrade model (Model Setup, section 15); the
@@ -814,7 +821,7 @@ the Mac.
   asks nothing), Cmd+Shift+A Apply, Cmd+Shift+M the Model dropdown, Cmd+E the
   text, Cmd+N the name, Cmd+L the list, Cmd+T Section..., Cmd+K Skills, Cmd+F
   Safety, Cmd+O Notes. The Agent Request: Cmd+Shift+M Mike, Cmd+Shift+A
-  Auto-send, Cmd+U Upgrade. The Confirm Command dialog: Cmd+D Deny,
+  Auto-send, Cmd+N Announce, Cmd+U Upgrade. The Confirm Command dialog: Cmd+D Deny,
   Cmd+Shift+A Allow. Every Cancel is Cmd+Shift+C. A dialog's Cmd+letters
   never reach the window behind it, as on Windows. Do not use Option:
   Option+S in the editor's text inserts ß.

@@ -537,6 +537,10 @@ META_TOOLS = [
                     "type": "boolean",
                     "description": "The Agent Request dialog's Auto-send checkbox (right of its Mike button): when true, a reply dictated with Mike is sent the moment its transcript lands in the reply box, as if Enter had been pressed; when false the transcript waits to be edited and sent by hand. Default false on create.",
                 },
+                "announce_request": {
+                    "type": "boolean",
+                    "description": "The Agent Request dialog's Announce checkbox (right of Auto-send): when true the dialog says 'Please Reply to Agent' aloud as it opens and repeats 'Please Respond' / 'Please Respond Now' every 60 seconds until it is answered (the system bell on a machine that cannot speak); when false the dialog opens and waits in silence. Default true on create.",
+                },
                 "notes": {
                     "type": "string",
                     "description": "Free-text notes about the instruction (what it is for, caveats, history) — stored with it and shown in the Instruction Editor's Notes box above the instruction text; NEVER part of the prompt the model receives. Optional on create / update; '' clears.",

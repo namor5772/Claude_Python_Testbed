@@ -107,6 +107,7 @@ class _Host(StateMixin, SkillsMixin):
         self._blocked_tools = set()
         for attr in TOGGLES:
             setattr(self, attr, _Var(False))
+        self.announce_request = _Var(True)      # the dialog's Announce box: on by default
         for attr in DISPLAY:
             setattr(self, attr, _Var(False))
         self._update_skills_button()

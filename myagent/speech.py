@@ -33,9 +33,10 @@ import threading
 
 from myagent.constants import IS_WINDOWS, _SUBPROCESS_NOWND
 
-# The words the Agent Request dialog says when it opens on Mike — "Please
-# Reply to Agent" since 2026-11-01 (the user's request; "Agent Request"
-# from 2026-10-23 until then).
+# The words the Agent Request dialog says as it opens with its Announce box
+# ticked (the Auto-send box until 2026-11-02) — "Please Reply to Agent"
+# since 2026-11-01 (the user's request; "Agent Request" from 2026-10-23
+# until then).
 AGENT_REQUEST_ANNOUNCEMENT = "Please Reply to Agent"
 
 # The reminders it repeats while nobody has answered (2026-10-31, the user's

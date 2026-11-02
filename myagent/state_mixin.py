@@ -970,6 +970,7 @@ class StateMixin:
                 "outlook": self.outlook_enabled.get(),
                 "conversational": self.conversational_enabled.get(),
                 "dictation_auto_send": self.dictation_auto_send.get(),
+                "announce_request": self.announce_request.get(),
                 "provider": self.provider,
                 "model": model_fields["model"],
                 "temperature": self.temperature,
@@ -1153,6 +1154,7 @@ class StateMixin:
         self.outlook_enabled.set(entry.get("outlook", False))
         self.conversational_enabled.set(entry.get("conversational", False))
         self.dictation_auto_send.set(entry.get("dictation_auto_send", False))
+        self.announce_request.set(entry.get("announce_request", True))
         self.upgrade_target = entry.get("upgrade_target")
         model_restored = "model" in entry
         if model_restored:

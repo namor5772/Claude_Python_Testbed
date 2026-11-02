@@ -571,9 +571,22 @@ class SafetyMixin(PaneNotesMixin):
             # is handed over as a lambda, looked up when a transcript lands
             # and never at this line. (The settings are the main window's
             # Voice Setup button.) Built before the image row so Tab order
-            # follows the visual order.
-            voice_row, mike_btn, auto_send_btn, dictation = self._voice_build_row(
-                dlg, resp_text, self.dictation_auto_send, lambda: on_inject())
+            # follows the visual order. The Announce box right of Auto-send
+            # (2026-11-02, the user's request) is the applied instruction's
+            # say in whether THIS dialog speaks — the opening cue and the
+            # reminders, below. Toggled while the dialog is open it acts at
+            # once: a tick arms the reminders (the opening words are not
+            # repeated — whoever ticked it is here), an untick silences them.
+            # `stop_reminders` and `dictation` are assigned below and looked
+            # up at the press, like on_inject.
+            def announce_toggled():
+                stop_reminders[0]()
+                stop_reminders[0] = (self._remind_request(dlg, dictation)
+                                     if self.announce_request.get() else (lambda: None))
+
+            voice_row, mike_btn, auto_send_btn, announce_btn, dictation = self._voice_build_row(
+                dlg, resp_text, self.dictation_auto_send, lambda: on_inject(),
+                announce=self.announce_request, on_announce=announce_toggled)
             voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
 
             # Upgrade row (model_upgrade_mixin): ticked, the run moves to the
@@ -623,7 +636,7 @@ class SafetyMixin(PaneNotesMixin):
             img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
             bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn,
-                                 "a": auto_send_btn, "u": upgrade_btn})
+                                 "a": auto_send_btn, "n": announce_btn, "u": upgrade_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with
@@ -646,9 +659,10 @@ class SafetyMixin(PaneNotesMixin):
             relay_seq = self._relay_request(shown)     # the phone sees what the box shows
             from_relay = [False]
             relay_poll = [None]
-            # The spoken reminders' cancel (set below, with the box ticked):
-            # every way the dialog closes — Enter, [X], a relayed reply —
-            # runs _capture_and_close, so that is where they fall silent.
+            # The spoken reminders' cancel (set below with the Announce box
+            # ticked, and by a tick while the dialog is open): every way the
+            # dialog closes — Enter, [X], a relayed reply — runs
+            # _capture_and_close, so that is where they fall silent.
             stop_reminders = [lambda: None]
 
             def _capture_and_close():
@@ -737,10 +751,13 @@ class SafetyMixin(PaneNotesMixin):
             # display bell), with the bell kept for a machine that cannot
             # speak — and since 2026-10-31 repeated every REQUEST_REMINDER_MS
             # (60 s) as "Please Respond", then "Please Respond Now", until the
-            # dialog is answered (_remind_request).
+            # dialog is answered (_remind_request). Under the Announce box
+            # since 2026-11-02 (the Auto-send tick until then, the user's
+            # request for a switch of its own): the applied instruction says
+            # whether this dialog speaks at all, hands-free or not.
             hands_free = self.dictation_auto_send.get()
             (mike_btn if hands_free else resp_text).focus_set()
-            if hands_free:
+            if self.announce_request.get():
                 self._announce_request(dlg)
                 stop_reminders[0] = self._remind_request(dlg, dictation)
             if relay_seq is not None:
@@ -804,10 +821,10 @@ class SafetyMixin(PaneNotesMixin):
         `speech.speak` hands the words to the platform's text-to-speech and
         returns at once; where nothing on the machine can speak it returns
         False and the display bell rings instead, as the dialog did before
-        2026-10-23 — so the cue is never silent. Called with the Auto-send
-        box ticked only, like the bell it replaced — with the opening words
-        when the dialog appears, and with each reminder's words by
-        _remind_request after it.
+        2026-10-23 — so the cue is never silent. Called with the Announce
+        box ticked only (2026-11-02; the Auto-send box until then, like the
+        bell it replaced) — with the opening words when the dialog appears,
+        and with each reminder's words by _remind_request after it.
         """
         if not speak(text):
             dlg.bell()

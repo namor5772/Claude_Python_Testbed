@@ -147,7 +147,8 @@ class _WidgetCase(unittest.TestCase):
                  instruction_editor_window=self.root,
                  _instr_notes_text="", _notes_dialog=None, _notes_text=None,
                  _instr_shown_name="", _instr_tree=None, _editor_images=[], pending_images=[],
-                 dictation_auto_send=tk.BooleanVar(self.root, value=False), upgrade_target=None,
+                 dictation_auto_send=tk.BooleanVar(self.root, value=False),
+                 announce_request=tk.BooleanVar(self.root, value=True), upgrade_target=None,
                  provider="Anthropic", model="claude-sonnet-5", thinking_enabled=True, thinking_effort="low",
                  thinking_budget=8192, thinking_mode="low", temperature=1.0, text_verbosity="medium",
                  fast_mode=False, skills={}, _disabled_confirm_patterns=set(), _blocked_tools=set(),
@@ -368,6 +369,7 @@ class RestoreTests(_WidgetCase):
         flags = {n: tk.BooleanVar(self.root, value=False) for n in
                  ("desktop", "browser", "excel", "physical", "meta", "mcp", "google", "proton", "outlook", "conversational")}
         h = stub(StateMixin, dictation_auto_send=tk.BooleanVar(self.root, value=False),
+                 announce_request=tk.BooleanVar(self.root, value=True),
                  _restore_model_params=lambda e, **kw: None, _restore_skill_modes=lambda e: None,
                  _update_title=lambda: None)
         for name, var in flags.items():

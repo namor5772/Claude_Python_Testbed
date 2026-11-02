@@ -213,16 +213,24 @@ class _DialogHost(SafetyMixin):
         self.root = root
         self.queue = queue.Queue()
         self.dictation_auto_send = tk.BooleanVar(master=root, value=False)
+        # The Announce box's variable — OFF here, where the app's default is
+        # on, so the suite's dialogs stay silent; the cue tests tick it.
+        self.announce_request = tk.BooleanVar(master=root, value=False)
         self.send = None    # what the real row calls when Auto-send is ticked
 
-    def _voice_build_row(self, dlg, resp_text, auto_send, send):
+    def _voice_build_row(self, dlg, resp_text, auto_send, send,
+                         announce=None, on_announce=lambda: None):
         row = tk.Frame(dlg)
         mike = tk.Button(row, text="Mike")
         mike.pack(side=tk.LEFT)
         auto = tk.Checkbutton(row, text="Auto-send", variable=auto_send)
         auto.pack(side=tk.LEFT)
+        box = None
+        if announce is not None:    # the real row's box: the dialog's handler on its command
+            box = tk.Checkbutton(row, text="Announce", variable=announce, command=on_announce)
+            box.pack(side=tk.LEFT)
         self.send = send
-        return row, mike, auto, _Dictation()
+        return row, mike, auto, box, _Dictation()
 
     def _upgrade_build_row(self, dlg):
         # model_upgrade_mixin's row: here a box with nothing to move to (the
@@ -268,14 +276,15 @@ class DialogTests(unittest.TestCase):
         gc.collect()
         self.root.destroy()
 
-    def run_dialog(self, message, act, auto_send=False, preface=""):
+    def run_dialog(self, message, act, auto_send=False, announce=False, preface=""):
         """Run the real do_user_prompt(message) on a worker thread and hand
         the dialog, once it is on screen, to act(dialog). Returns the host and
-        {"reply": ...} (or {"error": ...}). `auto_send` is the applied
-        instruction's Auto-send tick as the dialog finds it; `preface` the
-        model's text shown above the message."""
+        {"reply": ...} (or {"error": ...}). `auto_send` and `announce` are
+        the applied instruction's Auto-send and Announce ticks as the dialog
+        finds them; `preface` the model's text shown above the message."""
         host = self.host = _DialogHost(self.root)
         host.dictation_auto_send.set(auto_send)
+        host.announce_request.set(announce)
         outcome = {}
 
         def work():
@@ -383,7 +392,7 @@ class DialogTests(unittest.TestCase):
                          [{"type": "user_prompt_request", "content": asked},
                           {"type": "user_prompt_echo", "content": "yes, go ahead"}])
 
-    def test_the_dialog_opens_in_the_reply_box_or_on_mike_with_a_bell_when_auto_send_is_ticked(self):
+    def test_the_dialog_opens_in_the_reply_box_or_on_mike_and_speaks_only_with_announce_ticked(self):
         # The initial focus (2026-09-30): the reply box, ready for typing —
         # unless the applied instruction's Auto-send box is ticked, when it
         # is the Mike button, so a hands-free reply needs no mouse and no
@@ -399,9 +408,12 @@ class DialogTests(unittest.TestCase):
         # Agent" since 2026-11-01, "Agent Request" until then),
         # with the bell as the fallback where nothing can speak: speech is
         # patched to say it could not, so the bell is what is counted — and
-        # the suite stays quiet either way.
-        for ticked, expected in ((False, "reply"), (True, "Mike")):
-            with self.subTest(auto_send=ticked):
+        # the suite stays quiet either way. Since 2026-11-02 the cue follows
+        # the Announce box, not Auto-send (the user's request for a switch of
+        # its own): the focus still follows Auto-send, the sound only Announce.
+        for ticked, announce, expected in ((False, True, "reply"), (True, True, "Mike"),
+                                           (True, False, "Mike"), (False, False, "reply")):
+            with self.subTest(auto_send=ticked, announce=announce):
                 seen = {}
 
                 def act(dialog):
@@ -424,14 +436,14 @@ class DialogTests(unittest.TestCase):
 
                 with mock.patch.object(tk.Misc, "bell", autospec=True) as bell, \
                         mock.patch("myagent.safety_mixin.speak", return_value=False) as say:
-                    self.run_dialog("Which account?", act, auto_send=ticked)
+                    self.run_dialog("Which account?", act, auto_send=ticked, announce=announce)
                 self.assertEqual(seen["focus"], expected)
-                # Spoken once, with the box ticked; never without — and with
+                # Spoken once, with Announce ticked; never without — and with
                 # speech unavailable the bell rings once, on the dialog.
                 self.assertEqual([c.args for c in say.call_args_list],
-                                 [("Please Reply to Agent",)] if ticked else [])
+                                 [("Please Reply to Agent",)] if announce else [])
                 self.assertEqual([str(c.args[0]) for c in bell.call_args_list],
-                                 [seen["dialog"]] if ticked else [])
+                                 [seen["dialog"]] if announce else [])
 
     def test_space_and_enter_on_the_focused_mike_button_both_press_it(self):
         # The user's request (2026-09-30): Space on Mike should do what Enter
@@ -502,7 +514,7 @@ class DialogTests(unittest.TestCase):
         with mock.patch("myagent.safety_mixin.REQUEST_REMINDER_MS", 120), \
                 mock.patch("myagent.safety_mixin.speak",
                            side_effect=lambda text: said.append(text) or True):
-            host, outcome = self.run_dialog("Which account?", act, auto_send=True)
+            host, outcome = self.run_dialog("Which account?", act, auto_send=True, announce=True)
             spoken_at_close = list(said)
             self.root.after(500, self.root.quit)
             self.root.mainloop()
@@ -513,6 +525,52 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(set(spoken_at_close[2:]), {"Please Respond Now"})
         # Silence after the reply: the close path cancelled the timer.
         self.assertEqual(said, spoken_at_close)
+
+    def test_the_announce_box_silences_or_arms_the_reminders_while_the_dialog_is_open(self):
+        # 2026-11-02, the user's request: a per-instruction switch for the
+        # spoken messages. Unticked, the dialog opens in silence — no cue, no
+        # reminders, whatever Auto-send says; ticked while it is open, the
+        # reminders start (the opening words are not repeated: whoever ticked
+        # it is here); unticked again, they stop at once.
+        said = []
+        marks = {}
+
+        def act(dialog):
+            box = [w for w in _walk(dialog)
+                   if isinstance(w, tk.Checkbutton) and w.cget("text") == "Announce"][0]
+
+            def tick():
+                marks["before_tick"] = list(said)
+                box.invoke()
+
+            def untick():
+                marks["before_untick"] = list(said)
+                box.invoke()
+
+            def send():
+                marks["at_send"] = list(said)
+                _reply_box(dialog).insert("1.0", "the joint account")
+                self.host.send()
+
+            self.root.after(300, tick)
+            self.root.after(750, untick)
+            self.root.after(1150, send)
+
+        with mock.patch("myagent.safety_mixin.REQUEST_REMINDER_MS", 120), \
+                mock.patch("myagent.safety_mixin.speak",
+                           side_effect=lambda text: said.append(text) or True):
+            host, outcome = self.run_dialog("Which account?", act, auto_send=True, announce=False)
+            self.root.after(400, self.root.quit)
+            self.root.mainloop()
+        self.assertEqual(outcome["reply"], "the joint account")
+        self.assertEqual(marks["before_tick"], [])                      # silent until the tick
+        self.assertGreaterEqual(len(marks["before_untick"]), 2, marks)  # ~3 reminders in 450 ms
+        self.assertEqual(marks["before_untick"][0], "Please Respond")
+        self.assertEqual(set(marks["before_untick"][1:]), {"Please Respond Now"})
+        self.assertNotIn("Please Reply to Agent", said)                 # the opening words were not owed
+        self.assertEqual(marks["at_send"], marks["before_untick"])      # silence after the untick
+        self.assertEqual(said, marks["at_send"])                        # and after the close
+        self.assertFalse(host.announce_request.get())
 
 
 def _reply_box(dialog):

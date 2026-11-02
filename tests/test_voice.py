@@ -935,6 +935,7 @@ class _RowHost(VoiceMixin):
     def __init__(self, root, recorder=None, transcribe=None, name="Pay_bills", disk=None):
         self.root = root
         self.dictation_auto_send = tk.BooleanVar(master=root, value=False)
+        self.announce_request = tk.BooleanVar(master=root, value=True)
         self.agent_instruction_name = name
         self.disk = disk if disk is not None else {name: {"text": "t"}}
         self.recorder = recorder or _FakeRecorder()
@@ -994,14 +995,17 @@ class AutoSendTests(unittest.TestCase):
         # there — "main thread is not in main loop", ignored but printed.
         for host in self.hosts:
             host.dictation_auto_send = None
+            host.announce_request = None
         self.root.destroy()
 
     def build(self, host):
         self.hosts.append(host)
         # `send` is the dialog's on_inject: here it records what the box held.
+        # The Announce box rides along as the dialog has it (AnnounceTests).
         return host._voice_build_row(
             self.dlg, self.box, host.dictation_auto_send,
-            lambda: self.sent.append(self.box.get("1.0", "end-1c")))
+            lambda: self.sent.append(self.box.get("1.0", "end-1c")),
+            announce=host.announce_request)
 
     def dictate(self, mike, dictation, timeout=5.0):
         mike.invoke()
@@ -1014,20 +1018,21 @@ class AutoSendTests(unittest.TestCase):
         self.assertEqual(dictation.state, "idle")
 
     def test_the_box_sits_right_of_mike_before_the_status_line(self):
+        # (The Announce box between them since 2026-11-02 — AnnounceTests.)
         host = _RowHost(self.root)
-        row, mike, auto, _ = self.build(host)
+        row, mike, auto, announce, _ = self.build(host)
         status = row.winfo_children()[-1]
-        self.assertEqual(row.winfo_children(), [mike, auto, status])   # creation = Tab order
+        self.assertEqual(row.winfo_children(), [mike, auto, announce, status])   # creation = Tab order
         self.assertEqual((auto.winfo_class(), auto.cget("text")), ("Checkbutton", "Auto-send"))
-        self.assertEqual([int(w.grid_info()["column"]) for w in (mike, auto, status)], [0, 1, 2])
-        self.assertEqual(int(row.grid_columnconfigure(2)["weight"]), 1)   # the status line stretches
+        self.assertEqual([int(w.grid_info()["column"]) for w in (mike, auto, status)], [0, 1, 3])
+        self.assertEqual(int(row.grid_columnconfigure(3)["weight"]), 1)   # the status line stretches
         self.assertEqual(int(row.grid_columnconfigure(1)["weight"]), 0)
         self.assertEqual(str(auto.cget("variable")), str(host.dictation_auto_send))
         self.assertFalse(host.dictation_auto_send.get())               # off until ticked
 
     def test_unticked_the_transcript_lands_and_nothing_is_sent(self):
         host = _RowHost(self.root)
-        _, mike, _, d = self.build(host)
+        _, mike, _, _, d = self.build(host)
         self.box.insert("1.0", "Reply:")
         self.dictate(mike, d)
         self.assertEqual(self.box.get("1.0", "end-1c"), "Reply: Hello there.")
@@ -1035,7 +1040,7 @@ class AutoSendTests(unittest.TestCase):
 
     def test_ticked_the_landed_transcript_is_sent_as_if_enter_were_pressed(self):
         host = _RowHost(self.root)
-        _, mike, auto, d = self.build(host)
+        _, mike, auto, _, d = self.build(host)
         self.box.insert("1.0", "Reply:")
         auto.invoke()
         self.assertTrue(host.dictation_auto_send.get())
@@ -1058,7 +1063,7 @@ class AutoSendTests(unittest.TestCase):
                 (_RowHost(self.root, transcribe=nothing), "No speech recognised"),
                 (_RowHost(self.root, transcribe=boom), "OPENAI_API_KEY")):
             with self.subTest(expected=expected):
-                row, mike, auto, d = self.build(host)
+                row, mike, auto, _, d = self.build(host)
                 auto.invoke()
                 self.dictate(mike, d)
                 self.assertEqual((self.sent, self.box.get("1.0", "end-1c")), ([], ""))
@@ -1071,7 +1076,7 @@ class AutoSendTests(unittest.TestCase):
             with self.subTest(heard=heard):
                 host = _RowHost(self.root, transcribe=lambda cfg, wav, heard=heard: (
                     heard, {"model": "m", "note": "", "elapsed": 0.1}))
-                _, mike, auto, d = self.build(host)
+                _, mike, auto, _, d = self.build(host)
                 auto.invoke()
                 self.sent = []
                 self.box.delete("1.0", "end")
@@ -1081,7 +1086,7 @@ class AutoSendTests(unittest.TestCase):
     def test_an_end_word_after_typed_text_lands_as_heard(self):
         host = _RowHost(self.root, transcribe=lambda cfg, wav: (
             "Stop.", {"model": "m", "note": "", "elapsed": 0.1}))
-        _, mike, auto, d = self.build(host)
+        _, mike, auto, _, d = self.build(host)
         auto.invoke()
         self.box.insert("1.0", "Yes:")
         self.dictate(mike, d)
@@ -1090,7 +1095,7 @@ class AutoSendTests(unittest.TestCase):
     def test_unticked_a_dictated_end_word_lands_bare_for_enter_to_send(self):
         host = _RowHost(self.root, transcribe=lambda cfg, wav: (
             "Quit.", {"model": "m", "note": "", "elapsed": 0.1}))
-        _, mike, _, d = self.build(host)
+        _, mike, _, _, d = self.build(host)
         self.dictate(mike, d)
         self.assertEqual((self.box.get("1.0", "end-1c"), self.sent), ("quit", []))
 
@@ -1102,7 +1107,7 @@ class AutoSendTests(unittest.TestCase):
         # widget's focus_set is deferred to its VisibilityNotify), hence the
         # row gridded on a shown, transparent window.
         host = _RowHost(self.root)
-        row, mike, auto, _ = self.build(host)
+        row, mike, auto, _, _ = self.build(host)
         row.grid()
         self.dlg.attributes("-alpha", 0.0)
         self.dlg.deiconify()
@@ -1131,7 +1136,7 @@ class AutoSendTests(unittest.TestCase):
     def test_the_tick_is_kept_with_the_applied_instruction(self):
         host = _RowHost(self.root, name="Pay_bills",
                         disk={"Pay_bills": {"text": "t", "desktop": True}, "Other": {"text": "o"}})
-        _, _, auto, _ = self.build(host)
+        _, _, auto, _, _ = self.build(host)
         auto.invoke()
         # A targeted key write on the applied entry, and the snapshot saved.
         self.assertEqual(host.disk, {"Pay_bills": {"text": "t", "desktop": True,
@@ -1144,18 +1149,126 @@ class AutoSendTests(unittest.TestCase):
 
     def test_a_value_the_entry_already_holds_is_not_rewritten(self):
         host = _RowHost(self.root, disk={"Pay_bills": {"text": "t", "dictation_auto_send": True}})
-        _, _, auto, _ = self.build(host)
+        _, _, auto, _, _ = self.build(host)
         auto.invoke()                                   # off → on, as on disk already
         self.assertEqual((host.store_writes, host.state_saves), (0, 1))
 
     def test_an_ad_hoc_run_keeps_the_tick_for_the_session_and_the_snapshot_alone(self):
         for name in ("", "Gone"):                       # no instruction, or one the store lost
             host = _RowHost(self.root, name=name, disk={"Pay_bills": {"text": "t"}})
-            _, _, auto, _ = self.build(host)
+            _, _, auto, _, _ = self.build(host)
             auto.invoke()
             self.assertTrue(host.dictation_auto_send.get())
             self.assertEqual((host.disk, host.store_writes, host.state_saves),
                              ({"Pay_bills": {"text": "t"}}, 0, 1))
+
+
+class AnnounceTests(unittest.TestCase):
+    """The Announce box right of Auto-send (2026-11-02, the user's request: a
+    switch of its own, per instruction, for the dialog's spoken cue and
+    reminders), on the REAL row: the app's variable, on by default; a toggle
+    is kept with the applied instruction exactly as Auto-send's is and THEN
+    handed to the caller (the dialog arms or silences its reminders there —
+    tests/test_agent_request_display.py); a caller without a variable
+    (SelfBot) gets no box; the row itself never speaks."""
+
+    def setUp(self):
+        try:
+            self.root = tk.Tk()
+        except tk.TclError as exc:  # headless box, no display
+            self.skipTest(f"Tk unavailable: {exc}")
+        self.root.withdraw()
+        self.dlg = tk.Toplevel(self.root)
+        self.dlg.withdraw()
+        self.box = tk.Text(self.dlg)
+        self.hosts = []
+        _VoiceDictation.live = 0
+
+    def tearDown(self):
+        _VoiceDictation.live = 0
+        for host in self.hosts:         # on the Tk thread — see AutoSendTests
+            host.dictation_auto_send = None
+            host.announce_request = None
+        self.root.destroy()
+
+    def build(self, host, on_announce=lambda: None):
+        self.hosts.append(host)
+        return host._voice_build_row(self.dlg, self.box, host.dictation_auto_send,
+                                     lambda: None, announce=host.announce_request,
+                                     on_announce=on_announce)
+
+    def test_the_box_sits_right_of_auto_send_before_the_status_line_on_by_default(self):
+        host = _RowHost(self.root)
+        row, mike, auto, announce, _ = self.build(host)
+        status = row.winfo_children()[-1]
+        self.assertEqual(row.winfo_children(), [mike, auto, announce, status])   # creation = Tab order
+        self.assertEqual((announce.winfo_class(), announce.cget("text")), ("Checkbutton", "Announce"))
+        self.assertEqual([int(w.grid_info()["column"]) for w in (mike, auto, announce, status)],
+                         [0, 1, 2, 3])
+        self.assertEqual([int(row.grid_columnconfigure(c)["weight"]) for c in range(4)],
+                         [0, 0, 0, 1])                                           # the status line stretches
+        self.assertEqual(str(announce.cget("variable")), str(host.announce_request))
+        self.assertTrue(host.announce_request.get())                           # on until unticked
+
+    def test_without_a_variable_the_row_has_no_box(self):
+        # SelfBot's call: no Agent Request dialog, so nothing to announce.
+        host = _RowHost(self.root)
+        self.hosts.append(host)
+        row, mike, auto, announce, _ = host._voice_build_row(
+            self.dlg, self.box, host.dictation_auto_send, lambda: None)
+        self.assertIsNone(announce)
+        status = row.winfo_children()[-1]
+        self.assertEqual(row.winfo_children(), [mike, auto, status])
+        self.assertEqual(int(status.grid_info()["column"]), 2)
+        self.assertEqual(int(row.grid_columnconfigure(2)["weight"]), 1)
+
+    def test_a_toggle_is_kept_with_the_applied_instruction_then_handed_to_the_caller(self):
+        host = _RowHost(self.root, name="Pay_bills",
+                        disk={"Pay_bills": {"text": "t", "desktop": True}, "Other": {"text": "o"}})
+        seen = []
+        _, _, _, announce, _ = self.build(
+            host, on_announce=lambda: seen.append((host.announce_request.get(), host.store_writes)))
+        announce.invoke()                               # on → off
+        # A targeted key write on the applied entry and the snapshot saved —
+        # BEFORE the caller hears of it.
+        self.assertEqual(host.disk, {"Pay_bills": {"text": "t", "desktop": True,
+                                                   "announce_request": False},
+                                     "Other": {"text": "o"}})
+        self.assertEqual((host.store_writes, host.state_saves), (1, 1))
+        self.assertEqual(seen, [(False, 1)])
+        announce.invoke()                               # off → on
+        self.assertTrue(host.disk["Pay_bills"]["announce_request"])
+        self.assertEqual((host.store_writes, host.state_saves), (2, 2))
+        self.assertEqual(seen, [(False, 1), (True, 2)])
+
+    def test_a_value_the_entry_already_holds_is_not_rewritten(self):
+        # The key's default is True, so an entry WITHOUT it and a box that is
+        # on are in step: an untick writes, a tick back to the default on an
+        # entry that never had the key does not.
+        host = _RowHost(self.root, disk={"Pay_bills": {"text": "t", "announce_request": False}})
+        _, _, _, announce, _ = self.build(host)
+        announce.invoke()                               # on → off, as on disk already
+        self.assertEqual((host.store_writes, host.state_saves), (0, 1))
+        host = _RowHost(self.root, disk={"Pay_bills": {"text": "t"}})
+        host.announce_request.set(False)
+        _, _, _, announce, _ = self.build(host)
+        announce.invoke()                               # off → on: the default, nothing to write
+        self.assertEqual((host.store_writes, host.state_saves), (0, 1))
+
+    def test_an_ad_hoc_run_keeps_the_switch_for_the_session_and_the_snapshot_alone(self):
+        for name in ("", "Gone"):                       # no instruction, or one the store lost
+            host = _RowHost(self.root, name=name, disk={"Pay_bills": {"text": "t"}})
+            _, _, _, announce, _ = self.build(host)
+            announce.invoke()
+            self.assertFalse(host.announce_request.get())
+            self.assertEqual((host.disk, host.store_writes, host.state_saves),
+                             ({"Pay_bills": {"text": "t"}}, 0, 1))
+
+    def test_the_row_never_speaks(self):
+        # The words are the dialog's (safety_mixin); the row carries the switch.
+        src = (REPO / "myagent" / "voice_mixin.py").read_text(encoding="utf-8")
+        self.assertNotRegex(src, r"\bspeak\(")
+        self.assertNotIn("myagent.speech", src)
 
 
 class AutoSendPersistenceTests(unittest.TestCase):
@@ -1184,6 +1297,25 @@ class AutoSendPersistenceTests(unittest.TestCase):
         self.assertTrue(host.dictation_auto_send.get())
         host._apply_instruction_entry("Old", {"text": "t", "conversational": True})
         self.assertFalse(host.dictation_auto_send.get())
+
+
+    def test_the_announce_switch_survives_a_relaunch(self):
+        # Announce (2026-11-02) rides the same snapshot: on by default, an
+        # untick saved and restored.
+        first = _StateHost({}, self.state_file)
+        self.assertTrue(first.announce_request.get())
+        first.announce_request.set(False)
+        first._save_last_state()
+        second = _StateHost({}, self.state_file)
+        second._load_last_state()
+        self.assertFalse(second.announce_request.get())
+
+    def test_the_entry_decides_announce_and_an_older_entry_loads_with_it_on(self):
+        host = _StateHost({}, self.state_file)
+        host._apply_instruction_entry("Quiet", {"text": "t", "announce_request": False})
+        self.assertFalse(host.announce_request.get())
+        host._apply_instruction_entry("Old", {"text": "t", "conversational": True})
+        self.assertTrue(host.announce_request.get())
 
 
 class MainWindowButtonTests(unittest.TestCase):
@@ -1332,6 +1464,43 @@ class IndependenceTests(unittest.TestCase):
         self.assertEqual(manage_tool["input_schema"]["properties"]["dictation_auto_send"]["type"],
                          "boolean")
 
+    def test_the_announce_switch_rides_the_same_sites(self):
+        # Announce (2026-11-02, `announce_request`): the dialog's other
+        # per-instruction box — on by default, so every reader falls back to
+        # True — at every site Auto-send passes through, the editor's
+        # environment snapshot and restore included.
+        def between(src, start, end):
+            return src[src.index(start):src.index(end)]
+
+        instr = (REPO / "myagent" / "instructions_mixin.py").read_text(encoding="utf-8")
+        state = (REPO / "myagent" / "state_mixin.py").read_text(encoding="utf-8")
+        self.assertIn('"announce_request": self.announce_request.get()',
+                      between(instr, "def _save_instruction(", "def _delete_instruction("))
+        self.assertIn("self.announce_request.set(True)",
+                      between(instr, "def _clear_instruction_editor(", "def _on_instruction_selected("))
+        self.assertIn('self.announce_request.set(entry.get("announce_request", True))',
+                      between(instr, "def _on_instruction_selected(", "def _apply_instruction("))
+        self.assertIn('"announce_request": bool(self.announce_request.get())',
+                      between(instr, "def _editor_env_snapshot(", "def _editor_mark_env("))
+        discard = between(instr, "def _editor_discard_env(", "def _nullify_editor_widgets(")
+        self.assertIn('announce = entry.get("announce_request", announce)', discard)
+        self.assertIn("self.announce_request.set(bool(announce))", discard)
+        manage = between(instr, "def do_manage_instructions(", "def open_instruction_editor(")
+        flat = re.sub(r"\s+", " ", manage)
+        self.assertIn('"announce_request": entry.get("announce_request", True)', manage)   # read
+        self.assertIn('"announce_request": params.get("announce_request", True)', manage)  # create
+        self.assertIn('"upgrade_target", "announce_request",', flat)                        # update: accepted
+        self.assertIn('"dictation_auto_send", "announce_request", "provider",', flat)       # update: copied
+        self.assertIn('"announce_request": self.announce_request.get()',
+                      between(state, "def _save_last_state(", "def _load_last_state("))
+        self.assertIn('self.announce_request.set(entry.get("announce_request", True))',
+                      between(state, "def _apply_instruction_entry(", "def _merge_extra_text("))
+        self.assertIn("self.announce_request = tk.BooleanVar(value=True)",
+                      (REPO / "MyAgent.py").read_text(encoding="utf-8"))
+        manage_tool = next(t for t in META_TOOLS if t["name"] == "manage_instructions")
+        self.assertEqual(manage_tool["input_schema"]["properties"]["announce_request"]["type"],
+                         "boolean")
+
     def test_every_press_reads_the_one_per_user_file(self):
         self.assertEqual(os.path.normpath(voice_mixin.VOICE_CONFIG_FILE),
                          os.path.normpath(os.path.expanduser("~/.config/myagent-voice/config.json")))
@@ -1372,14 +1541,17 @@ class WiringTests(unittest.TestCase):
         # 2026-09-20, where it can be reached before a run asks anything).
         flat = re.sub(r"\s+", " ", src)
         self.assertIn('bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn, '
-                      '"a": auto_send_btn, "u": upgrade_btn})', flat)
+                      '"a": auto_send_btn, "n": announce_btn, "u": upgrade_btn})', flat)
         self.assertNotIn("voice_setup_btn", src)
         # The Auto-send box gets the app's per-instruction variable and the
         # dialog's own send path — on_inject, defined further down, hence the
-        # late-bound lambda.
+        # late-bound lambda; the Announce box (2026-11-02) its own variable
+        # and the dialog's arm-or-silence handler, defined just before.
         self.assertIn("self._voice_build_row( dlg, resp_text, self.dictation_auto_send, "
-                      "lambda: on_inject())", flat)
+                      "lambda: on_inject(), announce=self.announce_request, "
+                      "on_announce=announce_toggled)", flat)
         self.assertLess(src.index("lambda: on_inject()"), src.index("def on_inject("))
+        self.assertLess(src.index("def announce_toggled():"), src.index("self._voice_build_row("))
         # Enter never sends mid-dictation, and every close path frees the microphone.
         inject = src[src.index("def on_inject("):src.index("def on_close(")]
         self.assertLess(inject.index('dictation.state == "recording"'),
@@ -1390,16 +1562,19 @@ class WiringTests(unittest.TestCase):
         # The voice row is built before the image row: Tab order is creation order.
         self.assertLess(src.index("self._voice_build_row("), src.index("attach_btn = tk.Button("))
         # Initial focus (2026-09-30): Mike with Auto-send ticked, else the
-        # reply box — and the spoken "Agent Request" with it ticked (the bell
-        # until 2026-10-23, kept as the fallback inside _announce_request) —
-        # once the dialog is shown (the real dialog is pinned in
-        # tests/test_agent_request_display.py, the cue in tests/test_speech.py).
+        # reply box — and the spoken cue (the bell until 2026-10-23, kept as
+        # the fallback inside _announce_request) under the Announce box since
+        # 2026-11-02 (the Auto-send tick until then) — once the dialog is
+        # shown (the real dialog is pinned in tests/test_agent_request_display.py,
+        # the cue in tests/test_speech.py).
         prompt = src[src.index("def do_user_prompt("):]
         focus = "(mike_btn if hands_free else resp_text).focus_set()"
         self.assertIn("hands_free = self.dictation_auto_send.get()", prompt)
         self.assertIn(focus, prompt)
         self.assertLess(prompt.index("dlg.deiconify()"), prompt.index(focus))
         self.assertLess(prompt.index(focus), prompt.index("self._announce_request(dlg)"))
+        self.assertIn("if self.announce_request.get():", prompt)
+        self.assertNotIn("if hands_free:", prompt)
         self.assertNotIn("dlg.bell()", prompt[:prompt.index("def _announce_request(")])
         # A tick mid-dialog moves the focus to Mike: the box's command is the
         # write-through, then the focus (the real row, AutoSendTests).

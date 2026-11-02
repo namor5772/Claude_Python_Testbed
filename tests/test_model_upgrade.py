@@ -689,6 +689,7 @@ class _DialogHost(SafetyMixin, _Probe):
         self.root = root
         self.queue = queue.Queue()
         self.dictation_auto_send = tk.BooleanVar(master=root, value=False)
+        self.announce_request = tk.BooleanVar(master=root, value=False)   # silent in the suite
         self.send = None
         self.target = target
         self.applied = []
@@ -706,14 +707,14 @@ class _DialogHost(SafetyMixin, _Probe):
         self.applied.append(target)
         return True
 
-    def _voice_build_row(self, dlg, resp_text, auto_send, send):
+    def _voice_build_row(self, dlg, resp_text, auto_send, send, announce=None, on_announce=None):
         row = tk.Frame(dlg)
         mike = tk.Button(row, text="Mike")
         mike.pack(side=tk.LEFT)
         auto = tk.Checkbutton(row, text="Auto-send", variable=auto_send)
         auto.pack(side=tk.LEFT)
         self.send = send
-        return row, mike, auto, _Dictation()
+        return row, mike, auto, None, _Dictation()
 
     def _place_window(self, win, kind, default_size, **_kwargs):
         win.attributes("-alpha", 0.0)

@@ -119,7 +119,7 @@ class EditorCloseDiscardsTheBrowsedEnvironment(unittest.TestCase):
             thinking_mode="low", text_verbosity="medium", fast_mode=False,
             skills={"alpha": {"content": "A", "mode": "enabled"}},
             _disabled_confirm_patterns={"p1"}, _blocked_tools={"run_command"},
-            dictation_auto_send=_Var(False), upgrade_target=None,
+            dictation_auto_send=_Var(False), announce_request=_Var(True), upgrade_target=None,
             agent_instruction_name="", streaming=False,
             _restore_model_params=lambda entry, state_file=False:
                 restored.append((dict(entry), state_file)),
@@ -139,6 +139,7 @@ class EditorCloseDiscardsTheBrowsedEnvironment(unittest.TestCase):
         host._disabled_confirm_patterns = set()
         host._blocked_tools = set()
         host.dictation_auto_send.set(True)
+        host.announce_request.set(False)
         host.upgrade_target = {"model": "claude-fable-5-1", "level": "Max"}
         host._editor_env_replaced = True
 
@@ -155,6 +156,7 @@ class EditorCloseDiscardsTheBrowsedEnvironment(unittest.TestCase):
         self.assertEqual(host._disabled_confirm_patterns, {"p1"})
         self.assertEqual(host._blocked_tools, {"run_command"})
         self.assertFalse(host.dictation_auto_send.get())
+        self.assertTrue(host.announce_request.get())
         self.assertIsNone(host.upgrade_target)
         self.assertIsNone(host._editor_env)
 
@@ -179,11 +181,13 @@ class EditorCloseDiscardsTheBrowsedEnvironment(unittest.TestCase):
         host, _ = self._host(
             agent_instruction_name="A",
             _load_saved_instructions=lambda: {
-                "A": {"dictation_auto_send": True, "upgrade_target": target}})
+                "A": {"dictation_auto_send": True, "announce_request": False,
+                      "upgrade_target": target}})
         host._editor_mark_env()
         self._browse(host)
         host._editor_discard_env()
         self.assertTrue(host.dictation_auto_send.get())
+        self.assertFalse(host.announce_request.get())
         self.assertEqual(host.upgrade_target, target)
 
     def test_the_app_close_discards_before_saving_the_state(self):
