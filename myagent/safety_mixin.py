@@ -571,22 +571,14 @@ class SafetyMixin(PaneNotesMixin):
             # is handed over as a lambda, looked up when a transcript lands
             # and never at this line. (The settings are the main window's
             # Voice Setup button.) Built before the image row so Tab order
-            # follows the visual order. The Announce box right of Auto-send
-            # (2026-11-02, the user's request) is the applied instruction's
-            # say in whether THIS dialog speaks — the opening cue and the
-            # reminders, below. Toggled while the dialog is open it acts at
-            # once: a tick arms the reminders (the opening words are not
-            # repeated — whoever ticked it is here), an untick silences them.
-            # `stop_reminders` and `dictation` are assigned below and looked
-            # up at the press, like on_inject.
-            def announce_toggled():
-                stop_reminders[0]()
-                stop_reminders[0] = (self._remind_request(dlg, dictation)
-                                     if self.announce_request.get() else (lambda: None))
-
-            voice_row, mike_btn, auto_send_btn, announce_btn, dictation = self._voice_build_row(
+            # follows the visual order. The Auto-send and Announce boxes are
+            # the Instruction Editor's since 2026-11-03 (the user's request:
+            # their own row under the tool toggles) — the dialog reads the
+            # applied instruction's two variables and shows no box (the row
+            # is Mike and the status line; `auto_send_box=False`).
+            voice_row, mike_btn, _auto_send_btn, dictation = self._voice_build_row(
                 dlg, resp_text, self.dictation_auto_send, lambda: on_inject(),
-                announce=self.announce_request, on_announce=announce_toggled)
+                auto_send_box=False)
             voice_row.grid(row=4, column=0, sticky="ew", padx=15, pady=(5, 0))
 
             # Upgrade row (model_upgrade_mixin): ticked, the run moves to the
@@ -636,7 +628,7 @@ class SafetyMixin(PaneNotesMixin):
             img_listbox = tk.Listbox(img_frame, height=3, exportselection=False)
             img_listbox.grid(row=0, column=2, rowspan=2, sticky="ew")
             bind_mnemonics(dlg, {"i": attach_btn, "r": remove_btn, "m": mike_btn,
-                                 "a": auto_send_btn, "n": announce_btn, "u": upgrade_btn})
+                                 "u": upgrade_btn})
 
             def on_paste(ev=None):
                 # Ctrl+V with an image on the clipboard attaches it; with
@@ -659,10 +651,10 @@ class SafetyMixin(PaneNotesMixin):
             relay_seq = self._relay_request(shown)     # the phone sees what the box shows
             from_relay = [False]
             relay_poll = [None]
-            # The spoken reminders' cancel (set below with the Announce box
-            # ticked, and by a tick while the dialog is open): every way the
-            # dialog closes — Enter, [X], a relayed reply — runs
-            # _capture_and_close, so that is where they fall silent.
+            # The spoken reminders' cancel (set below with the instruction's
+            # Announce setting on): every way the dialog closes — Enter, [X],
+            # a relayed reply — runs _capture_and_close, so that is where
+            # they fall silent.
             stop_reminders = [lambda: None]
 
             def _capture_and_close():

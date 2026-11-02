@@ -1624,11 +1624,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         # Auto-send setting. The root is the row's window, so its <Destroy>
         # releases the microphone when the app closes. Without the myagent
         # package there is no VoiceMixin, hence no row. See CLAUDE_SELFBOT.md's
-        # Voice input paragraph. No Announce box (the fourth value, None):
-        # that is the Agent Request dialog's spoken cue, which SelfBot has no
-        # dialog to speak for.
+        # Voice input paragraph.
         if _HAS_MYAGENT_TOOLS:
-            self.voice_row, self.mike_button, self.auto_send_toggle, _announce, self._dictation = (
+            self.voice_row, self.mike_button, self.auto_send_toggle, self._dictation = (
                 self._voice_build_row(self.root, self.input_field,
                                       self.dictation_auto_send, self._send_as_enter))
             self.voice_row.grid(row=5, column=0, columnspan=2, sticky="ew",

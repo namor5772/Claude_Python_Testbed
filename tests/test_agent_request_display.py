@@ -218,19 +218,16 @@ class _DialogHost(SafetyMixin):
         self.announce_request = tk.BooleanVar(master=root, value=False)
         self.send = None    # what the real row calls when Auto-send is ticked
 
-    def _voice_build_row(self, dlg, resp_text, auto_send, send,
-                         announce=None, on_announce=lambda: None):
+    def _voice_build_row(self, dlg, resp_text, auto_send, send, auto_send_box=True):
         row = tk.Frame(dlg)
         mike = tk.Button(row, text="Mike")
         mike.pack(side=tk.LEFT)
-        auto = tk.Checkbutton(row, text="Auto-send", variable=auto_send)
-        auto.pack(side=tk.LEFT)
-        box = None
-        if announce is not None:    # the real row's box: the dialog's handler on its command
-            box = tk.Checkbutton(row, text="Announce", variable=announce, command=on_announce)
-            box.pack(side=tk.LEFT)
+        auto = None
+        if auto_send_box:           # the dialog passes False since 2026-11-03
+            auto = tk.Checkbutton(row, text="Auto-send", variable=auto_send)
+            auto.pack(side=tk.LEFT)
         self.send = send
-        return row, mike, auto, box, _Dictation()
+        return row, mike, auto, _Dictation()
 
     def _upgrade_build_row(self, dlg):
         # model_upgrade_mixin's row: here a box with nothing to move to (the
@@ -525,52 +522,6 @@ class DialogTests(unittest.TestCase):
         self.assertEqual(set(spoken_at_close[2:]), {"Please Respond Now"})
         # Silence after the reply: the close path cancelled the timer.
         self.assertEqual(said, spoken_at_close)
-
-    def test_the_announce_box_silences_or_arms_the_reminders_while_the_dialog_is_open(self):
-        # 2026-11-02, the user's request: a per-instruction switch for the
-        # spoken messages. Unticked, the dialog opens in silence — no cue, no
-        # reminders, whatever Auto-send says; ticked while it is open, the
-        # reminders start (the opening words are not repeated: whoever ticked
-        # it is here); unticked again, they stop at once.
-        said = []
-        marks = {}
-
-        def act(dialog):
-            box = [w for w in _walk(dialog)
-                   if isinstance(w, tk.Checkbutton) and w.cget("text") == "Announce"][0]
-
-            def tick():
-                marks["before_tick"] = list(said)
-                box.invoke()
-
-            def untick():
-                marks["before_untick"] = list(said)
-                box.invoke()
-
-            def send():
-                marks["at_send"] = list(said)
-                _reply_box(dialog).insert("1.0", "the joint account")
-                self.host.send()
-
-            self.root.after(300, tick)
-            self.root.after(750, untick)
-            self.root.after(1150, send)
-
-        with mock.patch("myagent.safety_mixin.REQUEST_REMINDER_MS", 120), \
-                mock.patch("myagent.safety_mixin.speak",
-                           side_effect=lambda text: said.append(text) or True):
-            host, outcome = self.run_dialog("Which account?", act, auto_send=True, announce=False)
-            self.root.after(400, self.root.quit)
-            self.root.mainloop()
-        self.assertEqual(outcome["reply"], "the joint account")
-        self.assertEqual(marks["before_tick"], [])                      # silent until the tick
-        self.assertGreaterEqual(len(marks["before_untick"]), 2, marks)  # ~3 reminders in 450 ms
-        self.assertEqual(marks["before_untick"][0], "Please Respond")
-        self.assertEqual(set(marks["before_untick"][1:]), {"Please Respond Now"})
-        self.assertNotIn("Please Reply to Agent", said)                 # the opening words were not owed
-        self.assertEqual(marks["at_send"], marks["before_untick"])      # silence after the untick
-        self.assertEqual(said, marks["at_send"])                        # and after the close
-        self.assertFalse(host.announce_request.get())
 
 
 def _reply_box(dialog):

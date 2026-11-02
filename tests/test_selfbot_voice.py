@@ -88,7 +88,7 @@ class RowTests(unittest.TestCase):
     def build(self, **kw):
         app = _bare(self.root, **kw)
         self.apps.append(app)
-        row, mike, auto, _announce, dictation = app._voice_build_row(      # no Announce box in SelfBot
+        row, mike, auto, dictation = app._voice_build_row(
             self.root, app.input_field, app.dictation_auto_send, app._send_as_enter)
         app._dictation = dictation
         return app, row, mike, auto, dictation

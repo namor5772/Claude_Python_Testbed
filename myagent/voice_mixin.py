@@ -3,9 +3,9 @@
 The dialog's **Mike** button is a toggle: the first press starts recording the
 microphone, the second stops it, the recording goes to a speech-to-text model,
 and the transcript is inserted into the reply box at the cursor — to be edited
-like typed text before Enter sends it, or, with the **Auto-send** box right of
-Mike ticked (2026-09-23), sent that moment as if Enter had been pressed; the
-box is the applied instruction's setting. **Voice Setup** — a button at the bottom
+like typed text before Enter sends it, or, with the instruction's **Auto-send**
+setting on (2026-09-23 — a box right of Mike until 2026-11-03, the Instruction
+Editor's since), sent that moment as if Enter had been pressed. **Voice Setup** — a button at the bottom
 left of the MAIN window since 2026-09-20 (it began beside Mike, reachable only
 while a run was asking something) — picks the provider / model / language /
 vocabulary hint / microphone and tests the whole chain (microphone → API key →
@@ -13,9 +13,10 @@ model) with a Test button of its own.
 
 Pieces, outermost first:
 
-* `VoiceMixin._voice_build_row` — the Mike button, the Auto-send checkbox and
-  the status line the Agent Request dialog embeds (`_voice_auto_send_changed`
-  keeps the box's value with the applied instruction); `_voice_setup_from_main`
+* `VoiceMixin._voice_build_row` — the Mike button, the status line and, for
+  SelfBot, the Auto-send checkbox (MyAgent's dialog takes the row WITHOUT the
+  box since 2026-11-03: its Auto-send and Announce boxes are the Instruction
+  Editor's, bound to the same per-instruction variables); `_voice_setup_from_main`
   / `_open_voice_setup` — the main window's button and the setup dialog it
   opens.
 * `_VoiceDictation` — the toggle's state machine (idle → recording →
@@ -44,8 +45,9 @@ The settings are one per-user file, `~/.config/myagent-voice/config.json`
 (beside the mail mixins' config dirs), NOT agent_state.json: instance N and
 every headless child keep their own state file, and a microphone chosen once
 has to hold in all of them. API keys stay in the environment like every other
-provider's. The dictation settings that ARE per instruction are the dialog's
-two boxes — Auto-send (`dictation_auto_send`) and, since 2026-11-02, Announce
+provider's. The dictation settings that ARE per instruction are the two boxes
+the Instruction Editor shows on their own row since 2026-11-03 (the dialog's
+own until then) — Auto-send (`dictation_auto_send`) and Announce
 (`announce_request`, whether the dialog speaks its cue and reminders), on the
 App and in the instruction entry: they say what the dialog does — with a
 transcript, and when it opens — not how a transcript is made. All helpers
@@ -907,27 +909,20 @@ class VoiceMixin:
         return status
 
     def _voice_build_row(self, dlg, target_text, auto_send, send,
-                         announce=None, on_announce=lambda: None):
-        """Mike, the Auto-send checkbox, the Announce checkbox when asked for,
-        and the status line, for the caller to grid under its reply box.
-        Returns (frame, mike_button, auto_send_button, announce_button,
-        dictation) — announce_button None without an `announce` variable;
-        the caller owns the mnemonics (one bind_mnemonics call per window)
-        and calls dictation.shutdown() on its close paths.
+                         auto_send_box=True):
+        """Mike, the Auto-send checkbox (SelfBot's; MyAgent's dialog passes
+        `auto_send_box=False` since 2026-11-03, when its Auto-send and
+        Announce boxes moved to the Instruction Editor's own row — the
+        user's request) and the status line, for the caller to grid under
+        its reply box. Returns (frame, mike_button, auto_send_button,
+        dictation) — auto_send_button None without the box; the caller owns
+        the mnemonics (one bind_mnemonics call per window) and calls
+        dictation.shutdown() on its close paths.
 
-        `announce` is the app's BooleanVar behind the Announce box (2026-11-02,
-        the user's request: a way to turn the dialog's spoken cue off per
-        instruction) — the applied instruction's setting, kept by
-        `_voice_announce_changed` exactly as Auto-send's is — and `on_announce`
-        is what the caller does after a tick or untick (the Agent Request
-        dialog arms or silences its reminders there). The box itself says
-        nothing: the words are the dialog's (safety_mixin `_announce_request`),
-        this row only carries the switch. SelfBot, which has no dialog to
-        announce, passes no variable and gets no box.
-
-        `auto_send` is the app's BooleanVar behind the checkbox — the applied
-        instruction's setting, kept by `_voice_auto_send_changed` — and `send`
-        is what the caller does on Enter. Ticked, a transcript is sent the
+        `auto_send` is the app's BooleanVar behind the setting — the applied
+        instruction's, read when a transcript lands whether or not the box
+        is shown (SelfBot's box keeps it with `_voice_auto_send_changed`,
+        its own override) — and `send` is what the caller does on Enter. Ticked, a transcript is sent the
         moment it has landed in the box, as if Enter had been pressed (the
         user's request, 2026-09-23: a hands-free reply); unticked, the row
         behaves exactly as it did before the box existed. Only a transcript
@@ -943,39 +938,28 @@ class VoiceMixin:
         row = tk.Frame(dlg)
         mike_btn = tk.Button(row, text="Mike", width=15)
         mike_btn.grid(row=0, column=0, padx=(0, 8), sticky="nw")
-        # Right of Mike, where the user asked for it, and created after it so
-        # Tab reaches it next. Tk flips the variable BEFORE running the
-        # command, which then keeps the new value with the instruction — and,
-        # on a tick, moves the focus to Mike (2026-09-30, the user's
-        # request): a box ticked mid-dialog means "I will dictate this one",
-        # and Mike is where Enter or Space then starts the recording. Every
-        # way of ticking runs the command (a click, Space on the box, Alt+A
-        # through keyboard.py's press); unticking moves nothing.
-        def toggled():
-            self._voice_auto_send_changed()
-            if auto_send.get():
-                mike_btn.focus_set()
+        # Right of Mike (SelfBot's box; MyAgent's lives in the Instruction
+        # Editor since 2026-11-03), created after it so Tab reaches it next.
+        # Tk flips the variable BEFORE running the command, which keeps the
+        # new value (the host's _voice_auto_send_changed) — and, on a tick,
+        # moves the focus to Mike (2026-09-30, the user's request): a box
+        # ticked mid-chat means "I will dictate this one", and Mike is where
+        # Enter or Space then starts the recording. Every way of ticking runs
+        # the command (a click, Space on the box); unticking moves nothing.
+        auto_btn = None
+        status_column = 1
+        if auto_send_box:
+            def toggled():
+                self._voice_auto_send_changed()
+                if auto_send.get():
+                    mike_btn.focus_set()
 
-        auto_btn = tk.Checkbutton(row, text="Auto-send", variable=auto_send,
-                                  command=toggled)
-        auto_btn.grid(row=0, column=1, padx=(0, 8), sticky="nw")
-        # Right of Auto-send, created after it (Tab order): the Announce box,
-        # when the caller has a variable for it. Tk flips the variable before
-        # the command runs, so the command keeps the new value with the
-        # instruction and THEN hands it to the caller.
-        announce_btn = None
-        status_column = 2
-        if announce is not None:
-            def announce_toggled():
-                self._voice_announce_changed()
-                on_announce()
-
-            announce_btn = tk.Checkbutton(row, text="Announce", variable=announce,
-                                          command=announce_toggled)
-            announce_btn.grid(row=0, column=2, padx=(0, 8), sticky="nw")
-            status_column = 3
+            auto_btn = tk.Checkbutton(row, text="Auto-send", variable=auto_send,
+                                      command=toggled)
+            auto_btn.grid(row=0, column=1, padx=(0, 8), sticky="nw")
+            status_column = 2
         row.grid_columnconfigure(status_column, weight=1)
-        # Beside the boxes. (While Voice Setup sat here too the status went
+        # Beside the button(s). (While Voice Setup sat here too the status went
         # UNDER the buttons: the dialog's size is the user's — 567 px wide on
         # one saved layout — and beside two BUTTONS the longest message
         # wrapped into eight lines. Beside one it was four, in less height
@@ -1003,42 +987,16 @@ class VoiceMixin:
         dlg.bind("<Destroy>",
                  lambda e: dictation.shutdown() if str(e.widget) == str(dlg) else None,
                  add="+")
-        return row, mike_btn, auto_btn, announce_btn, dictation
+        return row, mike_btn, auto_btn, dictation
 
     def _voice_auto_send_changed(self):
-        """The Auto-send checkbox was toggled. The Agent Request dialog is the
-        only place the setting is set, so it persists from here: the new value
-        goes to the applied instruction's entry in the shared store — a
-        targeted key write, nothing else in the entry is touched — so the next
-        run of that instruction, on any machine, starts the same way; and to
-        the applied snapshot in agent_state.json (`_save_last_state`), so a
-        relaunch does too. An ad-hoc run has no entry to write to and keeps
-        the value for the session and the snapshot alone; a value the entry
-        already holds is not rewritten (no OneDrive churn)."""
-        self._voice_keep_with_instruction(
-            "dictation_auto_send", bool(self.dictation_auto_send.get()), False)
-
-    def _voice_announce_changed(self):
-        """The Announce checkbox was toggled (2026-11-02): Auto-send's
-        write-through, for `announce_request` — the applied instruction's
-        entry and the applied snapshot. The key's default is True, so an
-        entry without it is rewritten only by an untick."""
-        self._voice_keep_with_instruction(
-            "announce_request", bool(self.announce_request.get()), True)
-
-    def _voice_keep_with_instruction(self, key, value, default):
-        """Keep a dialog box's new value with the applied instruction: a
-        targeted write of `key` into its store entry when the entry's value
-        (or `default`, where it has none) differs, then the state file. An
-        ad-hoc run has no entry and keeps the value for the session and the
-        snapshot alone."""
-        name = getattr(self, "agent_instruction_name", "")
-        if name:
-            instructions = self._load_saved_instructions()
-            entry = instructions.get(name)
-            if isinstance(entry, dict) and bool(entry.get(key, default)) != value:
-                entry[key] = value
-                self._save_instructions_to_disk(instructions)
+        """The row's Auto-send checkbox was toggled: keep the new value in the
+        state file. SelfBot overrides this (its box is bundled into a saved
+        system prompt as well); MyAgent's dialog shows no box since
+        2026-11-03 — its Auto-send and Announce boxes are the Instruction
+        Editor's, bound to the live variables like the model params and
+        carried into the entry by SAVE / Apply, so until then this wrote the
+        value through to the applied instruction's store entry at once."""
         self._save_last_state()
 
     # ── UI: Voice Setup ────────────────────────────────────────────────

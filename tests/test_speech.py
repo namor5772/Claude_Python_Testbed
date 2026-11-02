@@ -20,9 +20,9 @@ fallbacks and refusals; the announce helper's two branches; the reminder
 timer over a fake dialog (the words in order, the re-arm, the cancel, a tick
 mid-dictation saying nothing, a tick after the dialog is gone, the bell
 fallback); and a wiring scan of the dialog — the cue after the focus, under
-the Announce gate (the Auto-send tick until 2026-11-02), the reminders armed
-beside it, armed or stopped by a toggle of the box, and stopped on the close
-path, no bare bell left on the dialog path. The real dialog is driven in
+the Announce gate (the Auto-send tick until 2026-11-02; the box the
+Instruction Editor's since 2026-11-03), the reminders armed beside it and
+stopped on the close path, no bare bell left on the dialog path. The real dialog is driven in
 tests/test_agent_request_display.py with speech patched out — including the
 reminders at a shortened interval, stopping when the reply is sent.
 """
@@ -348,14 +348,7 @@ class WiringTests(unittest.TestCase):
         self.assertIsNotNone(gate)
         self.assertLess(prompt.index(focus), gate.start())
         self.assertNotIn("if hands_free:", prompt)      # the Auto-send tick no longer gates it
-        # A toggle of the box while the dialog is open: whatever was armed
-        # is stopped, and with the box on the reminders are armed afresh —
-        # the opening words are not repeated.
-        toggled = prompt[prompt.index("def announce_toggled():"):prompt.index("voice_row, mike_btn")]
-        self.assertLess(toggled.index("stop_reminders[0]()"),
-                        toggled.index("stop_reminders[0] = (self._remind_request(dlg, dictation)"))
-        self.assertIn("if self.announce_request.get() else (lambda: None))", toggled)
-        self.assertNotIn("_announce_request(", toggled)
+        self.assertNotIn("announce_toggled", prompt)    # no box in the dialog since 2026-11-03
         # The close path — every way out of the dialog — stops them.
         close = prompt[prompt.index("def _capture_and_close("):prompt.index("def poll_relay(")]
         self.assertIn("stop_reminders[0]()", close)

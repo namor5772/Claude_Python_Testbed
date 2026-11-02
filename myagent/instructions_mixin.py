@@ -519,13 +519,36 @@ class InstructionsMixin:
             font=("Arial", 9),
         ).pack(side=tk.LEFT, padx=(5, 0))
 
-        # Row 3: Attach Images, Remove Selected, Skills, Safety — one row of
+        # Row 3 (2026-11-03, the user's request): the Agent Request dialog's
+        # two per-instruction boxes, moved here from the dialog's Mike row
+        # onto a row of their own under the tool toggles — Auto-send (a
+        # dictated reply is sent the moment its transcript lands) and
+        # Announce (the dialog speaks its cue and reminders). Bound to the
+        # LIVE variables like the model params, not to editor drafts: a tick
+        # takes effect for the session at once, SAVE / Apply carry it into
+        # the entry, a page selection sets it from the page, and [X] after
+        # a browse puts the applied values back (_editor_discard_env).
+        # Created after the tool toggles, so Tab reaches them next.
+        dialog_frame = tk.Frame(win)
+        dialog_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        auto_send_cb = tk.Checkbutton(
+            dialog_frame, text="Auto-send", variable=self.dictation_auto_send,
+            font=("Arial", 9),
+        )
+        auto_send_cb.pack(side=tk.LEFT)
+        announce_cb = tk.Checkbutton(
+            dialog_frame, text="Announce", variable=self.announce_request,
+            font=("Arial", 9),
+        )
+        announce_cb.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Row 4: Attach Images, Remove Selected, Skills, Safety — one row of
         # buttons, 10 px apart. The two image buttons opened the row below
         # until 2026-10-23 (stacked at its left, the Agent Request dialog's
         # layout, then side by side); they are created first, ahead of
         # Skills, because Tab order is creation order and they now lead.
         buttons_frame = tk.Frame(win)
-        buttons_frame.grid(row=3, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
+        buttons_frame.grid(row=4, column=0, columnspan=6, sticky="ew", padx=10, pady=(5, 0))
 
         attach_btn = tk.Button(
             buttons_frame, text="Attach Images", command=self.attach_image, width=15,
@@ -646,6 +669,7 @@ class InstructionsMixin:
             "k": self.skills_button, "f": self.ps_safety_button,
             "i": attach_btn, "r": remove_btn,
             "o": self._notes_button,
+            "u": auto_send_cb, "b": announce_cb,     # the dialog's boxes (2026-11-03)
             "e": self._instr_text,
         })
 
@@ -739,9 +763,11 @@ class InstructionsMixin:
         a page selection or CLEAR has replaced it since — the [X] close, and
         the app's close with the editor still open. Never while a run is
         streaming: it reads these settings on every call (the rule behind
-        _editor_run_guard). Auto-send, Announce and the upgrade model are
-        written through to the applied instruction's store entry, so a saved
-        instruction's values are read back from there."""
+        _editor_run_guard). The upgrade model is written through to the
+        applied instruction's store entry (Model Setup) — and Auto-send /
+        Announce were, from the dialog, until 2026-11-03 — so a saved
+        instruction's values are read back from there: the entry is what the
+        last SAVE wrote, the snapshot the fallback."""
         snap = getattr(self, "_editor_env", None)
         replaced = getattr(self, "_editor_env_replaced", False)
         self._editor_env = None
@@ -1150,8 +1176,9 @@ class InstructionsMixin:
             "proton": self.proton_enabled.get(),
             "outlook": self.outlook_enabled.get(),
             "conversational": self.conversational_enabled.get(),
-            # The Agent Request dialog's Auto-send and Announce boxes: live
-            # state like the model params — they have no editor widget.
+            # The Agent Request dialog's Auto-send and Announce settings: live
+            # state like the model params (the editor's own row since
+            # 2026-11-03 binds its boxes to the live variables).
             "dictation_auto_send": self.dictation_auto_send.get(),
             "announce_request": self.announce_request.get(),
             "provider": self.provider,
