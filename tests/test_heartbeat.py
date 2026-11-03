@@ -24,12 +24,14 @@ bot.
 import io
 import json
 import os
+import platform
 import re
 import subprocess
 import tempfile
 import time
 import unittest
 import urllib.error
+import wave
 from pathlib import Path
 from unittest import mock
 
@@ -391,13 +393,15 @@ class TelegramProcessTests(_TelegramBase):
         self.assertEqual(self.api.sent, [])
 
     def test_a_non_text_message_is_consumed_with_a_hint_naming_its_kind(self):
-        self.fake(_update(10, None, voice={"file_id": "x", "duration": 3}))
+        # (A voice note is transcribed since 2026-11-03 — VoiceMessageTests;
+        # an audio FILE is still answered with its kind.)
+        self.fake(_update(10, None, audio={"file_id": "x", "duration": 3}))
         self.assertTrue(Heartbeat.process_telegram(self.cfg))
         self.assertEqual(self.events, ["confirm:10", "send:777"])
-        self.assertIn("I received a voice message", self.api.sent[0][1])
+        self.assertIn("I received an audio file", self.api.sent[0][1])
         self.assertIn("Send text", self.api.sent[0][1])
         self.assertEqual(self.launches, [])
-        self.assertIn("a voice message in update 10 — consumed", self.log_text())
+        self.assertIn("an audio file in update 10 — consumed", self.log_text())
 
     def test_message_kinds(self):
         self.assertEqual(Heartbeat.telegram_message_kind({"photo": [{"file_id": "x"}]}), "a photo")
@@ -1142,6 +1146,256 @@ class WatchRunRelayTests(_TelegramBase):
         _patch(self, Heartbeat, "pid_alive", lambda pid: False)
         Heartbeat.watch_run(self.cfg, 5151, pending)
         self.assertEqual(waited, [Heartbeat.WATCH_POLL_SECONDS])
+
+
+
+class VoiceTriggerParseTests(unittest.TestCase):
+    """parse_voice_trigger (2026-11-03): a spoken trigger has no line break,
+    so the instruction is the saved name the words start with."""
+    NAMES = ["JustChat", "ZZ Probe", "WBC_LoginToWebsite", "Process_Dockets",
+             "Process_Dockets_PROGRAM"]
+
+    def test_the_name_the_words_start_with_case_and_punctuation_ignored(self):
+        self.assertEqual(Heartbeat.parse_voice_trigger("Just chat, what time is it?", self.NAMES),
+                         ("JustChat", "what time is it?", False))
+        self.assertEqual(Heartbeat.parse_voice_trigger("zz probe do the thing", self.NAMES),
+                         ("ZZ Probe", "do the thing", False))
+        self.assertEqual(Heartbeat.parse_voice_trigger("W B C login to website.", self.NAMES),
+                         ("WBC_LoginToWebsite", "", False))
+
+    def test_the_longest_name_wins_and_a_name_ends_on_a_word(self):
+        self.assertEqual(Heartbeat.parse_voice_trigger("process dockets program now", self.NAMES),
+                         ("Process_Dockets_PROGRAM", "now", False))
+        self.assertEqual(Heartbeat.parse_voice_trigger("process dockets now", self.NAMES),
+                         ("Process_Dockets", "now", False))
+        self.assertEqual(Heartbeat.parse_voice_trigger("Justchatting away", ["JustChat"]),
+                         (None, "Justchatting away", False))
+
+    def test_show_asks_for_the_window_and_no_name_is_no_trigger(self):
+        self.assertEqual(Heartbeat.parse_voice_trigger("Show just chat hello", self.NAMES),
+                         ("JustChat", "hello", True))
+        self.assertEqual(Heartbeat.parse_voice_trigger("hello there", self.NAMES),
+                         (None, "hello there", False))
+        self.assertEqual(Heartbeat.parse_voice_trigger("", self.NAMES), (None, "", False))
+
+
+class VoiceMessageTests(_TelegramBase):
+    """telegram_handle_update on a voice note (2026-11-03): transcribed (the
+    transcriber faked), the words shown back, then read as a typed message —
+    a trigger by the spoken name, a reply to an open request, or poison."""
+
+    def setUp(self):
+        super().setUp()
+        _patch(self, Heartbeat, "telegram_instruction_names", lambda: ["JustChat", "ZZ Probe"])
+        self.heard = ("Just chat what time is it", "gpt-transcribe")
+        self.voice_calls = []
+        self.shown = []
+
+        def voice_text(token, voice):
+            self.voice_calls.append((token, voice))
+            if isinstance(self.heard, Exception):
+                raise self.heard
+            return self.heard
+        _patch(self, Heartbeat, "telegram_voice_text", voice_text)
+
+        def launch(name, result_file=None, relay_dir=None, prepend_file=None, show_window=False):
+            self.events.append(f"launch:{name}")
+            self.launches.append((name, result_file))
+            self.shown.append(show_window)
+            return 4242
+        _patch(self, Heartbeat, "launch_instruction", launch)
+
+    def test_a_voice_note_is_transcribed_shown_back_and_run_as_a_trigger(self):
+        self.fake(_update(10, None, voice={"file_id": "f1", "duration": 4}))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["send:777", "confirm:10", "launch:JustChat", "send:777"])
+        self.assertEqual(self.voice_calls, [("TOKEN", {"file_id": "f1", "duration": 4})])
+        self.assertEqual(self.api.sent[0][1], "🎤 Heard (gpt-transcribe): Just chat what time is it")
+        self.assertEqual(self.rewrites, [("JustChat", "what time is it")])
+        self.assertIn("Started JustChat on", self.api.sent[1][1])
+        self.assertEqual(self.shown, [False])
+        self.assertIn("voice message in update 10 transcribed by gpt-transcribe", self.log_text())
+
+    def test_show_runs_with_the_window(self):
+        self.heard = ("show zz probe do the thing", "m")
+        self.fake(_update(10, None, voice={"file_id": "f1", "duration": 4}))
+        Heartbeat.process_telegram(self.cfg)
+        self.assertEqual(self.rewrites, [("ZZ Probe", "do the thing")])
+        self.assertEqual(self.shown, [True])
+        self.assertIn("with its window", self.api.sent[1][1])
+
+    def test_words_no_saved_name_starts_are_poison(self):
+        self.heard = ("hello there", "m")
+        self.fake(_update(10, None, voice={"file_id": "f1", "duration": 4}))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["send:777", "confirm:10", "send:777"])
+        self.assertEqual(self.launches, [])
+        self.assertIn("Not run on", self.api.sent[1][1])
+        self.assertIn("Say the instruction name first", self.api.sent[1][1])
+        self.assertIn("POISON telegram update 10: no saved instruction starts", self.log_text())
+
+    def test_a_failed_transcription_is_consumed_with_the_reason(self):
+        self.heard = RuntimeError("OpenAI rejected the API key: check OPENAI_API_KEY.")
+        self.fake(_update(10, None, voice={"file_id": "f1", "duration": 4}))
+        self.assertTrue(Heartbeat.process_telegram(self.cfg))
+        self.assertEqual(self.events, ["confirm:10", "send:777"])
+        self.assertIn("could not transcribe it: OpenAI rejected the API key", self.api.sent[0][1])
+        self.assertEqual(self.launches, [])
+        self.assertIn("not transcribed: OpenAI rejected", self.log_text())
+
+    def test_silence_is_consumed(self):
+        self.heard = ("", "m")
+        self.fake(_update(10, None, voice={"file_id": "f1", "duration": 4}))
+        Heartbeat.process_telegram(self.cfg)
+        self.assertEqual(self.events, ["confirm:10", "send:777"])
+        self.assertIn("heard only silence", self.api.sent[0][1])
+        self.assertEqual(self.launches, [])
+
+    def test_a_voice_reply_answers_an_open_request(self):
+        _patch(self, Heartbeat, "AWAITING", {})
+        _patch(self, Heartbeat, "TELEGRAM_RELAY_DIR", self.root / "tg" / "relay")
+        relay_dir = self.root / "tg" / "relay" / "10"
+        relay_dir.mkdir(parents=True)
+        relay.write_request(relay_dir, 1, "Which month?")
+        Heartbeat.AWAITING[777] = [(str(relay_dir), 1, "ZZ Probe")]
+        self.heard = ("October please", "m")
+        self.fake()
+        status, _ = Heartbeat.telegram_handle_update(
+            self.cfg, _update(20, None, voice={"file_id": "f2", "duration": 2}))
+        self.assertEqual(status, "skipped")
+        self.assertEqual(relay.read_reply(relay_dir, 1), "October please")
+        self.assertEqual(self.api.sent[0][1], "🎤 Heard (m): October please")
+        self.assertIn("Sent to ZZ Probe", self.api.sent[1][1])
+        self.assertEqual(self.launches, [])
+
+    def test_an_audio_file_is_still_unreadable(self):
+        self.fake(_update(10, None, audio={"file_id": "a", "duration": 3}))
+        Heartbeat.process_telegram(self.cfg)
+        self.assertIn("I received an audio file", self.api.sent[0][1])
+        self.assertEqual(self.voice_calls, [])
+
+    def test_the_usage_mentions_voice(self):
+        self.assertIn("voice message", Heartbeat.telegram_usage())
+
+
+class VoiceFileTests(unittest.TestCase):
+    """The pieces behind telegram_voice_text: the download (the token never
+    in an error), the ffmpeg conversion, the upload shape, the length limit."""
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def test_file_bytes_asks_getfile_then_downloads_without_the_token_in_errors(self):
+        seen = {}
+
+        def api(token, method, **params):
+            seen["api"] = (token, method, params)
+            return {"file_id": params["file_id"], "file_path": "voice/file_1.oga"}
+
+        def urlopen(url, timeout):
+            seen["url"], seen["timeout"] = url, timeout
+            return self._Resp(b"OggS...")
+        with mock.patch.object(Heartbeat, "telegram_api", api), \
+                mock.patch.object(Heartbeat.urllib.request, "urlopen", urlopen):
+            self.assertEqual(Heartbeat.telegram_file_bytes("SECRET", "f1"), b"OggS...")
+        self.assertEqual(seen["api"], ("SECRET", "getFile", {"file_id": "f1"}))
+        self.assertEqual(seen["url"], "https://api.telegram.org/file/botSECRET/voice/file_1.oga")
+        self.assertEqual(seen["timeout"], Heartbeat.TELEGRAM_HTTP_TIMEOUT)
+
+        def boom(url, timeout):
+            raise urllib.error.HTTPError(url, 404, "Not Found", {}, io.BytesIO(b""))
+        with mock.patch.object(Heartbeat, "telegram_api", api), \
+                mock.patch.object(Heartbeat.urllib.request, "urlopen", boom):
+            with self.assertRaises(RuntimeError) as cm:
+                Heartbeat.telegram_file_bytes("SECRET", "f1")
+        self.assertNotIn("SECRET", str(cm.exception))
+        self.assertIn("HTTP 404", str(cm.exception))
+        with mock.patch.object(Heartbeat, "telegram_api", lambda *a, **k: {"file_id": "f1"}):
+            with self.assertRaises(RuntimeError):
+                Heartbeat.telegram_file_bytes("SECRET", "f1")
+
+    def test_voice_to_wav_through_the_bundled_ffmpeg(self):
+        exe = Heartbeat.ffmpeg_exe()
+        if not exe:
+            self.skipTest("no ffmpeg on this machine")
+        detach = ({"creationflags": subprocess.CREATE_NO_WINDOW}
+                  if platform.system() == "Windows" else {})
+        # A one-second Opus note, the way Telegram makes them.
+        ogg = subprocess.run([exe, "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                              "-i", "sine=frequency=440:duration=1", "-c:a", "libopus",
+                              "-f", "ogg", "pipe:1"], capture_output=True, timeout=60,
+                             **detach).stdout
+        if not ogg:
+            self.skipTest("this ffmpeg cannot encode Opus")
+        wav = Heartbeat.voice_to_wav(ogg, exe)
+        with wave.open(io.BytesIO(wav)) as w:
+            self.assertEqual((w.getnchannels(), w.getframerate(), w.getsampwidth()), (1, 16000, 2))
+            self.assertAlmostEqual(w.getnframes() / 16000, 1.0, delta=0.15)
+        with self.assertRaises(RuntimeError) as cm:
+            Heartbeat.voice_to_wav(b"not audio at all", exe)
+        self.assertIn("ffmpeg could not decode", str(cm.exception))
+
+    def test_without_ffmpeg_the_ogg_goes_as_it_is(self):
+        with mock.patch.object(Heartbeat, "ffmpeg_exe", lambda: None):
+            self.assertIsNone(Heartbeat.voice_to_wav(b"OggS"))
+
+    def test_the_transcriber_gets_wav_or_the_ogg_under_its_own_type(self):
+        calls = []
+
+        class _Host:
+            @staticmethod
+            def _voice_load_config(path=None):
+                return {"provider": "OpenAI"}
+
+            @staticmethod
+            def _voice_transcribe(cfg, data, media=("speech.wav", "audio/wav")):
+                calls.append((data, media))
+                return "  Hello there.  ", {"model": "gpt-transcribe", "note": "", "elapsed": 0.1}
+
+            @staticmethod
+            def _voice_error_text(exc):
+                return f"worded: {exc}"
+        with mock.patch.object(Heartbeat, "telegram_file_bytes", lambda token, fid: b"OggS"), \
+                mock.patch.object(Heartbeat, "voice_transcriber", lambda: _Host), \
+                mock.patch.object(Heartbeat, "voice_to_wav", lambda audio, exe=None: b"RIFF"):
+            self.assertEqual(Heartbeat.telegram_voice_text("TOKEN", {"file_id": "f", "duration": 3}),
+                             ("Hello there.", "gpt-transcribe"))
+        with mock.patch.object(Heartbeat, "telegram_file_bytes", lambda token, fid: b"OggS"), \
+                mock.patch.object(Heartbeat, "voice_transcriber", lambda: _Host), \
+                mock.patch.object(Heartbeat, "voice_to_wav", lambda audio, exe=None: None):
+            Heartbeat.telegram_voice_text("TOKEN", {"file_id": "f", "duration": 3})
+        self.assertEqual(calls, [(b"RIFF", ("speech.wav", "audio/wav")),
+                                 (b"OggS", ("voice.ogg", "audio/ogg"))])
+
+    def test_a_transcriber_error_is_reworded_and_the_limit_refuses_unheard(self):
+        class _Host:
+            @staticmethod
+            def _voice_load_config(path=None):
+                return {}
+
+            @staticmethod
+            def _voice_transcribe(cfg, data, media=None):
+                raise ValueError("boom")
+
+            @staticmethod
+            def _voice_error_text(exc):
+                return f"worded: {exc}"
+        with mock.patch.object(Heartbeat, "telegram_file_bytes", lambda token, fid: b"OggS"), \
+                mock.patch.object(Heartbeat, "voice_transcriber", lambda: _Host), \
+                mock.patch.object(Heartbeat, "voice_to_wav", lambda audio, exe=None: b"RIFF"):
+            with self.assertRaises(RuntimeError) as cm:
+                Heartbeat.telegram_voice_text("TOKEN", {"file_id": "f", "duration": 3})
+        self.assertEqual(str(cm.exception), "worded: boom")
+        touched = []
+        with mock.patch.object(Heartbeat, "telegram_api", lambda *a, **k: touched.append(a)):
+            with self.assertRaises(RuntimeError) as cm:
+                Heartbeat.telegram_voice_text("TOKEN", {"file_id": "f", "duration": 601})
+        self.assertIn("limit is 600", str(cm.exception))
+        self.assertEqual(touched, [])
 
 
 class TokenHygieneTests(unittest.TestCase):

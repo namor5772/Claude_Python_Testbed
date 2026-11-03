@@ -95,6 +95,10 @@ VOICE_MIN_SECONDS = 0.4            # below this the press was a slip, not speech
 # sent — silence is where speech models invent a "Thank you." to transcribe.
 VOICE_SILENCE_PEAK = 50
 VOICE_API_TIMEOUT = 90.0           # seconds; a reply is waiting on it
+# The name and MIME type the transcribers upload the audio under: the Mike
+# button's recorder makes WAV; Heartbeat hands a Telegram voice note over as
+# WAV too where ffmpeg is at hand, else as the OGG/Opus it is (2026-11-03).
+VOICE_WAV_MEDIA = ("speech.wav", "audio/wav")
 VOICE_DEFAULT_DEVICE_LABEL = "(System default)"
 VOICE_IDLE_HINT = "Press Mike, speak, press it again: the text lands in the box above."
 VOICE_ERROR_FG = "#b00020"
@@ -727,21 +731,24 @@ class VoiceMixin:
     def _voice_new_recorder(self, sd):
         return _VoiceRecorder(sd)
 
-    def _voice_transcribe(self, cfg, wav_bytes):
-        """WAV bytes → (transcript, info). Called on a worker thread."""
+    def _voice_transcribe(self, cfg, wav_bytes, media=VOICE_WAV_MEDIA):
+        """Audio bytes → (transcript, info). Called on a worker thread.
+        `media` is the (file name, MIME type) the bytes are uploaded as —
+        WAV from the recorder; Heartbeat's Telegram voice notes may come
+        as OGG/Opus (2026-11-03), which OpenAI and Google take as they are."""
         provider = cfg["provider"]
         model = cfg["models"][provider]
         started = time.monotonic()
         if provider == "Google":
-            text, note = self._voice_transcribe_gemini(model, cfg, wav_bytes)
+            text, note = self._voice_transcribe_gemini(model, cfg, wav_bytes, media)
         elif provider == "xAI":
-            text, note = self._voice_transcribe_xai(model, cfg, wav_bytes)
+            text, note = self._voice_transcribe_xai(model, cfg, wav_bytes, media)
         else:
-            text, note = self._voice_transcribe_openai(model, cfg, wav_bytes)
+            text, note = self._voice_transcribe_openai(model, cfg, wav_bytes, media)
         return text.strip(), {"model": model, "note": note,
                               "elapsed": time.monotonic() - started}
 
-    def _voice_transcribe_openai(self, model, cfg, wav_bytes):
+    def _voice_transcribe_openai(self, model, cfg, wav_bytes, media=VOICE_WAV_MEDIA):
         client = getattr(self, "openai_client", None)
         if client is None:
             raise RuntimeError("OPENAI_API_KEY is not set, so OpenAI cannot transcribe. Set it and "
@@ -750,7 +757,7 @@ class VoiceMixin:
 
         def call(optional):
             return client.audio.transcriptions.create(
-                model=model, file=("speech.wav", io.BytesIO(wav_bytes), "audio/wav"),
+                model=model, file=(media[0], io.BytesIO(wav_bytes), media[1]),
                 timeout=VOICE_API_TIMEOUT, **optional)
 
         note = ""
@@ -766,7 +773,7 @@ class VoiceMixin:
             note = "the model refused the language / vocabulary hint: sent without"
         return getattr(result, "text", "") or "", note
 
-    def _voice_transcribe_xai(self, model, cfg, wav_bytes):
+    def _voice_transcribe_xai(self, model, cfg, wav_bytes, media=VOICE_WAV_MEDIA):
         """Grok Speech to Text: a plain multipart POST to <base>/stt. Not the
         OpenAI SDK, although `xai_client` is one — xAI serves no
         /audio/transcriptions (404) — so the client lends only its key and its
@@ -781,7 +788,7 @@ class VoiceMixin:
 
         def call(data):
             return httpx.post(url, headers={"Authorization": f"Bearer {client.api_key}"},
-                              data=data, files={"file": ("speech.wav", wav_bytes, "audio/wav")},
+                              data=data, files={"file": (media[0], wav_bytes, media[1])},
                               timeout=VOICE_API_TIMEOUT)
 
         note = ""
@@ -796,12 +803,12 @@ class VoiceMixin:
                                f"{' '.join(response.text.split())[:200]}")
         return response.json().get("text") or "", note
 
-    def _voice_transcribe_gemini(self, model, cfg, wav_bytes):
+    def _voice_transcribe_gemini(self, model, cfg, wav_bytes, media=VOICE_WAV_MEDIA):
         client = getattr(self, "gemini_client", None)
         if client is None:
             raise RuntimeError("GEMINI_API_KEY is not set, so Google cannot transcribe. Set it and "
                                "restart MyAgent, or pick OpenAI in Voice Setup (main window).")
-        audio = genai_types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav")
+        audio = genai_types.Part.from_bytes(data=wav_bytes, mime_type=media[1])
         ask = self._voice_gemini_request(cfg["language"], cfg["hint"])
         dedicated = VOICE_GEMINI_DEDICATED_SUBSTRING in model
 

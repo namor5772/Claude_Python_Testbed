@@ -19,7 +19,7 @@ pass posts the run's outcome back to the chat — its status and final text,
 or a note that it ended without a result (the watchdog, a crash) or has run
 a day without one (a dialog). The bot answers at once: ▶ Started, ⚠ Not run
 with the reason for a poison trigger, the usage for /start or /help, and
-what it received for a message without text (a voice note, a sticker).
+what it received for a message without text (a sticker, a photo without a caption); a voice note is transcribed and read as text (2026-11-03).
 A run the listener launched also has its Agent Request dialogs RELAYED
 (2026-10-26, myagent/relay.py): MyAgent writes each request to the run's
 relay folder (--relay-dir), the watcher posts "❓ <name> asks: …" to the
@@ -258,6 +258,164 @@ def telegram_message_kind(msg):
     return "a message without text"
 
 
+# ── Voice messages (2026-11-03) ────────────────────────────────────────────
+# A voice note is transcribed through the same speech-to-text setup the Mike
+# button uses — Voice Setup's provider and model, the per-user file — and its
+# words are then read exactly as a typed message would be: the reply to an
+# open Agent Request, /help, or a trigger whose instruction is the saved name
+# the words start with (no line break can be spoken). Longer than this is
+# refused unheard: a minute of speech costs about a cent, an hour would not.
+TELEGRAM_VOICE_MAX_SECONDS = 600
+_VOICE_HOST = None
+
+
+def telegram_file_bytes(token, file_id):
+    """A Telegram file's bytes: getFile for its path, then the download. The
+    file URL carries the token like the API URL does, so an error names the
+    step and the HTTP status, never the URL."""
+    info = telegram_api(token, "getFile", file_id=file_id)
+    file_path = info.get("file_path") if isinstance(info, dict) else None
+    if not file_path:
+        raise RuntimeError("Telegram getFile: no file_path in the answer")
+    url = f"{TELEGRAM_API_BASE}/file/bot{token}/{file_path}"
+    try:
+        with urllib.request.urlopen(url, timeout=TELEGRAM_HTTP_TIMEOUT) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Telegram file download: HTTP {e.code}") from None
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Telegram file download: {e.reason}") from None
+
+
+def ffmpeg_exe():
+    """imageio-ffmpeg's bundled binary (in the MyAgent venv on both Windows
+    machines), else an ffmpeg on PATH, else None."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return shutil.which("ffmpeg")
+
+
+def voice_to_wav(audio_bytes, exe=None):
+    """OGG/Opus (a Telegram voice note) → 16 kHz mono WAV through ffmpeg — the
+    shape the Mike button's recorder hands the transcribers — or None when no
+    ffmpeg can be found, the caller then sending the OGG as it is."""
+    exe = exe or ffmpeg_exe()
+    if not exe:
+        return None
+    detach = {"creationflags": subprocess.CREATE_NO_WINDOW} if platform.system() == "Windows" else {}
+    # The WAV goes to a temp file, not a pipe: writing to a pipe leaves the
+    # RIFF and data sizes as placeholders (ffmpeg cannot seek back to fill
+    # them in), and a transcriber reading the header would see a file of
+    # hours. The OGG still arrives on the pipe; decoding needs no seek.
+    fd, out = tempfile.mkstemp(prefix="voice_", suffix=".wav")
+    os.close(fd)
+    try:
+        result = subprocess.run(
+            [exe, "-hide_banner", "-loglevel", "error", "-y", "-i", "pipe:0",
+             "-ac", "1", "-ar", "16000", "-f", "wav", out],
+            input=audio_bytes, capture_output=True, timeout=120, **detach)
+        wav = Path(out).read_bytes() if result.returncode == 0 else b""
+    finally:
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+    if result.returncode != 0 or not wav:
+        why = " ".join(result.stderr.decode("utf-8", "replace").split())[:200]
+        raise RuntimeError(f"ffmpeg could not decode the voice note: {why or 'no output'}")
+    return wav
+
+
+def voice_transcriber():
+    """A bare VoiceMixin host carrying the transcription clients the
+    environment's keys allow — Mike's path end to end, built once, with no
+    microphone: the recorder, the Mike state machine and the audio package are never touched.
+    Imported here, not at the top, so a machine without these packages still
+    runs the listener for typed messages and reports why a voice note fails."""
+    global _VOICE_HOST
+    if _VOICE_HOST is None:
+        from myagent.voice_mixin import VoiceMixin
+        from myagent.constants import XAI_DEFAULT_BASE_URL
+        import openai
+        host = object.__new__(VoiceMixin)
+        host.openai_client = openai.OpenAI() if os.environ.get("OPENAI_API_KEY") else None
+        host.xai_client = (openai.OpenAI(api_key=os.environ["XAI_API_KEY"], base_url=XAI_DEFAULT_BASE_URL)
+                           if os.environ.get("XAI_API_KEY") else None)
+        host.gemini_client = None
+        key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if key:
+            try:
+                from google import genai
+                host.gemini_client = genai.Client(api_key=key)
+            except Exception:
+                host.gemini_client = None
+        _VOICE_HOST = host
+    return _VOICE_HOST
+
+
+def telegram_voice_text(token, voice):
+    """A voice note's words through Voice Setup's provider and model:
+    (transcript, model). Raises with a readable reason — the length limit,
+    the download, ffmpeg, or the transcriber's own wording of its error."""
+    seconds = int(voice.get("duration") or 0)
+    if seconds > TELEGRAM_VOICE_MAX_SECONDS:
+        raise RuntimeError(f"the voice note is {seconds} s long; the limit is "
+                           f"{TELEGRAM_VOICE_MAX_SECONDS} s")
+    audio = telegram_file_bytes(token, voice["file_id"])
+    wav = voice_to_wav(audio)
+    host = voice_transcriber()
+    cfg = host._voice_load_config()
+    try:
+        if wav is not None:
+            text, info = host._voice_transcribe(cfg, wav)
+        else:
+            text, info = host._voice_transcribe(cfg, audio, media=("voice.ogg", "audio/ogg"))
+    except Exception as e:
+        raise RuntimeError(host._voice_error_text(e)) from e
+    return text.strip(), info.get("model", "")
+
+
+def _spoken_key(text):
+    """Letters and digits alone, lower-cased: how a spoken name is compared."""
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def parse_voice_trigger(transcript, names):
+    """A spoken trigger (no line break can be spoken): the instruction is the
+    saved name the words START with — case and punctuation ignored, so "Just
+    chat, what time is it?" names JustChat with "what time is it?" as the
+    prompt — the longest such name when several fit, and the name must end
+    on a word boundary ("Justchatting away" names nothing); a leading "show"
+    asks for the run's window, the spoken @. Returns (name, prompt_core,
+    show_window), name None when no saved name starts the words."""
+    words = transcript.split()
+    show = False
+    if words and _spoken_key(words[0]) == "show":
+        show, words = True, words[1:]
+    keys = [(name, _spoken_key(name)) for name in names if _spoken_key(name)]
+    for name, key in sorted(keys, key=lambda nk: -len(nk[1])):
+        taken, used = "", 0
+        while used < len(words) and len(taken) < len(key):
+            taken += _spoken_key(words[used])
+            used += 1
+        if taken == key:
+            prompt = " ".join(words[used:]).lstrip(" ,.;:!?—-").strip()
+            return name, prompt, show
+    return None, " ".join(words), show
+
+
+def telegram_instruction_names():
+    """The saved instruction names, for parse_voice_trigger — [] when the
+    store cannot be read, which makes the trigger poison like an unknown name."""
+    try:
+        store = json.loads(INSTRUCTIONS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [name for name, entry in store.items() if isinstance(entry, dict)]
+
+
 # The chat's START button sends /start; /help is what a person types.
 TELEGRAM_HELP_COMMANDS = ("/start", "/help")
 
@@ -268,7 +426,9 @@ def telegram_usage():
             f"replaces the instruction's {MARKER} block; an instruction without one "
             f"gets it put in front of its text for that run; no prompt runs the "
             f"instruction as saved. Start the name with {SHOW_WINDOW_PREFIX} to watch "
-            f"the run in its window on the PC (otherwise it runs headless). I confirm "
+            f"the run in its window on the PC (otherwise it runs headless). Or send a "
+            f"voice message: say the instruction's name first, then the prompt (\"show\" "
+            f"before the name for its window); I show you what I heard. I confirm "
             f"the start and post the result when the run ends.")
 
 
@@ -428,9 +588,33 @@ def telegram_handle_update(cfg, upd):
             f"allowed_chat_ids")
         return "ignored", None
     text = msg.get("text") or msg.get("caption")
+    spoken = None
+    if not text and msg.get("voice"):
+        # A voice note (2026-11-03): transcribed through Voice Setup's
+        # provider and read as text from here on — the words shown back
+        # first, so a mishearing is visible before anything runs on it.
+        try:
+            text, model = telegram_voice_text(token, msg["voice"])
+        except Exception as e:
+            telegram_confirm(token, uid)
+            telegram_send(token, chat_id,
+                          f"🎤 I received a voice message but could not transcribe it: "
+                          f"{e}. Send text: line 1 the instruction name, the prompt below it.")
+            log(f"telegram: voice message in update {uid} — not transcribed: {e}")
+            return "skipped", None
+        if not text:
+            telegram_confirm(token, uid)
+            telegram_send(token, chat_id,
+                          "🎤 I received a voice message but heard only silence.")
+            log(f"telegram: voice message in update {uid} — silence, consumed")
+            return "skipped", None
+        spoken = text
+        telegram_send(token, chat_id, f"🎤 Heard ({model}): {text}")
+        log(f"telegram: voice message in update {uid} transcribed by {model}: "
+            f"{len(text)} chars")
     if not text:
         # Consumed and answered, then on to the next update: a sticker or a
-        # voice note must not use up a pass's one launch.
+        # photo without a caption must not use up a pass's one launch.
         kind = telegram_message_kind(msg)
         telegram_confirm(token, uid)
         telegram_send(token, chat_id,
@@ -466,7 +650,18 @@ def telegram_handle_update(cfg, upd):
         telegram_send(token, chat_id, f"↩ Sent to {name}.")
         log(f"telegram: reply to {name!r} request #{seq} from update {uid}")
         return "skipped", None
-    name, prompt_core, show_window = parse_telegram_trigger(text)
+    if spoken is not None:
+        name, prompt_core, show_window = parse_voice_trigger(spoken, telegram_instruction_names())
+        if name is None:
+            telegram_confirm(token, uid)
+            telegram_send(token, chat_id,
+                          f"⚠ Not run on {HOST}: no saved instruction's name starts what I "
+                          f"heard. Say the instruction name first, then the prompt.")
+            log(f"POISON {label}: no saved instruction starts the spoken words — "
+                f"consumed, no launch")
+            return "poison", None
+    else:
+        name, prompt_core, show_window = parse_telegram_trigger(text)
     TELEGRAM_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     result_file = TELEGRAM_RESULTS_DIR / f"{uid}.json"
     relay_dir = TELEGRAM_RELAY_DIR / str(uid)

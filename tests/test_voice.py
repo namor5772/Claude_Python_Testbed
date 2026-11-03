@@ -439,6 +439,16 @@ class OpenAITranscribeTests(unittest.TestCase):
                          ("whisper-1", "en", "Westpac"))
         self.assertEqual(call["timeout"], voice_mixin.VOICE_API_TIMEOUT)
 
+    def test_the_upload_name_and_type_follow_the_media_argument(self):
+        # Heartbeat hands a Telegram voice note over as OGG/Opus when no
+        # ffmpeg can convert it (2026-11-03); the default stays WAV.
+        client = _FakeOpenAI()
+        stub(VoiceMixin, openai_client=client)._voice_transcribe(
+            self.cfg("whisper-1"), b"OggS", media=("voice.ogg", "audio/ogg"))
+        name, stream, mime = client.calls[0]["file"]
+        self.assertEqual((name, stream.read(), mime), ("voice.ogg", b"OggS", "audio/ogg"))
+        self.assertEqual(voice_mixin.VOICE_WAV_MEDIA, ("speech.wav", "audio/wav"))
+
     def test_a_400_is_retried_once_with_the_audio_alone(self):
         client = _FakeOpenAI(fail_when=lambda kw: "language" in kw)
         text, info = stub(VoiceMixin, openai_client=client)._voice_transcribe(
@@ -1384,13 +1394,20 @@ class IndependenceTests(unittest.TestCase):
                      "skills_mixin.py", "streaming_mixin.py", "datapaths.py"):
             src = (REPO / "myagent" / name).read_text(encoding="utf-8").lower()
             self.assertNotIn("voice", src, name)
-        # Heartbeat may name Telegram's own "voice" message type (a voice note a
-        # phone sends to the bot); what it must never touch is the voice INPUT
-        # machinery — the mixin, its helpers, its settings file, dictation.
-        src = (REPO / "Heartbeat.py").read_text(encoding="utf-8").lower()
-        for token in ("voice_mixin", "_voice", "voice_", "myagent-voice", "dictation",
-                      "sounddevice", "transcri"):
-            self.assertNotIn(token, src, token)
+        # Heartbeat transcribes a Telegram voice note since 2026-11-03 — through
+        # the mixin's own transcriber on a bare host, with Voice Setup's
+        # provider and model from the one settings file — but must never touch
+        # the microphone machinery: the recorder, dictation, sounddevice.
+        src = (REPO / "Heartbeat.py").read_text(encoding="utf-8")
+        for token in ("_VoiceRecorder", "_VoiceDictation", "_voice_sd", "_voice_new_recorder",
+                      "sounddevice", "dictation"):
+            self.assertNotIn(token, src.lower() if token.islower() else src, token)
+        voice = src[src.index("def voice_transcriber("):src.index("def _spoken_key(")]
+        self.assertIn("from myagent.voice_mixin import VoiceMixin", voice)   # imported lazily, inside
+        self.assertIn("host._voice_load_config()", voice)
+        self.assertIn("host._voice_transcribe(cfg, wav)", voice)
+        self.assertIn('media=("voice.ogg", "audio/ogg")', voice)
+        self.assertNotIn("import myagent.voice_mixin", src[:src.index("def voice_transcriber(")])
 
     def test_the_auto_send_tick_is_the_one_dictation_setting_an_instruction_carries(self):
         # Auto-send (2026-09-23) says what the DIALOG does with a transcript,
