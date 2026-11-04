@@ -7,9 +7,12 @@ confirm telling the user to resend, one trigger per pass), the outcome
 delivery (the result file, a dead process, the 24-hour rule), main() over the
 one transport (no setup is an error, idle is one line), the resident listener
 (every update of a long-poll batch handled, a deferred trigger pausing the
-poll, errors backed off and logged once, the one-instance lock, runs from an
-earlier life watched, the per-run watcher posting the outcome the moment the
-child exits), the launcher's command
+poll, errors backed off and logged once, the one-instance lock — and, since
+2026-11-05, the pid-reuse rule behind it and the pending records: a pid handed
+on to a process younger than the record is not its writer, through the REAL
+process_start_time on a child spawned for the purpose — runs from an earlier
+life watched, the per-run watcher posting the outcome the moment the child
+exits), the launcher's command
 line still matching the watchdog pattern, the pairing command, and the rule
 that the bot token never reaches a log line or an error text.
 
@@ -21,12 +24,14 @@ results folders the same way — the suite must never touch, or poll, a real
 bot.
 """
 
+import inspect
 import io
 import json
 import os
 import platform
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -125,7 +130,13 @@ def _update(uid, text, chat_id=777, **extra):
 
 class _TelegramBase(unittest.TestCase):
     """Temp log + temp Telegram folders, the store and the process table
-    faked, the launcher recorded."""
+    faked, the launcher recorded. A pid's liveness is whatever a test patches
+    `pid_alive` to say: the start-time check behind it (2026-11-05) is faked
+    to "unreadable" here, so a made-up pid that is a live process on the
+    suite's machine (pid 1 on a Mac) cannot contradict the patch —
+    PidReuseTests runs the real one."""
+
+    fake_start_time = True
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
@@ -133,6 +144,8 @@ class _TelegramBase(unittest.TestCase):
         self.root = Path(tmp.name)
         self.log = self.root / "heartbeat.log"
         _patch(self, Heartbeat, "LOG_FILE", self.log)
+        if self.fake_start_time:
+            _patch(self, Heartbeat, "process_start_time", lambda pid: None)
         _patch(self, Heartbeat, "TELEGRAM_CONFIG_DIR", self.root / "tg")
         _patch(self, Heartbeat, "TELEGRAM_CONFIG_FILE", self.root / "tg" / "config.json")
         _patch(self, Heartbeat, "TELEGRAM_PENDING_DIR", self.root / "tg" / "pending")
@@ -889,6 +902,113 @@ class ListenerTests(_TelegramBase):
         _patch(self, Heartbeat, "LISTEN_ALIVE_LINE_SECONDS", 0)
         self.listen([], [])
         self.assertEqual(self.log_text().count("listener alive"), 2)
+
+
+class PidReuseTests(_TelegramBase):
+    """A pid is not an identity (2026-11-05): after a reboot the listener's
+    lock named a live system process that had been handed the dead
+    listener's pid, so the logon listener stood down and the laptop had no
+    listener until the next logon. `pid_alive_since` tells a record's writer
+    from a later process by the start time — against the lock file's mtime,
+    a pending record's `started` — through the REAL `process_start_time` on
+    this process and on a child spawned for the purpose."""
+
+    fake_start_time = False
+
+    def setUp(self):
+        super().setUp()
+        _patch(self, Heartbeat, "TELEGRAM_LOCK_FILE", self.root / "tg" / "listener.lock")
+
+    def child(self):
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(lambda: (proc.kill(), proc.wait(10)))
+        return proc
+
+    def lock(self, pid, written):
+        (self.root / "tg").mkdir(parents=True, exist_ok=True)
+        path = self.root / "tg" / "listener.lock"
+        path.write_text(str(pid), encoding="utf-8")
+        os.utime(path, (written, written))
+        return path
+
+    def pend(self, pid, started):
+        result = self.root / "tg" / "results" / "7.json"
+        pending = Heartbeat.telegram_pending_write(7, 777, "ZZ", pid, result)
+        rec = json.loads(pending.read_text(encoding="utf-8"))
+        rec["started"] = started
+        pending.write_text(json.dumps(rec), encoding="utf-8")
+        return pending
+
+    def test_this_process_began_in_the_past(self):
+        started = Heartbeat.process_start_time(os.getpid())
+        self.assertIsInstance(started, float)
+        self.assertLessEqual(started, time.time())
+        self.assertGreater(started, time.time() - 86400)
+
+    def test_no_process_has_no_start_time(self):
+        for pid in (0, -1, None, "x", 999_999):
+            self.assertIsNone(Heartbeat.process_start_time(pid), pid)
+
+    def test_the_rule_on_this_process(self):
+        me = os.getpid()
+        self.assertTrue(Heartbeat.pid_alive_since(me, time.time()))
+        self.assertFalse(Heartbeat.pid_alive_since(me, Heartbeat.process_start_time(me) - 3600))
+        self.assertTrue(Heartbeat.pid_alive_since(me, None))         # no stamp: the pid alone
+        self.assertFalse(Heartbeat.pid_alive_since(999_999, time.time()))
+
+    def test_the_rule_with_fakes(self):
+        asked = []
+        _patch(self, Heartbeat, "pid_alive", lambda pid: pid == 5)
+        _patch(self, Heartbeat, "process_start_time", lambda pid: asked.append(pid) or 100.0)
+        slack = Heartbeat.START_SLACK_SECONDS
+        self.assertTrue(Heartbeat.pid_alive_since(5, 100.0))          # began as the stamp says
+        self.assertTrue(Heartbeat.pid_alive_since(5, 100.0 - slack))  # within the slack
+        self.assertFalse(Heartbeat.pid_alive_since(5, 100.0 - slack - 1))
+        self.assertTrue(Heartbeat.pid_alive_since(5, 0))              # no stamp
+        self.assertTrue(Heartbeat.pid_alive_since(5, "bad"))
+        self.assertFalse(Heartbeat.pid_alive_since(6, 100.0))         # dead: never asked
+        self.assertNotIn(6, asked)
+        _patch(self, Heartbeat, "process_start_time", lambda pid: None)
+        self.assertTrue(Heartbeat.pid_alive_since(5, 10.0))           # unreadable: the pid stands
+
+    def test_a_lock_older_than_the_live_process_it_names_is_taken_over(self):
+        proc = self.child()
+        lock = self.lock(proc.pid, time.time() - 3600)
+        self.assertTrue(Heartbeat.listener_lock_acquire())
+        self.assertEqual(lock.read_text(encoding="utf-8"), str(os.getpid()))
+
+    def test_a_lock_written_by_the_live_process_it_names_is_held(self):
+        proc = self.child()
+        lock = self.lock(proc.pid, time.time())
+        self.assertFalse(Heartbeat.listener_lock_acquire())
+        self.assertEqual(lock.read_text(encoding="utf-8"), str(proc.pid))
+
+    def test_a_pending_run_whose_pid_was_handed_on_gets_the_no_result_note_at_once(self):
+        self.fake()
+        proc = self.child()
+        pending = self.pend(proc.pid, time.time())
+        self.assertEqual(Heartbeat.telegram_deliver_results(self.cfg), 0)   # live and young: waits
+        self.pend(proc.pid, time.time() - 3600)      # a run launched an hour before this process
+        self.assertEqual(Heartbeat.telegram_deliver_results(self.cfg), 1)
+        self.assertIn("ended without a result", self.api.sent[0][1])
+        self.assertFalse(pending.exists())
+
+    def test_a_watched_run_whose_pid_was_handed_on_ends_the_watch_at_once(self):
+        self.fake()
+        proc = self.child()
+        pending = self.pend(proc.pid, time.time() - 3600)
+        sleeps = []
+        _patch(self, Heartbeat.time, "sleep", lambda secs: sleeps.append(secs))
+        Heartbeat.watch_run(self.cfg, proc.pid, pending)
+        self.assertEqual(sleeps, [])
+        self.assertIn("ended without a result", self.api.sent[0][1])
+
+    def test_every_liveness_site_reads_the_start_time(self):
+        for fn in (Heartbeat.listener_lock_acquire, Heartbeat.telegram_deliver_one,
+                   Heartbeat.watch_run):
+            src = inspect.getsource(fn)
+            self.assertIn("pid_alive_since(", src, fn.__name__)
+            self.assertNotRegex(src, r"\bpid_alive\(", fn.__name__)
 
 
 class _FakeProc:

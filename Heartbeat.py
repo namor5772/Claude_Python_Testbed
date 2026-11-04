@@ -41,11 +41,14 @@ but one Bot API call. Two ways to run it:
       holds the connection up to LONG_POLL_SECONDS and answers the moment a
       message arrives — so a trigger is picked up within a second, and a
       watcher thread per run posts the outcome the instant the child exits.
-      Started at logon by Task Scheduler (MyAgent_Heartbeat_Listener, via
+      Started at logon, and again every 10 minutes whenever it is not
+      running, by Task Scheduler (MyAgent_Heartbeat_Listener, via
       desktop_launchers/Heartbeat_Listener_Win.ps1 -Register) or a launchd
       KeepAlive job on the Mac; a lock file keeps it to one instance (two
-      would consume each other's updates); a network failure backs off and
-      retries; an hourly 'listener alive' line is its liveness record.
+      would consume each other's updates — a lock whose pid is dead or was
+      handed on to a process younger than the lock is stale and taken over);
+      a network failure backs off and retries; an hourly 'listener alive'
+      line is its liveness record.
   python Heartbeat.py            ONE PASS: post finished runs' outcomes, drain
       one trigger, exit — the shape the scheduled job had (every 3 minutes on
       the laptop, 8 on the desktop) and still the hand-run check.
@@ -454,8 +457,9 @@ def parse_telegram_trigger(text):
 
 
 def pid_alive(pid):
-    """Whether a process with this id is still running (a stale id reused by
-    another process reads as alive; the 24-hour rule then ends the wait)."""
+    """Whether a process with this id is still running — ANY process: a stale
+    id handed on to another one reads as alive here, which is what
+    `pid_alive_since` sorts out by the start time."""
     try:
         pid = int(pid)
     except (TypeError, ValueError):
@@ -482,6 +486,76 @@ def pid_alive(pid):
     except PermissionError:
         return True
     return True
+
+
+# How much later than a record's stamp the process it names may appear to
+# have begun and still be taken for its writer: `ps -o etime` is whole
+# seconds, and a writer stamps its record within a second of its birth.
+START_SLACK_SECONDS = 5
+
+
+def process_start_time(pid):
+    """When the process with this id began (epoch seconds), or None when no
+    such process exists or its start cannot be read. The pair (pid, start
+    time) names ONE process for good, where the pid alone is handed to the
+    next process once this one is gone — after the 2026-11-05 reboot the old
+    listener's pid belonged to a system process. Windows asks the kernel
+    (GetProcessTimes); elsewhere `ps -o etime` gives the elapsed time."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return None
+    if platform.system() == "Windows":
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32")                 # private: the argtypes stay here
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [wintypes.LPFILETIME] * 4
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            times = (wintypes.FILETIME * 4)()           # creation, exit, kernel, user
+            if not k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            return ticks / 1e7 - 11644473600            # 100 ns ticks since 1601-01-01
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        out = subprocess.run(["ps", "-o", "etime=", "-p", str(pid)],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        days, _, clock = out.rpartition("-")            # [[dd-]hh:]mm:ss; "" for no process
+        seconds = 0
+        for part in clock.split(":"):
+            seconds = seconds * 60 + int(part)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return time.time() - seconds - int(days or 0) * 86400
+
+
+def pid_alive_since(pid, written):
+    """Whether the process a record names is still the process that was
+    running when the record was stamped at ``written`` (epoch seconds): one
+    with that pid exists AND began no later than the stamp, give or take
+    START_SLACK_SECONDS. A later start is another process that was handed
+    the same pid — the listener's lock named one after a reboot, and the
+    logon listener stood down for good (2026-11-05). Without a stamp, or
+    without a readable start, the pid check alone decides, as before."""
+    if not pid_alive(pid):
+        return False
+    try:
+        written = float(written or 0)
+    except (TypeError, ValueError):
+        written = 0.0
+    if not written:
+        return True
+    started = process_start_time(pid)
+    return started is None or started <= written + START_SLACK_SECONDS
 
 
 def format_result_reply(name, result):
@@ -525,7 +599,7 @@ def telegram_deliver_one(cfg, pending):
         pending.unlink(missing_ok=True)
         return False
     name = record.get("instruction", "?")
-    alive = pid_alive(record.get("pid"))
+    alive = pid_alive_since(record.get("pid"), record.get("started"))
     if result_file.exists():
         try:
             result = json.loads(result_file.read_text(encoding="utf-8"))
@@ -748,7 +822,9 @@ _DELIVER_LOCK = threading.Lock()
 
 def listener_lock_acquire():
     """Claim the one-listener lock: False when another live listener holds
-    it (two would confirm each other's updates). A stale lock — its pid dead
+    it (two would confirm each other's updates). A stale lock — its pid dead,
+    or handed on to a process that began after the lock was written (a
+    reboot's doing: the lock file outlives every process, the pid does not)
     — is taken over."""
     other = 0
     if TELEGRAM_LOCK_FILE.exists():
@@ -756,8 +832,13 @@ def listener_lock_acquire():
             other = int(TELEGRAM_LOCK_FILE.read_text(encoding="utf-8").strip() or 0)
         except (ValueError, OSError):
             other = 0
-    if other and other != os.getpid() and pid_alive(other):
-        return False
+    if other and other != os.getpid():
+        try:
+            written = TELEGRAM_LOCK_FILE.stat().st_mtime
+        except OSError:
+            written = None
+        if pid_alive_since(other, written):
+            return False
     TELEGRAM_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     TELEGRAM_LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
     return True
@@ -839,7 +920,7 @@ def watch_run(cfg, pid, pending):
             except subprocess.TimeoutExpired:
                 pass
         else:
-            if not pid_alive(pid):
+            if not pid_alive_since(pid, record.get("started")):
                 break
             time.sleep(step)
         if relay_dir:
