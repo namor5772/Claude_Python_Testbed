@@ -319,7 +319,10 @@ class CaseFoldingTests(SkillsTreeCase):
 class HuskSweepTests(SkillsTreeCase):
     """A blocked rmdir can strand an empty SKILL.md-less husk (OneDrive holds
     the directory handle past any reasonable inline wait). The scan sweeps
-    aged empty husks at load; _sweep_dir_later finishes in-session deletes
+    aged empty husks at load — but ONLY husks on record as a blocked delete
+    (since 2026-11-05: a sync client creates a new skill's folder minutes
+    before its SKILL.md lands, and the unrecorded empty + aged test deleted
+    such a folder everywhere); _sweep_dir_later finishes in-session deletes
     in the background."""
 
     def aged(self, path):
@@ -331,12 +334,76 @@ class HuskSweepTests(SkillsTreeCase):
         husk.mkdir(parents=True)
         (husk / "empty-sub").mkdir()
         self.aged(husk)
+        dp._note_pending_husk(str(husk))
         dp._scan_skills_tree(str(self.tree))
         self.assertFalse(husk.exists())
+        # the entry goes with the folder, and an empty record is no file
+        self.assertEqual(dp._read_husk_record(str(self.tree)), set())
+        self.assertFalse((self.tree / dp.HUSK_RECORD_BASENAME).exists())
+
+    def test_scan_spares_aged_empty_folder_nobody_deleted(self):
+        # The 2026-11-05 loss: the folder arrived through the sync, its
+        # SKILL.md had not — empty, older than 60 s, and NOT ours to sweep.
+        pending = self.tree / "new-skill-syncing-in"
+        pending.mkdir(parents=True)
+        self.aged(pending)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertTrue(pending.is_dir())
+        # ...and once the file lands it is simply a skill
+        (pending / dp.SKILL_BASENAME).write_text(
+            "---\nname: new-skill-syncing-in\nmode: on_demand\n---\n\n# ok\n", encoding="utf-8")
+        self.assertIn("new-skill-syncing-in", dp._scan_skills_tree(str(self.tree)))
+
+    def test_recorded_husk_of_another_name_spares_this_folder(self):
+        other = self.tree / "really-deleted"
+        other.mkdir(parents=True)
+        dp._note_pending_husk(str(other))
+        pending = self.tree / "new-skill-syncing-in"
+        pending.mkdir(parents=True)
+        self.aged(pending)
+        self.aged(other)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertTrue(pending.is_dir())
+        self.assertFalse(other.exists())
+
+    def test_blocked_delete_records_the_husk(self):
+        from unittest import mock
+        husk = self.tree / "stuck"
+        husk.mkdir(parents=True)
+        with mock.patch.object(dp.shutil, "rmtree", side_effect=OSError("handle held")), \
+                mock.patch.object(dp.os, "rmdir", side_effect=OSError("handle held")):
+            gone = dp._rmtree_verified(str(husk), attempts=1, defer=False)
+        self.assertFalse(gone)
+        self.assertEqual(dp._read_husk_record(str(self.tree)), {"stuck"})
+        # a later launch, the handle released: the recorded husk is swept
+        self.aged(husk)
+        dp._scan_skills_tree(str(self.tree))
+        self.assertFalse(husk.exists())
+        self.assertEqual(dp._read_husk_record(str(self.tree)), set())
+
+    def test_record_entry_of_a_vanished_folder_is_dropped(self):
+        ghost = self.tree / "already-gone"
+        ghost.mkdir(parents=True)
+        dp._note_pending_husk(str(ghost))
+        ghost.rmdir()
+        other = self.tree / "some-other-husk"
+        other.mkdir(parents=True)
+        dp._scan_skills_tree(str(self.tree))   # the SKILL.md-less `other` triggers the pass
+        self.assertEqual(dp._read_husk_record(str(self.tree)), set())
+
+    def test_record_file_is_not_a_skill(self):
+        self.tree.mkdir(parents=True, exist_ok=True)
+        dp._note_pending_husk(str(self.tree / "whatever"))
+        skills = dp._scan_skills_tree(str(self.tree))
+        self.assertEqual(skills, {})
+        self.assertTrue((self.tree / dp.HUSK_RECORD_BASENAME).is_file())
+        dp.save_skills_tree(str(self.tree), {"real-skill": dict(ENTRY)})
+        self.assertEqual(set(dp.load_skills_tree(str(self.tree))), {"real-skill"})
 
     def test_scan_spares_fresh_empty_folder(self):
         fresh = self.tree / "incoming-sync"
         fresh.mkdir(parents=True)
+        dp._note_pending_husk(str(fresh))   # even on record: not before 60 s
         dp._scan_skills_tree(str(self.tree))
         self.assertTrue(fresh.is_dir())
 
@@ -355,6 +422,7 @@ class HuskSweepTests(SkillsTreeCase):
         sub = husk / "inner"
         sub.mkdir(parents=True)
         self.aged(husk)
+        dp._note_pending_husk(str(husk))
         os.chmod(sub, stat.S_IREAD)
         os.chmod(husk, stat.S_IREAD)
         dp._scan_skills_tree(str(self.tree))
@@ -364,11 +432,16 @@ class HuskSweepTests(SkillsTreeCase):
         import time as _time
         target = self.tree / "husk-being-swept"
         target.mkdir(parents=True)
+        dp._note_pending_husk(str(target))
         dp._sweep_dir_later(str(target), tries=10, interval=0.02)
         deadline = _time.time() + 2
         while target.exists() and _time.time() < deadline:
             _time.sleep(0.02)
         self.assertFalse(target.exists())
+        deadline = _time.time() + 2
+        while dp._read_husk_record(str(self.tree)) and _time.time() < deadline:
+            _time.sleep(0.02)
+        self.assertEqual(dp._read_husk_record(str(self.tree)), set())
 
 
 class ForkHealingTests(SkillsTreeCase):

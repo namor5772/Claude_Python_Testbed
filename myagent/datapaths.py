@@ -1047,16 +1047,15 @@ def _scan_skills_tree(dirpath):
         else:
             # SKILL.md-less folder: a husk from a blocked delete, or a folder
             # OneDrive is still materializing / a user is hand-authoring a
-            # future skill. Sweep only when it is EMPTY (no files anywhere —
-            # nothing to lose) AND not brand-new (>60 s), so an incoming
-            # sync or work-in-progress is never touched.
-            try:
-                has_files = any(files for _r, _d, files in os.walk(d))
-                aged = (time.time() - os.path.getmtime(d)) > 60
-            except OSError:
-                has_files, aged = True, False
-            if not has_files and aged:
-                _rmtree_verified(d, attempts=1, defer=False)
+            # future skill. Swept ONLY when a delete of this very folder was
+            # recorded as blocked (the husk record) AND it is EMPTY (no files
+            # anywhere — nothing to lose) AND not brand-new (>60 s). Until
+            # 2026-11-05 the record was not required, and the empty + aged
+            # test alone is exactly the state a sync client leaves a NEW
+            # skill in while it catches up — the folder created minutes
+            # before its SKILL.md arrives — so a launch in that window
+            # deleted a healthy skill everywhere (cba-pay-anyone, 2026-11-05).
+            _sweep_recorded_husk(dirpath, d)
         for extra_name, extra_entry in extras:
             skills.setdefault(extra_name, extra_entry)
     return skills
@@ -1120,6 +1119,82 @@ def save_skills_tree(dirpath, skills):
                 pass  # best-effort per file; the next save retries
 
 
+HUSK_RECORD_BASENAME = ".pending_skill_deletes.json"
+
+
+def _husk_record_path(dirpath):
+    return os.path.join(dirpath, HUSK_RECORD_BASENAME)
+
+
+def _read_husk_record(dirpath):
+    """The folder names (basenames under `dirpath`) whose delete this app
+    once started and could not finish — the husks the launch-time sweep is
+    allowed to remove. A missing or unreadable record is an empty set."""
+    try:
+        with open(_husk_record_path(dirpath), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    names = data.get("folders") if isinstance(data, dict) else None
+    return {n for n in names if isinstance(n, str)} if isinstance(names, list) else set()
+
+
+def _write_husk_record(dirpath, names):
+    """Atomic rewrite of the record; an empty set removes the file."""
+    path = _husk_record_path(dirpath)
+    if not names:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return
+    try:
+        fd, tmp = tempfile.mkstemp(dir=dirpath, prefix=HUSK_RECORD_BASENAME + ".", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump({"folders": sorted(names)}, f, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # best-effort: without the record the husk simply stays
+
+
+def _note_pending_husk(path):
+    """Record that the delete of skill folder `path` was started and is not
+    finished — the one thing that licenses _scan_skills_tree to sweep the
+    empty husk at a later launch."""
+    dirpath, name = os.path.split(os.path.normpath(path))
+    _write_husk_record(dirpath, _read_husk_record(dirpath) | {name})
+
+
+def _forget_husk(path):
+    dirpath, name = os.path.split(os.path.normpath(path))
+    names = _read_husk_record(dirpath)
+    if name in names:
+        _write_husk_record(dirpath, names - {name})
+
+
+def _sweep_recorded_husk(dirpath, d):
+    """The launch-time husk sweep for one SKILL.md-less folder `d`: remove it
+    only when its delete is on record AND it is empty AND older than 60 s.
+    A folder nobody tried to delete is never touched, whatever its age —
+    it may be a skill whose SKILL.md the sync client has not delivered yet.
+    Record entries whose folder is gone are dropped in passing."""
+    names = _read_husk_record(dirpath)
+    if not names:
+        return
+    sub = os.path.basename(d)
+    stale = {n for n in names if not os.path.exists(os.path.join(dirpath, n))}
+    if sub in names:
+        try:
+            has_files = any(files for _r, _d, files in os.walk(d))
+            aged = (time.time() - os.path.getmtime(d)) > 60
+        except OSError:
+            has_files, aged = True, False
+        if not has_files and aged and _rmtree_verified(d, attempts=1, defer=False):
+            stale.add(sub)
+    if stale:
+        _write_husk_record(dirpath, names - stale)
+
+
 def _sweep_dir_later(path, tries=40, interval=3.0):
     """Background daemon that keeps retrying a blocked directory removal
     after the caller has returned. OneDrive's directory handle outlives any
@@ -1127,16 +1202,21 @@ def _sweep_dir_later(path, tries=40, interval=3.0):
     files delete instantly, the rmdir stays blocked — and a rename is
     refused by the same sharing check, so there is no instant workaround).
     The default budget is ~2 minutes; a husk that outlives the process is
-    finished by the aged-empty sweep in _scan_skills_tree next launch."""
+    finished by _scan_skills_tree next launch, which finds it in the husk
+    record _rmtree_verified wrote (and removes the entry once it is gone)."""
     def _sweep():
         for _ in range(tries):
             time.sleep(interval)
             if not os.path.exists(path):
+                _forget_husk(path)
                 return
             try:
                 shutil.rmtree(path)
             except OSError:
                 continue
+            if not os.path.exists(path):
+                _forget_husk(path)
+                return
     threading.Thread(target=_sweep, daemon=True, name="skill-husk-sweep").start()
 
 
@@ -1197,6 +1277,9 @@ def _rmtree_verified(path, attempts=3, defer=True):
         pass
     if not os.path.exists(path):
         return True
+    # Still there: put it on record, so a later launch's scan knows this
+    # husk was MEANT to go (the scan sweeps nothing it finds unrecorded).
+    _note_pending_husk(path)
     if defer:
         _sweep_dir_later(path)
     return False
