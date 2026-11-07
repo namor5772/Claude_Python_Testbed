@@ -155,9 +155,11 @@ On Windows the twin uses junctions because a symbolic link needs Developer
 Mode or an elevated shell and Git Bash's `ln -s` silently copies without them;
 `-Remove` drops every junction of its own. Never `Remove-Item -Recurse` one
 of those junctions by hand — Windows PowerShell follows it into the shared
-skills tree. The Windows twin is written to the same contract but has not
-yet been run on a Windows machine; the first run there, followed by the
-`/skills` check, is its test. The server registration on Windows, from the
+skills tree. First run on Windows 2026-11-07, on the laptop: 25 junctions
+added under `~\.claude\skills`, a real folder already there left alone, a skill
+readable through its junction, the second run `0 added, 0 removed, 25
+unchanged`, and the open Claude Code session listed all 25 skills at once,
+no restart. The server registration on Windows, from the
 repo root in PowerShell:
 
     claude mcp add --scope user myagent -- "$PWD\.venv\Scripts\python.exe" "$PWD\claude_code_mcp\server.py"
