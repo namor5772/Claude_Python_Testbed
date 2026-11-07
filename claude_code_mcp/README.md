@@ -14,9 +14,10 @@ From the repository root, once per machine:
 
     claude mcp add --scope user myagent -- "$PWD/.venv/bin/python" "$PWD/claude_code_mcp/server.py"
 
-Tools appear in Claude Code as `mcp__myagent__<name>` (99 on the Mac Mini:
-desktop, browser, Excel, camera + microphone, Gmail / Proton / Outlook,
-read_document, the file tools, run_command, web_search / fetch_webpage,
+Tools appear in Claude Code as `mcp__myagent__<name>` (99 on the Mac Mini and
+on the Windows laptop alike: desktop, browser, Excel, camera + microphone,
+Gmail / Proton / Outlook, read_document, the file tools, run_command,
+web_search / fetch_webpage,
 csv_search, manage_instructions / manage_skills / run_instruction, get_skill).
 Left out on purpose: `find_element` (Gemini's pointing API), `user_prompt`
 and `upgrade_model` (controls of a MyAgent run), and MyAgent's own MCP
@@ -86,6 +87,16 @@ microphone call from Claude Code's terminal raises that app's own prompt.
 
     <venv python> smoke.py     # list + read-only calls, zero tokens
     <venv python> smoke2.py    # screenshot image, clipboard, the deny policy
+
+Both spawn `server.py` with this process's WHOLE environment
+(`env=dict(os.environ)`), as Claude Code does. Left to the SDK's default the
+child gets a dozen variables, and on Windows `OneDrive` is not one of them:
+`datapaths` then falls back to the repo-root `skills/` folder and the server
+serves 98 tools and `No skills defined.` — the first Windows run, 2026-11-07,
+until the scripts passed the environment. They also set stdout to UTF-8, since
+a cp1252 Windows console cannot print the `•` / `⚠` in tool results, and the
+`run_command` check joins its two commands with `;`, which bash and PowerShell
+share. Both pass on the Windows laptop since that day.
 
 ## Live use
 
@@ -163,6 +174,11 @@ no restart. The server registration on Windows, from the
 repo root in PowerShell:
 
     claude mcp add --scope user myagent -- "$PWD\.venv\Scripts\python.exe" "$PWD\claude_code_mcp\server.py"
+
+Done on the laptop 2026-11-07: `claude mcp get myagent` reports Connected, and a
+headless `claude -p` run calling `manage_skills` through the registered server
+listed the 25 skills — Claude Code passes the whole environment, `OneDrive`
+included (see Checks).
 
 Claude Code picks changes up live (no restart). The skills appear in `/skills`
 and as `/<name>` slash commands; the model loads one when its description

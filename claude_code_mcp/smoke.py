@@ -5,6 +5,14 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# A Windows console is cp1252 by default and cannot print the "•" of the skills
+# list or the "⚠" of a refusal — the script died on one 2026-11-07.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+# Spawn the server with THIS process's whole environment, as Claude Code does.
+# The SDK's default passes a dozen variables only — on Windows not OneDrive,
+# without which datapaths falls back to the empty repo-root skills folder and
+# the server serves 98 tools and "No skills defined." (seen 2026-11-07).
+SERVER_ENV = dict(os.environ)
 
 
 async def main():
@@ -15,7 +23,8 @@ async def main():
     table = os.path.join(tmp, "t.csv")
     with open(table, "w", newline="") as f:
         w = csv.writer(f); w.writerow(["id", "name"]); w.writerow([1, "alpha"]); w.writerow([2, "beta"])
-    params = StdioServerParameters(command=sys.executable, args=[os.path.join(HERE, "server.py")])
+    params = StdioServerParameters(command=sys.executable, args=[os.path.join(HERE, "server.py")],
+                                   env=SERVER_ENV)
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as s:
             await s.initialize()
@@ -44,7 +53,8 @@ async def main():
             await call("read_file", path=doc)
             await call("glob_files", pattern="*.txt", path=tmp)
             await call("csv_search", file_path=table, search_value="beta")
-            await call("run_command", command="echo smoke-ok && pwd")
+            # ";" runs in bash and PowerShell alike; "&&" is a parse error on PowerShell 5.1.
+            await call("run_command", command="echo smoke-ok; pwd")
             await call("clipboard_read")
             await call("manage_skills", action="list")
             res = await call("write_file", path=os.path.join(tmp, "out.txt"), content="x")

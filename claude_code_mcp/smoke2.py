@@ -4,11 +4,14 @@ import asyncio, base64, os, sys, tempfile
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # a cp1252 console cannot print "⚠" (see smoke.py)
+SERVER_ENV = dict(os.environ)  # the whole environment, as Claude Code passes it (see smoke.py)
 
 async def main():
     tmp = tempfile.mkdtemp(prefix="myagent-mcp-smoke2-")
     os.makedirs(os.path.join(tmp, "sub"))
-    params = StdioServerParameters(command=sys.executable, args=[os.path.join(HERE, "server.py")])
+    params = StdioServerParameters(command=sys.executable, args=[os.path.join(HERE, "server.py")],
+                                   env=SERVER_ENV)
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as s:
             await s.initialize()
