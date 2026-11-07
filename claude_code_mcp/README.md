@@ -58,13 +58,25 @@ real stdout, and fd 1 is pointed at stderr so child processes cannot corrupt it.
 ## Skills
 
 MyAgent's 25 skills are Claude Code skills too, since 2026-11-07: one symlink
-per skill folder directly under `~/.claude/skills/`, made by `link_skills.sh`.
+per skill folder directly under `~/.claude/skills/`, made by `link_skills.sh` (`link_skills.ps1` on Windows).
 Claude Code follows a top-level symlink and tolerates the `mode` / `section` /
 `order` frontmatter keys, but does NOT scan a nested folder (all three probed
 with headless Haiku runs), so a single link to the whole tree does not work
 and the per-skill links need a refresh when a skill is added or deleted:
 
-    ~/projects/myagent-mcp/link_skills.sh      # idempotent; adds / removes only its own links
+    <repo>/claude_code_mcp/link_skills.sh      # macOS / Linux: symlinks; idempotent, adds / removes only its own links
+    .\claude_code_mcp\link_skills.ps1          # Windows: directory JUNCTIONS (no Developer Mode or elevation needed)
+
+On Windows the twin uses junctions because a symbolic link needs Developer
+Mode or an elevated shell and Git Bash's `ln -s` silently copies without them;
+`-Remove` drops every junction of its own. Never `Remove-Item -Recurse` one
+of those junctions by hand — Windows PowerShell follows it into the shared
+skills tree. The Windows twin is written to the same contract but has not
+yet been run on a Windows machine; the first run there, followed by the
+`/skills` check, is its test. The server registration on Windows, from the
+repo root in PowerShell:
+
+    claude mcp add --scope user myagent -- "$PWD\.venv\Scripts\python.exe" "$PWD\claude_code_mcp\server.py"
 
 Claude Code picks changes up live (no restart). The skills appear in `/skills`
 and as `/<name>` slash commands; the model loads one when its description
