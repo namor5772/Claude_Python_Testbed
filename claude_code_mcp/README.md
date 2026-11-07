@@ -102,6 +102,40 @@ does not touch this server (local stdio, no claude.ai login), and
 server start — the index MyAgent's system prompt would show — so a mode change
 in the Skills Manager reaches it at the next reconnect.
 
+### A whole instruction, end to end (2026-11-07, later the same evening)
+
+A MyAgent instruction pasted into Claude Code — the Westpac Mastercard top-up
+("DRY_RUN=False": westpac-login, read the summary, transfer the shortfall with
+westpac-transfer-funds, email the report from Gmail, sign out, close only the
+task window) — ran to completion with no MyAgent window: the login helper's
+snapshot / open / prepare / submit / verify over `run_command`-style Bash, a
+$1,308.36 transfer with both local-date guards (receipt C08863), the
+`gmail_send` through the one-call client above, sign-out verified, the task
+target closed by id and the browser re-enumerated. The user's verdict:
+"Claude Code can act just like my MyAgent harness". Two things differ from a
+MyAgent run, and both are worth knowing before pasting the next instruction:
+
+- **Confirmations.** MyAgent's dialog does not exist here. The two mail sends
+  went through the one-call client because the instruction asked for them in
+  so many words; Claude Code's own permission prompt is the only gate on that
+  path, and a session with permissions bypassed has none. For unattended runs
+  MyAgent's dialog, or the Telegram relay, remains the safer design.
+- **Browser steps.** The skills are written for MyAgent's `browser_*` tools.
+  In Claude Code the tighter route is a small Playwright script per checkpoint
+  (form filled and read back; Continue and the confirm dialog; Confirm and the
+  receipt; the re-read), each `connect_over_cdp` to port 9222 — MyAgent's
+  automation Chrome, the one the login helper used — and bound to the helper's
+  exact `target_id` through `Target.getTargetInfo`, never to "the Westpac tab".
+  **Never call Playwright's `browser.close()` on that connection:** it closed
+  the task page (the debug browser went to zero targets, the session not signed
+  out); letting the `sync_playwright()` context exit only disconnects. The
+  helper then rightly refused to recreate the page, and the instruction
+  started with its own fresh baseline.
+
+The physical-interface rules held as written — "tell me" was spoken through
+`say`, the photos went to the share, the viewer was verified by screenshot —
+because the skill text is the same file either way.
+
 Server log lines go to stderr (Claude Code's MCP log); the protocol owns the
 real stdout, and fd 1 is pointed at stderr so child processes cannot corrupt it.
 
