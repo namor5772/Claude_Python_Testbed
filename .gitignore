@@ -125,3 +125,7 @@ SpecifyingList.csv
 # horizon profile in the header. This repo is PUBLIC and git history is
 # permanent, so they must never be committed.
 Sun2Set_*.txt
+
+# claude_code_mcp: the smoke runs' captured output (tool listings, server log)
+claude_code_mcp/*.out
+claude_code_mcp/*.err
