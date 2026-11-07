@@ -60,6 +60,10 @@ COPY_BUFFER = 1 << 20  # bytes per read in a copy — a plain loop on purpose, s
 MAX_ERROR_LINES = 50  # per row, in the log pane and file — the error COUNT is always exact
 DEFAULT_SIZE = (1000, 620)  # the window with nothing saved, centred on the primary monitor
 MIN_SIZE = (720, 460)  # the window's minsize; a smaller SAVED size is junk and falls back to DEFAULT_SIZE
+MIN_PANE = 60  # the least height the table and the log pane each keep when the sash is restored (pixels)
+# The table's three columns — Treeview column id → the state file's col_widths
+# key (the row-number column's width is saved too since 2026-11-08).
+TREE_COLUMNS = (("#0", "#"), ("from", HEADERS[0]), ("to", HEADERS[1]))
 # A saved position is usable only if enough of the window's title bar lands on
 # a connected monitor to grab it: at least GEOMETRY_VISIBLE_W px wide, and at
 # least GEOMETRY_TITLE_VISIBLE_H px of the window's top GEOMETRY_TITLE_STRIP px
@@ -880,6 +884,51 @@ def load_state_file(path):
     return state if isinstance(state, dict) else {}
 
 
+def sash_for_log_height(paned_height, sash_thickness, log_height, min_pane=MIN_PANE):
+    """The sash position — the table pane's height — that gives the log pane
+    `log_height` pixels in a vertical pane `paned_height` tall with a sash
+    `sash_thickness` thick (2026-11-08). The LOG height is what the state
+    file keeps, not the sash position: the window's size is what a restore
+    may lose (DEFAULT_SIZE centred, when the saved position is on no
+    connected monitor), and then the log — the pane the user sized by hand —
+    keeps its height while the table takes the rest. Each pane keeps at least
+    `min_pane`; None when the pane is not laid out yet (1 px tall, or too
+    short for two minimums) or the saved height is not a positive int, and
+    the sash then stays where the panes' weights put it."""
+    if isinstance(log_height, bool) or not isinstance(log_height, int) or log_height <= 0:
+        return None
+    room = paned_height - max(sash_thickness, 0)
+    if room < 2 * min_pane:
+        return None
+    return max(min_pane, min(room - log_height, room - min_pane))
+
+
+# In-file copies of myagent/keyboard.py's is_aqua / install_quit_handler
+# (2026-11-08; MyBackup imports nothing from the package): Tk's application
+# menu runs ::tk::mac::Quit when the command exists and plain exit when it
+# does not, so until then Cmd+Q on the Mac ended MyBackup without _on_close —
+# no save question, and nothing of the window written to state.json. Installed
+# in __init__ beside the WM_DELETE_WINDOW protocol with the same handler.
+def is_aqua(widget):
+    """True on macOS (Tk's aqua windowing system)."""
+    return widget.tk.call("tk", "windowingsystem") == "aqua"
+
+
+def install_quit_handler(root, handler):
+    """macOS: Cmd+Q runs `handler` instead of ending the process.
+
+    Tk's application menu calls ::tk::mac::Quit when the command exists and
+    plain exit when it does not, so without this a Cmd+Q skipped MyAgent's
+    whole close sequence. Installed beside the WM_DELETE_WINDOW protocol with
+    the same handler, so [X], Cmd+W and Cmd+Q are one close. Returns True
+    where installed; a no-op elsewhere.
+    """
+    if not is_aqua(root):
+        return False
+    root.createcommand("::tk::mac::Quit", handler)
+    return True
+
+
 # ── GUI ───────────────────────────────────────────────────────────────
 
 class App:
@@ -893,6 +942,7 @@ class App:
         self.rows = []  # list of [from, to]
         self.modified = False
         self._col_widths = {}
+        self._log_height = None  # the log pane's saved height; _save_state keeps the last laid-out value
         self._queue = queue.Queue()
         self._worker = None
         self._cancel = threading.Event()
@@ -904,6 +954,7 @@ class App:
         self._build_ui()
         self._load_state(setup_path)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        install_quit_handler(self.root, self._on_close)
 
     def run(self):
         self.root.mainloop()
@@ -960,10 +1011,13 @@ class App:
         style.configure("Backup.Treeview.Heading", background="#FFFFB3", foreground="black")
         style.map("Backup.Treeview.Heading", background=[("active", "#FFFF88")])
 
-        paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
+        # The table and the log pane share a sash; the log pane's height is
+        # remembered in state.json as log_height (2026-11-08) and put back by
+        # _restore_sash once the window is laid out at its restored size.
+        self._paned = paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
         paned.pack(fill=tk.BOTH, expand=True, padx=4, pady=(0, 4))
 
-        container = tk.Frame(paned)
+        self._table_pane = container = tk.Frame(paned)
         self.tree = ttk.Treeview(container, columns=("from", "to"), show="tree headings",
                                  selectmode="browse", style="Backup.Treeview")
         self.tree.heading("#0", text="#")
@@ -983,7 +1037,7 @@ class App:
         paned.add(container, weight=3)
 
         # Log pane: what each run planned and did, the same lines as the log file.
-        log_frame = tk.Frame(paned)
+        self._log_pane = log_frame = tk.Frame(paned)
         self._log = tk.Text(log_frame, height=9, wrap=tk.NONE, state=tk.DISABLED,
                             font=("Consolas", 9) if sys.platform == "win32" else ("Menlo", 11))
         log_vsb = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=self._log.yview)
@@ -1079,7 +1133,7 @@ class App:
     # ── Tree display ──────────────────────────────────────────────────
 
     def _capture_col_widths(self):
-        for cid, header in zip(("from", "to"), HEADERS):
+        for cid, header in TREE_COLUMNS:
             self._col_widths[header] = int(self.tree.column(cid, "width"))
 
     def _refresh_tree(self):
@@ -1339,9 +1393,11 @@ class App:
         self.root.geometry(restore_geometry(state, layout_key(monitors), monitors))
         widths = state.get("col_widths")
         if isinstance(widths, dict):
-            for cid, header in zip(("from", "to"), HEADERS):
+            for cid, header in TREE_COLUMNS:
                 if isinstance(widths.get(header), int) and widths[header] > 0:
                     self.tree.column(cid, width=widths[header])
+        height = state.get("log_height")
+        self._log_height = height if isinstance(height, int) and height > 0 else None
         path = setup_path or state.get("filepath")
         if not (path and os.path.isfile(path)) and os.path.isfile(DEFAULT_SETUP_FILE):
             path = DEFAULT_SETUP_FILE
@@ -1349,11 +1405,41 @@ class App:
             self._load_setup_file(path)
         else:
             self._update_status()
+        # The sash needs the window laid out at its restored size: before the
+        # idle tasks run the pane is 1 px tall and ttk clamps any position to it.
+        self.root.update_idletasks()
+        self._restore_sash()
+
+    def _log_height_live(self):
+        """The log pane's height while the window is laid out, else None (a
+        pane not laid out yet reports 1)."""
+        try:
+            height = self._log_pane.winfo_height()
+        except tk.TclError:
+            return None
+        return height if height > 1 else None
+
+    def _restore_sash(self):
+        """Put the sash where the saved log height says (sash_for_log_height);
+        nothing saved, or no layout yet, leaves it where the weights put it."""
+        if not self._log_height:
+            return
+        height = self._paned.winfo_height()
+        thickness = height - self._table_pane.winfo_height() - self._log_pane.winfo_height()
+        sash = sash_for_log_height(height, thickness, self._log_height)
+        if sash is not None:
+            self._paned.sashpos(0, sash)
 
     def _save_state(self):
         self._capture_col_widths()
+        live = self._log_height_live()
+        if live:
+            self._log_height = live
+        fields = {"filepath": self.filepath, "col_widths": self._col_widths}
+        if self._log_height:  # a window never laid out keeps the file's value (state_for_save's setdefault)
+            fields["log_height"] = self._log_height
         state = state_for_save(load_state_file(STATE_FILE), layout_key(self._monitors()), self.root.geometry(),
-                               {"filepath": self.filepath, "col_widths": self._col_widths})
+                               fields)
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             with open(STATE_FILE, "w", encoding="utf-8") as f:
