@@ -37,6 +37,41 @@ prompt then being the gate), re-register with the variable:
 `run_powershell`. Note that list is Windows-shaped; `rm -rf /` is a CONFIRM
 pattern (`\brm\b`), not a blocked one.
 
+The refusal names the dialog MyAgent would have shown ("Send a Proton email
+from roman1@ri.com.au?"), so the person who asked can be told exactly what
+was declined.
+
+### One call granted, the registration kept
+
+The policy is read from the environment once, at import, so a separate client
+process that spawns `server.py` with the variable set grants confirms in THAT
+child alone — the registered server stays deny-by-default. Verified
+2026-11-07: a `proton_send` the registered server had refused, sent this way
+from the same Claude Code session once the user had asked for it explicitly.
+From the venv, in the repo root:
+
+    import asyncio, os, sys
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    env = dict(os.environ, MYAGENT_MCP_CONFIRM="allow")
+
+    async def main():
+        params = StdioServerParameters(command=sys.executable,
+                                       args=["claude_code_mcp/server.py"], env=env)
+        async with stdio_client(params) as (r, w):
+            async with ClientSession(r, w) as s:
+                await s.initialize()
+                res = await s.call_tool("proton_send", {"account": "...", "to": "...",
+                                                        "subject": "...", "body": "..."})
+                print([c.text for c in res.content if c.type == "text"], res.isError)
+
+    asyncio.run(main())
+
+The grant is still logged by the server (`granted without MyAgent's dialog`)
+and the result carries the same `MyAgent notes:` line, so the transcript
+shows the gate was passed on purpose.
+
 ## Environment
 
 The server inherits Claude Code's environment. API keys for `microphone_listen`'s
@@ -51,6 +86,21 @@ microphone call from Claude Code's terminal raises that app's own prompt.
 
     <venv python> smoke.py     # list + read-only calls, zero tokens
     <venv python> smoke2.py    # screenshot image, clipboard, the deny policy
+
+## Live use
+
+First used from a real Claude Code session on the Mac Mini on 2026-11-07,
+driven by the `/physical-interface` skill: `get_skill` (the skill text out of
+the OneDrive tree), `camera_capture` with `save_path` (the 1920x1080 file in
+`MyAppShare/general` plus the provider-sized inline image Claude Code
+displays), `screenshot` of the display to verify a Preview window, and a
+`proton_send` through the one-call client above — each through this server,
+MyAgent itself idle. Two things seen on the way: Claude Code's `/mcp` warning
+that `ANTHROPIC_API_KEY` in the environment disables the claude.ai connectors
+does not touch this server (local stdio, no claude.ai login), and
+`get_skill`'s `skill_name` enum lists the skills whose mode is `on_demand` at
+server start — the index MyAgent's system prompt would show — so a mode change
+in the Skills Manager reaches it at the next reconnect.
 
 Server log lines go to stderr (Claude Code's MCP log); the protocol owns the
 real stdout, and fd 1 is pointed at stderr so child processes cannot corrupt it.
