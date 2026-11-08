@@ -147,6 +147,29 @@ The physical-interface rules held as written — "tell me" was spoken through
 `say`, the photos went to the share, the viewer was verified by screenshot —
 because the skill text is the same file either way.
 
+### A mail-housekeeping instruction, end to end (2026-11-09, the Windows laptop)
+
+The second pasted instruction was `Act_on_unread_emails` — the daily
+follow-up to `UnreadSummary.py`'s digest: read the newest "Summary of Unread
+Emails" in the Gmail inbox, trash and mark read exactly its numbered emails in
+every account (a Spam folder included), process any SPECIFYING LIST matches
+through the payment skills, report by email from the Outlook account. It ran
+to completion in one Claude Code session, Fable 5.1 at high effort, with no
+MyAgent window: the digest (10 numbered emails across 8 accounts, 0 matches)
+read through `gmail_read`; every numbered email located in its own account by
+id and matched to the digest by sender, subject and date BEFORE anything
+changed; 11 messages marked read and 11 trashed across both Gmail accounts,
+Proton and Outlook, nothing else touched; the saved settings read through
+`manage_instructions`; the report sent through `outlook_send`. The pattern
+that made it safe is the one to keep: the read-only and mark-read calls went
+through the REGISTERED server, and the four `*_trash` calls plus the send went
+through the one-call allow client above, one script per phase, each granted
+result carrying the server's `granted without MyAgent's dialog` note. The
+over-trash hazard MyAgent's version of this instruction guards against (a
+2026-06-08 run trashed every unread email) does not change here: the
+numbered list is the only authority, and the matching step is what enforces
+it.
+
 Server log lines go to stderr (Claude Code's MCP log); the protocol owns the
 real stdout, and fd 1 is pointed at stderr so child processes cannot corrupt it.
 
