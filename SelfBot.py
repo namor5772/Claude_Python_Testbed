@@ -537,6 +537,14 @@ if IS_WINDOWS:
         r"\b(?:iwr|curl|wget)\b.*-OutFile",         # Invoke-WebRequest to a file
         r"\biex\s*\(",                              # Invoke-Expression with (…)
         r"\bRemove-ItemProperty\b",                 # registry values (HKLM/HKCU: blocked)
+        # Reads of the OS credential vault (2026-11-09; MyAgent's list — the
+        # westpac-login helper reads the credentials itself). APPENDED.
+        r"\bkeyring\b",
+        r"\bcmdkey\b",
+        r"\bvaultcmd\b",
+        r"\bGet-StoredCredential\b",
+        r"\bPasswordVault\b",
+        r"\bCred(?:Read|Enumerate)\w*",
     ]
 else:
     COMMAND_BLOCKED = [
@@ -573,6 +581,9 @@ else:
         r"\bdiskutil\b",
         r"\bnetworksetup\b",
         r"\bpmset\b",
+        # Reads of the macOS Keychain (2026-11-09; MyAgent's list). APPENDED.
+        r"\bkeyring\b",
+        r"\bsecurity\s+(?:find|dump)-\S+",
     ]
 
 FALLBACK_MODELS = [

@@ -1486,6 +1486,20 @@ if IS_WINDOWS:
         r"\b(?:iwr|curl|wget)\b.*-OutFile",         # Invoke-WebRequest to a file
         r"\biex\s*\(",                              # Invoke-Expression with (…)
         r"\bRemove-ItemProperty\b",                 # registry values (HKLM/HKCU: blocked)
+        # Reads of the OS credential vault (2026-11-09). The Westpac login's
+        # Customer ID and password left the westpac-login skill's text for
+        # Windows Credential Manager, where only the skill's own helper reads
+        # them, inside its process — so a run never holds them, and a model
+        # going for them itself (keyring's CLI or API, cmdkey, vaultcmd, the
+        # CredentialManager module, WinRT's PasswordVault, a CredRead /
+        # CredEnumerate P/Invoke) meets the dialog. The helper's command lines
+        # name none of these words. APPENDED, like the aliases above.
+        r"\bkeyring\b",
+        r"\bcmdkey\b",
+        r"\bvaultcmd\b",
+        r"\bGet-StoredCredential\b",
+        r"\bPasswordVault\b",
+        r"\bCred(?:Read|Enumerate)\w*",
     ]
 else:
     COMMAND_BLOCKED = [
@@ -1522,6 +1536,11 @@ else:
         r"\bdiskutil\b",
         r"\bnetworksetup\b",
         r"\bpmset\b",
+        # Reads of the macOS Keychain (2026-11-09; the Windows list's twin): the
+        # westpac-login helper reads the credentials itself; `security find-…` /
+        # `dump-keychain` or keyring from a run is confirmed. APPENDED.
+        r"\bkeyring\b",
+        r"\bsecurity\s+(?:find|dump)-\S+",
     ]
 
 # ── Constants ─────────────��─────────────────────────────────────────────────
