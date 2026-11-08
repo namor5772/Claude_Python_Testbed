@@ -28,6 +28,7 @@ affected either way — launchd runs the venv python directly.)
 | `TodoList.app` | `TodoList_launcher.applescript` | `icon_todolist_master.png` (clipboard with a googly-eyed pencil ticking the last urgent item) | Launches `TodoList.py` detached; launch-or-focus like CSVEditor — TodoList's `todos.json` is OneDrive-synced, so a second local instance would race the first's 5-second sync poll |
 | `TodoList (Native).app` | `TodoListNative_launcher.applescript` | `icon_todolist_native_master.png` (the same clipboard with a deep-blue `C++` badge top-left, derived by `make_todolist_native_icon.py`) | Launches `TodoList.exe` — the native C++/Cocoa port built from `TodoList.mm` by `./build_todolist_native.sh` (repo root; run it once per machine, the binary is gitignored). Launch-or-focus across BOTH implementations: it focuses a running `TodoList.exe` *or* `TodoList.py` before launching, since either pair would race the shared 5-second sync poll. Shows a "build it first" dialog if the exe is missing |
 | `MyBackup.app` | `MyBackup_launcher.applescript` | `icon_mybackup_master.png` (the family's one sober design, by request: two drive slabs on a slate-blue tile, the TO drive's light green, a broad down-arrow between them — the one-way mirror; from `make_mybackup_icon.py`) | Launches `MyBackup.py` detached; launch-or-focus like CSVEditor — and load-bearing here, since two instances could mirror into the same TO directory at the same time |
+| `Bank Credentials.app` | `BankCredentials.applescript` + `store_bank_credentials.command` | `icon_bankcredentials_master.png` (a safe on the family's blue tile: googly eyes on its round door, a spoked dial, a golden key in the corner; from `make_bankcredentials_icon.py`) | Opens Terminal on a menu that runs the chosen bank skill's own helper in `store-credentials` mode — the Westpac / ANZ / CBA login details into the login Keychain, typed unechoed by the user; the launcher never sees a value. TCC-free like the viewers. Unbuilt / unverified on the Mac as of 2026-11-09 |
 
 `rebuild.sh` patches the repo path into the AppleScript for whatever clone
 it runs from, renders the iconset from the 1024px master with `sips`
@@ -570,3 +571,57 @@ $lnk.WorkingDirectory = "$env:OneDrive\MyAppShare\general"
 $lnk.IconLocation = "$repo\desktop_launchers\icon_general.ico,0"
 $lnk.Save()
 ```
+
+### Bank Credentials (Windows shortcut + macOS app)
+
+`BankCredentials_Win.ps1` (2026-11-09) is the console behind the **Bank Credentials**
+Desktop shortcut: it lists the three bank logins MyAgent's skills make — Westpac, ANZ,
+CBA — with each one's vault state (`stored` / `MISSING`, from the skill helper's
+`check-credentials`), and on a choice runs that skill's own helper in `store-credentials`
+mode — `westpac-login/scripts/windows_login_support.py`,
+`anz-login/scripts/anz_login_support.py`, `cba-login/scripts/cba_login_support.py`, found
+through `myagent.datapaths.resolve_skills_dir` — which asks for the ID and the password
+twice with no echo and writes Windows Credential Manager itself (keyring services
+`myagent-westpac` / `myagent-anz` / `myagent-cba`; the entries show in Control Panel →
+Credential Manager → Windows Credentials as `password@myagent-westpac` and so on). The
+launcher never sees a value and writes no file. It is the third VISIBLE console beside the
+two log viewers, and must stay one: the helpers' `getpass` needs a real console and refuses
+a redirected stdin (the script says so and exits 1 when its own input is a pipe), so the
+shortcut targets `powershell.exe` directly, never `conhost.exe --headless`. `-Status`
+prints the three states and exits. Use it after changing a password on a bank's site;
+MyAgent's next login reads the new value — nothing restarts. Verified on the laptop
+2026-11-09: the shortcut opens the menu with all three logins `stored`; the helpers' own
+store path is covered by their offline tests and by the first store, done the same day.
+
+`icon_bankcredentials.ico` is rendered from the 1024px master
+`icon_bankcredentials_master.png` (a safe on the family's blue tile: a gunmetal body, a
+round door with a rim, a spoked dial, the googly eyes on the door — the right one eyeing
+the golden key in the corner; `make_bankcredentials_icon.py`). Regenerate with:
+
+```powershell
+.venv\Scripts\python.exe desktop_launchers\make_bankcredentials_icon.py
+.venv\Scripts\python.exe -c "from PIL import Image; Image.open(r'desktop_launchers\icon_bankcredentials_master.png').convert('RGBA').save(r'desktop_launchers\icon_bankcredentials.ico', sizes=[(256,256),(128,128),(64,64),(48,48),(32,32),(16,16)])"
+```
+
+Recreate the Desktop shortcut on a new machine (run from the repo root; a visible window,
+so a plain `powershell.exe` target and `WindowStyle` 1):
+
+```powershell
+$repo = (Get-Location).Path
+$ws = New-Object -ComObject WScript.Shell
+$lnk = $ws.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'Bank Credentials.lnk'))
+$lnk.TargetPath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+$lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$repo\desktop_launchers\BankCredentials_Win.ps1`""
+$lnk.WorkingDirectory = $repo
+$lnk.IconLocation = "$repo\desktop_launchers\icon_bankcredentials.ico,0"
+$lnk.WindowStyle = 1
+$lnk.Save()
+```
+
+On macOS `rebuild.sh` builds **Bank Credentials.app** from `BankCredentials.applescript`,
+which opens Terminal on `store_bank_credentials.command` — the same menu in bash (Westpac
+through `macos_login_support.py store-credentials`, ANZ and CBA through their
+cross-platform helpers), TCC-free like the log viewers. `keyring` (and `websocket-client`
+for the ANZ / CBA helpers) must be installed in the Mac's venv first, and the first Keychain
+access by that python raises macOS's keychain-access dialog — answer **Always Allow**.
+Unbuilt and unverified on the Mac as of 2026-11-09.
