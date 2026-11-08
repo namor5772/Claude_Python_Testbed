@@ -3,7 +3,9 @@
 The Westpac login's Customer ID and password moved out of the westpac-login
 skill's text into Windows Credential Manager / the macOS Keychain (keyring
 service `myagent-westpac`), read by the skill's own helper inside its process,
-so a run never holds them. A model that went for them itself — keyring's CLI
+so a run never holds them; the ANZ login's Customer Registration Number and
+password followed the same day (service `myagent-anz`, anz-login's new
+`scripts/anz_login_support.py`). A model that went for them itself — keyring's CLI
 or API, cmdkey, vaultcmd, PowerShell's CredentialManager module, WinRT's
 PasswordVault, a CredRead / CredEnumerate P/Invoke; `security
 find-generic-password` / `dump-keychain` or keyring on the Mac — now meets the
@@ -27,6 +29,12 @@ HELPER_COMMANDS = (
     '"/Users/x/.venv/bin/python" -B "/Users/x/skills/westpac-login/scripts/macos_login_support.py" preflight',
     '"/Users/x/.venv/bin/python" -B "/Users/x/skills/westpac-login/scripts/macos_login_support.py" check-credentials',
     '"/Users/x/.venv/bin/python" -B "/Users/x/skills/westpac-login/scripts/macos_login_support.py" prepare --state "/var/folders/x/westpac-macos-abc/state.json"',
+    # anz-login's helper (the same day), one script for both platforms
+    r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\anz-login\scripts\anz_login_support.py" preflight',
+    r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\anz-login\scripts\anz_login_support.py" check-credentials',
+    r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\anz-login\scripts\anz_login_support.py" targets',
+    r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\anz-login\scripts\anz_login_support.py" enter-credentials --target-id "0123456789ABCDEF0123456789ABCDEF"',
+    '"/Users/x/.venv/bin/python" -B "/Users/x/skills/anz-login/scripts/anz_login_support.py" enter-credentials --target-id "0123456789ABCDEF0123456789ABCDEF" --port 9222',
 )
 
 WINDOWS_READERS = (
