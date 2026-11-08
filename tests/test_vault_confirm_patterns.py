@@ -3,9 +3,9 @@
 The Westpac login's Customer ID and password moved out of the westpac-login
 skill's text into Windows Credential Manager / the macOS Keychain (keyring
 service `myagent-westpac`), read by the skill's own helper inside its process,
-so a run never holds them; the ANZ login's Customer Registration Number and
-password followed the same day (service `myagent-anz`, anz-login's new
-`scripts/anz_login_support.py`). A model that went for them itself — keyring's CLI
+so a run never holds them; the ANZ and CBA logins followed the same day
+(services `myagent-anz` / `myagent-cba`, the new `scripts/anz_login_support.py`
+and `scripts/cba_login_support.py` of those skills). A model that went for them itself — keyring's CLI
 or API, cmdkey, vaultcmd, PowerShell's CredentialManager module, WinRT's
 PasswordVault, a CredRead / CredEnumerate P/Invoke; `security
 find-generic-password` / `dump-keychain` or keyring on the Mac — now meets the
@@ -35,6 +35,9 @@ HELPER_COMMANDS = (
     r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\anz-login\scripts\anz_login_support.py" targets',
     r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\anz-login\scripts\anz_login_support.py" enter-credentials --target-id "0123456789ABCDEF0123456789ABCDEF"',
     '"/Users/x/.venv/bin/python" -B "/Users/x/skills/anz-login/scripts/anz_login_support.py" enter-credentials --target-id "0123456789ABCDEF0123456789ABCDEF" --port 9222',
+    # cba-login's helper (the same day), the same shape
+    r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\cba-login\scripts\cba_login_support.py" check-credentials',
+    r'& "C:\x\.venv\Scripts\python.exe" -B "C:\x\skills\cba-login\scripts\cba_login_support.py" enter-credentials --target-id "0123456789ABCDEF0123456789ABCDEF"',
 )
 
 WINDOWS_READERS = (
