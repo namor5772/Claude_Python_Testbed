@@ -125,7 +125,10 @@ class RoundTripTests(unittest.TestCase):
             self.app = _TransparentApp()
         except tk.TclError as exc:  # headless box, no display
             self.skipTest(f"Tk unavailable: {exc}")
-        self.app.root.update_idletasks()
+        # The window manager's size is a real event, not an idle task: update(),
+        # not update_idletasks() — the undocked laptop's panes stayed 1 px tall
+        # under the latter and the first day's version of this fixture (2026-11-09).
+        self.app.root.update()
         return self.app
 
     def write_state(self, **fields):
@@ -179,6 +182,30 @@ class RoundTripTests(unittest.TestCase):
         app._finish_close()
         self.app = None
         self.assertEqual(self.read_state()["log_height"], log)
+
+    def test_the_sash_restore_waits_for_the_window_managers_layout(self):
+        """Before the WM's size event is processed the panes are 1 px tall; the
+        saved height is applied once it is — not dropped (2026-11-09: the
+        undocked laptop, where the idle tasks alone lay nothing out)."""
+        self.write_state(log_height=150)
+        try:
+            self.app = _TransparentApp()
+        except tk.TclError as exc:
+            self.skipTest(f"Tk unavailable: {exc}")
+        app = self.app
+        app.root.update_idletasks()
+        if app._paned.winfo_height() > 1:
+            self.skipTest("this machine lays the window out from the idle tasks alone")
+        self.assertIsNotNone(app._sash_restore_funcid, "waiting for the pane's first <Configure>")
+        app.root.update()
+        self.assertEqual(app._log_pane.winfo_height(), 150)
+        self.assertIsNone(app._sash_restore_funcid, "the wait is over")
+        # A later drag is the user's: the restore does not fight it.
+        paned, table, log = app._paned, app._table_pane, app._log_pane
+        height = paned.winfo_height()
+        paned.sashpos(0, mb.sash_for_log_height(height, height - table.winfo_height() - log.winfo_height(), 220))
+        app.root.update()
+        self.assertEqual(log.winfo_height(), 220)
 
     def test_a_saved_height_too_big_for_the_window_is_clamped(self):
         self.write_state(log_height=100000)

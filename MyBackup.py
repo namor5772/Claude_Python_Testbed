@@ -61,6 +61,7 @@ MAX_ERROR_LINES = 50  # per row, in the log pane and file — the error COUNT is
 DEFAULT_SIZE = (1000, 620)  # the window with nothing saved, centred on the primary monitor
 MIN_SIZE = (720, 460)  # the window's minsize; a smaller SAVED size is junk and falls back to DEFAULT_SIZE
 MIN_PANE = 60  # the least height the table and the log pane each keep when the sash is restored (pixels)
+SASH_RESTORE_IDLE_TRIES = 20  # idle passes _restore_sash waits for the panes' children once the WM has sized the window
 # The table's three columns — Treeview column id → the state file's col_widths
 # key (the row-number column's width is saved too since 2026-11-08).
 TREE_COLUMNS = (("#0", "#"), ("from", HEADERS[0]), ("to", HEADERS[1]))
@@ -943,6 +944,8 @@ class App:
         self.modified = False
         self._col_widths = {}
         self._log_height = None  # the log pane's saved height; _save_state keeps the last laid-out value
+        self._sash_restore_funcid = None  # the <Configure> binding _restore_sash arms while the pane is 1 px tall
+        self._sash_restore_idle_tries = 0
         self._queue = queue.Queue()
         self._worker = None
         self._cancel = threading.Event()
@@ -1405,8 +1408,10 @@ class App:
             self._load_setup_file(path)
         else:
             self._update_status()
-        # The sash needs the window laid out at its restored size: before the
-        # idle tasks run the pane is 1 px tall and ttk clamps any position to it.
+        # The sash needs the window laid out at its restored size: before then
+        # the pane is 1 px tall and ttk clamps any position to it. The idle
+        # tasks lay it out on some machines; where the window manager's size
+        # arrives as a real event instead, _restore_sash waits for it.
         self.root.update_idletasks()
         self._restore_sash()
 
@@ -1421,12 +1426,34 @@ class App:
 
     def _restore_sash(self):
         """Put the sash where the saved log height says (sash_for_log_height);
-        nothing saved, or no layout yet, leaves it where the weights put it."""
+        nothing saved leaves it where the panes' weights put it. The panes are
+        1 px tall until the window manager has sized the window — a real
+        event, which the idle tasks alone did not deliver on the undocked
+        laptop (2026-11-09: the saved height was silently dropped; the suite's
+        three layout failures) — so a pane not laid out yet is retried from
+        its first <Configure>, and a pane whose children are not laid out yet
+        from the idle queue, a bounded number of times."""
         if not self._log_height:
             return
-        height = self._paned.winfo_height()
-        thickness = height - self._table_pane.winfo_height() - self._log_pane.winfo_height()
-        sash = sash_for_log_height(height, thickness, self._log_height)
+        try:
+            height = self._paned.winfo_height()
+            table, log = self._table_pane.winfo_height(), self._log_pane.winfo_height()
+        except tk.TclError:
+            return  # the window is gone
+        if height <= 1:
+            if self._sash_restore_funcid is None:
+                self._sash_restore_funcid = self._paned.bind(
+                    "<Configure>", lambda event: self.root.after_idle(self._restore_sash), add="+")
+            return
+        if table <= 1 or log <= 1:
+            if self._sash_restore_idle_tries < SASH_RESTORE_IDLE_TRIES:
+                self._sash_restore_idle_tries += 1
+                self.root.after_idle(self._restore_sash)
+            return
+        if self._sash_restore_funcid is not None:
+            self._paned.unbind("<Configure>", self._sash_restore_funcid)
+            self._sash_restore_funcid = None
+        sash = sash_for_log_height(height, height - table - log, self._log_height)
         if sash is not None:
             self._paned.sashpos(0, sash)
 
