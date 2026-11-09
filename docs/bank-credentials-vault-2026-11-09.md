@@ -132,6 +132,17 @@ pins both halves.
   store time carried to the login. ANZ and CBA pass preflight there but were not
   logged in: the skills forbid a bank login just to test a skill. The 77 saved instructions
   were scanned: none restates the old typing steps, none holds a credential.
+- **The Desktop (DESKTOP-NAMOR), later the same evening**, after a `/sync-refultra`:
+  `keyring` 25.7.0 and `websocket-client` 1.9.2 installed in the venv (backend
+  `keyring.backends.Windows.WinVaultKeyring`), the **Bank Credentials** shortcut
+  created from the README recipe, every helper's preflight OK, all three banks
+  stored by the user through the shortcut (`-Status`: all `stored`) — and then the
+  user ran the Westpac, ANZ and CBA logins through MyAgent on it: all three worked.
+  So the vault method is live-confirmed on every machine. One observation: keyring's
+  Windows backend files a service's FIRST entry under the bare service name and
+  moves it to `<entry>@<service>` only when the second arrives, so Credential
+  Manager shows `customer-id@myagent-westpac` beside a bare `myagent-westpac`
+  (the password) — `get_password` reads either form, as the `stored` states show.
 - Full repo suite 2345 tests OK; ruff at its 42-finding baseline.
 
 ## Cleanup
