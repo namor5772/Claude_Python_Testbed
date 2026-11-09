@@ -177,6 +177,16 @@ themselves must be changed.
   whole-dict skills save writes a loaded skill back from memory.
 - **Memory:** `westpac-credentials-locations.md` in the Claude Code memory
   folder is the running status (what is stored where, what is still open).
+- **Backup:** on the Mac Mini `~/Library/Keychains/` is a MyBackup row since
+  2026-11-09 — the login keychain with the three `myagent-*` entries and the
+  launcher-signing key, both encrypted at rest, so the drive holds no clear
+  secret (the bank passwords also live in Bitwarden, the source they were stored
+  from). Claude Code's transcripts are deliberately NOT mirrored anywhere: the
+  Mac Mini's 2026-11-07 session, which ran the Westpac top-up with the pre-vault
+  skill, still holds the old Westpac password unredacted — the laptop's cleanup
+  reached only its own transcripts. The same day three stray `~/.config/* copy`
+  folders (duplicate Gmail / Outlook / Proton tokens from May–June) were deleted
+  from the Mac and, by the next run, from its mirror.
 
 ## Open
 
