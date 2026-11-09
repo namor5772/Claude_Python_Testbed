@@ -5,16 +5,17 @@ ends at the Agent Request dialog, where the user typically asks the agent to
 look back over the run just had and tighten the skills it used. That is the
 task a stronger model does better, so the dialog carries an **Upgrade** box:
 ticked, the reply is sent as usual and every API call FROM THAT REPLY ON goes
-to the upgrade model with its own thinking level; the conversation, the tools,
-the system prompt and the run's other settings (temperature, verbosity, Fast)
-are untouched. The switch lasts for the rest of the run; it never outlives it
-and never reaches the applied instruction, the state file or the store.
+to the upgrade model with its own thinking level — and, since 2026-11-10, its
+own SPEED; the conversation, the tools, the system prompt and the run's other
+settings (temperature, verbosity) are untouched. The switch lasts for the rest
+of the run; it never outlives it and never reaches the applied instruction,
+the state file or the store.
 
 WHICH model is a setting of the INSTRUCTION (the user's decision, the day it
 shipped: it was per-user at first, like Voice Setup): `upgrade_target` in the
-instruction entry, `{"provider", "model", "level"}`, carried through every
-site the other per-instruction settings pass (the editor's SAVE / select /
-CLEAR, the applied snapshot, `_apply_instruction_entry`, manage_instructions)
+instruction entry, `{"provider", "model", "level", "fast"}`, carried through
+every site the other per-instruction settings pass (the editor's SAVE / select
+/ CLEAR, the applied snapshot, `_apply_instruction_entry`, manage_instructions)
 exactly like the Auto-send tick, `dictation_auto_send`. It is edited in
 **Model Setup**, a button beside Voice Setup at the bottom left of the main
 window, whose Save writes the value through to the instruction's store entry
@@ -22,6 +23,23 @@ at once (a targeted key write, the Auto-send way). An instruction without one
 gets its provider's default (UPGRADE_DEFAULT_TARGETS); a model of "" is an
 explicit "no upgrade"; a target saved for another provider (the instruction's
 provider was changed since) does not apply.
+
+Fast (2026-11-10, the user's request — Model Setup had no way to ask for fast
+mode on the upgrade model). `fast` is the upgrade's OWN speed, decided in
+Model Setup by a Fast box shown only for a model with fast mode (Claude Fable
+5.2, Opus 5.5 / 5 / 4.8 — `_anthropic_supports_fast_mode`), False for every
+other model and for a target saved before the field existed. It is NOT the
+instruction's `fast_mode`: until this change the switch left `fast_mode` as
+the run's, so an instruction on Haiku 5.5 with a Fast tick saved while an
+Opus was picked — hidden, since the editor shows the box for fast-capable
+models alone — upgraded to Fable 5.2 at fast rates without a word (found
+2026-11-10 on the user's own WBC_LoginToWebsite). Now `_upgrade_apply` sets
+`_upgrade_fast` (the speed the switch asked for, None while no upgrade is
+active) and `_anthropic_fast_active` (ui_mixin) reads it AHEAD of `fast_mode`,
+so the live request, the Debug dump, the title and the cost log's PARAMETERS
+all follow the target's speed while an upgrade is active and the run's own
+otherwise; `fast_mode` itself is never rewritten, so no persistence site needs
+a stash for it. `_upgrade_end_run` clears it with the originals.
 
 A run upgrades within its own provider only — the history's provider-specific
 reasoning artefacts stay readable there (live-probed 2026-09-27: a Sonnet 5
@@ -65,9 +83,12 @@ UPGRADE_FIELDS = ("model", "thinking_enabled", "thinking_effort",
                   "thinking_budget", "thinking_mode")
 UPGRADE_NOTE = ("Ticked in an Agent Request dialog, the upgrade model answers from that "
                 "reply to the end of the run — same provider, same conversation, same "
-                "tools; temperature, verbosity and Fast keep the run's settings. The "
-                "cost log records the run under the upgrade model with an "
-                "upgraded-from part.")
+                "tools; temperature and verbosity keep the run's settings, the speed is "
+                "the Fast box above (shown for a model with fast mode; off = standard "
+                "speed whatever the instruction's own Fast setting). The cost log "
+                "records the run under the upgrade model with an upgraded-from part.")
+UPGRADE_FAST_LABEL = ("Fast — speed=\"fast\": up to 2.5x the output speed at 2x the "
+                      "price in every bucket")
 
 
 class ModelUpgradeMixin(PaneNotesMixin):
@@ -77,10 +98,13 @@ class ModelUpgradeMixin(PaneNotesMixin):
     @staticmethod
     def _upgrade_sanitize_target(raw, provider=None):
         """An instruction entry's `upgrade_target` → {"provider", "model",
-        "level"}, or None when it names none (absent or malformed: the
-        provider default applies). A model of "" is an explicit "no upgrade"
-        (its level is then ""). `provider` fills a value that carries none
-        (manage_instructions passes the entry's own)."""
+        "level", "fast"}, or None when it names none (absent or malformed:
+        the provider default applies). A model of "" is an explicit "no
+        upgrade" (its level is then "" and its fast False). `fast` — the
+        upgrade's own speed, 2026-11-10 — is a bool, True only for an
+        Anthropic model (fast mode is Anthropic's; a value saved before the
+        field existed reads False). `provider` fills a value that carries
+        none (manage_instructions passes the entry's own)."""
         if not isinstance(raw, dict):
             return None
         chosen = raw.get("provider") or provider
@@ -90,7 +114,8 @@ class ModelUpgradeMixin(PaneNotesMixin):
         model = model.strip() if isinstance(model, str) else ""
         level = raw.get("level")
         level = level.strip() if isinstance(level, str) and model else ""
-        return {"provider": chosen, "model": model, "level": level}
+        fast = bool(raw.get("fast")) and bool(model) and chosen == "Anthropic"
+        return {"provider": chosen, "model": model, "level": level, "fast": fast}
 
     def _upgrade_own_target(self):
         """The live instruction's own setting for the run's provider, or None
@@ -100,15 +125,33 @@ class ModelUpgradeMixin(PaneNotesMixin):
         return own if own is not None and own["provider"] == self.provider else None
 
     def _upgrade_target(self):
-        """The upgrade a run of the live instruction gets: {"model", "level"}
-        — the instruction's own, else its provider's default — or None for
-        no upgrade (an explicit "no upgrade", or no default for the
-        provider)."""
+        """The upgrade a run of the live instruction gets: {"model", "level",
+        "fast"} — the instruction's own, else its provider's default (at
+        standard speed: the defaults name no speed) — or None for no upgrade
+        (an explicit "no upgrade", or no default for the provider)."""
         own = self._upgrade_own_target()
         if own is not None:
-            return {"model": own["model"], "level": own["level"]} if own["model"] else None
+            if not own["model"]:
+                return None
+            return {"model": own["model"], "level": own["level"], "fast": own["fast"]}
         default = UPGRADE_DEFAULT_TARGETS.get(self.provider)
-        return dict(default) if default else None
+        return {**default, "fast": False} if default else None
+
+    def _upgrade_fast_for(self, model, fast):
+        """The speed a target with `fast` really gets on `model`: fast only
+        where the model serves fast mode (the same gate as the editor's Fast
+        box, so a target saved fast for a model that has since lost it — or
+        a hand-written one — runs standard and is LABELLED standard)."""
+        return bool(fast) and self.provider == "Anthropic" and \
+            self._anthropic_supports_fast_mode(model)
+
+    @staticmethod
+    def _upgrade_level_text(level, fast):
+        """"Max, fast" / "Max" / "fast" / "" — the parenthesised part of every
+        line that names an upgrade (the box's label, the ⬆ line, the tool's
+        reply)."""
+        parts = [p for p in (level, "fast" if fast else "") if p]
+        return ", ".join(parts)
 
     def _upgrade_instruction_name(self):
         """The saved instruction whose settings are LIVE, which is the one
@@ -255,17 +298,23 @@ class ModelUpgradeMixin(PaneNotesMixin):
         original = {field: getattr(self, field) for field in UPGRADE_FIELDS}
         original["call"] = getattr(self, "_run_call_num", 0)
         params = self._upgrade_params_for(self.provider, target["model"], target.get("level"))
+        fast = self._upgrade_fast_for(target["model"], target.get("fast"))
         # The stash goes up BEFORE the live fields change: _save_last_state
         # (Tk thread, periodic) reads the stash while it exists, so no save
         # can ever catch the upgraded model as the applied one.
         self._upgrade_original = original
+        # The upgrade's own speed (None while no upgrade is active), read by
+        # _anthropic_fast_active ahead of the instruction's fast_mode — which
+        # is never rewritten, so no persistence site needs a stash for it.
+        self._upgrade_fast = fast
         self.model = target["model"]
         for field, value in params.items():
             setattr(self, field, value)
         level = self._upgrade_level_for(self.provider, self.model, target.get("level"))
+        detail = self._upgrade_level_text(level, fast)
         self._warn(
             f"⬆ Model upgraded for the rest of this run: {original['model']} → "
-            f"{self.model}{f' ({level})' if level else ''}, from call "
+            f"{self.model}{f' ({detail})' if detail else ''}, from call "
             f"#{original['call'] + 1} on.\n")
         for note in self._upgrade_pricing_warnings():
             self._warn(f"⚠ {note}\n")
@@ -291,7 +340,8 @@ class ModelUpgradeMixin(PaneNotesMixin):
         if not self._upgrade_apply(target):
             return f"Nothing changed — this run stays on {before}."
         level = self._upgrade_level_for(self.provider, self.model, target.get("level"))
-        return (f"Upgraded: {before} → {self.model}{f' ({level})' if level else ''} "
+        detail = self._upgrade_level_text(level, getattr(self, "_upgrade_fast", None))
+        return (f"Upgraded: {before} → {self.model}{f' ({detail})' if detail else ''} "
                 f"for the rest of this run, from your next call on. The saved "
                 f"instruction is unchanged.")
 
@@ -310,8 +360,9 @@ class ModelUpgradeMixin(PaneNotesMixin):
         generic = self._generic_pricing_warning(self.provider, self.model)
         if generic:
             notes.append(generic)
-        fast = (self.provider == "Anthropic" and getattr(self, "fast_mode", False)
-                and self._anthropic_fast_active())
+        # The ONE speed gate (ui_mixin): the upgrade's own speed while the
+        # switch is active, which is now — not the instruction's fast_mode.
+        fast = self.provider == "Anthropic" and self._anthropic_fast_active()
         if self._unpriced_model_warning(self.provider, self.model, fast=fast):
             table = "ANTHROPIC_FAST_PRICING" if fast else f"{self.provider} pricing table"
             notes.append(
@@ -334,6 +385,7 @@ class ModelUpgradeMixin(PaneNotesMixin):
         for field in UPGRADE_FIELDS:
             setattr(self, field, original[field])
         self._upgrade_original = None
+        self._upgrade_fast = None       # the speed is the instruction's own again
         self._tool_info(f"Model restored to {self.model} for the next run.\n")
         root = getattr(self, "root", None)
         if root is not None:
@@ -355,9 +407,10 @@ class ModelUpgradeMixin(PaneNotesMixin):
         and the instruction's upgrade target."""
         if self._upgrade_active():
             level = self.thinking_mode.capitalize() if self.thinking_enabled else ""
+            detail = self._upgrade_level_text(level, getattr(self, "_upgrade_fast", None))
             return (False, True,
                     f"Upgraded to {self._get_display_name(self.model)}"
-                    f"{f' ({level})' if level else ''} for the rest of this run")
+                    f"{f' ({detail})' if detail else ''} for the rest of this run")
         if not target:
             return (False, False,
                     "Upgrade: no upgrade model set for this instruction "
@@ -366,9 +419,11 @@ class ModelUpgradeMixin(PaneNotesMixin):
             return (False, False,
                     f"Upgrade: this run is already on {self._get_display_name(self.model)}")
         level = self._upgrade_level_for(self.provider, target["model"], target.get("level"))
+        detail = self._upgrade_level_text(
+            level, self._upgrade_fast_for(target["model"], target.get("fast")))
         return (True, False,
                 f"Upgrade to {self._get_display_name(target['model'])}"
-                f"{f' ({level})' if level else ''} for the rest of this run")
+                f"{f' ({detail})' if detail else ''} for the rest of this run")
 
     def _upgrade_build_row(self, dlg):
         """The Upgrade checkbox for the caller to grid under the voice row.
@@ -401,8 +456,8 @@ class ModelUpgradeMixin(PaneNotesMixin):
             return own, ("own" if own["model"] else "none")
         default = UPGRADE_DEFAULT_TARGETS.get(self.provider)
         if default:
-            return {"provider": self.provider, **default}, "default"
-        return {"provider": self.provider, "model": "", "level": ""}, "none"
+            return {"provider": self.provider, **default, "fast": False}, "default"
+        return {"provider": self.provider, "model": "", "level": "", "fast": False}, "none"
 
     def _open_upgrade_setup(self, parent):
         """The modal dialog over `parent` that sets the upgrade model of the
@@ -444,7 +499,10 @@ class ModelUpgradeMixin(PaneNotesMixin):
         label(0, "Instruction:")
         value(0, name or "(not saved yet: kept for this session until the editor's SAVE)")
         label(1, "Provider:")
-        value(1, f"{provider} — this instruction runs on {self._get_display_name(self.model)}")
+        # The instruction's OWN model: while a run is upgraded the live
+        # `model` is the upgrade's, and the stash holds the instruction's.
+        own_model = (getattr(self, "_upgrade_original", None) or {}).get("model", self.model)
+        value(1, f"{provider} — this instruction runs on {self._get_display_name(own_model)}")
 
         label(2, "Upgrade model:")
         model_var = tk.StringVar()
@@ -461,6 +519,31 @@ class ModelUpgradeMixin(PaneNotesMixin):
                                    font=font, width=44)
         level_combo.grid(row=3, column=1, sticky="ew", padx=(0, 15), pady=4)
 
+        # The upgrade's own speed (2026-11-10): a Fast box under Thinking,
+        # gridded only while the picked model serves fast mode — the editor's
+        # rule for its own Fast box — so for every other model the row is
+        # absent and Save writes fast=False (nothing hidden survives, which
+        # is the trap the instruction's own hidden tick set; see the module
+        # docstring). Created before the buttons, so Tab reaches it after
+        # Thinking. The box's variable is a child of the dialog, like the
+        # Agent Request dialog's Upgrade var.
+        fast_var = tk.BooleanVar(master=dlg, value=bool(shown.get("fast")))
+        fast_box = tk.Checkbutton(dlg, text=UPGRADE_FAST_LABEL, variable=fast_var,
+                                  font=font, anchor="w", justify="left", wraplength=440)
+        fast_shown = {"on": False}
+
+        def show_fast():
+            model = model_var.get()
+            capable = (provider == "Anthropic" and bool(model)
+                       and model != UPGRADE_NO_MODEL_LABEL
+                       and self._anthropic_supports_fast_mode(model))
+            if capable and not fast_shown["on"]:
+                fast_box.grid(row=4, column=1, sticky="w", padx=(0, 15), pady=(0, 4))
+            elif not capable and fast_shown["on"]:
+                fast_box.grid_remove()
+                fast_var.set(False)
+            fast_shown["on"] = capable
+
         origin = {"own": "Saved with this instruction.",
                   "default": (f"This instruction has no upgrade model of its own yet: the "
                               f"{provider} default is shown. Save keeps it with the instruction."),
@@ -475,11 +558,11 @@ class ModelUpgradeMixin(PaneNotesMixin):
             return lbl
 
         origin_label = wrapping(origin[source], UPGRADE_MUTED_FG)
-        origin_label.grid(row=4, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 0))
+        origin_label.grid(row=5, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 0))
         note = wrapping(UPGRADE_NOTE, UPGRADE_MUTED_FG)
-        note.grid(row=5, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
+        note.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15, pady=(6, 2))
         status = wrapping("", UPGRADE_ERROR_FG)
-        status.grid(row=6, column=0, columnspan=2, sticky="ew", padx=15)
+        status.grid(row=7, column=0, columnspan=2, sticky="ew", padx=15)
 
         def show_levels(saved_level):
             model = model_var.get()
@@ -494,10 +577,12 @@ class ModelUpgradeMixin(PaneNotesMixin):
 
         def on_model(event=None):
             show_levels("")         # a fresh pick lands on the model's strongest level
+            show_fast()
 
         model_combo.bind("<<ComboboxSelected>>", on_model)
         model_var.set(shown["model"] or UPGRADE_NO_MODEL_LABEL)
         show_levels(shown["level"])
+        show_fast()
 
         def close(event=None):
             self._upgrade_setup_dialog = None
@@ -510,22 +595,23 @@ class ModelUpgradeMixin(PaneNotesMixin):
                 model = ""
             try:
                 self._upgrade_set_target({"provider": provider, "model": model,
-                                          "level": level_var.get() if model else ""})
+                                          "level": level_var.get() if model else "",
+                                          "fast": bool(fast_shown["on"] and fast_var.get())})
             except OSError as exc:
                 status.config(text=f"Could not save the setting: {exc}")
                 return
             close()
 
         btn_row = tk.Frame(dlg)
-        btn_row.grid(row=7, column=0, columnspan=2, pady=(8, 12))
+        btn_row.grid(row=8, column=0, columnspan=2, pady=(8, 12))
         save_btn = tk.Button(btn_row, text="Save", width=10, command=save)
         save_btn.pack(side=tk.LEFT, padx=8)
         cancel_btn = tk.Button(btn_row, text="Cancel", width=10, command=close)
         cancel_btn.pack(side=tk.LEFT, padx=8)
 
         dlg.protocol("WM_DELETE_WINDOW", close)
-        dlg.bind("<Escape>", close)     # two small settings: no draft worth protecting
-        bind_mnemonics(dlg, {"m": model_combo, "t": level_combo,
+        dlg.bind("<Escape>", close)     # three small settings: no draft worth protecting
+        bind_mnemonics(dlg, {"m": model_combo, "t": level_combo, "f": fast_box,
                              "s": save_btn, "c": cancel_btn})
 
         dlg.update_idletasks()

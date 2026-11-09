@@ -338,11 +338,15 @@ class App(UIMixin, StateMixin, InstructionsMixin, SkillsMixin,
         # counter, mirrored here so the switch can say which call it left the
         # first model at.
         self._upgrade_original = None
+        # The upgrade's own speed while one is active (True = speed="fast"),
+        # else None — read by _anthropic_fast_active ahead of fast_mode, which
+        # stays the instruction's own and is never rewritten by a switch.
+        self._upgrade_fast = None
         self._run_call_num = 0
         # WHICH model the Upgrade box moves to: the live instruction's
-        # setting ({"provider", "model", "level"}; None = its provider's
-        # default), per instruction like the Auto-send tick and written
-        # through from Model Setup.
+        # setting ({"provider", "model", "level", "fast"}; None = its
+        # provider's default), per instruction like the Auto-send tick and
+        # written through from Model Setup.
         self.upgrade_target = None
         # The window, field and button colours (other_setup_mixin): each
         # the chosen #rrggbb, or None for the platform default — kept in the

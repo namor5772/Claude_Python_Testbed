@@ -863,14 +863,21 @@ class UIMixin(PaneNotesMixin):
         return False
 
     def _anthropic_fast_active(self, model_id=None):
-        """True when this run should send speed="fast": the Fast checkbox is
-        on, the model serves fast mode, and the session has not learned the
-        surface off (a 400 naming speed / fast-mode adds "speed" to
-        _anthropic_unsupported — an org outside the research preview, or a
-        model the version gate over-admitted). Shared by the live request
-        (_stream_anthropic_call), the Debug dump (_payload_for_display) and
-        the title / cost-log param summary, so all three tell one story."""
-        return (bool(getattr(self, "fast_mode", False))
+        """True when this run should send speed="fast": the speed asked for
+        is fast, the model serves fast mode, and the session has not learned
+        the surface off (a 400 naming speed / fast-mode adds "speed" to
+        _anthropic_unsupported — an org without access, or a model the
+        version gate over-admitted). The speed asked for is the Model
+        upgrade's own (`_upgrade_fast`, set by `_upgrade_apply` for the rest
+        of an upgraded run and None otherwise — 2026-11-10, model_upgrade_mixin
+        has the why) ahead of the instruction's Fast checkbox, `fast_mode`.
+        Shared by the live request (_stream_anthropic_call), the Debug dump
+        (_payload_for_display), the title / cost-log param summary and the
+        upgrade's pricing check, so all of them tell one story."""
+        wanted = getattr(self, "_upgrade_fast", None)
+        if wanted is None:
+            wanted = bool(getattr(self, "fast_mode", False))
+        return (wanted
                 and self._anthropic_supports_fast_mode(model_id)
                 and "speed" not in getattr(self, "_anthropic_unsupported", set()))
 

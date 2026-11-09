@@ -119,3 +119,67 @@ if a duo ever wants it.
   adopted, as on 5.1.
 - Re-check on 2026-11-30: Opus 4.8's fast mode is removed; the 400 rung will learn
   it off per session, and the gate can then drop 4.8 from the fast set.
+
+## Later that day: Model Setup gets a Fast box, and an audit of the dialog's code
+
+The user asked for two things: expose fast mode on the UPGRADE model (Model Setup
+had no way to ask for it), and audit the code behind the dialog.
+
+### What the audit found
+
+1. **The hidden-tick trap (real, live on this machine).** The switch left `fast_mode`
+   as the run's own ("temperature, verbosity and Fast keep the run's settings"). The
+   editor shows the Fast box only for a fast-capable model, but the stored value
+   survives a model change underneath. `WBC_LoginToWebsite` was on Haiku 5.5 with
+   `fast_mode: True` saved from the morning's fast test and Fable 5.2 as its upgrade
+   target: an Upgrade would have run 5.2 at $16 / $80 with nothing announcing it at
+   run start (Haiku sends no speed, so the run-start checks were silent). Fixed by the
+   design below: the upgrade's speed is the target's own field, never the run's tick.
+2. **The Provider line lied mid-run.** Model Setup's "this instruction runs on <model>"
+   read the live `model`, which during an upgraded run is the upgrade's. It now reads
+   the instruction's own model from the stash. Cosmetic, fixed.
+3. **`_upgrade_pricing_warnings` keyed its fast-table check on `fast_mode`** — the
+   same trap seen from the pricing side. It now asks the one gate,
+   `_anthropic_fast_active`.
+4. Sound as found: the write-through to one key of one entry; the editor's page over
+   the applied instruction; a model off today's listing kept in the picker; the level
+   re-derived from the model's own rungs; Escape / Alt+F4 / Cancel keeping nothing; the
+   stash-before-write order and the restore after the cost-log line; the box label and
+   the `upgrade_model` tool sharing one state function; the dialog never fetching
+   anything. One known limit left as is: the ticked-and-disabled label of an active
+   upgrade derives its level from `thinking_mode`, which for a budget model names the
+   effort rather than the preset.
+
+### The design
+
+- `upgrade_target` gains **`fast`** (bool, Anthropic only, False for an entry saved
+  before the field, False for a model with no fast mode — `_upgrade_sanitize_target`).
+  The provider defaults stay standard speed.
+- **Model Setup** shows a **Fast** box (Alt+F) under Thinking only while the picked
+  model serves fast mode, by the editor's own gate; it is removed and unticked the
+  moment the pick changes to a model without it, so Save writes True only where it is
+  honoured. Tab order: Upgrade model → Thinking → Fast → Save → Cancel.
+- **The switch** sets `_upgrade_fast` (None while no upgrade is active) beside the
+  stash; `_anthropic_fast_active` reads it AHEAD of `fast_mode`. One gate, so the live
+  request, the Debug dump, the title and cost-log `speed=fast`, and the upgrade's
+  pricing check all agree. `fast_mode` itself is never rewritten, which is what keeps
+  every persistence site correct without a new stash field. `_upgrade_end_run` clears
+  it with the originals.
+- The box's label, the ⬆ pane line and the tool's reply say `(Max, fast)`.
+
+### Behaviour change to know
+
+An instruction that is itself on a fast model with Fast ticked (Opus 5.5 fast, say) and
+upgrades no longer carries the speed over: the upgrade runs standard unless Model
+Setup's Fast box is ticked. No saved instruction was in that position (the only
+`fast_mode: True` entry was the Haiku one above), so nothing changed in practice.
+
+### Tests
+
+`tests/test_upgrade_fast.py` (14): the sanitiser, the target with and without the
+field, the speed a target really gets, the switch setting and clearing `_upgrade_fast`
+with the gate / summary / pricing check following it, the hidden-tick case running
+standard, the REAL Model Setup dialog (the box for Fable 5.2 and not for Sonnet 5,
+cleared on a pick without fast mode, Save writing the field, Alt+F, the Tab order, the
+Provider line mid-upgrade), a wiring scan. `tests/test_model_upgrade.py` updated for the
+dict's new key.

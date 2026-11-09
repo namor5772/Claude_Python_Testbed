@@ -171,21 +171,27 @@ class TargetTests(unittest.TestCase):
         self.assertIsNone(s({"provider": "Bedrock", "model": "x"}))       # unknown provider
         self.assertIsNone(s({"model": "x"}))                               # no provider at all
         self.assertEqual(s({"model": " claude-opus-5-5 ", "level": " High "}, "Anthropic"),
-                         {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"})
-        # An explicit "no upgrade": the model is "", and so is its level.
-        self.assertEqual(s({"provider": "OpenAI", "model": "", "level": "Max"}),
-                         {"provider": "OpenAI", "model": "", "level": ""})
+                         {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High",
+                          "fast": False})
+        # An explicit "no upgrade": the model is "", and so are its level and speed.
+        self.assertEqual(s({"provider": "OpenAI", "model": "", "level": "Max", "fast": True}),
+                         {"provider": "OpenAI", "model": "", "level": "", "fast": False})
+        # fast (2026-11-10): a bool, Anthropic only — tests/test_upgrade_fast.py has the rest.
+        self.assertTrue(s({"model": "claude-fable-5-2", "level": "Max", "fast": 1}, "Anthropic")["fast"])
+        self.assertFalse(s({"model": "gpt-6-astra", "level": "Max", "fast": True}, "OpenAI")["fast"])
         # A value's own provider wins over the fallback.
         self.assertEqual(s({"provider": "OpenAI", "model": "gpt-6-astra"}, "Anthropic")["provider"],
                          "OpenAI")
 
     def test_an_instruction_without_its_own_gets_the_provider_default(self):
-        self.assertEqual(host()._upgrade_target(), UPGRADE_DEFAULT_TARGETS["Anthropic"])
+        # ...at standard speed: the defaults name no speed (fast False).
+        self.assertEqual(host()._upgrade_target(),
+                         {**UPGRADE_DEFAULT_TARGETS["Anthropic"], "fast": False})
         self.assertEqual(host(provider="OpenAI", model="gpt-5.6-terra")._upgrade_target(),
-                         {"model": "gpt-6-astra", "level": "Max"})
+                         {"model": "gpt-6-astra", "level": "Max", "fast": False})
         # Google's default since 2026-10-17: Gemini 4 Argon at High, the top of its ladder
         self.assertEqual(host(provider="Google", model="gemini-3.8-flash")._upgrade_target(),
-                         {"model": "gemini-4-argon", "level": "High"})
+                         {"model": "gemini-4-argon", "level": "High", "fast": False})
         self.assertEqual(UPGRADE_DEFAULT_TARGETS["Google"], {"model": "gemini-4-argon", "level": "High"})
         # ...and a provider without a default gets None (the box stays disabled)
         self.assertIsNone(host(provider="xAI", model="grok-4.3")._upgrade_target())
@@ -193,7 +199,7 @@ class TargetTests(unittest.TestCase):
     def test_its_own_wins_and_an_explicit_none_means_no_upgrade(self):
         own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
         self.assertEqual(host(upgrade_target=own)._upgrade_target(),
-                         {"model": "claude-opus-5-5", "level": "High"})
+                         {"model": "claude-opus-5-5", "level": "High", "fast": False})
         none = {"provider": "Anthropic", "model": "", "level": ""}
         self.assertIsNone(host(upgrade_target=none)._upgrade_target())
 
@@ -201,7 +207,8 @@ class TargetTests(unittest.TestCase):
         # The instruction's provider was changed after its upgrade model was set.
         h = host(upgrade_target={"provider": "OpenAI", "model": "gpt-6-astra", "level": "Max"})
         self.assertIsNone(h._upgrade_own_target())
-        self.assertEqual(h._upgrade_target(), UPGRADE_DEFAULT_TARGETS["Anthropic"])
+        self.assertEqual(h._upgrade_target(),
+                         {**UPGRADE_DEFAULT_TARGETS["Anthropic"], "fast": False})
 
     def test_model_setup_edits_the_instruction_whose_settings_are_live(self):
         self.assertEqual(host()._upgrade_instruction_name(), "Balance")          # applied
@@ -244,16 +251,21 @@ class TargetTests(unittest.TestCase):
         # The Anthropic default is claude-fable-5-2 Max since 2026-11-10 (it
         # was 5.1 Max from 2026-09-27).
         self.assertEqual(host()._upgrade_setup_draft(),
-                         ({"provider": "Anthropic", "model": "claude-fable-5-2", "level": "Max"},
+                         ({"provider": "Anthropic", "model": "claude-fable-5-2", "level": "Max",
+                           "fast": False},
                           "default"))
+        # A target saved before `fast` existed (2026-11-10) reads fast False.
         own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
-        self.assertEqual(host(upgrade_target=own)._upgrade_setup_draft(), (own, "own"))
+        self.assertEqual(host(upgrade_target=own)._upgrade_setup_draft(),
+                         ({**own, "fast": False}, "own"))
         none = {"provider": "Anthropic", "model": "", "level": ""}
-        self.assertEqual(host(upgrade_target=none)._upgrade_setup_draft(), (none, "none"))
+        self.assertEqual(host(upgrade_target=none)._upgrade_setup_draft(),
+                         ({**none, "fast": False}, "none"))
         self.assertEqual(host(provider="Google")._upgrade_setup_draft(),
-                         ({"provider": "Google", "model": "gemini-4-argon", "level": "High"}, "default"))
+                         ({"provider": "Google", "model": "gemini-4-argon", "level": "High",
+                           "fast": False}, "default"))
         self.assertEqual(host(provider="xAI")._upgrade_setup_draft(),
-                         ({"provider": "xAI", "model": "", "level": ""}, "none"))
+                         ({"provider": "xAI", "model": "", "level": "", "fast": False}, "none"))
 
 
 class ManageInstructionsTests(unittest.TestCase):
@@ -279,7 +291,8 @@ class ManageInstructionsTests(unittest.TestCase):
         h.do_manage_instructions({"action": "create", "name": "New", "text": "do it",
                                   "upgrade_target": {"model": "claude-opus-5-5", "level": "High"}})
         self.assertEqual(h.store["New"]["upgrade_target"],
-                         {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"})
+                         {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High",
+                          "fast": False})
         h.do_manage_instructions({"action": "create", "name": "Plain", "text": "do it"})
         self.assertIsNone(h.store["Plain"]["upgrade_target"])            # the provider default
         read = json.loads(h.do_manage_instructions({"action": "read", "name": "New"}))
@@ -290,20 +303,22 @@ class ManageInstructionsTests(unittest.TestCase):
                                   "model": "gpt-5.6-terra",
                                   "upgrade_target": {"model": "gpt-6-astra", "level": "Xhigh"}})
         self.assertEqual(h.store["New"]["upgrade_target"],
-                         {"provider": "OpenAI", "model": "gpt-6-astra", "level": "Xhigh"})
+                         {"provider": "OpenAI", "model": "gpt-6-astra", "level": "Xhigh",
+                          "fast": False})
         self.assertIsNone(h.upgrade_target)                              # the session untouched
         # upgrade_target alone is enough for an update.
         result = h.do_manage_instructions({"action": "update", "name": "Plain",
                                            "upgrade_target": {"model": ""}})
         self.assertIn("updated", result)
         self.assertEqual(h.store["Plain"]["upgrade_target"],
-                         {"provider": "Anthropic", "model": "", "level": ""})
+                         {"provider": "Anthropic", "model": "", "level": "", "fast": False})
 
     def test_the_schema_offers_it(self):
         tool = next(t for t in META_TOOLS if t["name"] == "manage_instructions")
         prop = tool["input_schema"]["properties"]["upgrade_target"]
         self.assertEqual(prop["type"], "object")
-        self.assertEqual(set(prop["properties"]), {"model", "level"})
+        self.assertEqual(set(prop["properties"]), {"model", "level", "fast"})
+        self.assertEqual(prop["properties"]["fast"], {"type": "boolean"})
 
 
 class PersistenceScanTests(unittest.TestCase):
@@ -524,13 +539,21 @@ class SwitchTests(unittest.TestCase):
         self.assertIn("generic 'gemini-3' fallback row", warning["content"])
 
     def test_the_fast_table_is_what_a_fast_run_needs(self):
-        # Fast stays on across a switch; a fast-capable model with no FAST row
-        # would be unpriced for this run however ordinary its standard row.
+        # The upgrade's OWN speed (its target's `fast`, 2026-11-10) decides:
+        # a fast-capable model asked for fast with no FAST row would be
+        # unpriced for this run however ordinary its standard row...
+        h = host(model="claude-opus-4-8", fast_mode=True)
+        with mock.patch.dict("myagent.streaming_mixin.ANTHROPIC_FAST_PRICING", {}, clear=True):
+            h._upgrade_apply({"model": "claude-opus-5-5", "level": "High", "fast": True})
+        _upgraded, warning = drained(h.queue)
+        self.assertIn("no row in the ANTHROPIC_FAST_PRICING", warning["content"])
+        # ...while the instruction's own Fast tick no longer rides along: a
+        # target without `fast` runs standard, whatever fast_mode says.
         h = host(model="claude-opus-4-8", fast_mode=True)
         with mock.patch.dict("myagent.streaming_mixin.ANTHROPIC_FAST_PRICING", {}, clear=True):
             h._upgrade_apply({"model": "claude-opus-5-5", "level": "High"})
-        _upgraded, warning = drained(h.queue)
-        self.assertIn("no row in the ANTHROPIC_FAST_PRICING", warning["content"])
+        self.assertEqual(len(drained(h.queue)), 1)              # the ⬆ line alone
+        self.assertFalse(h._anthropic_fast_active())
 
     def test_a_priced_upgrade_model_gets_the_switch_line_alone(self):
         for provider, model, target in (("Anthropic", "claude-sonnet-5", "claude-fable-5-1"),
@@ -961,11 +984,13 @@ class SetupDialogTests(unittest.TestCase):
             buttons["Save"].invoke()
 
         h, seen = self.open(act)
-        value = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
+        value = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High",
+                 "fast": False}
         self.assertEqual(h.upgrade_target, value)
         self.assertEqual(h.store["Balance"]["upgrade_target"], value)
         self.assertEqual(len(h.state_saves), 1)
-        self.assertEqual(h._upgrade_target(), {"model": "claude-opus-5-5", "level": "High"})
+        self.assertEqual(h._upgrade_target(),
+                         {"model": "claude-opus-5-5", "level": "High", "fast": False})
 
     def test_none_is_an_explicit_no_upgrade(self):
         def act(dlg, seen):
@@ -978,7 +1003,7 @@ class SetupDialogTests(unittest.TestCase):
         h, seen = self.open(act, upgrade_target=own)
         self.assertEqual(seen["level_state"], "disabled")
         self.assertEqual(h.store["Balance"]["upgrade_target"],
-                         {"provider": "Anthropic", "model": "", "level": ""})
+                         {"provider": "Anthropic", "model": "", "level": "", "fast": False})
         self.assertIsNone(h._upgrade_target())
 
     def test_with_the_editor_open_it_edits_the_editors_page(self):

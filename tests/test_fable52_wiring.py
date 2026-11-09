@@ -170,9 +170,13 @@ class ListsAndDefaultsTests(unittest.TestCase):
             self.assertIn("claude-mythos-5-2", s, name)
 
     def test_tool_schema_text_names_5_2(self):
-        src = (ROOT / "myagent" / "constants.py").read_text(encoding="utf-8")
-        self.assertIn("(Anthropic claude-fable-5-2 Max, OpenAI gpt-6-astra Max)", src)
-        self.assertIn("Anthropic fast mode (Fable 5.2 / Opus 5.5 / Opus 5 / Opus 4.8 only)", src)
+        from myagent.constants import META_TOOLS
+        props = next(t for t in META_TOOLS
+                     if t["name"] == "manage_instructions")["input_schema"]["properties"]
+        self.assertIn("Anthropic claude-fable-5-2 Max, OpenAI gpt-6-astra Max",
+                      props["upgrade_target"]["description"])
+        self.assertIn("Anthropic fast mode (Fable 5.2 / Opus 5.5 / Opus 5 / Opus 4.8 only)",
+                      props["fast_mode"]["description"])
 
 
 class SelfBotTests(unittest.TestCase):

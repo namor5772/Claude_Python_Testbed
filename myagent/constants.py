@@ -605,14 +605,18 @@ META_TOOLS = [
                     "description": (
                         "The model the Agent Request dialog's Upgrade box moves a run of "
                         "this instruction to, from the ticked reply to the end of the run: "
-                        "{model, level} — a model of the instruction's OWN provider and "
+                        "{model, level, fast} — a model of the instruction's OWN provider, "
                         "its thinking level as the editor names it (e.g. 'Max', 'Xhigh', "
-                        "'Adaptive'). model '' = no upgrade. Absent = the provider default "
-                        "(Anthropic claude-fable-5-2 Max, OpenAI gpt-6-astra Max)."
+                        "'Adaptive'), and fast (optional, default false): run the upgrade "
+                        "in Anthropic fast mode, honoured only on a model that has it "
+                        "(Fable 5.2, Opus 5.5 / 5 / 4.8). model '' = no upgrade. Absent = "
+                        "the provider default at standard speed (Anthropic claude-fable-5-2 "
+                        "Max, OpenAI gpt-6-astra Max)."
                     ),
                     "properties": {
                         "model": {"type": "string"},
                         "level": {"type": "string"},
+                        "fast": {"type": "boolean"},
                     },
                 },
                 "blocked_tools": {

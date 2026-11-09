@@ -577,11 +577,15 @@ model of ONE instruction, named in the title (the page the editor shows
 while the editor is open, otherwise the applied instruction). It opens with
 the focus on Upgrade model.
 
-Tab order: Upgrade model -> Thinking -> Save -> Cancel.
+Tab order: Upgrade model -> Thinking -> Fast (only while the picked model
+has fast mode: Fable 5.2, Opus 5.5 / 5 / 4.8) -> Save -> Cancel.
 
   Alt+M / Alt+T ............... the Upgrade model / Thinking dropdowns (the
                                 model list has an explicit "(none)" entry for
                                 no upgrade)
+  Alt+F ....................... Fast: the upgrade runs in fast mode (2x the
+                                price); the box is absent, and saved off, for
+                                a model without fast mode
   Alt+S ....................... Save: written into the instruction at once,
                                 and close
   Alt+C ....................... Cancel: nothing is saved
@@ -723,8 +727,8 @@ H. Allow or deny a guarded command during a run
 
 I. Move a run to a stronger model from one reply on
    Beforehand: Alt+M (Model Setup), Down to pick the upgrade model, Alt+T for
-   its thinking level, Alt+S. At an Agent Request: Alt+U (tick Upgrade), type
-   the reply, Enter.
+   its thinking level, Alt+F if it should run in fast mode, Alt+S. At an
+   Agent Request: Alt+U (tick Upgrade), type the reply, Enter.
 
 J. End a conversational run
    At its Agent Request type quit (or stop) and Enter. Typing exit instead
