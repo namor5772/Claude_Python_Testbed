@@ -158,6 +158,7 @@ Everything the apps share between machines lives in two OneDrive trees, both OUT
 
 ## Workflow
 - After editing or changing a .py file, always re-run it automatically — close any currently running instance first if necessary
+- A session's outcome goes into the repo, not the conversation: CLAUDE.md / the rules for the contract, and for a day's significant change a dated write-up `docs/<topic>-YYYY-MM-DD.md` linked from here (e.g. `docs/bank-credentials-vault-2026-11-09.md`) — transcripts and the Claude memory folder are per machine, and the user continues work on the Mac Mini and the desktop from a `git pull` (the README's **Claude Code integration** section has the handoff notes)
 
 ## Conventions
 - Keep code simple and focused — this is a testbed for experimentation
