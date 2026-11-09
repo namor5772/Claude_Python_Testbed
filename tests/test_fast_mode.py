@@ -54,17 +54,26 @@ def _host(model, provider="Anthropic", fast=False, unsupported=()):
 
 class SupportsFastMode(unittest.TestCase):
     CASES = {
-        # Fast-capable: exactly the research preview's Opus tiers (>= 4.8).
+        # Fast-capable: the Opus tiers from 4.8 up...
         "claude-opus-5-5": True,
         "claude-opus-5": True,
         "claude-opus-4-8": True,
         "claude-opus-5-20260724": True,    # dated Opus 5 snapshot: date != minor
-        # Below the gate / outside the Opus family.
+        # ...and, since 2026-11-10, Fable / Mythos from 5.2 up (the fast-mode
+        # page lists exactly those; served usage.speed="fast" live that day).
+        "claude-fable-5-2": True,
+        "claude-mythos-5-2": True,
+        "claude-fable-5-3": True,
+        "claude-fable-6": True,
+        # Below the gate / outside the families.
         "claude-opus-4-7": False,          # rejects speed="fast" outright
         "claude-opus-4-6": False,          # silently standard — never offer it
         "claude-opus-4-20250514": False,   # retired 4.0 dated id, not 4.<date>
         "claude-sonnet-5": False,
-        "claude-fable-5-1": False,
+        "claude-sonnet-5-5": False,
+        "claude-fable-5-1": False,         # no fast mode on 5.1 or 5
+        "claude-fable-5": False,
+        "claude-mythos-5-1": False,
         "claude-haiku-4-5": False,
         "claude-haiku-5-5": False,       # "does not support the `speed` parameter" (2026-10-08)
     }
@@ -112,6 +121,18 @@ class FastPricing(unittest.TestCase):
         self.assertEqual(set(p), set(expected))
         for key, value in expected.items():
             self.assertAlmostEqual(p[key], value, places=12, msg=key)
+
+    def test_fable_5_2_fast_row(self):
+        # Fable 5.2 (2026-11-10): $16 / $80, writes 1.25x, reads 0.025x of
+        # the FAST input rate — its own row, or the claude-fable-5 prefix
+        # would find no fast row and leave every fast call unpriced.
+        p = StreamingMixin._get_pricing("Anthropic", "claude-fable-5-2", speed="fast")
+        expected = {"input": 16e-06, "output": 80e-06,
+                    "cache_write": 20e-06, "cache_read": 0.40e-06}
+        for key, value in expected.items():
+            self.assertAlmostEqual(p[key], value, places=12, msg=key)
+        self.assertIsNone(StreamingMixin._get_pricing(
+            "Anthropic", "claude-fable-5-1", speed="fast"))
 
     def test_standard_speed_and_none_use_the_standard_table(self):
         std = StreamingMixin._get_pricing("Anthropic", "claude-opus-5-5")

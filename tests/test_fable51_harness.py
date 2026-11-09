@@ -54,6 +54,7 @@ class FableFeatures(unittest.TestCase):
         # Fable 5 / Mythos 5 accept both surfaces (and never act on the
         # binding check), so the class is gated by prefix, not by minor.
         for model in ("claude-fable-5", "claude-mythos-5", "claude-mythos-5-1",
+                      "claude-fable-5-2", "claude-mythos-5-2",   # 2026-11-09, by prefix
                       "claude-opus-5-5"):   # Opus 5.5 joined the class 2026-09-23
             with self.subTest(model=model):
                 self.assertIsNotNone(_host(model)._anthropic_fable_features())

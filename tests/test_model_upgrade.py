@@ -113,7 +113,8 @@ class _Host(_Probe):
         pass
 
     def _get_display_name(self, model_id):
-        return {"claude-fable-5-1": "Claude Fable 5.1"}.get(model_id, model_id)
+        return {"claude-fable-5-1": "Claude Fable 5.1",
+                "claude-fable-5-2": "Claude Fable 5.2"}.get(model_id, model_id)
 
     def _load_saved_instructions(self):
         return json.loads(json.dumps(self.store))
@@ -240,8 +241,10 @@ class TargetTests(unittest.TestCase):
         self.assertNotIn("upgrade_target", h.store["Balance"])
 
     def test_what_model_setup_opens_on(self):
+        # The Anthropic default is claude-fable-5-2 Max since 2026-11-10 (it
+        # was 5.1 Max from 2026-09-27).
         self.assertEqual(host()._upgrade_setup_draft(),
-                         ({"provider": "Anthropic", "model": "claude-fable-5-1", "level": "Max"},
+                         ({"provider": "Anthropic", "model": "claude-fable-5-2", "level": "Max"},
                           "default"))
         own = {"provider": "Anthropic", "model": "claude-opus-5-5", "level": "High"}
         self.assertEqual(host(upgrade_target=own)._upgrade_setup_draft(), (own, "own"))
@@ -599,8 +602,9 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(h.writes, [])                        # nothing written to the store
 
     def test_without_a_setting_the_provider_default_is_the_target(self):
+        # The Anthropic default: claude-fable-5-2 Max since 2026-11-10.
         h = host()
-        self.assertTrue(h.do_upgrade_model().startswith("Upgraded: claude-sonnet-5 → claude-fable-5-1"))
+        self.assertTrue(h.do_upgrade_model().startswith("Upgraded: claude-sonnet-5 → claude-fable-5-2"))
 
     def test_the_three_refusals_use_the_boxs_own_words(self):
         none = host(upgrade_target={"provider": "Anthropic", "model": "", "level": ""})
@@ -608,14 +612,14 @@ class ToolTests(unittest.TestCase):
                          "Nothing changed — Upgrade: no upgrade model set for this instruction "
                          "(Model Setup, on the main window).")
         self.assertEqual(none.model, "claude-sonnet-5")
-        same = host(model="claude-fable-5-1")
+        same = host(model="claude-fable-5-2")
         self.assertEqual(same.do_upgrade_model(),
-                         "Nothing changed — Upgrade: this run is already on Claude Fable 5.1.")
+                         "Nothing changed — Upgrade: this run is already on Claude Fable 5.2.")
         twice = host()
         twice.do_upgrade_model()
         self.assertEqual(twice.do_upgrade_model(),
-                         "Nothing changed — Upgraded to Claude Fable 5.1 (Max) for the rest of this run.")
-        self.assertEqual(twice.model, "claude-fable-5-1")
+                         "Nothing changed — Upgraded to Claude Fable 5.2 (Max) for the rest of this run.")
+        self.assertEqual(twice.model, "claude-fable-5-2")
 
     def test_the_schema_and_the_dispatch(self):
         tool = next(t for t in META_TOOLS if t["name"] == "upgrade_model")
@@ -890,8 +894,8 @@ class SetupDialogTests(unittest.TestCase):
 
     def open(self, act, **attrs):
         h = host(root=self.root,
-                 available_models=["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1",
-                                   "claude-sonnet-5"],
+                 available_models=["claude-opus-5-5", "claude-opus-5", "claude-fable-5-2",
+                                   "claude-fable-5-1", "claude-sonnet-5"],
                  _upgrade_setup_dialog=None, **attrs)
         h._place_window = lambda win, kind, size, parent=None: "+0+0"
         h._parse_geometry = lambda geo: None
@@ -939,7 +943,7 @@ class SetupDialogTests(unittest.TestCase):
 
         h, seen = self.open(act)
         self.assertEqual(seen["title"], "Model Setup — Balance")
-        self.assertEqual((seen["model"], seen["level"]), ("claude-fable-5-1", "Max"))
+        self.assertEqual((seen["model"], seen["level"]), ("claude-fable-5-2", "Max"))
         self.assertEqual(seen["levels"], ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"])
         self.assertEqual(seen["first_values"], [UPGRADE_NO_MODEL_LABEL, "claude-opus-5-5"])
         self.assertTrue(any("no upgrade model of its own yet" in t for t in seen["labels"]))

@@ -590,6 +590,7 @@ FALLBACK_MODELS = [
     "claude-opus-5",
     "claude-opus-5-5",
     "claude-opus-4-8",
+    "claude-fable-5-2",     # Fable 5.2 (live 2026-11-09, wired 2026-11-10): $8/$40, cache reads 0.025x — the shared ANTHROPIC_PRICING row; no fast mode here (SelfBot never sends speed)
     "claude-fable-5-1",
     "claude-fable-5",
     "claude-sonnet-5-5",    # the current Sonnet (live 2026-09-28): $2/$10, cache reads 0.05x, Off = between_tools — see _is_sonnet_55
@@ -636,16 +637,20 @@ DEPRECATED_MODEL_PREFIXES = (
 )
 # Exact-match aliases for adaptive-thinking models; the version-parsed
 # _is_adaptive_model backstops dated snapshots and future Opus/Sonnet 4.6+ minors.
-ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
+ADAPTIVE_THINKING_MODELS = {"claude-fable-5-2", "claude-mythos-5-2",
+                            "claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5-5", "claude-opus-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6",
                             "claude-haiku-5-5"}
-# Claude 5 Mythos-class (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is ALWAYS ON —
-# the API rejects thinking={"type": "disabled"} and budget_tokens with HTTP 400,
-# and sampling params (temperature/top_p/top_k) are rejected unconditionally.
-# Prefix-matched, so claude-fable-5-1 (2026-08-28) needed no new entry.
+# Claude 5 Mythos-class (Fable 5 / 5.1 / 5.2, Mythos 5 / 5.1 / 5.2): thinking is
+# ALWAYS ON — the API rejects thinking={"type": "disabled"} and budget_tokens
+# with HTTP 400, and sampling params (temperature/top_p/top_k) are rejected
+# unconditionally. Prefix-matched, so claude-fable-5-1 (2026-08-28) and
+# claude-fable-5-2 (2026-11-09; the same Models API capability tree, read
+# live 2026-11-10) needed no new entry — 5.2's own news is its cheaper
+# ANTHROPIC_PRICING row, shared with MyAgent.
 ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
 # Claude Opus 5.5 and every later Opus join the always-on class BY VERSION
 # (MyAgent's ANTHROPIC_ALWAYS_ON_OPUS_MIN): an explicit disable is HTTP 400

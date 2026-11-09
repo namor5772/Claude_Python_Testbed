@@ -323,16 +323,19 @@ class AnthropicMixin(PaneNotesMixin):
             # `fallbacks` is not a typed parameter in anthropic 0.84.0 (a typed
             # kwarg would raise) — extra_body merges it into the JSON body as-is.
             api_kwargs["extra_body"] = {"fallbacks": fable["fallbacks"]}
-        # Fast mode (research preview, Opus 4.8 / 5 / 5.5): the Fast checkbox
-        # sends speed="fast" under its beta — `speed` IS typed in anthropic
+        # Fast mode (Fable 5.2 / Opus 5.5 GA, Opus 5 / 4.8 preview — see
+        # constants.py): the Fast checkbox sends speed="fast" under the beta
+        # header the preview tiers still need (tolerated by the GA ones —
+        # probed on Fable 5.2 on 2026-11-10) — `speed` IS typed in anthropic
         # 0.84.0, unlike `fallbacks`. Two refusal shapes, two rungs below: a
-        # 400 naming speed / fast-mode (a model the version gate over-admitted)
-        # learns the surface off, and a fast-mode 429 drops the call to
-        # standard speed — with an org outside the preview (fast limit of
-        # ZERO, a 429 that no backoff unblocks) learning it off for the
-        # session. Fast and standard prefixes do NOT share a prompt cache, so
-        # a mid-session learn-off costs one cache rebuild — accepted, it
-        # fires at most once per session.
+        # 400 naming speed / fast-mode (a model the version gate over-admitted,
+        # or Opus 4.8 after its 2026-11-30 removal) learns the surface off,
+        # and a fast-mode 429 drops the call to standard speed — with an org
+        # or usage tier without access (fast limit of ZERO, a 429 that no
+        # backoff unblocks) learning it off for the session. Fast and standard
+        # prefixes do NOT share a prompt cache, so a mid-session learn-off
+        # costs one cache rebuild — accepted, it fires at most once per
+        # session.
         fast_requested = self._anthropic_fast_active()
         if fast_requested:
             api_kwargs["speed"] = "fast"
@@ -443,11 +446,12 @@ class AnthropicMixin(PaneNotesMixin):
                 if "fast mode" in rl_msg and "speed" in api_kwargs:
                     if "limit of 0" in rl_msg:
                         self._anthropic_unsupported.add("speed")
-                        note = ("⚠ Fast mode is not enabled for this API key (its "
-                                "fast-mode rate limit is 0 — the research preview "
-                                "needs access; claude.com/fast-mode) — running at "
-                                "standard speed and standard rates for the rest of "
-                                "the session.\n")
+                        note = ("⚠ Fast mode is not enabled for this API key on this "
+                                "model (its fast-mode rate limit is 0 — Opus 5 / 4.8 "
+                                "are a research preview needing access, and the "
+                                "Evaluation usage tier has no fast limit on any model; "
+                                "claude.com/fast-mode) — running at standard speed and "
+                                "standard rates for the rest of the session.\n")
                     else:
                         note = ("⚠ Fast mode is rate-limited right now — this call "
                                 "runs at standard speed and bills standard rates.\n")
@@ -477,21 +481,21 @@ class AnthropicMixin(PaneNotesMixin):
                     self._tool_info("Model does not support temperature — retrying without it...\n")
                     full_text = ""
                     continue
-                # Fast mode refused (a model outside the research preview —
-                # Opus 4.7 rejects speed="fast" outright — or an org without
-                # access; an unrecognised beta 400 names the fast-mode flag):
-                # learn once for the session, drop it, retry at standard
-                # speed. A WARNING, not tool_info: the run the user priced at
-                # fast rates now bills at standard ones.
+                # Fast mode refused (a model without fast mode — Opus 4.7
+                # rejects speed="fast" outright, Opus 4.8 does from 2026-11-30
+                # — or an org without access; an unrecognised beta 400 names
+                # the fast-mode flag): learn once for the session, drop it,
+                # retry at standard speed. A WARNING, not tool_info: the run
+                # the user priced at fast rates now bills at standard ones.
                 if ("speed" in msg or "fast-mode" in msg) and "speed" in api_kwargs:
                     self._anthropic_unsupported.add("speed")
                     del api_kwargs["speed"]
                     betas = [b for b in betas if b != ANTHROPIC_FAST_MODE_BETA]
                     fast_requested = False
                     self._warn(
-                        "⚠ Fast mode is not available here (model outside the research "
-                        "preview, or this API key has no access) — retrying at standard "
-                        "speed; this run bills at standard rates.\n")
+                        "⚠ Fast mode is not available here (this model has no fast "
+                        "mode, or this API key has no access to it) — retrying at "
+                        "standard speed; this run bills at standard rates.\n")
                     full_text = ""
                     continue
                 # Claude Fable 5.1's preserved-thinking check: a replayed thinking
@@ -604,7 +608,7 @@ class AnthropicMixin(PaneNotesMixin):
                         "  Even the most recent exchanges alone are larger than this model "
                         "can hold. 200K-window models (Haiku 4.5, Opus 4.5) cannot run "
                         "very long tasks — switch this instruction to a 1M-context model "
-                        "(claude-opus-5, claude-fable-5-1, claude-sonnet-5, claude-sonnet-4-6, or "
+                        "(claude-opus-5-5, claude-fable-5-2, claude-sonnet-5-5, claude-haiku-5-5, or "
                         "claude-opus-4-8/4.7/4.6), or "
                         "split the task into smaller parts.\n")
                     raise RuntimeError(

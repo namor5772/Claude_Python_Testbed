@@ -16,6 +16,14 @@ from myagent.ui_mixin import UIMixin
 
 # model -> (always_on, rejects_temp, max_effort, xhigh_effort, adaptive, mode_values)
 EXPECTED = {
+    # Fable 5.2 / Mythos 5.2 (2026-11-09; wired 2026-11-10): the same prefix
+    # rules again — the Models API tree read live that day is 5.1's (thinking
+    # adaptive only, effort low..max); 5.2's own news is pricing and fast
+    # mode, pinned in tests/test_fable52_wiring.py.
+    "claude-fable-5-2":           (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
+    "claude-mythos-5-2":          (True,  True,  True,  True,  True,
+                                   ["Adaptive", "Low", "Medium", "High", "Xhigh", "Max"]),
     # Fable 5.1 / Mythos 5.1 (2026-08-28) ride the same prefix rules as Fable 5:
     # always-on adaptive thinking, no sampling params, effort through Max
     # (live Models API capability tree, 2026-09-02: effort low..max all True,
@@ -83,6 +91,8 @@ EXPECTED = {
 
 # model -> omitting the thinking param runs adaptive (True) vs thinking-off
 THINKING_DEFAULT_ON = {
+    "claude-fable-5-2": True,
+    "claude-mythos-5-2": True,
     "claude-fable-5-1": True,
     "claude-mythos-5-1": True,
     "claude-fable-5": True,

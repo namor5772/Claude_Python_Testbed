@@ -6,8 +6,9 @@
   fast-mode rows 2026-09-24, the five-provider audit of 2026-11-02 (every
   picker model's row re-read against its provider's card: all correct; the
   OpenAI deprecation sweep and the OpenAI / Gemini long-context cards —
-  docs/model-audit-2026-11-02.md) (see the dated notes in each section;
-  constants.py is the source of truth)
+  docs/model-audit-2026-11-02.md), the Claude Fable 5.2 / Mythos 5.2 rows
+  (standard and fast) 2026-11-10 — docs/fable-5-2-wiring-2026-11-10.md (see
+  the dated notes in each section; constants.py is the source of truth)
 ================================================================================
 
 
@@ -17,8 +18,8 @@
 
   Anthropic models include prompt caching pricing (5-minute cache writes
   and cache reads). Cache writes cost 1.25x base input; cache reads cost
-  0.1x base input — except Claude Fable 5.1 and Mythos 5.1 (0.025x) and
-  Claude Opus 5.5 and Claude Sonnet 5.5 (0.05x). Every row re-verified
+  0.1x base input — except Claude Fable 5.2 / 5.1 and Mythos 5.2 / 5.1
+  (0.025x) and Claude Opus 5.5 and Claude Sonnet 5.5 (0.05x). Every row re-verified
   against platform.claude.com/docs/en/about-claude/pricing on 2026-09-23
   and again on 2026-10-14 (the SelfBot model audit: the Sonnet 5.5 row
   added, Sonnet 4.5 removed on its deprecation).
@@ -35,14 +36,25 @@
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
+  claude-fable-5-2       $8.00    $40.00   $10.00       $0.20   (row added 2026-11-10)
+  claude-mythos-5-2      $8.00    $40.00   $10.00       $0.20   (row added 2026-11-10)
   claude-fable-5-1       $10.00   $50.00   $12.50       $0.25
   claude-mythos-5-1      $10.00   $50.00   $12.50       $0.25   (row added 2026-09-23)
   claude-fable-5         $10.00   $50.00   $12.50       $1.00
   claude-mythos-5        $10.00   $50.00   $12.50       $1.00
 
-  (Fable 5 / 5.1 and Mythos 5 / 5.1: thinking is always on — MyAgent's
-   Thinking combo has no "Off" for them, temperature is never sent, and
-   effort goes up to Xhigh/Max. Safety classifiers may decline a request
+  (Fable 5.2 / Mythos 5.2 — released 2026-11-09, rows added 2026-11-10 —
+   are the successors in the same tier at a LOWER price: $8 / $40 against
+   5.1's $10 / $50, cache reads 0.025x like 5.1 ($0.20), 1M context, 128K
+   output, the same always-on adaptive thinking; each needs its own row or
+   the "claude-fable-5" prefix would bill it 25% over on every token and 5x
+   on cache reads. Fable 5.2 is the first Fable with FAST MODE — see the
+   fast-mode table below — and the Model upgrade's Anthropic default since
+   the same day. Fable 5.1 / 5 stay served, priced and in the picker; no
+   retirement is announced.
+   Fable 5 / 5.1 / 5.2 and Mythos 5 / 5.1 / 5.2: thinking is always on —
+   MyAgent's Thinking combo has no "Off" for them, temperature is never
+   sent, and effort goes up to Xhigh/Max. Safety classifiers may decline a request
    with stop_reason="refusal"; MyAgent surfaces this as a ⚠ warning line
    and, since 2026-09-02, asks the API for a server-side fallback
    (fallbacks="default"), so a declined call may be SERVED — and billed —
@@ -89,28 +101,39 @@
    the row is permanent. Every Anthropic row above was re-verified the same
    day; claude-opus-5 is the picker default.)
 
-  Fast mode (research preview — Opus 5.5 / 5 / 4.8 only; wired 2026-09-24)
+  Fast mode (Fable 5.2 / Opus 5.5 GA, Opus 5 / 4.8 research preview; wired
+  2026-09-24, Fable 5.2 added 2026-11-10)
   ──────────────────────────────────────────────────────────────────────────
   Model Prefix           Input    Output   Cache Write  Cache Read
   ──────────────────────────────────────────────────────────────────────────
+  claude-fable-5-2       $16.00   $80.00   $20.00       $0.40   (row added 2026-11-10)
+  claude-mythos-5-2      $16.00   $80.00   $20.00       $0.40   (row added 2026-11-10)
   claude-opus-5-5        $8.00    $40.00   $10.00       $0.40
   claude-opus-5          $10.00   $50.00   $12.50       $1.00
   claude-opus-4-8        $10.00   $50.00   $12.50       $1.00
 
-  (speed="fast" under the fast-mode-2026-02-01 beta: the SAME model at up
-   to 2.5x output tokens/sec for exactly 2x the standard row in every
-   bucket — the pricing page lists fast input/output ($8/$40 Opus 5.5,
-   $10/$50 Opus 5 / 4.8) and says the caching multipliers apply ON TOP of
-   fast pricing, so Opus 5.5 keeps its 0.05x cache-read discount of the
-   FAST input rate. MyAgent's Fast checkbox (editor model-params row,
-   shown only for these tiers) requests it, persisted per instruction as
-   "fast_mode"; every call is PRICED by the usage.speed the API reports
-   (ANTHROPIC_FAST_PRICING in constants.py), and a fast-served model
-   missing a fast row is unpriced + warned — never billed from the
-   standard table at half the real rate. Claude API only: no Batch, no
-   Priority Tier; Opus 4.7 rejects speed="fast" outright and 4.6 silently
-   runs standard — both below MyAgent's version gate (Opus >= 4.8). Docs
-   read 2026-09-24.)
+  (speed="fast": the SAME model at up to 2.5x output tokens/sec for exactly
+   2x the standard row in every bucket — the pricing page lists fast
+   input/output ($16/$80 Fable 5.2 / Mythos 5.2, $8/$40 Opus 5.5, $10/$50
+   Opus 5 / 4.8) and says the caching multipliers apply ON TOP of fast
+   pricing, so Fable 5.2 keeps its 0.025x and Opus 5.5 its 0.05x cache-read
+   discount of the FAST input rate. GA — no beta header, no access request,
+   a default fast rate limit from the Start usage tier up — on Fable 5.2
+   (launched with it, 2026-11-09) and Opus 5.5 (since 2026-10-15); Opus 5
+   and 4.8 remain a research preview under the fast-mode-2026-02-01 beta,
+   and 4.8's fast mode is REMOVED on 2026-11-30. MyAgent sends the header
+   on every fast request (tolerated on the GA tiers: a Fable 5.2 request
+   with it was served fast on 2026-11-10, probed live beside one without).
+   MyAgent's Fast checkbox (editor model-params row, shown only for these
+   tiers) requests it, persisted per instruction as "fast_mode"; every call
+   is PRICED by the usage.speed the API reports (ANTHROPIC_FAST_PRICING in
+   constants.py), and a fast-served model missing a fast row is unpriced +
+   warned — never billed from the standard table at half the real rate.
+   Claude API only: no Batch, no Priority Tier; Opus 4.7 rejects
+   speed="fast" outright and 4.6 silently runs standard — both below
+   MyAgent's version gates (Opus >= 4.8, Fable / Mythos >= 5.2; Fable 5.1
+   and 5 have no fast mode). SelfBot has no fast mode. Docs read
+   2026-09-24 and 2026-11-10.)
 
   Claude 4.0/4.1 Family (RETIRED — Opus 4.1 on 2026-08-05; not in ANTHROPIC_PRICING)
   ──────────────────────────────────────────────────────────────────────────

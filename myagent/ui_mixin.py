@@ -833,27 +833,34 @@ class UIMixin(PaneNotesMixin):
                                             (("claude-sonnet-",), (5, 0)))
 
     def _anthropic_supports_fast_mode(self, model_id=None):
-        """True for Anthropic models that serve fast mode (research preview:
-        speed="fast" under ANTHROPIC_FAST_MODE_BETA for up to 2.5x output
-        speed at 2x the per-token price) — Opus 4.8, Opus 5 and Opus 5.5,
-        version-parsed as Opus >= (4, 8) so a later Opus keeps the Fast
-        checkbox without a new entry (the docs list no other family, so this
-        stays Opus-only). Opus 4.7 rejects speed="fast" outright and 4.6
-        silently runs standard — both below the gate. A dated snapshot's
-        date in the minor slot does not count (claude-opus-4-20250514 is a
-        retired 4.0, not a 4.<date>); a dated Opus 5+ id clamps to minor 0
-        and passes. The reactive 400 rung in _stream_anthropic_call
-        backstops anything this over-admits."""
+        """True for Anthropic models that serve fast mode (speed="fast" for up
+        to 2.5x output speed at 2x the per-token price; constants.py's
+        ANTHROPIC_FAST_MODE_BETA comment has the dates) — Opus 4.8, Opus 5
+        and Opus 5.5, version-parsed as Opus >= (4, 8), and since 2026-11-10
+        Claude Fable 5.2 / Mythos 5.2, parsed as Fable / Mythos >= (5, 2)
+        (the fast-mode page lists exactly those; 5.1 and 5 have no fast
+        mode) — so a later Opus or Fable keeps the Fast checkbox without a
+        new entry. Opus 4.7 rejects speed="fast" outright and 4.6 silently
+        runs standard — both below the gate. A dated snapshot's date in the
+        minor slot does not count (claude-opus-4-20250514 is a retired 4.0,
+        not a 4.<date>; a dated 5.2 snapshot clamps to minor 0 and would
+        FAIL the Fable gate — none is served, and the Opus rule has the same
+        shape); the reactive 400 rung in _stream_anthropic_call backstops
+        anything this over-admits. Probed live 2026-11-10: claude-fable-5-2
+        served usage.speed="fast" with and without the beta header."""
         if self.provider != "Anthropic":
             return False
         mid = model_id or self.model or ""
-        version = self._parse_claude_major_minor(mid, ("claude-opus-",))
-        if version is None:
-            return False
-        major, minor = version
-        if minor >= 100:
-            minor = 0   # claude-opus-5-20260724: a date, not a minor
-        return (major, minor) >= (4, 8)
+        for families, floor in ((("claude-opus-",), (4, 8)),
+                                (("claude-fable-", "claude-mythos-"), (5, 2))):
+            version = self._parse_claude_major_minor(mid, families)
+            if version is None:
+                continue
+            major, minor = version
+            if minor >= 100:
+                minor = 0   # claude-opus-5-20260724: a date, not a minor
+            return (major, minor) >= floor
+        return False
 
     def _anthropic_fast_active(self, model_id=None):
         """True when this run should send speed="fast": the Fast checkbox is

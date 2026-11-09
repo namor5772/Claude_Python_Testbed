@@ -36,6 +36,16 @@ class TestGetPricing(unittest.TestCase):
         ("Anthropic", "claude-fable-5"): {
             "input": 1e-05, "output": 5e-05,
             "cache_write": 1.25e-05, "cache_read": 1e-06},
+        # Fable 5.2 / Mythos 5.2 (live 2026-11-09, rows added 2026-11-10):
+        # the cheaper successor — $8 / $40, writes 1.25x ($10), cache reads
+        # 0.025x ($0.20) — each its own row, or the "claude-fable-5" prefix
+        # would bill 25% over on every token and 5x on cache reads.
+        ("Anthropic", "claude-fable-5-2"): {
+            "input": 8e-06, "output": 4e-05,
+            "cache_write": 1e-05, "cache_read": 2.0000000000000002e-07},
+        ("Anthropic", "claude-mythos-5-2"): {
+            "input": 8e-06, "output": 4e-05,
+            "cache_write": 1e-05, "cache_read": 2.0000000000000002e-07},
         # Fable 5.1: same per-token rates as Fable 5 but cache reads at
         # $0.25/MTok (0.025x input) — it MUST out-rank the "claude-fable-5"
         # prefix, or its cache reads would bill 4x too high.

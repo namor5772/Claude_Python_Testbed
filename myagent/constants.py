@@ -577,8 +577,8 @@ META_TOOLS = [
                     "description": (
                         "Thinking/reasoning mode (optional for update; create inherits current). "
                         "Anthropic adaptive: off/adaptive/low/medium/high/xhigh/max ('xhigh' Opus 4.7+/"
-                        "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 and Mythos 5 / 5.1 have "
-                        "ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
+                        "Fable 5+; 'max' Opus 4.6+/Fable 5+). Fable 5 / 5.1 / 5.2, Mythos 5 / 5.1 / 5.2 "
+                        "and Opus 5.5+ have ALWAYS-ON thinking — 'off' is invalid for them; use 'adaptive'. "
                         "OpenAI gpt-5.1+ reasoning: none/low/medium/high/xhigh (max on 5.6+); "
                         "gpt-6-sol / gpt-6-luna / gpt-6.1-terra: none..max like 5.6; gpt-6-astra and "
                         "gpt-6.1-sol are ALWAYS-reasoning — low/medium/high/xhigh/max, "
@@ -593,11 +593,11 @@ META_TOOLS = [
                 "fast_mode": {
                     "type": "boolean",
                     "description": (
-                        "Anthropic fast mode (research preview; Opus 5.5 / 5 / 4.8 only): "
+                        "Anthropic fast mode (Fable 5.2 / Opus 5.5 / Opus 5 / Opus 4.8 only): "
                         "the run sends speed=\"fast\" for up to 2.5x output speed at 2x "
-                        "the per-token price (Opus 5.5 $8/$40 per MTok, Opus 5 / 4.8 "
-                        "$10/$50). Ignored for every other provider/model. Optional for "
-                        "update; create inherits current."
+                        "the per-token price (Fable 5.2 $16/$80 per MTok, Opus 5.5 $8/$40, "
+                        "Opus 5 / 4.8 $10/$50). Ignored for every other provider/model. "
+                        "Optional for update; create inherits current."
                     ),
                 },
                 "upgrade_target": {
@@ -608,7 +608,7 @@ META_TOOLS = [
                         "{model, level} — a model of the instruction's OWN provider and "
                         "its thinking level as the editor names it (e.g. 'Max', 'Xhigh', "
                         "'Adaptive'). model '' = no upgrade. Absent = the provider default "
-                        "(Anthropic claude-fable-5-1 Max, OpenAI gpt-6-astra Max)."
+                        "(Anthropic claude-fable-5-2 Max, OpenAI gpt-6-astra Max)."
                     ),
                     "properties": {
                         "model": {"type": "string"},
@@ -1549,6 +1549,7 @@ FALLBACK_MODELS = [
     "claude-opus-5",
     "claude-opus-5-5",      # the next Opus (live 2026-09-21): $4/$20, always-on thinking — see ANTHROPIC_ALWAYS_ON_OPUS_MIN
     "claude-opus-4-8",
+    "claude-fable-5-2",     # Fable 5.2 (live 2026-11-09, wired 2026-11-10): $8/$40 — cheaper than 5.1 — cache reads 0.025x, fast mode GA (no beta header) — see _anthropic_supports_fast_mode
     "claude-fable-5-1",
     "claude-fable-5",
     "claude-sonnet-5-5",    # the current Sonnet (live 2026-09-28): $2/$10, cache reads 0.05x; its Off is between_tools — SelfBot's _is_sonnet_55 since 2026-10-14, MyAgent's wiring still open
@@ -1618,18 +1619,22 @@ ANTHROPIC_DEPRECATED_MODEL_PREFIXES = (
     "claude-3",              # every Claude 3.x — fully retired (last 2026-04-19)
     "claude-2",              # Claude 2.x — retired
 )
-ADAPTIVE_THINKING_MODELS = {"claude-fable-5-1", "claude-mythos-5-1",
+ADAPTIVE_THINKING_MODELS = {"claude-fable-5-2", "claude-mythos-5-2",
+                            "claude-fable-5-1", "claude-mythos-5-1",
                             "claude-fable-5", "claude-mythos-5",
                             "claude-opus-5", "claude-opus-5-5",
                             "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
                             "claude-sonnet-5-5", "claude-sonnet-5", "claude-sonnet-4-6",
                             "claude-haiku-5-5"}
-# Claude 5 Mythos-class models (Fable 5 / 5.1, Mythos 5 / 5.1): thinking is
-# ALWAYS ON. The API rejects thinking={"type": "disabled"} and budget_tokens with
-# HTTP 400 — only omitting the param or {"type": "adaptive"} is accepted, and
-# sampling params (temperature/top_p/top_k) are rejected unconditionally. The UI
-# drops the "Off" mode for these and the streaming path always takes the thinking
-# branch. Prefix-matched, so claude-fable-5-1 (2026-08-28) needed no new entry.
+# Claude 5 Mythos-class models (Fable 5 / 5.1 / 5.2, Mythos 5 / 5.1 / 5.2):
+# thinking is ALWAYS ON. The API rejects thinking={"type": "disabled"} and
+# budget_tokens with HTTP 400 — only omitting the param or {"type": "adaptive"}
+# is accepted, and sampling params (temperature/top_p/top_k) are rejected
+# unconditionally. The UI drops the "Off" mode for these and the streaming path
+# always takes the thinking branch. Prefix-matched, so claude-fable-5-1
+# (2026-08-28) and claude-fable-5-2 (2026-11-09: the same Models API tree —
+# thinking adaptive only, effort low..max, 1M / 128K — read live 2026-11-10)
+# needed no new entry here; 5.2's news is its price row and fast mode, below.
 ALWAYS_ON_THINKING_PREFIXES = ("claude-fable-", "claude-mythos-")
 # ...and since Claude Opus 5.5 (claude-opus-5-5, live 2026-09-21 — found by
 # the 2026-09-23 audit two days later) the Opus line too: "thinking.type.
@@ -1669,17 +1674,27 @@ ANTHROPIC_THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01"
 ANTHROPIC_THINKING_BLOCK_BINDING = {"prefix_mismatch_behavior": "drop_block"}
 ANTHROPIC_SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01"
 ANTHROPIC_SERVER_FALLBACKS = "default"
-# Fast mode (research preview, 2026-09-24): Opus 4.8 / 5 / 5.5 serve the SAME
-# model at up to 2.5x output tokens/sec for 2x the per-token price when the
-# request carries speed="fast" under this beta (docs read 2026-09-24:
-# platform.claude.com/docs/en/build-with-claude/fast-mode). Claude API only —
-# not Batch, not Priority Tier, not the cloud platforms. Capability is
-# version-gated in _anthropic_supports_fast_mode (Opus >= (4, 8)); the Fast
-# checkbox in the editor's model-params row drives it, persisted per
-# instruction as "fast_mode". A 400 naming speed / fast-mode (a model outside
-# the preview, or an org without access) learns the surface off for the
-# session via _anthropic_unsupported — the same rung pattern as the Fable
-# betas. Opus 4.7 rejects speed="fast" outright; Opus 4.6 would silently run
+# Fast mode (wired 2026-09-24; re-read 2026-11-10): the SAME model at up to
+# 2.5x output tokens/sec for 2x the per-token price when the request carries
+# speed="fast" (platform.claude.com/docs/en/build-with-claude/fast-mode).
+# GA — no beta header, no access request, a default fast rate limit from the
+# Start usage tier up — on Claude Fable 5.2 (launched with it, 2026-11-09;
+# Mythos 5.2 too) and Claude Opus 5.5 (out of preview 2026-10-15); still a
+# research preview NEEDING this beta header on Opus 5 and Opus 4.8, and
+# REMOVED from Opus 4.8 on 2026-11-30 (deprecated 2026-10-30 — after that
+# date speed="fast" is an error there, which the 400 rung below handles).
+# The header is sent on every fast request regardless: the docs say a 5.5
+# request that still sends it keeps working, and a Fable 5.2 request with it
+# was served fast on 2026-11-10 (probed live, beside one without), so one
+# shape serves all four tiers. Claude API only — not Batch, not Priority
+# Tier. Capability is version-gated in _anthropic_supports_fast_mode (Opus
+# >= (4, 8); Fable / Mythos >= (5, 2) — 5.1 and 5 have no fast mode); the
+# Fast checkbox in the editor's model-params row drives it, persisted per
+# instruction as "fast_mode". A 400 naming speed / fast-mode (a model the
+# gate over-admitted) learns the surface off for the session via
+# _anthropic_unsupported — the same rung pattern as the Fable betas — and a
+# fast-mode 429 with a limit of 0 (an org or tier without access) does the
+# same. Opus 4.7 rejects speed="fast" outright; Opus 4.6 would silently run
 # standard (usage.speed says so) — neither passes the version gate anyway.
 # The response's usage.speed ("fast" / "standard") is what a call is PRICED
 # by (ANTHROPIC_FAST_PRICING below), never the checkbox.
@@ -3815,6 +3830,13 @@ ANTHROPIC_PRICING = {
     # $1.00, 4x too high. Mythos 5.1's cache-read rate was open at launch and
     # fell through to the mythos-5 row (the conservative $1.00) until the
     # pricing page confirmed 0.025x for it too (read 2026-09-23).
+    # Fable 5.2 / Mythos 5.2 (live 2026-11-09; pricing page read 2026-11-10):
+    # the successor at a LOWER price — $8 / $40, 5-minute writes 1.25x
+    # ($10.00), cache reads 0.025x like 5.1 ($0.20) — so each needs its own
+    # row: the longest-prefix match would otherwise bill them from the
+    # "claude-fable-5" row, 25% over on every token and 5x on cache reads.
+    "claude-fable-5-2":    (8.00, 40.00, 10.00, 0.20),
+    "claude-mythos-5-2":   (8.00, 40.00, 10.00, 0.20),
     "claude-fable-5-1":    (10.00, 50.00, 12.50, 0.25),
     "claude-mythos-5-1":   (10.00, 50.00, 12.50, 0.25),
     "claude-fable-5":      (10.00, 50.00, 12.50, 1.00),
@@ -3864,17 +3886,20 @@ ANTHROPIC_PRICING = {
 
 # Fast-mode pricing (see ANTHROPIC_FAST_MODE_BETA): the rates a call served at
 # speed="fast" bills at — exactly 2x the model's standard row in every bucket.
-# The pricing page (read 2026-09-24) lists fast input/output ($8/$40 Opus 5.5;
-# $10/$50 Opus 5 / 4.8) and says the caching multipliers apply ON TOP of fast
-# pricing, so the cache columns are the model's own multipliers of the FAST
-# input rate: 5-minute writes 1.25x, reads 0.1x (0.05x on Opus 5.5 — its
-# standard-row discount carries over). stream_worker prices a call by the
-# usage.speed the API reports; a fast-served model MISSING here is unpriced
-# (warned at run start), never billed from the standard table at half the
-# real rate. Same plain 4-tuple shape as ANTHROPIC_PRICING (which must stay
-# untouched — SelfBot unpacks it directly and never sends speed).
+# The pricing page (read 2026-09-24, again 2026-11-10) lists fast input/output
+# ($16/$80 Fable 5.2 / Mythos 5.2; $8/$40 Opus 5.5; $10/$50 Opus 5 / 4.8) and
+# says the caching multipliers apply ON TOP of fast pricing, so the cache
+# columns are the model's own multipliers of the FAST input rate: 5-minute
+# writes 1.25x, reads 0.1x (0.05x on Opus 5.5, 0.025x on Fable / Mythos 5.2
+# — each standard-row discount carries over). stream_worker prices a call by
+# the usage.speed the API reports; a fast-served model MISSING here is
+# unpriced (warned at run start), never billed from the standard table at
+# half the real rate. Same plain 4-tuple shape as ANTHROPIC_PRICING (which
+# must stay untouched — SelfBot unpacks it directly and never sends speed).
 ANTHROPIC_FAST_PRICING = {
     # (input, output, 5min_cache_write, cache_read) per million tokens
+    "claude-fable-5-2":    (16.00, 80.00, 20.00, 0.40),
+    "claude-mythos-5-2":   (16.00, 80.00, 20.00, 0.40),
     "claude-opus-5-5":     (8.00, 40.00, 10.00, 0.40),
     "claude-opus-5":       (10.00, 50.00, 12.50, 1.00),
     "claude-opus-4-8":     (10.00, 50.00, 12.50, 1.00),
@@ -4424,7 +4449,10 @@ PROVIDERS =["Anthropic", "OpenAI", "Google", "xAI", "Moonshot", "Ollama"]
 # choice, the day the audit found Argon served) — and the label Model Setup's
 # model picker offers for an explicit "no upgrade". xAI, Moonshot and Ollama
 # have none, so their Upgrade box stays disabled until Model Setup sets one.
-UPGRADE_DEFAULT_TARGETS = {"Anthropic": {"model": "claude-fable-5-1", "level": "Max"},
+# Anthropic's default moved from claude-fable-5-1 to claude-fable-5-2 on
+# 2026-11-10, the day after 5.2 shipped: the same tier, cheaper ($8/$40
+# against $10/$50), the same Max rung.
+UPGRADE_DEFAULT_TARGETS = {"Anthropic": {"model": "claude-fable-5-2", "level": "Max"},
                            "OpenAI": {"model": "gpt-6-astra", "level": "Max"},
                            "Google": {"model": "gemini-4-argon", "level": "High"}}
 UPGRADE_NO_MODEL_LABEL = "(none — no upgrade for this instruction)"
