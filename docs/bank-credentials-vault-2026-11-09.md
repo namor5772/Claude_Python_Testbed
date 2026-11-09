@@ -119,7 +119,18 @@ pins both halves.
   true, the submit button enabled — then the page cleared and the task browser
   closed by its root process.
 - The same day the user ran the Westpac, ANZ and CBA logins through MyAgent on
-  the laptop with the new method: all three worked. The 77 saved instructions
+  the laptop with the new method: all three worked.
+- **The Mac Mini, the same evening**, after a `/sync-refultra`: `keyring` and
+  `websocket-client` installed in the venv (backend `keyring.backends.macOS.Keyring`),
+  `rebuild.sh` run (the Bank Credentials app signed with the launcher cert, its
+  Desktop alias created), the user stored all three from Bitwarden through the
+  shortcut, every helper's `check-credentials` → `CREDENTIALS_AVAILABLE`. Then a
+  Westpac login driven from Claude Code through the skill's own
+  `macos_login_support.py`: snapshot → `open` (a dedicated launch, no debugging
+  Chrome was running) → `prepare` (`FORM_PREPARED`) → `submit` → `LOGIN_VERIFIED`,
+  first try. No keychain-access dialog interrupted any step — the grant given at
+  store time carried to the login. ANZ and CBA pass preflight there but were not
+  logged in: the skills forbid a bank login just to test a skill. The 77 saved instructions
   were scanned: none restates the old typing steps, none holds a credential.
 - Full repo suite 2345 tests OK; ruff at its 42-finding baseline.
 
@@ -145,10 +156,11 @@ themselves must be changed.
   helper's `store-credentials`. It is visible on purpose — `getpass` needs a real
   console — so it targets `powershell.exe` directly, never `conhost.exe
   --headless`. `-Status` prints the three states for a script.
-- **A new machine** (the Mac Mini as of this date): `pip install keyring
-  websocket-client` in the venv, then store all three; the first Keychain access
-  by that Python raises macOS's keychain-access dialog — *Always Allow*. Until
-  then a run there stops at `CREDENTIALS_MISSING` and asks, by design.
+- **A new machine:** `pip install keyring websocket-client` in the venv, run
+  `rebuild.sh` for the launcher, then store all three; the first Keychain access
+  by that Python may raise macOS's keychain-access dialog — *Always Allow*. Until
+  then a run there stops at `CREDENTIALS_MISSING` and asks, by design. Done on
+  the Mac Mini the same evening (below).
 - **After editing a skill file directly,** restart any app that loaded the old
   text — MyAgent, SelfBot, the `claude_code_mcp` servers — because the
   whole-dict skills save writes a loaded skill back from memory.
@@ -158,7 +170,8 @@ themselves must be changed.
 ## Open
 
 - Change the three bank passwords and re-store them (the user's step).
-- Store all three on the Mac Mini; build the Mac launcher with `rebuild.sh`;
-  the Keychain prompt is unverified live.
+- ~~Store all three on the Mac Mini; build the Mac launcher~~ — done 2026-11-09
+  (Verification). The first ANZ / CBA vault logins on the Mac will happen with
+  real use.
 - Two `Heartbeat.py --listen` processes were seen running at once on the laptop
   during this work (the lock should allow one) — unexplained, unrelated.
