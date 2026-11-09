@@ -183,3 +183,24 @@ standard, the REAL Model Setup dialog (the box for Fable 5.2 and not for Sonnet 
 cleared on a pick without fast mode, Save writing the field, Alt+F, the Tab order, the
 Provider line mid-upgrade), a wiring scan. `tests/test_model_upgrade.py` updated for the
 dict's new key.
+
+### Live-verified the same morning (the user's run)
+
+`ANZ_LoginToWebsite_2026-11-10_101440`, Haiku 5.5 at Medium, upgraded at its Agent
+Request to Fable 5.2 Max **fast** through the box Model Setup had just saved:
+
+- the pane line `⬆ Model upgraded for the rest of this run: claude-haiku-5-5 →
+  claude-fable-5-2 (Max, fast), from call #16 on.`, and `Model restored to
+  claude-haiku-5-5 for the next run.` at the end;
+- the cost log: `claude-fable-5-2;1.6442;mode=Max, speed=fast,
+  upgraded-from=claude-haiku-5-5@call15;143;ANZ_LoginToWebsite;23;…` with the 13th
+  field `claude-haiku-5-5,0.008756,32,3120,28399,364270|claude-fable-5-2,1.635404,
+  18,8840,41498,244890` — both parts reconcile to the cent, the Fable part against
+  the FAST table, so every one of its eight calls was served fast;
+- the cost shape to expect: call 16 was $0.61 on its own (the 28,626-token prompt
+  cache rewritten for the new model at the fast write rate, $20 / MTok — the known
+  price of any switch, doubled by fast), and Max thinking produced 8,840 output
+  tokens in eight calls against Haiku's 3,120 in fifteen, at $80 / MTok fast. For
+  the "look back and fix the skills" request, Fable 5.2 at High or Xhigh and
+  standard speed is the sensible setting; fast is for a long answer someone is
+  waiting on.
