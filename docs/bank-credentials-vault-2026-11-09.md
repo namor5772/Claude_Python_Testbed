@@ -190,7 +190,14 @@ themselves must be changed.
 
 ## Open
 
-- Change the three bank passwords and re-store them (the user's step).
+- ~~Change the three bank passwords and re-store them (the user's step)~~ —
+  done 2026-11-10: the user changed the Westpac, ANZ and CBA passwords at the
+  banks, re-stored them through the Bank Credentials shortcut and ran each login
+  instruction successfully. With that, the old passwords left in OneDrive's
+  version history, the Mac Mini's 2026-11-07 transcript and the provider logs
+  are dead values. Each machine has its own vault, so a machine whose vault
+  still holds an old password stops at the bank's login error until it is
+  re-stored there.
 - ~~Store all three on the Mac Mini; build the Mac launcher~~ — done 2026-11-09
   (Verification). The first ANZ / CBA vault logins on the Mac will happen with
   real use.
