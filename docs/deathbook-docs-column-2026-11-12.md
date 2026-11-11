@@ -163,8 +163,11 @@ the `Docs` column and is Comments now, so the button no longer cleared an Accoun
 finds the field by name (`ListColumns("Account").Index`). Tested through the macro: an Account filter
 is cleared, a Comments filter is left alone; table values, the other modules and the selection were
 unchanged. Backup: `Backups/DeathBook_pre_fix_CLEARsourceFILTERS_20261112_090420.xlsm`.
-`CLEARCategory1FILTERS` still clears fields 2 to 9 by number (Category1 … Comments; it used to reach
-Account) and was left as it is, pending the user's word on what it should cover.
+`CLEARCategory1FILTERS` had the same fault: it cleared fields 2 to 9 by number, which used to run from
+Category1 to Account and stopped at Comments after the insert. At the user's word it now loops from
+`ListColumns("Category1")` to `ListColumns("Account")` by name. Tested through the macro with filters on
+Category1, Docs, Comments, Account and Month: the first four were cleared and Month was left alone.
+Backup: `Backups/DeathBook_pre_fix_CLEARCategory1FILTERS_20261112_091009.xlsm`.
 
 ## Open
 
