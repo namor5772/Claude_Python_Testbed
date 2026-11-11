@@ -154,7 +154,9 @@ from J3 to C1 with a cut, which carries the value and formatting and re-points t
 needed adjusting: no formula on any sheet, no line of the workbook's VBA, no skill and no saved
 instruction refers to the name or to J3. Every other cell, name and column width was verified
 unchanged. The `deathbook-workbook` skill now says to address the cell by name. Backup:
-`Backups/DeathBook_pre_move_DATE_STAMP_20261112_090009.xlsm`.
+`Backups/DeathBook_pre_move_DATE_STAMP_20261112_090009.xlsm`. Afterwards, at the user's request, C1 was
+merged with the empty D1 and its format changed to `dd-mmm-yy hh:mm`; the name still refers to the
+single cell C1, so reading it by name returns the same value as before.
 
 ## CLEAR Account FILTERS fixed (same day)
 
