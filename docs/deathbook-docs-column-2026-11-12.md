@@ -182,6 +182,17 @@ Category1 to Account and stopped at Comments after the insert. At the user's wor
 Category1, Docs, Comments, Account and Month: the first four were cleared and Month was left alone.
 Backup: `Backups/DeathBook_pre_fix_CLEARCategory1FILTERS_20261112_091009.xlsm`.
 
+## Backups kept from this day
+
+The day's work wrote 17 files into `DeathFinances/Backups`. At the user's request eleven redundant ones
+were moved to the Recycle Bin, so several backup names quoted above no longer exist. Kept, oldest first:
+
+- `DeathBook_pre_docs_prefix_migration_20261112_065234.xlsm` — before any of the day's changes
+- `DeathBook_before_SHOW_DOCUMENTS_docs_code_20261112_065814.xlsm` (+ `.integrity.json`) — before the VBA module update
+- `DeathBook_before_LAYOUT_install_20261112_081919.xlsm` — before the LAYOUT button
+- `DeathBook_pre_fill_blank_docs_20261112_084821.xlsm` — before the blank-Docs fill, the macro fixes and the DATE_STAMP moves
+- `DeathBook_pre_move_DATE_STAMP_to_B1_20261112_093024.xlsm` — the latest
+
 ## Open
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
