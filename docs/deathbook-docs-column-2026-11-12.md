@@ -87,7 +87,12 @@ row that has no document at all.
   the duplicate guard matches the index as `A{index}` / `D{index}` in `Docs` as well as the older
   `AI{index} created` in Details.
 - `ShowDocuments.bas` — the source reads the `Docs` cell (`docsCode`) for the same-date fallback.
-  **The module installed in the workbook is not updated yet** (see Open).
+  Installed in the workbook the same day with `install_show_documents.py update-module --label
+  docs_code`, once the user had enabled VBA-project trust: integrity verified, compile forced, workbook
+  saved; 69 fixture checks and live parity over 258 rows passed. The first run stopped on a text
+  mismatch (a missing space in the source that the VBA editor normalises); the source was fixed and the
+  second run completed. Roll back from `Backups/DeathBook_before_SHOW_DOCUMENTS_docs_code_20261112_065814.xlsm`,
+  not the `_065838` copy.
 - New: `deathbook-workbook/scripts/migrate_details_prefix_to_docs.py` (dry run by default) and
   `deathbook-workbook/tests/test_migrate_prefix.py`.
 - Skill text rewritten to the rule: `docket-processing` (+ both references), `process-payment-emails`,
@@ -108,10 +113,8 @@ Offline suites after this change: docket 84 tests, payment 23, migration rule 6 
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
   offline suites and the dry runs only.
-- **The Show Documents module inside the workbook still classifies by the Details prefix.** Updating it
-  is the Windows `update-module` procedure in `docket-processing/references/show-documents-button.md`
-  and needs the user to enable VBA-project trust for the session. Until then only the last-resort
-  same-date fallback differs (one row today: 9839).
+- The Show Documents module has not been compiled on the Mac since this change.
+- The user should untick *Trust access to the VBA project object model* again if it is still on.
 - The workbook's own VBA (`SortByDate`, the `Select_*` buttons, the CLEAR filter macros, `Snapshot`,
   `SortTableALL`) was not inspected from here; the user updated and checked those macros by hand
   (reported 2026-11-12), so this item is closed.
