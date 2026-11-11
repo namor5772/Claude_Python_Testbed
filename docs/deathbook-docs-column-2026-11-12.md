@@ -162,9 +162,12 @@ Later still it was moved one cell left: `DATE_STAMP` is now **B1, merged B1:C1**
 `dd-mmm-yy    hh:mm`, and D1 is a plain empty cell again (backup
 `Backups/DeathBook_pre_move_DATE_STAMP_to_B1_20261112_093024.xlsm`). No formula, macro or skill refers
 to those cells. **One saved MyAgent instruction does: `SchedulePayment` ends with "In Cell B1 of the
-[Spending] tab place the text `AI - {timestamp}`", which would now overwrite the stamp.** The
-instruction was left unchanged pending the user's decision; the `deathbook-workbook` skill warns
-against writing to B1:C1.
+[Spending] tab place the text `AI - {timestamp}`", which would now overwrite the stamp.** At the
+user's choice that step now reads "set the named cell DATE_STAMP … to the current date and time as a
+real date-time value (not text), keeping its existing formatting. Write nothing else into B1:C1."
+It was a one-sentence byte edit of `<OneDrive>/MyAppShare/agent_instructions.json` (only that entry's
+`text` changed; backup `agent_instructions.pre_DATE_STAMP_20261112.bak` beside it). No MyAgent was
+running; an app that loaded the store earlier must be restarted before it saves instructions.
 
 ## CLEAR Account FILTERS fixed (same day)
 
