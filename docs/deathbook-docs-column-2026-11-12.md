@@ -1,5 +1,27 @@
 # DeathBook `Docs` column: the skills and helper scripts made header-driven (2026-11-12)
 
+## Where things stand at the end of the day
+
+The sections below are in the order the work happened, and some describe a state that a later section
+replaced. The end state:
+
+- **TableALL** is `B8:L…`: Date, Category1, Category2, Category3, Column1, **Docs**, Details, Amount,
+  Comments, Account, Month. Skills and helper scripts find columns by header name.
+- **Docs** holds a document code — `D` / `D{n}` (docket), `A` / `A{n}` (email attachment), `{n}` the
+  Recurring Payments Index — or, when there is none, a lone apostrophe (an empty text). Details carries
+  no `DOCKET: ` / `ATTACH: ` prefix; 243 old rows were migrated and 9,739 blank cells filled.
+- **Workbook VBA**: `modShowDocuments` reads the Docs code; new `modLayout` with the **LAYOUT** button
+  (three sets of column widths, each click stores the current widths and applies the next); in
+  `Module1` the two CLEAR filter macros find their columns by name.
+- **`Spending!DATE_STAMP`** is B1, merged B1:C1, format `ddd dd-mmm-yy    hh:mm`. The saved instruction
+  `SchedulePayment` refreshes it. J2 (`UP TO DATE`) was emptied and unformatted at the user's request.
+- **New files in the OneDrive skills tree**: `deathbook-workbook/scripts/` — `Layout.bas`,
+  `install_layout_button.py`, `migrate_details_prefix_to_docs.py`, `fill_blank_docs.py`; and
+  `deathbook-workbook/tests/test_migrate_prefix.py`.
+- **Not yet proven in real use**: see **Open** at the end.
+
+## The column insert
+
 The user inserted a whole sheet column into the Spending sheet of `DeathBook.xlsm` and named it `Docs`,
 between `Column1` and `Details` in `TableALL`. Everything from G rightwards moved one letter:
 
@@ -14,8 +36,10 @@ between `Column1` and `Details` in `TableALL`. Everything from G rightwards move
 | Month (formula) | K | L  |
 | Table range | `$B$8:$K$n` | `$B$8:$L$n` |
 | Empty side columns checked before an insert | L:T | M:U |
-| Mirrored helper block / Table7 | Z:AI / X:AG | AA:AJ / Y:AH |
-| Status cells | K2:K3, AH3:AH4 | L2:L3, AI3:AI4 |
+
+The skills also used to describe a mirrored helper block (Z:AI, or Table7 at X:AG) and status cells at
+K2:K3 / AH3:AH4. Those notes were stale: inspected later in the day, the sheet's used range ended at
+column U, TableALL was its only table, and the status block was H1:I6 with the stamp at J3.
 
 Everything changed lives in the OneDrive skills tree (`<OneDrive>/MyAppShare/skills/`), outside this repo;
 it reaches the other machines through OneDrive, not `git pull`. No file in this repo changed apart from
@@ -169,6 +193,11 @@ It was a one-sentence byte edit of `<OneDrive>/MyAppShare/agent_instructions.jso
 `text` changed; backup `agent_instructions.pre_DATE_STAMP_20261112.bak` beside it). No MyAgent was
 running; an app that loaded the store earlier must be restarted before it saves instructions.
 
+Small follow-ups, all at the user's request: the format became `ddd dd-mmm-yy    hh:mm` (short weekday
+first, four spaces before the time); the stamp was reset to the current date and time after text was
+typed over it by accident; and J2, which held the text `UP TO DATE`, was cleared of contents and
+formatting (nothing referred to it).
+
 ## CLEAR Account FILTERS fixed (same day)
 
 `CLEARsourceFILTERS` in the workbook's `Module1` still cleared filter field 9, which was Account before
@@ -197,7 +226,8 @@ were moved to the Recycle Bin, so several backup names quoted above no longer ex
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
   offline suites and the dry runs only.
-- The Show Documents module has not been compiled on the Mac since this change.
+- The rewritten `SchedulePayment` step (refresh `DATE_STAMP`) has not been run.
+- Neither `modShowDocuments` nor the new `modLayout` has been compiled on the Mac since these changes.
 - The user should untick *Trust access to the VBA project object model* again if it is still on.
 - The workbook's own VBA (`SortByDate`, the `Select_*` buttons, the CLEAR filter macros, `Snapshot`,
   `SortTableALL`) was not inspected from here; the user updated and checked those macros by hand
