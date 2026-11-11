@@ -109,6 +109,27 @@ except row 9839, which relies on the same-date fallback.
 
 Offline suites after this change: docket 84 tests, payment 23, migration rule 6 — all pass.
 
+## LAYOUT button (same day)
+
+At the user's request a **LAYOUT** button was added to the Spending sheet, right of SHOW DOCUMENTS
+(`btnLayout`, macro `LayoutToggle`, new standard module `modLayout`). It toggles the sheet between two
+remembered sets of column widths and changes nothing else. Each click stores the current widths as the
+layout being left and applies the other, so layout 2 is set up by switching to it and dragging the
+columns; until then both layouts hold today's widths and a click moves nothing. The caption shows the
+active layout (`LAYOUT 1` / `LAYOUT 2`). Widths live in three hidden workbook names (`LAYOUT_Current`,
+`LAYOUT_Widths1`, `LAYOUT_Widths2`).
+
+Source and guarded installer: `deathbook-workbook/scripts/Layout.bas` and `install_layout_button.py`
+(`install` / `update-module` / `status`). The install verified every sheet's cells, the other two VBA
+modules, the other shapes and the column widths unchanged, forced a compile, toggled there and back
+with the widths restored exactly, and saved. Backup:
+`Backups/DeathBook_before_LAYOUT_install_20261112_081919.xlsm`.
+
+Two things learned about scripted VBA installs, now noted in the skill: the VBA editor keeps one
+spelling per identifier across the whole project (`modShowDocuments` declares `count`, `name`, `names`,
+`text`, so new source must use those spellings), and it reformats lines (`x =y` becomes `x = y`), so a
+source that is compared with the live text must be written exactly as the editor formats it.
+
 ## Open
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
