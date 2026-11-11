@@ -156,6 +156,16 @@ instruction refers to the name or to J3. Every other cell, name and column width
 unchanged. The `deathbook-workbook` skill now says to address the cell by name. Backup:
 `Backups/DeathBook_pre_move_DATE_STAMP_20261112_090009.xlsm`.
 
+## CLEAR Account FILTERS fixed (same day)
+
+`CLEARsourceFILTERS` in the workbook's `Module1` still cleared filter field 9, which was Account before
+the `Docs` column and is Comments now, so the button no longer cleared an Account filter. The line now
+finds the field by name (`ListColumns("Account").Index`). Tested through the macro: an Account filter
+is cleared, a Comments filter is left alone; table values, the other modules and the selection were
+unchanged. Backup: `Backups/DeathBook_pre_fix_CLEARsourceFILTERS_20261112_090420.xlsm`.
+`CLEARCategory1FILTERS` still clears fields 2 to 9 by number (Category1 … Comments; it used to reach
+Account) and was left as it is, pending the user's word on what it should cover.
+
 ## Open
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
