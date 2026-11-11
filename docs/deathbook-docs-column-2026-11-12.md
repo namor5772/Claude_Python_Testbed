@@ -137,6 +137,16 @@ spelling per identifier across the whole project (`modShowDocuments` declares `c
 `text`, so new source must use those spellings), and it reformats lines (`x =y` becomes `x = y`), so a
 source that is compared with the live text must be written exactly as the editor formats it.
 
+## Blank Docs cells hold a lone apostrophe (same day)
+
+So that Column1's text cannot spill over an empty `Docs` cell, every blank `Docs` cell in TableALL now
+holds a lone apostrophe: an empty text that shows nothing and reads back as `""`. 9,739 cells were
+filled in one verified write (the 243 coded cells and every other column unchanged; backup
+`Backups/DeathBook_pre_fill_blank_docs_20261112_084821.xlsm`). `add_docket.py` and
+`add_payment_entry.py` write the apostrophe into `Docs` for a new row that has no code, and
+`deathbook-workbook/scripts/fill_blank_docs.py` (dry run by default) fills any cells still truly
+empty, for example after rows typed by hand. All readers already treated `""` like empty.
+
 ## Open
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
