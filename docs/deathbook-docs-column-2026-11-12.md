@@ -119,7 +119,11 @@ separate save step. (A fixed-layout variant, saving only through a `LayoutSave` 
 between and replaced at the user's request the same day.) `LayoutSave` (Alt+F8) remains for storing
 the current widths without switching; `LayoutSaveActive` is its dialog-free equivalent. Both layouts
 currently hold today's widths, so a click moves nothing until layout 2 has been adjusted. The caption
-shows the active layout (`LAYOUT 1` / `LAYOUT 2`). Widths live in three hidden workbook names (`LAYOUT_Current`,
+shows the active layout.
+
+Later the same day the button was extended from two layouts to **three**: each click cycles
+1 → 2 → 3 → 1 (`LAYOUT_COUNT` in `Layout.bas`, `COUNT` in the installer), with a fourth hidden name
+`LAYOUT_Widths3`. All three layouts hold today's widths until their columns are dragged. Widths live in three hidden workbook names (`LAYOUT_Current`,
 `LAYOUT_Widths1`, `LAYOUT_Widths2`).
 
 Source and guarded installer: `deathbook-workbook/scripts/Layout.bas` and `install_layout_button.py`
