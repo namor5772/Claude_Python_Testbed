@@ -64,8 +64,8 @@ Offline only — the workbook is never opened from a Claude Code session.
 
 - **Not run against the live workbook.** First live use of each helper: dry-run first
   (`add_docket.py check` prints the live headers and table range without writing).
-- **The workbook's own VBA was not inspected** (`SortByDate`, `Select_WBCSAV` / `Select_WBCMC` /
-  `Select_ANZSAV` / `Select_ANZBIG`, `CLEARCategory1FILTERS`, `CLEARsourceFILTERS`, `Snapshot`,
-  `SortTableALL`). A macro that filters by field number or a fixed range would now hit the wrong column.
+- The workbook's own VBA (`SortByDate`, the `Select_*` buttons, the CLEAR filter macros, `Snapshot`,
+  `SortTableALL`) was not inspected from here; the user updated and checked those macros by hand
+  (reported 2026-11-12), so this item is closed.
 - `process-payment-emails/scripts/archive_one_offs/` still uses fixed letters; archived, do not run.
 - What `Docs` should hold, and whether the helpers should fill it.
