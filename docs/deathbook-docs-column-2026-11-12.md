@@ -113,12 +113,13 @@ Offline suites after this change: docket 84 tests, payment 23, migration rule 6 
 
 At the user's request a **LAYOUT** button was added to the Spending sheet, right of SHOW DOCUMENTS
 (`btnLayout`, macro `LayoutToggle`, new standard module `modLayout`). It toggles the sheet between two
-fixed sets of column widths and changes nothing else. A click only applies the other layout's stored
-widths; it never stores anything (the first version remembered the widths on every click, which the
-user did not want, and was replaced the same day). Saving is the separate macro `LayoutSave` (Alt+F8),
-which asks first and then stores the current widths as the layout that is showing; `LayoutSaveActive`
-is the dialog-free equivalent. Both layouts currently hold today's widths, so a click moves nothing
-until layout 2 has been saved. The caption shows the active layout (`LAYOUT 1` / `LAYOUT 2`). Widths live in three hidden workbook names (`LAYOUT_Current`,
+sets of column widths and changes nothing else. Each click first overwrites the stored widths of the
+layout that is showing with the sheet's current widths, then applies the other layout; there is no
+separate save step. (A fixed-layout variant, saving only through a `LayoutSave` macro, was installed in
+between and replaced at the user's request the same day.) `LayoutSave` (Alt+F8) remains for storing
+the current widths without switching; `LayoutSaveActive` is its dialog-free equivalent. Both layouts
+currently hold today's widths, so a click moves nothing until layout 2 has been adjusted. The caption
+shows the active layout (`LAYOUT 1` / `LAYOUT 2`). Widths live in three hidden workbook names (`LAYOUT_Current`,
 `LAYOUT_Widths1`, `LAYOUT_Widths2`).
 
 Source and guarded installer: `deathbook-workbook/scripts/Layout.bas` and `install_layout_button.py`
