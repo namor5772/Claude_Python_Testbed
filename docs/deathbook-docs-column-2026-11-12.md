@@ -158,6 +158,14 @@ unchanged. The `deathbook-workbook` skill now says to address the cell by name. 
 merged with the empty D1 and its format changed to `dd-mmm-yy hh:mm`; the name still refers to the
 single cell C1, so reading it by name returns the same value as before.
 
+Later still it was moved one cell left: `DATE_STAMP` is now **B1, merged B1:C1**, format
+`dd-mmm-yy    hh:mm`, and D1 is a plain empty cell again (backup
+`Backups/DeathBook_pre_move_DATE_STAMP_to_B1_20261112_093024.xlsm`). No formula, macro or skill refers
+to those cells. **One saved MyAgent instruction does: `SchedulePayment` ends with "In Cell B1 of the
+[Spending] tab place the text `AI - {timestamp}`", which would now overwrite the stamp.** The
+instruction was left unchanged pending the user's decision; the `deathbook-workbook` skill warns
+against writing to B1:C1.
+
 ## CLEAR Account FILTERS fixed (same day)
 
 `CLEARsourceFILTERS` in the workbook's `Module1` still cleared filter field 9, which was Account before
