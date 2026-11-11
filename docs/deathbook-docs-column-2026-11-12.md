@@ -147,6 +147,15 @@ filled in one verified write (the 243 coded cells and every other column unchang
 `deathbook-workbook/scripts/fill_blank_docs.py` (dry run by default) fills any cells still truly
 empty, for example after rows typed by hand. All readers already treated `""` like empty.
 
+## DATE_STAMP moved to C1 (same day)
+
+The sheet-level name `Spending!DATE_STAMP` (a timestamp cell, yellow, `dd/mm/yyyy hh:mm:ss`) was moved
+from J3 to C1 with a cut, which carries the value and formatting and re-points the name. Nothing else
+needed adjusting: no formula on any sheet, no line of the workbook's VBA, no skill and no saved
+instruction refers to the name or to J3. Every other cell, name and column width was verified
+unchanged. The `deathbook-workbook` skill now says to address the cell by name. Backup:
+`Backups/DeathBook_pre_move_DATE_STAMP_20261112_090009.xlsm`.
+
 ## Open
 
 - **The first real insert under the new rule has not happened yet.** The write paths are covered by the
