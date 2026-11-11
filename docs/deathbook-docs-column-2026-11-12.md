@@ -24,8 +24,8 @@ this write-up and its link.
 ## Rule from now on
 
 TableALL columns are located by **header name**, never by letter or offset. Each helper reads the live
-header row, aborts before any write if a required header is missing or repeated, and works with or
-without the `Docs` column. **No helper writes `Docs`**: the user has not yet said what goes in it.
+header row and aborts before any write if a required header is missing or repeated. What `Docs`
+holds was settled later the same day: see **Docs is the document code** below.
 
 ## What changed
 
@@ -60,12 +60,60 @@ Offline only — the workbook is never opened from a Claude Code session.
   header, and `Docs` staying empty after an add.
 - `process-payment-emails/tests/test_duplicate_guard` — 21 tests pass, including both layouts.
 
+Later the same day, at the user's explicit request and with the workbook open, the read-only steps ran
+against the live table: `add_docket.py check`, `recent`, `show --no-open`, `add --dry-run` and
+`add_payment_entry.py --dry-run` all resolved the B:L layout correctly and wrote nothing.
+
+## Docs is the document code (user rule, 2026-11-12)
+
+A row's document status moved out of the front of `Details` into `Docs`:
+
+| Details used to begin | Docs | Details now |
+|---|---|---|
+| `ATTACH: ` | `A` | the rest |
+| `ATTACH: AI{n} created - ` | `A{n}` | the rest |
+| `DOCKET: ` | `D` | the rest |
+| `DOCKET: AI{n} created - ` | `D{n}` | the rest |
+
+`{n}` is the Recurring Payments Index. Two shapes the user did not list were left as they are:
+`NO DOCKET: ` (a deliberately fileless record; `Docs` empty) and a bare `AI{n} created - ` on a payment
+row that has no document at all.
+
+- `add_docket.py` — `format_details()` returns `(docs_code, details)`: a real source file gives `D`, or
+  `D{n}` when `--details` starts `AI{n} created - ` (the marker is removed); no file gives an empty
+  `Docs` and a `NO DOCKET: ` Details. A document add aborts if the table has no `Docs` column.
+  `show` treats `Docs` `D…` as a docket row and still recognises an old Details prefix.
+- `add_payment_entry.py` — with `--attach` the row gets `Docs` `A{index}` and unprefixed Details;
+  the duplicate guard matches the index as `A{index}` / `D{index}` in `Docs` as well as the older
+  `AI{index} created` in Details.
+- `ShowDocuments.bas` — the source reads the `Docs` cell (`docsCode`) for the same-date fallback.
+  **The module installed in the workbook is not updated yet** (see Open).
+- New: `deathbook-workbook/scripts/migrate_details_prefix_to_docs.py` (dry run by default) and
+  `deathbook-workbook/tests/test_migrate_prefix.py`.
+- Skill text rewritten to the rule: `docket-processing` (+ both references), `process-payment-emails`,
+  `deathbook-workbook`, `email-attachment-processing`.
+
+**Live migration applied** with the workbook open, at the user's request: 243 of 9,982 rows changed
+(160 `D`, 17 `D{n}`, 23 `A`, 43 `A{n}`), only their `Docs` and `Details` cells. Every other cell, the row
+count, the table range and the Month formulas were verified unchanged before the save. Three rows had
+nothing after the prefix and now have an empty Details (9451, 9585, 9958); row 9984 used `AI23 created :`
+and became `D23`. Not migrated: 16 bare `AI{n} created` rows and 1 `NO DOCKET:` row. Backup:
+`DeathFinances/Backups/DeathBook_pre_docs_prefix_migration_20261112_065234.xlsm`. A read-only audit
+afterwards found every coded row still resolving to its document (exact, attachment or shared receipt),
+except row 9839, which relies on the same-date fallback.
+
+Offline suites after this change: docket 84 tests, payment 23, migration rule 6 — all pass.
+
 ## Open
 
-- **Not run against the live workbook.** First live use of each helper: dry-run first
-  (`add_docket.py check` prints the live headers and table range without writing).
+- **The first real insert under the new rule has not happened yet.** The write paths are covered by the
+  offline suites and the dry runs only.
+- **The Show Documents module inside the workbook still classifies by the Details prefix.** Updating it
+  is the Windows `update-module` procedure in `docket-processing/references/show-documents-button.md`
+  and needs the user to enable VBA-project trust for the session. Until then only the last-resort
+  same-date fallback differs (one row today: 9839).
 - The workbook's own VBA (`SortByDate`, the `Select_*` buttons, the CLEAR filter macros, `Snapshot`,
   `SortTableALL`) was not inspected from here; the user updated and checked those macros by hand
   (reported 2026-11-12), so this item is closed.
 - `process-payment-emails/scripts/archive_one_offs/` still uses fixed letters; archived, do not run.
-- What `Docs` should hold, and whether the helpers should fill it.
+- Whether `NO DOCKET: ` rows and bare `AI{n} created - ` rows should also get a `Docs` code.
