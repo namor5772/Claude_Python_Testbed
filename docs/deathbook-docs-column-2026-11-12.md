@@ -12,8 +12,9 @@ replaced. The end state:
   no `DOCKET: ` / `ATTACH: ` prefix; 243 old rows were migrated and 9,739 blank cells filled.
 - **Workbook VBA**: `modShowDocuments` reads the Docs code; new `modLayout` with the **LAYOUT** button
   (three sets of column widths, each click stores the current widths and applies the next); in
-  `Module1` the two CLEAR filter macros find their columns by name, and Reset (`SortTableALL`) ends on
-  the Date cell of the last row, scrolled to about two thirds down the window.
+  `Module1` the two CLEAR filter macros find their columns by name, and Reset (`SortTableALL`) and the
+  four Select buttons end on the Date cell of the last visible row, scrolled to about two thirds down
+  the window.
 - **`Spending!DATE_STAMP`** is B1, merged B1:C1, format `ddd dd-mmm-yy    hh:mm`. The saved instruction
   `SchedulePayment` refreshes it. J2 (`UP TO DATE`) was emptied and unformatted at the user's request.
 - **New files in the OneDrive skills tree**: `deathbook-workbook/scripts/` — `Layout.bas`,
@@ -222,6 +223,14 @@ is on screen, so a skill that calls the macro from elsewhere is unaffected. Veri
 the macro: focus on B9992, the row 66.7 % down, table values and order unchanged, and nothing moved
 when run from the Recurring Payments sheet. Backup:
 `Backups/DeathBook_pre_extend_Reset_20261112_203708.xlsm`.
+
+The four Select buttons (`Select_WBCSAV`, `Select_WBCMC`, `Select_ANZSAV`, `Select_ANZBIG`) then got the
+same ending. The logic moved into one `Private Sub JumpToLastVisibleRow` at the end of `Module1`, which
+all five macros call last; it targets the last row that passes the current filter (filtered-out rows
+have no height, so the two-thirds placement still holds). Tested through each macro: the Account
+filter applied, focus on the last matching row's Date cell (B9992, B9991, B9953, B9983), that row 67 to
+69 % down; Reset re-tested the same way; table values and order unchanged; filters cleared and the view
+restored afterwards. Backup: `Backups/DeathBook_pre_Select_buttons_jump_20261112_204949.xlsm`.
 
 ## Backups kept from this day
 
