@@ -438,7 +438,10 @@ class MainTests(_TempLog):
             _patch(self, US, mark, self._recorder(f"mark:{provider}", ["marked read"]))
         _patch(self, US, "show_digest", self._show)
         _patch(self, US, "outlook_send", self._send)
+        _patch(self, US, "smtp_send", self._smtp_send)
+        _patch(self, US, "SEND_FALLBACK_IMAP_ACCOUNT", "fallback")
         self.send_error = None
+        self.smtp_error = None
 
     def _recorder(self, label, result):
         def record(entry):
@@ -464,6 +467,12 @@ class MainTests(_TempLog):
             raise self.send_error
         self.sent.append(body)
 
+    def _smtp_send(self, account, cfg, subject, body):
+        self.events.append(f"smtp:{account}")
+        if self.smtp_error:
+            raise self.smtp_error
+        self.sent.append(body)
+
     def accounts(self, provider, names):
         (self.dirs[provider] / "accounts.json").write_text(
             json.dumps({"accounts": {n: {"email": f"{n}@{provider.lower()}.example"}
@@ -486,6 +495,43 @@ class MainTests(_TempLog):
             US.main(["--no-view"])
         self.assertEqual(self.events, ["save:Gmail", "digest", "send"])
         self.assertNotIn("acted on match", self.log_text())
+
+    def test_a_failed_outlook_send_falls_back_to_the_imap_account(self):
+        self.accounts("Gmail", ["main"])
+        self.accounts("IMAP", ["fallback"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        self.collected["IMAP"]["fallback"] = []
+        self.send_error = RuntimeError("Graph 504 UnknownError")
+        US.main(["--no-view"])
+        self.assertEqual(self.events,
+                         ["save:Gmail", "digest", "send", "smtp:fallback", "mark:Gmail", "logout"])
+        self.assertEqual(len(self.sent), 1)
+        log = self.log_text()
+        self.assertIn("falling back to fallback", log)
+        self.assertIn("from fallback@imap.example", log)
+
+    def test_both_senders_failing_changes_no_mailbox(self):
+        self.accounts("Gmail", ["main"])
+        self.accounts("IMAP", ["fallback"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        self.collected["IMAP"]["fallback"] = []
+        self.send_error = RuntimeError("Graph 504 UnknownError")
+        self.smtp_error = OSError("connection refused")
+        with self.assertRaises(RuntimeError) as cm:
+            US.main(["--no-view"])
+        self.assertIn("Graph 504", str(cm.exception))
+        self.assertIn("connection refused", str(cm.exception))
+        self.assertNotIn("mark:Gmail", self.events)
+        self.assertNotIn("acted on match", self.log_text())
+
+    def test_no_fallback_account_reraises_the_outlook_error(self):
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = []
+        _patch(self, US, "SEND_FALLBACK_IMAP_ACCOUNT", None)
+        self.send_error = RuntimeError("Graph 503 ServiceUnavailable")
+        with self.assertRaisesRegex(RuntimeError, "^Graph 503"):
+            US.main(["--no-view"])
+        self.assertNotIn("smtp:fallback", self.events)
 
     def test_imap_connections_stay_open_until_the_marks_ran(self):
         self.accounts("IMAP", ["webcentral"])

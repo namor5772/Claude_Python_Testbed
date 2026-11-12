@@ -20,7 +20,9 @@ they are marked read — but stay in place: the original move-to-Trash is
 off by default behind the TRASH_MATCHES flag (each per-match action has
 its own flag; see the constants below). The list is sent from
 grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
-instruction's daily email.
+instruction's daily email; when that send fails (a Graph 5xx outage, a
+dead token) it goes by SMTP from roman@ri.com.au instead
+(SEND_FALLBACK_IMAP_ACCOUNT).
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text — so a daily run costs $0.00 in API tokens (the AI run cost
@@ -77,6 +79,7 @@ import base64
 import csv
 import email
 import email.header
+import email.message
 import email.utils
 import imaplib
 import json
@@ -84,6 +87,7 @@ import os
 import platform
 import re
 import shutil
+import smtplib
 import socket
 import ssl
 import subprocess
@@ -120,6 +124,10 @@ GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 OUTLOOK_HTTP_TIMEOUT = 60
 
 SEND_FROM_OUTLOOK_ACCOUNT = "outlook"  # account key in msmail accounts.json
+# When the Outlook send fails (a Graph 5xx outage, an expired token) the digest
+# goes out by SMTP from this IMAP account instead — a key in the
+# myagent-protonmail accounts.json. None turns the fallback off.
+SEND_FALLBACK_IMAP_ACCOUNT = "roman@ri.com.au"
 SEND_TO = "namor5772@gmail.com"
 SUBJECT_PREFIX = "Summary of Unread Emails"
 
@@ -984,6 +992,68 @@ def outlook_send(account, account_email, subject, body):
     })
 
 
+def smtp_send(account, cfg, subject, body):
+    """Send the digest by SMTP from an IMAP account (the fallback sender).
+    TLS mirrors imap_connect: implicit TLS when smtp_ssl, else STARTTLS, and
+    a failed STARTTLS refuses the login anywhere but this machine."""
+    host = cfg.get("smtp_host", "127.0.0.1")
+    port = int(cfg.get("smtp_port", 1025))
+    ctx = _imap_ssl_context({**cfg, "imap_host": host})
+    if cfg.get("smtp_ssl"):
+        client = smtplib.SMTP_SSL(host, port, context=ctx, timeout=60)
+    else:
+        client = smtplib.SMTP(host, port, timeout=60)
+        try:
+            client.starttls(context=ctx)
+        except smtplib.SMTPException as e:
+            if not _is_loopback_host(host):
+                client.close()
+                raise RuntimeError(
+                    f"STARTTLS failed on {host}: {e} — refusing to send the password "
+                    f"unencrypted (set smtp_ssl: true if the server speaks implicit TLS)"
+                ) from e
+    msg = email.message.EmailMessage()
+    msg["From"] = cfg.get("email", account)
+    msg["To"] = SEND_TO
+    msg["Subject"] = subject
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid()
+    msg.set_content(body)
+    try:
+        client.login(cfg.get("username") or cfg.get("email"), cfg["app_password"])
+        client.send_message(msg)
+    finally:
+        try:
+            client.quit()
+        except Exception:
+            pass
+
+
+def send_summary(outlook_accounts, imap_accounts, subject, body):
+    """Send the digest from the Outlook account; on any failure, from
+    SEND_FALLBACK_IMAP_ACCOUNT by SMTP. Returns the sending address. Raises
+    when no sender worked — the caller then changes no mailbox."""
+    send_cfg = outlook_accounts.get(SEND_FROM_OUTLOOK_ACCOUNT, {})
+    primary = send_cfg.get("email", SEND_FROM_OUTLOOK_ACCOUNT)
+    try:
+        outlook_send(SEND_FROM_OUTLOOK_ACCOUNT, primary, subject, body)
+        return primary
+    except Exception as e:
+        fallback = imap_accounts.get(SEND_FALLBACK_IMAP_ACCOUNT) \
+            if SEND_FALLBACK_IMAP_ACCOUNT else None
+        if not fallback:
+            raise
+        log(f"send via {primary} failed ({type(e).__name__}: {e}); "
+            f"falling back to {SEND_FALLBACK_IMAP_ACCOUNT}")
+        try:
+            smtp_send(SEND_FALLBACK_IMAP_ACCOUNT, fallback, subject, body)
+        except Exception as e2:
+            raise RuntimeError(
+                f"send failed via {primary} ({type(e).__name__}: {e}) and via "
+                f"{SEND_FALLBACK_IMAP_ACCOUNT} ({type(e2).__name__}: {e2})") from e2
+        return fallback.get("email", SEND_FALLBACK_IMAP_ACCOUNT)
+
+
 # ── Output assembly ──────────────────────────────────────────────────────────
 
 def _field(label, value, width=9, wrap=WRAP):
@@ -1166,8 +1236,9 @@ def main(argv=None):
             except Exception as e:
                 errors[slot] = f"{type(e).__name__}: {e}"
 
-        for account, cfg in _provider_accounts("IMAP", PROTON_CONFIG_DIR,
-                                               account_order, errors).items():
+        imap_accounts = _provider_accounts("IMAP", PROTON_CONFIG_DIR,
+                                           account_order, errors)
+        for account, cfg in imap_accounts.items():
             slot = ("IMAP", account)
             host = cfg.get("imap_host", "")
             kind = "Proton Bridge" if host in ("127.0.0.1", "localhost") else "IMAP"
@@ -1242,10 +1313,8 @@ def main(argv=None):
                 f"{len(errors)} account error(s)")
             return
 
-        send_cfg = outlook_accounts.get(SEND_FROM_OUTLOOK_ACCOUNT, {})
-        outlook_send(SEND_FROM_OUTLOOK_ACCOUNT,
-                     send_cfg.get("email", SEND_FROM_OUTLOOK_ACCOUNT), subject, body)
-        log(f"sent summary to {SEND_TO}: {total} unread across "
+        sender = send_summary(outlook_accounts, imap_accounts, subject, body)
+        log(f"sent summary to {SEND_TO} from {sender}: {total} unread across "
             f"{len(account_order)} accounts, {len(matched)} specifying match(es), "
             f"{len(errors)} account error(s)")
 
