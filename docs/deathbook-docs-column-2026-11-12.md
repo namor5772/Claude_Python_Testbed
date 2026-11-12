@@ -241,7 +241,12 @@ were moved to the Recycle Bin, so several backup names quoted above no longer ex
 - `DeathBook_before_SHOW_DOCUMENTS_docs_code_20261112_065814.xlsm` (+ `.integrity.json`) — before the VBA module update
 - `DeathBook_before_LAYOUT_install_20261112_081919.xlsm` — before the LAYOUT button
 - `DeathBook_pre_fill_blank_docs_20261112_084821.xlsm` — before the blank-Docs fill, the macro fixes and the DATE_STAMP moves
-- `DeathBook_pre_move_DATE_STAMP_to_B1_20261112_093024.xlsm` — the latest
+- `DeathBook_pre_move_DATE_STAMP_to_B1_20261112_093024.xlsm` — the last of the morning's work
+
+Added in the evening, after the thinning:
+
+- `DeathBook_pre_extend_Reset_20261112_203708.xlsm` — before Reset's jump to the last row
+- `DeathBook_pre_Select_buttons_jump_20261112_204949.xlsm` — before the Select buttons got it (the latest)
 
 ## Open
 
