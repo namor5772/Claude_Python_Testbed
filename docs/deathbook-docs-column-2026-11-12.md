@@ -12,7 +12,8 @@ replaced. The end state:
   no `DOCKET: ` / `ATTACH: ` prefix; 243 old rows were migrated and 9,739 blank cells filled.
 - **Workbook VBA**: `modShowDocuments` reads the Docs code; new `modLayout` with the **LAYOUT** button
   (three sets of column widths, each click stores the current widths and applies the next); in
-  `Module1` the two CLEAR filter macros find their columns by name.
+  `Module1` the two CLEAR filter macros find their columns by name, and Reset (`SortTableALL`) ends on
+  the Date cell of the last row, scrolled to about two thirds down the window.
 - **`Spending!DATE_STAMP`** is B1, merged B1:C1, format `ddd dd-mmm-yy    hh:mm`. The saved instruction
   `SchedulePayment` refreshes it. J2 (`UP TO DATE`) was emptied and unformatted at the user's request.
 - **New files in the OneDrive skills tree**: `deathbook-workbook/scripts/` — `Layout.bas`,
@@ -210,6 +211,17 @@ Category1 to Account and stopped at Comments after the insert. At the user's wor
 `ListColumns("Category1")` to `ListColumns("Account")` by name. Tested through the macro with filters on
 Category1, Docs, Comments, Account and Month: the first four were cleared and Month was left alone.
 Backup: `Backups/DeathBook_pre_fix_CLEARCategory1FILTERS_20261112_091009.xlsm`.
+
+## Reset button jumps to the last row (same day, evening)
+
+`SortTableALL` (the Reset button) still clears filters and sorts by Date then Amount, and now ends by
+selecting the Date cell of the last TableALL row and scrolling so that row sits about two thirds of the
+way down the visible rows. The scroll position is worked out from actual row heights in the scrolling
+pane, so frozen panes and uneven rows are handled. The step is skipped when another sheet or workbook
+is on screen, so a skill that calls the macro from elsewhere is unaffected. Verified end to end through
+the macro: focus on B9992, the row 66.7 % down, table values and order unchanged, and nothing moved
+when run from the Recurring Payments sheet. Backup:
+`Backups/DeathBook_pre_extend_Reset_20261112_203708.xlsm`.
 
 ## Backups kept from this day
 
