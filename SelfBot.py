@@ -7404,6 +7404,38 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
             self.chat_display.see(tk.END)
         self.chat_display.config(state="disabled")
 
+    @staticmethod
+    def _cost_tokens(msg):
+        """The token part of a cost line, from one cost_update message: `in:`
+        is the WHOLE prompt the provider counted for the call, `out:` what the
+        model wrote. When a cache bucket is in play the prompt's split by
+        billing rate follows `in:` in brackets — `uncached` (the full input
+        rate), `cache_write`, `cache_read` — and always sums to it; a call
+        with no cache bucket reads `in:N  out:M` alone.
+
+        The message carries the DISJOINT buckets the pricing tables rate: its
+        input_tokens is the uncached bucket by itself (the cost log's {in}
+        field), and until 2026-11-17 THAT was printed as `in:`. On the OpenAI
+        tiers that bill cache writes it is only what follows the automatic
+        cache breakpoint at the end of the newest message — 3 tokens on an
+        ordinary call, of a prompt of 174,053 on the run that raised it — so
+        all 153 lines of that run read `in:3`, and Anthropic's lines read
+        `in:2` or so for the same reason: true, and taken for a broken
+        counter. Pure, and byte-identical in MyAgent's EventLoopMixin and
+        SelfBot's App (tests/test_cost_line_tokens.py)."""
+        inp = msg["input_tokens"]
+        out = msg["output_tokens"]
+        cw = msg["cache_write_tokens"]
+        cr = msg["cache_read_tokens"]
+        if not (cw or cr):
+            return f"in:{inp:,}  out:{out:,}"
+        split = [f"uncached:{inp:,}"]
+        if cw:
+            split.append(f"cache_write:{cw:,}")
+        if cr:
+            split.append(f"cache_read:{cr:,}")
+        return f"in:{inp + cw + cr:,} [{'  '.join(split)}]  out:{out:,}"
+
     def check_queue(self):
         try:
             while True:
@@ -7506,14 +7538,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 elif msg["type"] == "cost_update":
                     call_cost = msg["call_cost"]
                     total_cost = msg["total_cost"]
-                    inp, out = msg["input_tokens"], msg["output_tokens"]
-                    cw, cr = msg["cache_write_tokens"], msg["cache_read_tokens"]
-                    parts = [f"in:{inp:,}  out:{out:,}"]
-                    if cw:
-                        parts.append(f"cache_write:{cw:,}")
-                    if cr:
-                        parts.append(f"cache_read:{cr:,}")
-                    token_str = "  ".join(parts)
+                    # in: is the whole prompt, its billing split in brackets
+                    # (MyAgent's _cost_tokens — the byte-identical copy above).
+                    token_str = self._cost_tokens(msg)
                     if call_cost is None:
                         # An unpriced call (no pricing row for the model): the
                         # tokens alone, in MyAgent's words.

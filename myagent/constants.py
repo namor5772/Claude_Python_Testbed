@@ -4012,6 +4012,12 @@ OPENAI_PRICING = {
     # are SUBSETS of input_tokens (2420 of 2423 written on a first call, read
     # back on the repeat). The >272K long-context tier (2x input/cache, 1.5x
     # output on 5.5/5.6/6) is not modelled — table keeps the ≤272K tier.
+    # The 4th element is the 30-MINUTE write — the default, and the only one
+    # MyAgent incurs: the pricing page (read 2026-11-17) lists a 12-hour
+    # write too, at 2.5x input, and usage splits a write into
+    # cache_write_tokens_details.ttl_30m_tokens / ttl_12h_tokens (12h was 0 on
+    # every probed call — no retention parameter is sent). A 12-hour
+    # retention would need a second write bucket in responses_usage_dict.
     # GPT-6 Astra (2026-09-03; $10/$50, cached $1.00, write $12.50). No bare
     # "gpt-6" family row, for the same reason as 5.6 below: an unknown future
     # gpt-6 tier is unpriced, not mispriced.

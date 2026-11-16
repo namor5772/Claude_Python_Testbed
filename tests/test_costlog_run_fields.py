@@ -318,7 +318,10 @@ class CostLogRunFieldsTests(unittest.TestCase):
 
 
 class CostLineTests(unittest.TestCase):
-    """event_loop_mixin._cost_line: the blue per-call line, pure."""
+    """event_loop_mixin._cost_line: the blue per-call line, pure. Since
+    2026-11-17 `in:` is the whole prompt and the message's uncached bucket
+    (12,345 here) is named inside the brackets — tests/test_cost_line_tokens.py
+    has the why and the token string's own cases."""
 
     @staticmethod
     def _msg(call_cost, total_cost, cw=0, cr=0):
@@ -330,12 +333,14 @@ class CostLineTests(unittest.TestCase):
         self.assertEqual(EventLoopMixin._cost_line(self._msg(0.0012, 0.0034)),
                          "  $0.0012 this call  |  $0.0034 total  (in:12,345  out:678)\n")
         self.assertEqual(EventLoopMixin._cost_line(self._msg(0.0012, 1.2345, cw=40, cr=7)),
-                         "  $0.0012 this call  |  $1.23 total  (in:12,345  out:678  cache_write:40  cache_read:7)\n")
+                         "  $0.0012 this call  |  $1.23 total  "
+                         "(in:12,392 [uncached:12,345  cache_write:40  cache_read:7]  out:678)\n")
 
     def test_unpriced_line_shows_the_tokens(self):
         from myagent.event_loop_mixin import EventLoopMixin
         self.assertEqual(EventLoopMixin._cost_line(self._msg(None, None, cr=7)),
-                         "  unpriced this call  |  no pricing row  (in:12,345  out:678  cache_read:7)\n")
+                         "  unpriced this call  |  no pricing row  "
+                         "(in:12,352 [uncached:12,345  cache_read:7]  out:678)\n")
 
 
 if __name__ == "__main__":

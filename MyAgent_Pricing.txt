@@ -192,6 +192,24 @@
   / cache_write_tokens, both SUBSETS of input_tokens and so subtracted before
   pricing (verified live 2026-09-06 on terra AND astra: 2420 of 2423 tokens
   written on a first call, read on the repeat).
+  TWO WRITE CLASSES (pricing page and caching guide read 2026-11-17): the
+  page's write column is now two — a 30-minute write at 1.25x input, the
+  DEFAULT and the rate in every row below, and a 12-hour write at 2.5x
+  (the six rows read: gpt-6-astra $25.00 / gpt-6-sol, gpt-6.1-sol and
+  gpt-5.6-terra $5.00 / gpt-6.1-terra $2.50 / gpt-6-luna $0.25 per M). MyAgent
+  sends no retention parameter, and the usage object reports every written
+  token under cache_write_tokens_details.ttl_30m_tokens (ttl_12h_tokens 0,
+  probed that day), so the single write rate is right. A 12-hour retention is
+  NOT modelled: it would need a second write bucket in the normalizer.
+  WHAT IS LEFT AT THE FULL INPUT RATE: on these tiers the provider puts its
+  cache breakpoint at the end of the newest message, so of a prompt over the
+  1,024-token floor only what follows it is plain input — 3 tokens on an
+  ordinary call (68 through 2026-10-08), more when a server-side web search
+  feeds the model mid-call. The cost line names it "uncached" since
+  2026-11-17 and shows the whole prompt as "in:"; until then it was printed
+  as "in:" itself and every line of an OpenAI run read in:3
+  (docs/openai-cost-line-in3-2026-11-17.md; re-probe with the hand-run
+  tests/check_openai_usage_live.py, about US$0.001).
 
   2026-07-31 RATE AUDIT — eight entries were wrong and are corrected below:
   gpt-5.2, gpt-5.2-pro, gpt-5.1, gpt-4.1-mini, gpt-4.1-nano and codex-mini all
