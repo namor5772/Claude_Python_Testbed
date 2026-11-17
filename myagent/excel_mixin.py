@@ -4,7 +4,8 @@ Drives the REAL Excel application — COM on Windows, AppleScript on macOS —
 so changes land visibly in the open workbook, formulas recalculate, and
 existing VBA macros can run. This is the "agent inside your workbook"
 surface: attach to whatever the user already has open (or open/create a
-workbook), then read/write/format ranges, manage sheets, run macros.
+workbook), then read/write/format ranges, manage sheets and tables, freeze
+panes, run macros.
 
 Architecture notes (mirrors the mail mixins):
 - No COM/AppleScript handles are cached on self. Tool calls run on a fresh
@@ -20,15 +21,36 @@ Architecture notes (mirrors the mail mixins):
 - On macOS the import also moves xlwings' per-user config path OUT of
   Excel's sandbox container (see under the import): one stat in there is a
   TCC "access data from other apps" dialog on every new process.
+- Two tools (2026-11-18) reach past xlwings to the native object model, each
+  in ONE place, because xlwings has no desktop implementation of either:
+  excel_table's convert_to_range (_excel_table_unlist) and the whole of
+  excel_freeze_panes (_excel_pane_window hands out the window;
+  _excel_win_get / _excel_win_set are where COM and appscript differ). The
+  panes go through the WORKBOOK'S OWN window, never the application's
+  active one — attached to the user's Excel, the active window is whatever
+  they have in front. What a real Excel does with a freeze, and why each
+  step and each refusal is there, was measured that day:
+  docs/excel-table-freeze-panes-2026-11-18.md.
 """
 
 import datetime as _dt
 import decimal as _decimal
+import math as _math
 import numbers as _numbers
 import os
+import re as _re
 import sys
 
-from myagent.constants import EXCEL_SHEET_ACTIONS
+from myagent.constants import (
+    EXCEL_SHEET_ACTIONS, EXCEL_TABLE_ACTIONS, EXCEL_TABLE_OPTIONS,
+)
+
+# What Excel reads as a cell reference, and so refuses as a table name: A1
+# style (up to three column letters and a row) and R1C1 style (R1C1, RC, R2C,
+# the bare R and C). Whether the row / column is inside the sheet is checked
+# by the caller — XFE1 and A1048577 are past its edge and are valid names.
+_A1_REF = _re.compile(r"^([A-Za-z]{1,3})(\d{1,7})$")
+_R1C1_REF = _re.compile(r"^(?:[Rr](\d*))?(?:[Cc](\d*))?$")
 
 try:
     import xlwings as xw
@@ -57,6 +79,32 @@ class ExcelMixin:
     #: Defined in constants.py beside the tool schema (whose enum it also
     #: feeds), so the guard and the schema can never drift apart.
     SHEET_ACTIONS = EXCEL_SHEET_ACTIONS
+
+    #: excel_table's actions and display options — constants.py's too, for
+    #: the same reason (the options also feed the schema's boolean properties).
+    TABLE_ACTIONS = EXCEL_TABLE_ACTIONS
+    TABLE_OPTIONS = EXCEL_TABLE_OPTIONS
+
+    #: A worksheet's size, and the style Excel itself gives a new table.
+    _EXCEL_SHEET_ROWS = 1_048_576
+    _EXCEL_SHEET_COLS = 16_384
+    _EXCEL_TABLE_STYLE = "TableStyleMedium2"
+    _EXCEL_TABLE_STYLE_HINT = ("Built-in styles are TableStyleLight1-21, "
+                               "TableStyleMedium1-28 and TableStyleDark1-11.")
+    #: How many of a table's columns excel_table names before summing up the rest.
+    _EXCEL_TABLE_COLS_SHOWN = 40
+
+    #: A window's pane properties: the name this module uses → (the COM
+    #: attribute, the appscript property). Reads and writes go through
+    #: _excel_win_get / _excel_win_set, the one place the two shapes differ.
+    _EXCEL_PANE_PROPS = {
+        "frozen": ("FreezePanes", "freeze_panes"),
+        "split_row": ("SplitRow", "split_row"),
+        "split_column": ("SplitColumn", "split_column"),
+        "scroll_row": ("ScrollRow", "scroll_row"),
+        "scroll_column": ("ScrollColumn", "scroll_column"),
+        "view": ("View", "view"),
+    }
 
     # ── Pure helpers (unit-tested in tests/test_excel_mixin.py) ──────────
 
@@ -196,6 +244,172 @@ class ExcelMixin:
             lines.append(f"{first_row + i}\t{cells}")
         return "\n".join(lines)
 
+    @staticmethod
+    def _excel_col_number(letters):
+        """Excel column letters → 1-based number (A→1, XFD→16384): the
+        inverse of _excel_col_letter."""
+        n = 0
+        for ch in str(letters).upper():
+            n = n * 26 + (ord(ch) - 64)
+        return n
+
+    @staticmethod
+    def _excel_is_cell_reference(name):
+        """True when `name` reads as a cell reference in either notation: A1
+        style inside the sheet (A1 … XFD1048576) or R1C1 style (R1C1, RC, R2C,
+        the bare R and C). Excel refuses these as table names. A column or
+        row past the sheet's edge is no reference, and Excel accepts it —
+        XFE1, A1048577 (measured 2026-11-18)."""
+        rows, cols = ExcelMixin._EXCEL_SHEET_ROWS, ExcelMixin._EXCEL_SHEET_COLS
+        m = _A1_REF.match(name)
+        if m and ExcelMixin._excel_col_number(m.group(1)) <= cols \
+                and 1 <= int(m.group(2)) <= rows:
+            return True
+        m = _R1C1_REF.match(name) if name else None
+        if m:
+            row, col = m.group(1), m.group(2)
+            return ((not row or 1 <= int(row) <= rows)
+                    and (not col or 1 <= int(col) <= cols))
+        return False
+
+    @staticmethod
+    def _excel_table_name_problem(name):
+        """Why Excel would refuse `name` for a table, worded to finish the
+        sentence "'X' cannot be a table name — …", or None when it is fine.
+
+        Checked HERE, before a table exists, because of how xlwings names
+        one: it creates the table and only then sets the name, so a refused
+        name leaves a table called Table4 behind (seen 2026-11-18, with a
+        duplicate name). And the name is later set through display_name,
+        which is where Excel applies these rules — the plain .Name property
+        takes anything and quietly gives the table a DIFFERENT name for
+        formulas ('Has Space' → Has_Space, 'A1' → A1_).
+
+        The rules are Excel's for any defined name, each confirmed against
+        the display-name setter that day: a letter, underscore or backslash
+        first; then letters, digits, underscores, periods (backslashes and
+        question marks too); no spaces; not a cell reference; 255 characters
+        at most."""
+        if not name:
+            return "it is empty"
+        if len(name) > 255:
+            return f"it is {len(name)} characters long (255 at most)"
+        if any(ch.isspace() for ch in name):
+            return "it contains a space (join the words with an underscore)"
+        if not (name[0].isalpha() or name[0] in "_\\"):
+            return "it must start with a letter or an underscore"
+        bad = [ch for ch in dict.fromkeys(name)
+               if not (ch.isalnum() or ch in "_.\\?")]
+        if bad:
+            return ("it contains " + " ".join(bad) + " — only letters, digits, "
+                    "underscores and periods are allowed")
+        if ExcelMixin._excel_is_cell_reference(name):
+            return "it reads as a cell reference"
+        return None
+
+    @staticmethod
+    def _excel_table_line(info):
+        """One table as excel_table reports it: a headline (name, where,
+        size, style, the display options that are on) and its columns as
+        LETTER=header pairs, so a column can be addressed by its header name
+        instead of a remembered letter. `info` is _excel_table_info's dict."""
+        name = info["name"]
+        if info.get("display_name") and info["display_name"] != name:
+            # Only for a table named through .Name by something else: the
+            # name formulas must use is then not the one the table shows.
+            name += f" (in formulas: {info['display_name']})"
+        n = info["data_rows"]
+        head = (f"• {name} — {info['sheet']}!{info['range']}, "
+                f"{n} data row{'' if n == 1 else 's'}, "
+                + (f"style {info['style']}" if info["style"] else "no style"))
+        if info["options"]:
+            head += "; " + ", ".join(info["options"])
+        cols = info["columns"]
+        if cols is None:
+            body = "(header row hidden)"
+        else:
+            shown = ExcelMixin._EXCEL_TABLE_COLS_SHOWN
+            body = ", ".join(f"{letter}={header}" for letter, header in cols[:shown])
+            if len(cols) > shown:
+                body += f", … +{len(cols) - shown} more"
+        return head + "\n  columns: " + body
+
+    @staticmethod
+    def _excel_given(value):
+        """Whether a numeric tool parameter was supplied — 0 is a value
+        here (rows=0 unfreezes), so the usual `or default` test will not do."""
+        return value is not None and value != ""
+
+    @staticmethod
+    def _excel_pane_count(value, what, limit):
+        """excel_freeze_panes' rows / columns → a whole number from 0 to
+        limit-1 (one row or column has to stay scrollable). Takes what the
+        providers send for a JSON number — 8, 8.0, '8' — and raises a
+        ValueError that names the parameter for anything else."""
+        problem = f"'{what}' must be a whole number (0 = none), got {value!r}"
+        if isinstance(value, bool):
+            raise ValueError(problem)
+        try:
+            num = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(problem) from None
+        if not _math.isfinite(num) or num != int(num):
+            raise ValueError(problem)
+        count = int(num)
+        if count < 0:
+            raise ValueError(f"'{what}' cannot be negative (0 = none)")
+        if count >= limit:
+            raise ValueError(f"'{what}' must be below {limit:,} — a sheet has "
+                             f"{limit:,}, and one has to stay scrollable")
+        return count
+
+    @staticmethod
+    def _excel_pane_words(rows, cols):
+        """'top 8 rows and left column' — the frozen part, in words."""
+        parts = []
+        if rows:
+            parts.append("top row" if rows == 1 else f"top {rows} rows")
+        if cols:
+            parts.append("left column" if cols == 1 else f"left {cols} columns")
+        return " and ".join(parts)
+
+    @staticmethod
+    def _excel_pane_text(state):
+        """A pane state (_excel_pane_state's dict) in words."""
+        rows, cols = state["rows"], state["columns"]
+        if state["frozen"]:
+            words = ExcelMixin._excel_pane_words(rows, cols)
+            return f"frozen — {words} kept in view" if words else "frozen"
+        parts = ([f"below row {rows}"] if rows else []) + (
+            [f"right of column {ExcelMixin._excel_col_letter(cols)}"] if cols else [])
+        if parts:
+            return "split but not frozen (" + ", ".join(parts) + ")"
+        return "not frozen"
+
+    @staticmethod
+    def _excel_pane_landed(state, rows, cols):
+        """Whether Excel's read-back says the freeze just made is the one
+        asked for: the frozen flag right, no split on an axis that was not
+        asked for, and each asked-for axis reading the count asked for — or
+        one less, which is how Excel reads a split lying past what the
+        window can show (39 for 40 rows, 2026-11-18).
+
+        A check and not a formality, because the one failure seen is
+        silent: an absurd count raises nothing, Excel just substitutes a
+        freeze in the middle of the window (1,048,575 rows became 16 rows by
+        10 columns). It can be this strict only because
+        _excel_pane_blocked has already refused the case where Excel
+        legitimately reads back MORE — hidden rows directly under the split."""
+        if not (rows or cols):
+            return (not state["frozen"]
+                    and state["rows"] == 0 and state["columns"] == 0)
+
+        def axis(wanted, got):
+            return got == 0 if wanted == 0 else got >= 1 and got in (wanted, wanted - 1)
+
+        return (bool(state["frozen"])
+                and axis(rows, state["rows"]) and axis(cols, state["columns"]))
+
     # ── Excel plumbing ───────────────────────────────────────────────────
 
     @staticmethod
@@ -221,6 +435,15 @@ class ExcelMixin:
             except Exception:
                 pass
         return str(e)
+
+    @staticmethod
+    def _excel_reason(e, fallback="Excel gave no reason"):
+        """_excel_err's text for use INSIDE a sentence, or `fallback` when
+        there is none to give: a COM error without a description — Excel's
+        answer to an unknown table style, or to a duplicate table name —
+        prints as a bare tuple of numbers, which tells the model nothing."""
+        text = ExcelMixin._excel_err(e).strip().rstrip(".")
+        return fallback if not text or text.startswith("(") else text
 
     def _excel_app(self, launch=False):
         """Attach to the running Excel instance (the user's, if one is
@@ -421,6 +644,422 @@ class ExcelMixin:
                 f"Active sheet: [{active_book.name}]{sht.name}, used range "
                 f"{addr} ({ur.rows.count} rows x {ur.columns.count} cols)")
         return "\n".join(lines)
+
+    # ── Tables ───────────────────────────────────────────────────────────
+
+    def _excel_tables(self, book, sheet=None):
+        """Every table of the workbook — or of one sheet — as (sheet, table)
+        pairs, in sheet order."""
+        sheets = [self._excel_get_sheet(book, sheet)] if sheet else list(book.sheets)
+        return [(sht, tbl) for sht in sheets for tbl in sht.tables]
+
+    @staticmethod
+    def _excel_table_names(tbl):
+        """A table's two names: (.name, the display name formulas use). They
+        are the same string for any table named through this tool; they
+        differ for one whose .Name was set to something Excel had to adapt."""
+        name = tbl.name
+        try:
+            shown = tbl.display_name or name
+        except Exception:
+            shown = name
+        return name, shown
+
+    def _excel_find_table(self, book, name, sheet=None):
+        """Resolve a table by name anywhere in the workbook — a table name is
+        unique in it, so no sheet is needed — by the rule sheets get: exact
+        first, then case-insensitive; .name first, then the display name."""
+        pairs = self._excel_tables(book, sheet)
+        named = [self._excel_table_names(tbl) for _sht, tbl in pairs]
+        for which in (0, 1):
+            candidates = [names[which] for names in named]
+            real = self._excel_resolve_sheet_name(candidates, name)
+            if real is not None:
+                return pairs[candidates.index(real)]
+        where = f"sheet '{sheet}' of {book.name}" if sheet else book.name
+        listed = ", ".join(names[0] for names in named) or "none"
+        raise RuntimeError(f"Table '{name}' not found in {where}. Tables: {listed}")
+
+    def _excel_table_clash(self, book, name, own=None):
+        """What in the workbook already answers to `name`, as a sentence — or
+        None. A table name must be unique among the tables AND the defined
+        names, whatever the case; Excel's own refusal of a duplicate says
+        nothing at all (a bare 0x800A03EC). `own` is the table being
+        renamed, which may of course keep its name."""
+        want = name.lower()
+        for sht, tbl in self._excel_tables(book):
+            names = self._excel_table_names(tbl)
+            if own is not None and names[0] == own:
+                continue
+            if want in (n.lower() for n in names):
+                return (f"a table named '{names[0]}' already exists "
+                        f"({sht.name}!{tbl.range.address.replace('$', '')})")
+        try:
+            for defined in book.names:
+                if str(defined.name).lower() == want:
+                    return f"the workbook already has a defined name '{defined.name}'"
+        except Exception:
+            pass    # names that cannot be read are no reason to refuse; Excel still decides
+        return None
+
+    def _excel_table_info(self, sht, tbl):
+        """One table's facts as a plain dict (see _excel_table_line). Every
+        read that a legitimate table can fail is guarded: a table with no
+        style has no style NAME to read, one with its header row switched off
+        has no header range, an empty one has no data range."""
+        name, shown = self._excel_table_names(tbl)
+        try:
+            style = tbl.table_style or None
+        except Exception:
+            style = None
+        try:
+            header = tbl.header_row_range
+        except Exception:
+            header = None
+        columns = None
+        if header is not None:
+            values = self._excel_as_2d(header.value)[0]
+            first = header.column
+            columns = [(self._excel_col_letter(first + i), self._excel_cell_str(v))
+                       for i, v in enumerate(values)]
+        try:
+            body = tbl.data_body_range
+            data_rows = body.rows.count if body is not None else 0
+        except Exception:
+            data_rows = 0
+        options = []
+        for attr, words, _text in self.TABLE_OPTIONS.values():
+            try:
+                if getattr(tbl, attr):
+                    options.append(words)
+            except Exception:
+                pass
+        return {"name": name, "display_name": shown, "sheet": sht.name,
+                "range": tbl.range.address.replace("$", ""), "style": style,
+                "columns": columns, "data_rows": data_rows, "options": options}
+
+    def _excel_table_set_options(self, tbl, params):
+        """Apply the display options the call names (an absent one is left
+        alone). Returns (what was set, what Excel refused) — each is tried
+        on its own, so one refusal does not hide the others."""
+        done, refused = [], []
+        for param, (attr, _words, _text) in self.TABLE_OPTIONS.items():
+            if params.get(param) is None:
+                continue
+            value = bool(params[param])
+            try:
+                setattr(tbl, attr, value)
+                done.append(f"{param}={str(value).lower()}")
+            except Exception as e:
+                refused.append(f"{param} ({self._excel_reason(e)})")
+        return done, refused
+
+    @staticmethod
+    def _excel_table_unlist(tbl):
+        """Turn a table back into plain cells. xlwings has no call for it, so
+        this is the table tool's one native call: ListObject.Unlist on
+        Windows (verified 2026-11-18 — the values stay, the style's look stays
+        as ordinary cell formatting, the name and the filter buttons go),
+        and on macOS the AppleScript `convert to range` command, taken from
+        xlwings' terminology table and NOT yet run on a Mac."""
+        if sys.platform == "darwin":
+            tbl.api.convert_to_range()
+        else:
+            tbl.api.Unlist()
+
+    # ── Panes ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _excel_win_get(win, prop):
+        com, mac = ExcelMixin._EXCEL_PANE_PROPS[prop]
+        if sys.platform == "darwin":
+            return getattr(win, mac).get()
+        return getattr(win, com)
+
+    @staticmethod
+    def _excel_win_set(win, prop, value):
+        com, mac = ExcelMixin._EXCEL_PANE_PROPS[prop]
+        if sys.platform == "darwin":
+            getattr(win, mac).set(value)
+        else:
+            setattr(win, com, value)
+
+    @staticmethod
+    def _excel_view_mark(book):
+        """What is on screen before a tool has to show another sheet: (the
+        active workbook's name, this workbook's active sheet's name) — None
+        for one that cannot be read. _excel_view_restore puts it back."""
+        try:
+            active_book = book.app.books.active.name
+        except Exception:
+            active_book = None
+        try:
+            active_sheet = book.sheets.active.name
+        except Exception:
+            active_sheet = None
+        return active_book, active_sheet
+
+    @staticmethod
+    def _excel_view_restore(book, mark):
+        """Put the active sheet and the active workbook back as
+        _excel_view_mark found them. Both are checked, because showing a
+        sheet of a workbook that is not in front sometimes brings that
+        workbook forward and sometimes does not (seen both ways 2026-11-18).
+        Best-effort: a view that cannot be restored never fails the tool."""
+        active_book, active_sheet = mark
+        try:
+            if active_sheet and book.sheets.active.name != active_sheet:
+                book.sheets[active_sheet].activate()
+        except Exception:
+            pass
+        try:
+            if active_book and book.app.books.active.name != active_book:
+                book.app.books[active_book].activate()
+        except Exception:
+            pass
+
+    def _excel_pane_window(self, book, sht):
+        """The window whose panes are `sht`'s, with `sht` showing in it.
+
+        Panes belong to a (window, sheet) pair and can only be read or set
+        for the sheet a window currently shows — so the sheet is shown first
+        (the caller restores the view afterwards).
+
+        On Windows this is the WORKBOOK'S OWN window, never the
+        application's active one: a freeze through ActiveWindow lands on
+        whatever is in front at that instant, and the agent is attached to
+        the user's Excel — another workbook coming forward mid-call would
+        have ITS sheet frozen. The workbook's window needs neither the
+        workbook active nor Excel visible (verified 2026-11-18: another
+        workbook stayed in front and its own panes stayed untouched). What
+        the window shows is checked rather than assumed, because activating
+        a HIDDEN sheet raises nothing and changes nothing.
+
+        macOS's AppleScript reaches a window only as the application's
+        active one, so there the workbook is brought forward and both it and
+        the sheet are checked before the window is handed out. NOT yet run
+        on a Mac."""
+        if sys.platform == "darwin":
+            book.activate()
+            if book.sheets.active.name != sht.name:
+                sht.activate()
+            app = book.app
+            if app.books.active.name != book.name or book.sheets.active.name != sht.name:
+                raise RuntimeError(
+                    f"could not bring sheet '{sht.name}' of {book.name} to the "
+                    "front — its panes can only be reached while it is showing")
+            return app.api.active_window
+        if book.sheets.active.name != sht.name:
+            sht.activate()
+        win = book.api.Windows(1)
+        if str(win.ActiveSheet.Name) != sht.name:
+            raise RuntimeError(
+                f"could not show sheet '{sht.name}' in {book.name}'s window (is "
+                "it hidden?) — its panes can only be reached while it is showing")
+        return win
+
+    def _excel_pane_state(self, win):
+        """What Excel reports for a window's panes. 'rows' / 'columns' are
+        its raw SplitRow / SplitColumn: where the split IS, which is not
+        always how many rows are visibly frozen (_excel_pane_true)."""
+        get = self._excel_win_get
+        return {"frozen": bool(get(win, "frozen")),
+                "rows": int(get(win, "split_row") or 0),
+                "columns": int(get(win, "split_column") or 0),
+                "scroll_row": int(get(win, "scroll_row") or 1),
+                "scroll_column": int(get(win, "scroll_column") or 1)}
+
+    def _excel_pane_apply(self, win, rows, cols):
+        """Freeze `rows` top rows and `cols` left columns (0, 0 = unfreeze).
+
+        The order matters, each step measured 2026-11-18. Unfreezing alone
+        leaves an ordinary split behind, so the split is cleared as well.
+        And a freeze is taken from the window's CURRENT scroll position —
+        asked for 8 rows while scrolled to row 50, Excel froze rows 50-57 and
+        put rows 1-49 out of reach — so the window is scrolled to the top-left
+        corner before the split is set."""
+        put = self._excel_win_set
+        put(win, "frozen", False)
+        put(win, "split_row", 0)
+        put(win, "split_column", 0)
+        put(win, "scroll_row", 1)
+        put(win, "scroll_column", 1)
+        if rows or cols:
+            put(win, "split_column", cols)
+            put(win, "split_row", rows)
+            put(win, "frozen", True)
+
+    def _excel_pane_scroll(self, win, before, rows, cols):
+        """Scroll the unfrozen part back to where the user had it, after
+        _excel_pane_apply sent the window to its top-left corner. With frozen
+        panes ScrollRow / ScrollColumn address the scrollable part only, so
+        this never undoes a freeze.
+
+        Only a position the user had actually scrolled TO is put back. A
+        window with two frozen columns reads ScrollColumn 3 while it shows
+        its leftmost columns; put back as a bare number after a freeze with
+        no frozen columns, that 3 scrolled columns A and B out of view
+        (2026-11-18). Best-effort: the view is a courtesy, never a reason
+        for the tool to fail."""
+        try:
+            for key, frozen_before, frozen_now in (
+                    ("scroll_row", before["rows"], rows),
+                    ("scroll_column", before["columns"], cols)):
+                home = (frozen_before if before["frozen"] else 0) + 1
+                if before[key] > max(home, frozen_now + 1):
+                    self._excel_win_set(win, key, before[key])
+        except Exception:
+            pass
+
+    @staticmethod
+    def _excel_span_hidden(sht, first, last, axis):
+        """True when every row (axis 'row') or column from `first` to `last`
+        is hidden — one call: a range's row_height / column_width is 0 when
+        all of it is hidden, and None when it is mixed (verified 2026-11-18,
+        for hidden and for filtered-out rows alike)."""
+        if axis == "row":
+            return sht.range((first, 1), (last, 1)).row_height == 0
+        return sht.range((1, first), (1, last)).column_width == 0
+
+    def _excel_page_layout(self, win):
+        """True when the window shows its sheet in Page Layout view (COM's
+        xlPageLayoutView is 3; appscript answers with a keyword naming it).
+        A view that cannot be read counts as not being one."""
+        try:
+            view = self._excel_win_get(win, "view")
+        except Exception:
+            return False
+        return view == 3 or "page_layout" in str(view).lower()
+
+    def _excel_pane_blocked(self, sht, win, rows, cols):
+        """Why this freeze must not be attempted, as a sentence — or None.
+
+        1. Page Layout view has no panes: a freeze there fails half-way,
+           after the panes the sheet had are already gone.
+        2. The row directly below the rows to freeze (or the column right of
+           the columns) is hidden. Excel positions a split in points and a
+           hidden row has no height, so with rows 9-20 hidden "below row 8"
+           and "below row 20" are one position — and Excel settles on the far
+           end. The freeze LOOKS right and is wrong: the hidden rows are
+           inside it, and stay frozen once they are shown. Measured
+           2026-11-18: one header row frozen over a filtered table was 31
+           frozen rows when the filter was cleared, and Excel's own
+           freeze-at-the-active-cell route does the same. A freeze made
+           FIRST and filtered afterwards is stable, so the remedy is the
+           order — show the rows, then freeze.
+
+        Visibility that cannot be read does not block: _excel_pane_landed
+        then catches a freeze that came out larger than asked."""
+        if self._excel_page_layout(win):
+            return ("the sheet is in Page Layout view, which has no panes — "
+                    "switch it to Normal view first")
+        for count, axis in ((rows, "row"), (cols, "column")):
+            if not count:
+                continue
+            try:
+                hidden = self._excel_span_hidden(sht, count + 1, count + 1, axis)
+            except Exception:
+                hidden = False
+            if not hidden:
+                continue
+            if axis == "row":
+                return (f"row {count + 1}, directly below the "
+                        f"{'row' if count == 1 else f'{count} rows'} to freeze, is "
+                        "hidden (filtered out?). Excel would take the hidden rows "
+                        "into the frozen part, where they stay frozen once shown "
+                        "again — show them (clear the filter) first, then freeze")
+            return (f"column {self._excel_col_letter(count + 1)}, directly right of "
+                    f"the {'column' if count == 1 else f'{count} columns'} to freeze, "
+                    "is hidden. Excel would take the hidden columns into the frozen "
+                    "part, where they stay frozen once shown again — show them "
+                    "first, then freeze")
+        return None
+
+    def _excel_pane_home(self, win, rows, cols):
+        """Whether a window's frozen part begins at the sheet's first row /
+        column: True, False, or None where it cannot be told. A freeze made
+        while scrolled keeps the WRONG rows in view (_excel_pane_apply) yet
+        reads exactly like a proper one — same flag, same split — and only
+        the frozen pane's own scroll position gives it away. That is reached
+        through the window's panes, which COM exposes and the AppleScript
+        route used here does not."""
+        if sys.platform == "darwin":
+            return None
+        try:
+            pane = win.Panes(1)
+            return ((not rows or int(pane.ScrollRow) == 1)
+                    and (not cols or int(pane.ScrollColumn) == 1))
+        except Exception:
+            return None
+
+    def _excel_pane_extent(self, sht, split, axis):
+        """How many rows (or columns) are VISIBLY frozen, given where Excel
+        reports the split. The two differ when the frozen part ends in
+        hidden rows — a freeze made over hidden rows takes them in (see
+        _excel_pane_blocked), and while they stay hidden Excel reads the
+        split one short of its far end: 19 for rows 1-20 with 9-20 hidden.
+        The row after the reported split is then hidden too, which is the
+        tell; the visible part ends at the last shown row before that hidden
+        run, found by bisection (a filtered sheet can hide thousands).
+
+        A freeze made normally and filtered afterwards has its hidden run
+        start right after the split, so it reads true: the split itself.
+        Whatever cannot be read leaves Excel's own figure standing."""
+        if split <= 0:
+            return 0
+        end = split + 1
+
+        def hidden_from(first):
+            return self._excel_span_hidden(sht, first, end, axis)
+
+        try:
+            if not hidden_from(end):
+                return split
+            low, high = 1, end
+            while low < high:
+                mid = (low + high) // 2
+                if hidden_from(mid):
+                    high = mid
+                else:
+                    low = mid + 1
+            return low - 1
+        except Exception:
+            return split
+
+    def _excel_pane_true(self, sht, state):
+        """`state` as the user sees it. A frozen state's counts become the
+        rows / columns VISIBLY frozen (_excel_pane_extent), and 'buried'
+        names any hidden rows or columns lying inside the frozen part beyond
+        them — they will show as frozen the moment they are unhidden. An
+        unfrozen split is left as read."""
+        true = dict(state, buried=[])
+        if not state["frozen"]:
+            return true
+        for key, axis in (("rows", "row"), ("columns", "column")):
+            shown = self._excel_pane_extent(sht, state[key], axis)
+            if shown < state[key]:
+                true["buried"].append(
+                    f"rows from row {shown + 1}" if axis == "row" else
+                    f"columns from column {self._excel_col_letter(shown + 1)}")
+            true[key] = shown
+        return true
+
+    def _excel_pane_put_back(self, win, before):
+        """After a freeze that failed part-way: restore the panes as
+        `before` (a _excel_pane_true state) describes them. True on success."""
+        try:
+            if before["frozen"]:
+                self._excel_pane_apply(win, before["rows"], before["columns"])
+            else:
+                self._excel_pane_apply(win, 0, 0)
+                if before["rows"] or before["columns"]:
+                    self._excel_win_set(win, "split_column", before["columns"])
+                    self._excel_win_set(win, "split_row", before["rows"])
+            self._excel_pane_scroll(win, before, before["rows"] if before["frozen"] else 0,
+                                    before["columns"] if before["frozen"] else 0)
+            return True
+        except Exception:
+            return False
 
     # ── Tools ────────────────────────────────────────────────────────────
 
@@ -641,6 +1280,268 @@ class ExcelMixin:
                     "not implemented — this is a bug in excel_mixin.")
         except Exception as e:
             return f"excel_sheet error: {self._excel_err(e)}"
+
+    def do_excel_table(self, params):
+        try:
+            action = (params.get("action") or "").strip().lower()
+            # The action first, as in excel_sheet: a bad one is named as such
+            # rather than as whatever its placeholder arguments fail on.
+            if action not in self.TABLE_ACTIONS:
+                return (f"excel_table error: unknown action '{action}'. Use "
+                        + ", ".join(self.TABLE_ACTIONS) + ".")
+            book = self._excel_book(params.get("workbook"))
+            sheet = (params.get("sheet") or "").strip()
+            name = (params.get("name") or "").strip()
+            if action == "list":
+                pairs = self._excel_tables(book, sheet or None)
+                where = (f"sheet '{self._excel_get_sheet(book, sheet).name}' of "
+                         f"{book.name}") if sheet else book.name
+                if not pairs:
+                    return f"No tables in {where}."
+                return (f"Tables in {where}:\n" + "\n".join(
+                    self._excel_table_line(self._excel_table_info(sht, tbl))
+                    for sht, tbl in pairs))
+            if action == "create":
+                return self._excel_table_create(book, sheet, name, params)
+            if not name:
+                return (f"excel_table error: 'name' is required for '{action}' "
+                        "(action=list shows the workbook's tables).")
+            sht, tbl = self._excel_find_table(book, name, sheet or None)
+            if action == "update":
+                return self._excel_table_update(book, sht, tbl, params)
+            if action == "convert_to_range":
+                real, _shown = self._excel_table_names(tbl)
+                where = f"{sht.name}!{tbl.range.address.replace('$', '')}"
+                self._excel_table_unlist(tbl)
+                # The effect, not the call: the table must be gone from the workbook.
+                if any(self._excel_table_names(t)[0] == real
+                       for _s, t in self._excel_tables(book)):
+                    return (f"excel_table error: Excel still lists table '{real}' "
+                            f"({where}) after converting it — nothing changed.")
+                return (f"Converted table '{real}' ({where}) in {book.name} back to "
+                        "an ordinary range. The cells keep their values and their "
+                        "look; the table's name, banding rules and filter buttons "
+                        "are gone.")
+            # Unreachable, like excel_sheet's: a name added to TABLE_ACTIONS
+            # without a branch fails loudly instead of returning None.
+            return (f"excel_table error: action '{action}' is accepted but "
+                    "not implemented — this is a bug in excel_mixin.")
+        except Exception as e:
+            return f"excel_table error: {self._excel_err(e)}"
+
+    def _excel_table_create(self, book, sheet, name, params):
+        rng_str = (params.get("range") or "").strip()
+        if not rng_str:
+            return ("excel_table error: 'range' is required for create — the cells "
+                    "to turn into a table, header row first (e.g. 'B8:F20').")
+        # Everything that can be known about the name is checked before the
+        # table exists (see _excel_table_name_problem for why).
+        if name:
+            problem = self._excel_table_name_problem(name)
+            if problem:
+                return (f"excel_table error: '{name}' cannot be a table name — "
+                        f"{problem}. Nothing was created.")
+            clash = self._excel_table_clash(book, name)
+            if clash:
+                return f"excel_table error: {clash}. Nothing was created."
+        sht = self._excel_get_sheet(book, sheet or None)
+        style = (params.get("style") or "").strip()
+        try:
+            rng = sht.range(rng_str)
+            asked = rng.address.replace("$", "")
+            header_only = rng.rows.count == 1
+        except Exception as e:
+            reason = self._excel_reason(e, "")
+            return (f"excel_table error: '{rng_str}' is not a range of sheet "
+                    f"'{sht.name}' that Excel can read"
+                    + (f" ({reason})" if reason else "")
+                    + " — give it in A1 style, e.g. 'B8:F20'. Nothing was created.")
+        try:
+            # The style goes in with the creation: Excel refuses an unknown
+            # one BEFORE making anything, so a bad style leaves no table.
+            tbl = sht.tables.add(source=rng,
+                                 table_style_name=style or self._EXCEL_TABLE_STYLE)
+        except Exception as e:
+            # Excel names most refusals (an overlap, a protected sheet); the
+            # one it does not name is the unknown style.
+            reason = self._excel_reason(e, "")
+            if reason:
+                why = f": {reason}."
+            elif style:
+                why = (" and gave no reason — most likely it does not know the "
+                       f"style '{style}'. " + self._EXCEL_TABLE_STYLE_HINT)
+            else:
+                why = " and gave no reason."
+            return (f"excel_table error: Excel could not make a table of "
+                    f"{sht.name}!{asked}{why} Nothing was created.")
+        notes = []
+        if name:
+            try:
+                # display_name, not name: the setter Excel validates, and the
+                # one after which the table's two names are the same string.
+                tbl.display_name = name
+            except Exception as e:
+                notes.append(
+                    f"⚠ Excel refused the name '{name}' ({self._excel_reason(e)}), so "
+                    "the table keeps its automatic name — rename it with "
+                    "action=update or undo it with action=convert_to_range.")
+        done, refused = self._excel_table_set_options(tbl, params)
+        if refused:
+            notes.append("⚠ Not applied: " + "; ".join(refused) + ".")
+        info = self._excel_table_info(sht, tbl)
+        if info["range"] != asked:
+            # The table is not always the range asked for, and the result
+            # says so rather than leaving the model to find out: a header
+            # row alone gets one empty row for the first entry (a single cell
+            # becomes a one-column table the same way), and a Total row is
+            # part of the table.
+            why = ((["a header row alone gets one empty data row"] if header_only else [])
+                   + (["the Total row is part of the table"]
+                      if params.get("total_row") else []))
+            notes.append(f"The table is {info['range']}, not the {asked} asked for"
+                         + (": " + "; ".join(why) if why else "") + ".")
+        out = (f"Created table '{info['name']}' in {book.name}"
+               + (f" ({', '.join(done)})" if done else "") + ".\n"
+               + self._excel_table_line(info))
+        return out + ("\n" + "\n".join(notes) if notes else "")
+
+    def _excel_table_update(self, book, sht, tbl, params):
+        new_name = (params.get("new_name") or "").strip()
+        style = (params.get("style") or "").strip()
+        rng_str = (params.get("range") or "").strip()
+        if not (new_name or style or rng_str
+                or any(params.get(p) is not None for p in self.TABLE_OPTIONS)):
+            return ("excel_table error: nothing to update — give at least one of "
+                    "new_name, style, range, " + ", ".join(self.TABLE_OPTIONS) + ".")
+        old_name, _shown = self._excel_table_names(tbl)
+        if new_name:
+            # Refused before anything else changes, so an update is never
+            # half-applied over a name Excel would not take.
+            problem = self._excel_table_name_problem(new_name)
+            if problem:
+                return (f"excel_table error: '{new_name}' cannot be a table name — "
+                        f"{problem}. Nothing was changed.")
+            clash = self._excel_table_clash(book, new_name, own=old_name)
+            if clash:
+                return f"excel_table error: {clash}. Nothing was changed."
+        done, refused = [], []
+        if rng_str:
+            try:
+                tbl.resize(sht.range(rng_str))
+                done.append("resized to " + tbl.range.address.replace("$", ""))
+            except Exception as e:
+                refused.append(f"range {rng_str} (" + self._excel_reason(
+                    e, "not a range Excel can resize the table to") + ")")
+        if style:
+            try:
+                tbl.table_style = style
+                done.append(f"style={style}")
+            except Exception as e:
+                # An unknown style is refused with no reason at all (pywin32
+                # words it "Invalid number of parameters"); the table keeps
+                # the style it had.
+                refused.append(
+                    f"style {style} ("
+                    + self._excel_reason(e, "Excel does not know that style")
+                    + ". " + self._EXCEL_TABLE_STYLE_HINT + ")")
+        set_done, set_refused = self._excel_table_set_options(tbl, params)
+        done += set_done
+        refused += set_refused
+        if new_name:
+            try:
+                tbl.display_name = new_name
+                done.append(f"renamed from '{old_name}'")
+            except Exception as e:
+                refused.append(f"new_name {new_name} ({self._excel_reason(e)})")
+        info = self._excel_table_info(sht, tbl)
+        out = (f"Updated table '{info['name']}' in {book.name}"
+               + (": " + ", ".join(done) if done else " — nothing was changed") + ".\n"
+               + self._excel_table_line(info))
+        if refused:
+            out += "\n⚠ Not applied: " + "; ".join(refused) + "."
+        return out
+
+    def do_excel_freeze_panes(self, params):
+        try:
+            rows_in, cols_in = params.get("rows"), params.get("columns")
+            report_only = not (self._excel_given(rows_in) or self._excel_given(cols_in))
+            # Validated before Excel is touched: a count Excel cannot take
+            # would otherwise be found out half-way through the sequence.
+            rows = (self._excel_pane_count(rows_in, "rows", self._EXCEL_SHEET_ROWS)
+                    if self._excel_given(rows_in) else 0)
+            cols = (self._excel_pane_count(cols_in, "columns", self._EXCEL_SHEET_COLS)
+                    if self._excel_given(cols_in) else 0)
+            book, sht = self._excel_target(params)
+            where = f"[{book.name}]{sht.name}"
+            mark = self._excel_view_mark(book)
+            try:
+                win = self._excel_pane_window(book, sht)
+                before = self._excel_pane_true(sht, self._excel_pane_state(win))
+                was = self._excel_pane_text(before)
+                if report_only:
+                    if self._excel_page_layout(win):
+                        return (f"Panes on {where}: none — the sheet is in Page "
+                                "Layout view, which has no panes.")
+                    out = f"Panes on {where}: {was}."
+                    if before["buried"]:
+                        out += ("\n⚠ Hidden " + " and ".join(before["buried"]) + " lie "
+                                "inside the frozen part and will show as frozen once "
+                                "unhidden. If that is not intended: show them, then "
+                                "unfreeze and freeze again.")
+                    return out
+                if not (rows or cols or before["frozen"]
+                        or before["rows"] or before["columns"]):
+                    return f"Panes on {where} were not frozen — nothing to do."
+                if ((rows or cols) and before["frozen"] and not before["buried"]
+                        and (before["rows"], before["columns"]) == (rows, cols)
+                        and self._excel_pane_home(win, rows, cols)):
+                    # Already so, and properly: say it and touch nothing. This
+                    # is also what keeps a sheet that was frozen first and
+                    # filtered later — the everyday case — from being refused
+                    # by the hidden-row rule below for a freeze it already has.
+                    return (f"Panes on {where} are already frozen that way "
+                            f"({was}) — nothing to do.")
+                blocked = self._excel_pane_blocked(sht, win, rows, cols)
+                if blocked:
+                    return (f"excel_freeze_panes error: {blocked}. Nothing was "
+                            f"changed on {where}.")
+                problem = None
+                try:
+                    self._excel_pane_apply(win, rows, cols)
+                    after = self._excel_pane_state(win)
+                    if not self._excel_pane_landed(after, rows, cols):
+                        problem = "Excel reports them " + self._excel_pane_text(after)
+                except Exception as e:
+                    problem = self._excel_reason(e)
+                if problem:
+                    wanted = ("freeze the " + self._excel_pane_words(rows, cols)
+                              if rows or cols else "unfreeze the panes")
+                    put_back = self._excel_pane_put_back(win, before)
+                    return (f"excel_freeze_panes error: could not {wanted} of {where}: "
+                            f"{problem}. "
+                            + (f"The panes were put back as they were ({was})."
+                               if put_back else
+                               "⚠ The panes could NOT be put back as they were — "
+                               "look at the sheet."))
+                self._excel_pane_scroll(win, before, rows, cols)
+                if not (rows or cols):
+                    return f"Unfroze the panes of {where} (before: {was})."
+                out = (f"Froze the {self._excel_pane_words(rows, cols)} of "
+                       f"{where} (before: {was}).")
+                if any(want and got == want - 1 for want, got in
+                       ((rows, after["rows"]), (cols, after["columns"]))):
+                    # The read-back _excel_pane_landed lets through: worth
+                    # saying, because such a sheet can no longer be scrolled.
+                    out += ("\n⚠ Excel reads this split one short, which is how it "
+                            "reports a frozen part larger than the window shows at "
+                            "its present size — what lies beyond it cannot be "
+                            "scrolled into view until the window is larger or less "
+                            "is frozen.")
+                return out
+            finally:
+                self._excel_view_restore(book, mark)
+        except Exception as e:
+            return f"excel_freeze_panes error: {self._excel_err(e)}"
 
     def do_excel_find(self, params):
         try:

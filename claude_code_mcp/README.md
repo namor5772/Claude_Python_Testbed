@@ -14,8 +14,9 @@ From the repository root, once per machine:
 
     claude mcp add --scope user myagent -- "$PWD/.venv/bin/python" "$PWD/claude_code_mcp/server.py"
 
-Tools appear in Claude Code as `mcp__myagent__<name>` (99 on the Mac Mini and
-on the Windows laptop alike: desktop, browser, Excel, camera + microphone,
+Tools appear in Claude Code as `mcp__myagent__<name>` (101 since 2026-11-18,
+when `excel_table` and `excel_freeze_panes` joined — 99 until then; the same on
+the Mac Mini and the Windows laptop: desktop, browser, Excel, camera + microphone,
 Gmail / Proton / Outlook, read_document, the file tools, run_command,
 web_search / fetch_webpage,
 csv_search, manage_instructions / manage_skills / run_instruction, get_skill).

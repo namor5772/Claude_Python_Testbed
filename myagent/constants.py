@@ -2278,6 +2278,29 @@ PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill",
 # SHEET_ACTIONS), so a new action can't reach one list and miss the other.
 EXCEL_SHEET_ACTIONS = ("list", "add", "rename", "delete", "activate", "clear")
 
+# excel_table's action set and display options (2026-11-18) — the same single
+# source of truth: the schema's enum and its boolean properties are built from
+# these, and excel_mixin imports both for its guard and for what each option
+# sets, so neither list can gain an entry the other lacks.
+EXCEL_TABLE_ACTIONS = ("list", "create", "update", "convert_to_range")
+
+# tool parameter → (the xlwings Table attribute it sets, the words list /
+# create / update report it with, the schema's description of it).
+EXCEL_TABLE_OPTIONS = {
+    "banded_rows": ("show_table_style_row_stripes", "banded rows",
+                    "Shade alternate rows (Excel's default: on)."),
+    "banded_columns": ("show_table_style_column_stripes", "banded columns",
+                       "Shade alternate columns (default: off)."),
+    "first_column": ("show_table_style_first_column", "first column emphasised",
+                     "Emphasise the first column (default: off)."),
+    "last_column": ("show_table_style_last_column", "last column emphasised",
+                    "Emphasise the last column (default: off)."),
+    "total_row": ("show_totals", "total row",
+                  "Show a Total row under the data (default: off)."),
+    "filter_buttons": ("show_autofilter", "filter buttons",
+                       "Show the filter drop-downs in the header row (default: on)."),
+}
+
 EXCEL_TOOLS = [
     {
         "name": "excel_open",
@@ -2474,6 +2497,105 @@ EXCEL_TOOLS = [
                 },
             },
             "required": ["action"],
+        },
+    },
+    {
+        "name": "excel_table",
+        "description": (
+            "Manage Excel tables — the named 'Format as Table' ranges (ListObjects) with "
+            "a header row, a banded style and filter buttons. list reports every table: "
+            "its sheet, range, style and each column's letter and header (use it to "
+            "address a table's columns by header name). create turns a range whose FIRST "
+            "ROW holds the headers into a table. update renames, restyles or resizes "
+            "one. convert_to_range turns one back into ordinary cells, keeping the data "
+            "and the look."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": list(EXCEL_TABLE_ACTIONS),
+                    "description": "The operation to perform.",
+                },
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": (
+                        "Sheet name. create: the sheet 'range' is on (default: the active "
+                        "sheet). list: only that sheet's tables (default: every sheet). "
+                        "update / convert_to_range: not needed — a table is found by name."
+                    ),
+                },
+                "name": {
+                    "type": "string",
+                    "description": (
+                        "The table's name: required for update and convert_to_range; for "
+                        "create, the name to give it (Excel picks Table1, Table2 … when "
+                        "omitted). Letters, digits, underscores and periods, starting with "
+                        "a letter or an underscore; no spaces; not something that reads as "
+                        "a cell reference (A1, R1C1); unique in the workbook."
+                    ),
+                },
+                "range": {
+                    "type": "string",
+                    "description": (
+                        "A1-style range whose first row is the header row, e.g. 'B8:F20'. "
+                        "Required for create. With update it resizes the table — the "
+                        "header row stays where it is and at least one data row remains."
+                    ),
+                },
+                "new_name": {
+                    "type": "string",
+                    "description": "New table name (update only).",
+                },
+                "style": {
+                    "type": "string",
+                    "description": (
+                        "Table style name: TableStyleLight1-21, TableStyleMedium1-28 "
+                        "(TableStyleMedium2 is Excel's default) or TableStyleDark1-11."
+                    ),
+                },
+                **{param: {"type": "boolean", "description": text}
+                   for param, (_attr, _words, text) in EXCEL_TABLE_OPTIONS.items()},
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "excel_freeze_panes",
+        "description": (
+            "Freeze the top rows and / or the left columns of a sheet so they stay in "
+            "view while the rest scrolls: rows=1 keeps a header row visible, rows=8 "
+            "freezes rows 1-8, columns=1 freezes column A — give either or both. rows=0 "
+            "with columns=0 unfreezes (and removes any split). Called with neither, it "
+            "only reports the sheet's panes. It acts on the named workbook's own window "
+            "and leaves the active sheet as it was."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "Sheet name. Default: the active sheet.",
+                },
+                "rows": {
+                    "type": "number",
+                    "description": "How many rows to keep frozen at the top (0 = none).",
+                },
+                "columns": {
+                    "type": "number",
+                    "description": "How many columns to keep frozen at the left (0 = none).",
+                },
+            },
+            "required": [],
         },
     },
     {

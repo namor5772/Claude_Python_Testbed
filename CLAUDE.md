@@ -28,8 +28,10 @@ ruff check MyAgent.py myagent/                     # baseline 42 findings, all E
 ```
 Tests: `tests/_util.py` builds bare mixin hosts via `__new__` (no Tk, keys or network); widget tests build real
 widgets on a withdrawn or transparent root and skip without a display; the five `tests/check_*_live.py` are hand-run
-live checks outside discovery (voice, Kimi and OpenAI-usage are billed; Excel and Ollama are free). Every command's
-flags, the ruff baseline's makeup and the module-by-module test history: `docs/claude/commands-and-tests.md`.
+live checks outside discovery (voice, Kimi and OpenAI-usage are billed; Excel and Ollama are free). Run the Excel one
+as `python tests/check_excel_live.py --private` whenever the user has a workbook open: it then drives a hidden Excel
+instance of its own and never attaches to theirs. Every command's flags, the ruff baseline's makeup and the
+module-by-module test history: `docs/claude/commands-and-tests.md`.
 
 ## Project Structure
 One line per item; each item's full contract and history: `docs/claude/project-structure.md`.
