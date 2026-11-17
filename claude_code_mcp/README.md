@@ -210,3 +210,33 @@ as an enabled one. The skill text itself is the OneDrive file, so an edit in
 MyAgent's Skills Manager, or by `manage_skills`, is live for Claude Code at
 once. The skills themselves stay in OneDrive, outside git, as they always have;
 nothing of them enters this folder.
+
+### Editing a SKILL.md from a Claude Code session (2026-11-17)
+
+The server reads the skills tree once, at start, and every `manage_skills`
+save writes its whole in-memory copy back (a file whose text already matches
+is left untouched). So a SKILL.md changed behind its back — Claude Code's own
+`Edit` on the OneDrive file — is put back to the old text by the server's next
+skill save, exactly as a running MyAgent or SelfBot would do. Either reconnect
+the server afterwards (`/mcp`), or bring it in step without a restart, as was
+done for `email-attachment-processing` that day:
+
+1. Before: check that no file in the tree is newer than the server's start,
+   and that every SKILL.md is already in the form the serializer writes
+   (`_serialize_skill_md(*_entry_from_md(_read_text(md), folder)) == text`,
+   the three in `myagent/datapaths.py`) — otherwise the save rewrites those
+   files too. Copy the file to
+   `<OneDrive>/MyAppShare/skills_backups/<yyyymmdd>_<topic>/<skill>/`.
+2. Make the change with `Edit` (exact; the file's line endings are kept) and
+   note the file's SHA-256.
+3. Send the full new body through `manage_skills` (`update`, `content=…`).
+   Backslashes arrive as typed.
+4. The hash must be unchanged: the save found the file identical to what the
+   server now holds, so the two agree. A changed hash is a transcription
+   slip — compare with the `Edit` result. A second update that changes
+   nothing (`mode` set to its current value) rules out a swallowed write
+   error.
+
+Close a running MyAgent or SelfBot first — only a restart reaches their copy —
+and remember the apps on the other machines. The record of that day is
+`docs/show-documents-qr-attachment-2026-11-17.md`.
