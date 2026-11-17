@@ -27,9 +27,9 @@ python -m unittest discover -s tests -t .          # the characterization suite 
 ruff check MyAgent.py myagent/                     # baseline 42 findings, all E402 — judge NEW findings only
 ```
 Tests: `tests/_util.py` builds bare mixin hosts via `__new__` (no Tk, keys or network); widget tests build real
-widgets on a withdrawn or transparent root and skip without a display; `tests/check_*_live.py` are hand-run, paid
-live checks outside discovery. Every command's flags, the ruff baseline's makeup and the module-by-module test
-history: `docs/claude/commands-and-tests.md`.
+widgets on a withdrawn or transparent root and skip without a display; the five `tests/check_*_live.py` are hand-run
+live checks outside discovery (voice, Kimi and OpenAI-usage are billed; Excel and Ollama are free). Every command's
+flags, the ruff baseline's makeup and the module-by-module test history: `docs/claude/commands-and-tests.md`.
 
 ## Project Structure
 One line per item; each item's full contract and history: `docs/claude/project-structure.md`.
