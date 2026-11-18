@@ -10,6 +10,37 @@ formats and sheets and had no operation for a table or a window. Told so, the us
 
 > add table and freeze pane tools to the excel MCP
 
+## The sheet that prompted it — `[Documents]` / `TableDOCS`
+
+Recorded here because nothing else in the repo does: the skills that drive the workbook live in
+OneDrive, and `deathbook-workbook`'s sheet list does not name the sheet yet.
+
+- **Where.** A worksheet `Documents`, the tab directly after `Spending`. `Data Sources` is still the
+  last tab, which is all the reconciliation scripts rely on — they find their sheets by name and
+  append `Data Sources` at the end — and no macro refers to a sheet by position (the workbook's three
+  VBA modules, some 1,300 lines, were read for it; `ThisWorkbook` and the sheet modules are empty, so
+  nothing fires on a new sheet or a write).
+- **The table.** `TableDOCS` at `B8:F9` — header row 8, data from row 9, `TableALL`'s anchor — with
+  five columns: Date, Category1, Category2, Category3, Comments, and the one row the user gave.
+- **The look**, read from `TableALL` as it stood and matched by header name, never by letter: style
+  `TableStyleMedium2` with banded rows and filter buttons (the colours are the style's — `TableALL`'s
+  header cells carry no fill of their own, so painting cells would have been the wrong copy); column
+  widths 10.18 / 15 / 21.82 / 15.36 for Date and the three categories and 49.73 for Comments, which is
+  column J on Spending, behind the same 2.18-wide column A; the Date column `d/mm/yyyy` holding a real
+  date; panes frozen below row 8; zoom 85 %.
+- **Left out on purpose.** Rows 1-7 are empty: Spending's buttons and status block there are wired to
+  `TableALL`'s macros. No tab colour: each of the user's sheets has its own, and it was not ours to
+  pick.
+- **How.** Attached to the workbook the user had open — no password, no second copy, the same
+  workbook they were looking at. The build was rehearsed on a throwaway workbook in a hidden Excel
+  instance, then run unchanged against the live one after a `SaveCopyAs` backup,
+  `DeathBook_pre_Documents_sheet_20261118_083932.xlsm` in `DeathFinances\Backups` (the helper
+  scripts' convention). Read back: 29 checks, among them hashes of every formula and every value on
+  Spending taken before and after (identical), every other sheet's used range, the table list and the
+  count of defined names; then the saved file's own ZIP, which lists the sheet, the table and the VBA
+  part. The workbook saves itself (AutoSave, on OneDrive), so the backup is the way back — or
+  deleting the tab.
+
 ## What was added
 
 Two tools in `EXCEL_TOOLS` (`myagent/constants.py`), implemented in `myagent/excel_mixin.py`. The
@@ -176,6 +207,20 @@ the private instances the live check and the day's probes start are quit through
   right after Spending (`excel_sheet add` appends at the end).
 - **A report on a frozen part larger than the window reads one short** (39 for 40). The freeze
   itself is warned about when it is made.
-- **A running MCP server keeps the old catalogue** until it is reconnected (`/mcp`), like any app
-  that has the package imported.
-- The `deathbook-workbook` skill still sends structural edits to a COM script; it was not edited.
+- **The `deathbook-workbook` skill was not edited.** It still sends structural edits to a COM
+  script and tells a run to map `TableALL`'s columns by reading header row 8 — `excel_table list`
+  now answers that in one call — and its sheet list does not name `Documents`.
+
+## Afterwards: the tools in the session that asked for them
+
+The session's own MCP server had been started before the change and went on serving 99 tools. The
+user reconnected it that afternoon (`/mcp`, 15:23): a new server process, 101 tools,
+`mcp__myagent__excel_table` and `mcp__myagent__excel_freeze_panes` listed with the schemas above,
+and `excel_freeze_panes` answering through it — a refusal that needs no Excel, which by then was
+closed. No restart of Claude Code. Every open session has its own server process and reconnects on
+its own: two more were running on the laptop at that hour, started before the change by sessions
+still open, and they serve the old catalogue until they reconnect as well.
+
+The table-name rule was closed off the same afternoon. Of its 24 names, 22 had been given to the
+display-name setter in the morning's probes; the other two (`TableDOCS`, `Table 1`) and a
+255-character name through `.Name` were measured then, and came out as the rule says.

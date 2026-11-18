@@ -171,6 +171,33 @@ over-trash hazard MyAgent's version of this instruction guards against (a
 numbered list is the only authority, and the matching step is what enforces
 it.
 
+### Two tools added from inside a session (2026-11-18, the Windows laptop)
+
+`excel_table` and `excel_freeze_panes` were written in a Claude Code session
+that was itself using this server — to attach to an open workbook, read it back
+and save it — after a table and a frozen header had needed a hand-written COM
+script (`docs/excel-table-freeze-panes-2026-11-18.md`). Nothing in this folder
+changed: a tool added to `EXCEL_TOOLS` with its `do_<name>` on the mixin is in
+`_get_tools()`'s catalogue, and so in the next server process, MyAgent's own
+dispatcher finding it by its `excel_` prefix.
+
+What that took in practice:
+
+- **The session's own server kept the old catalogue** — 99 tools — because it
+  had imported the package before the change. `/mcp` → Reconnect started a new
+  process: 101 tools, both new ones listed and answering, no restart of Claude
+  Code. Until then the change was checked against a server spawned fresh over
+  stdio, as `smoke.py` spawns one.
+- **Every open session has its own server process** and reconnects on its own.
+  Two more were running on the laptop that afternoon, started before the change
+  by sessions still open; they serve the old catalogue until they reconnect.
+- **The Excel tools attach to the Excel you have running.** To TRY a new one,
+  never point this server at a workbook that matters:
+  `python tests/check_excel_live.py --private` runs every Excel tool in a hidden
+  Excel instance of its own. (`smoke.py` lists the catalogue but exercises no
+  Excel tool — and its `clipboard_read` call prints whatever is on the clipboard,
+  which an agent's transcript then holds.)
+
 Server log lines go to stderr (Claude Code's MCP log); the protocol owns the
 real stdout, and fd 1 is pointed at stderr so child processes cannot corrupt it.
 
