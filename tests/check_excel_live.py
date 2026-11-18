@@ -1,7 +1,8 @@
 """Live-Excel check for the excel_* tools. Run it by hand, on either OS.
 
-    python tests/check_excel_live.py             # attached to the Excel you have running
-    python tests/check_excel_live.py --private   # in an Excel instance of its own
+    python tests/check_excel_live.py                  # attached to the Excel you have running
+    python tests/check_excel_live.py --private        # in a hidden Excel instance of its own
+    python tests/check_excel_live.py --private --show # ... with that instance on screen
 
 NOT part of `python -m unittest discover` (the filename doesn't match test*.py)
 because it needs a running Excel. The pure helpers are unit-tested in
@@ -21,6 +22,8 @@ workbook that matters is open. That instance is closed at exit, through raw
 COM on Windows: xlwings' own quit() / kill() end with Apps.cleanup(), which
 force-kills every Excel process that shows no workbook window. Windows-run;
 macOS can start a second instance too, but that path has not been run there.
+--show puts that instance on screen: the same checks against windows that are
+really drawn, which is what an attached Excel's are.
 """
 
 import atexit
@@ -39,7 +42,7 @@ RESULTS = []
 PRIVATE = "--private" in sys.argv[1:]
 PRIVATE_APP = None
 if PRIVATE:
-    PRIVATE_APP = excel_mixin.xw.App(visible=False, add_book=False)
+    PRIVATE_APP = excel_mixin.xw.App(visible="--show" in sys.argv[1:], add_book=False)
 
     def _close_private():
         try:
@@ -467,6 +470,201 @@ check("unfreeze again: nothing to do", "nothing to do" in panes(rows=0), panes(r
 check("at the end the workbook in front is still in front", in_front() == BY, in_front())
 check("... and the sheet in view still in view", book.sheets.active.name == "Panes",
       book.sheets.active.name)
+
+# ── 12. a place for a sheet (2026-11-18) ───────────────────────────────────
+print("\n12. excel_sheet: add at a place, move")
+
+
+def tabs():
+    return [s.name for s in book.sheets]
+
+
+def tab(action, **params):
+    return h.do_excel_sheet(dict(params, workbook=LAY, action=action))
+
+
+def book_count():
+    return h._excel_app().books.count
+
+
+out = tab("add", name="After First", after=FIRST)
+check("add after a sheet", tabs() == [FIRST, "After First", "Panes"] and f"after '{FIRST}'" in out, out)
+check("... the new sheet is the one in view in its workbook",
+      book.sheets.active.name == "After First", book.sheets.active.name)
+check("... and the workbook in front is still in front", in_front() == BY, in_front())
+out = tab("add", name="Cover", before=FIRST.lower())
+check("add before a sheet, found whatever the case", tabs()[:2] == ["Cover", FIRST], out)
+out = tab("add", name="Last")
+check("add with no place still goes last", tabs()[-1] == "Last", out)
+check("... and does not bring its workbook forward", in_front() == BY, in_front())
+count = len(tabs())
+for bad, why in (("a/b", "it contains /"), ("x" * 32, "31 at most"), ("History", "reserves")):
+    out = tab("add", name=bad, after=FIRST)
+    check(f"add: the name {bad[:8]!r} is refused ({why})",
+          "cannot be a sheet name" in out and why in out, out)
+check("no sheet is left behind by a refused name", len(tabs()) == count, tabs())
+out = tab("add", name="cover")
+check("add: a name in use is refused, with the sheets there are",
+      "already has a sheet named 'Cover'" in out, out)
+out = tab("add", name="Q", before=FIRST, after="Panes")
+check("add: two places at once are refused", "not both" in out, out)
+out = tab("add", name="Q", after="No Such Sheet")
+check("add: an unknown neighbour is the usual friendly error", "not found" in out, out)
+check("... and none of those added anything", len(tabs()) == count, tabs())
+
+# The sheet-name rule, measured again against THIS Excel, through the
+# engine's own setter (xlwings' public one screens some names itself).
+scratch = book.sheets["Last"]
+disagree = []
+for candidate in ("x" * 31, "a'b", "Sheet 9", "x.y", "A1", "x" * 32, "a/b", "a\\b", "a?b",
+                  "a*b", "a[b", "a]b", "a:b", "'a", "a'", "History"):
+    by_rule = ExcelMixin._excel_sheet_name_problem(candidate) is None
+    try:
+        scratch.impl.name = candidate
+        by_excel = True
+    except Exception:
+        by_excel = False
+    if by_rule != by_excel:
+        disagree.append(f"{candidate[:10]!r}: rule {by_rule}, Excel {by_excel}")
+    if by_excel:
+        scratch.impl.name = "Last"
+        scratch = book.sheets["Last"]
+check("the sheet-name rule and this Excel agree on 16 names", not disagree, "; ".join(disagree))
+
+order, shown, books = tabs(), book.sheets.active.name, book_count()
+out = tab("move", name="Last", before="Cover")
+check("move to the front", tabs()[0] == "Last" and out.startswith("Moved sheet 'Last' before 'Cover'"), out)
+out = tab("move", name="Last", after=tabs()[-1])
+check("move after the last sheet", tabs()[-1] == "Last", out)
+out = tab("move", name="last", after="cover")
+check("move into the middle, names found whatever the case", tabs()[:2] == ["Cover", "Last"], out)
+out = tab("move", name="Last", after="Cover")
+check("move to where it already is: nothing to do", "nothing to do" in out, out)
+check("no move changed the sheet in view", book.sheets.active.name == shown, book.sheets.active.name)
+check("... nor the workbook in front", in_front() == BY, in_front())
+check("no sheet left the workbook and no workbook appeared",
+      sorted(tabs()) == sorted(order) and book_count() == books, (tabs(), book_count()))
+out = tab("move", name="Last", after="Last")
+check("move beside itself is refused", "cannot be moved after itself" in out, out)
+out = tab("move", name="Last")
+check("move with no place is refused", "'before' or 'after' is required" in out, out)
+
+if IS_WIN:
+    # Why the tool brings the workbook forward, measured on THIS Excel: in a
+    # workbook that is behind, Excel allows for the removal of that
+    # workbook's ACTIVE sheet instead of the moved one, so a sheet coming
+    # from the far side of its destination lands one tab early.
+    names = tabs()
+    book.sheets[names[0]].activate()
+    h._excel_app().books[BY].activate()
+    mover, follower = book.sheets[names[-1]], book.sheets[names[1]]
+    mover.api.Move(follower.api)
+    check("Excel does misplace a move in a workbook that is behind (the reason for the rule)",
+          tabs().index(mover.name) == 0, tabs())
+    h._excel_app().books[BY].activate()
+    out = tab("move", name=mover.name, after=names[0])
+    check("... and the tool's move into that same slot is right", tabs().index(mover.name) == 1, out)
+    check("... leaving the workbook in front where it was", in_front() == BY, in_front())
+    # One tab off, not a jump to the sheet in view: asked to go before the
+    # FOURTH tab with the first one showing, the last sheet lands before the third.
+    names = tabs()
+    book.sheets[names[0]].activate()
+    h._excel_app().books[BY].activate()
+    mover = book.sheets[names[-1]]
+    mover.api.Move(book.sheets[names[3]].api)
+    check("... the slip is one tab: Excel allows for the active sheet leaving, not the moved one",
+          tabs().index(mover.name) == 2, (names, tabs()))
+    h._excel_app().books[BY].activate()
+    out = tab("move", name=mover.name, before=names[3])
+    check("... and the tool puts that one right as well",
+          tabs().index(mover.name) == tabs().index(names[3]) - 1 and tabs().index(mover.name) == 3, out)
+
+    # A chart sheet is a tab that xlwings' book.sheets does not list.
+    book.api.Charts.Add(Before=book.sheets[tabs()[1]].api)
+    book.sheets[tabs()[0]].activate()
+    h._excel_app().books[BY].activate()
+    every = [str(s.Name) for s in book.api.Sheets]
+    chart = next(n for n in every if n not in tabs())
+    ahead = every[every.index(chart) - 1]
+    mover = next(n for n in reversed(tabs()) if n != ahead)
+    out = tab("move", name=mover, after=ahead)
+    every = [str(s.Name) for s in book.api.Sheets]
+    check("a chart sheet next door does not throw the place",
+          every.index(mover) == every.index(ahead) + 1 and every.index(chart) == every.index(mover) + 1,
+          (out, every))
+    out = tab("add", name="By Chart", after=ahead)
+    check("... nor the place of a new sheet", tabs().index("By Chart") == tabs().index(ahead) + 1, (out, tabs()))
+
+    # A chart sheet AHEAD of the neighbour is what throws xlwings' own "add
+    # after": it counts tabs through Worksheet.Index over a collection that
+    # holds worksheets only. Measured on THIS Excel, then the tool's add —
+    # beside the last two worksheets, where xlwings' route swaps them.
+    book.api.Charts.Add(Before=book.sheets[tabs()[0]].api)
+    h._excel_app().books[BY].activate()
+    book.sheets.add("Raw Add", after=book.sheets[tabs()[0]])
+    check("xlwings' own add is thrown by a chart sheet ahead (the reason for the rule)",
+          tabs().index("Raw Add") != 1, tabs())
+    names = tabs()
+    out = tab("add", name="Tool Add", after=names[-2])
+    check("... and the tool's add lands where asked, every other sheet where it was",
+          tabs() == names[:-1] + ["Tool Add", names[-1]] and "⚠" not in out, (out, names, tabs()))
+    check("... with the workbook in front still in front", in_front() == BY, in_front())
+
+    book.api.Protect(Structure=True)
+    out = tab("add", name="Locked Out")
+    check("protected structure: add is refused in words",
+          "is protected, so no sheet can be added" in out and "-2147" not in out, out)
+    out = tab("move", name=tabs()[0], after=tabs()[-1])
+    check("protected structure: move is refused in words",
+          "is protected, so no sheet can be moved" in out and "-2147" not in out, out)
+    book.api.Unprotect()
+else:
+    for n in ("Excel does misplace a move in a workbook that is behind (the reason for the rule)",
+              "... and the tool's move into that same slot is right",
+              "... leaving the workbook in front where it was",
+              "... the slip is one tab: Excel allows for the active sheet leaving, not the moved one",
+              "... and the tool puts that one right as well",
+              "a chart sheet next door does not throw the place",
+              "... nor the place of a new sheet",
+              "xlwings' own add is thrown by a chart sheet ahead (the reason for the rule)",
+              "... and the tool's add lands where asked, every other sheet where it was",
+              "... with the workbook in front still in front",
+              "protected structure: add is refused in words",
+              "protected structure: move is refused in words"):
+        skip(n, "set up through COM here")
+
+# ── 13. zoom (2026-11-18) ──────────────────────────────────────────────────
+print("\n13. excel_zoom")
+
+
+def zoom(**params):
+    return h.do_excel_zoom(dict(HERE, **params))
+
+
+shown = book.sheets.active.name
+out = zoom()
+check("report: a sheet that was never zoomed", out == f"Zoom on [{LAY}]{FIRST}: 100%.", out)
+out = zoom(percent=85)
+check("set 85%", out == f"Set the zoom of [{LAY}]{FIRST} to 85% (before: 100%).", out)
+check("... and that is what the report says", ": 85%." in zoom(), zoom())
+out = h.do_excel_zoom({"workbook": LAY, "sheet": "Panes"})
+check("another sheet keeps its own zoom", ": 100%." in out, out)
+out = h.do_excel_zoom({"workbook": BY})
+check("the workbook in front was not zoomed instead", ": 100%." in out, out)
+check("the workbook in front stayed in front", in_front() == BY, in_front())
+check("the sheet in view stayed in view", book.sheets.active.name == shown, book.sheets.active.name)
+check("asking for the zoom it has: nothing to do", "nothing to do" in zoom(percent=85), zoom(percent=85))
+for bad, why in ((9, "from 10 to 400"), (401, "from 10 to 400"), (85.5, "whole number"),
+                 ("abc", "whole number")):
+    out = zoom(percent=bad)
+    check(f"percent {bad!r} is refused by name", "'percent' must be" in out and why in out, out)
+check("... and none of them changed it", ": 85%." in zoom(), zoom())
+panes(rows=2)
+out = zoom(percent=120)
+check("a zoom leaves frozen panes alone",
+      "top 2 rows kept in view" in panes() and out.startswith("Set the zoom"), (out, panes()))
+panes(rows=0)
+
 h.do_excel_close({"workbook": LAY, "save": False})
 h.do_excel_close({"workbook": BY, "save": False})
 

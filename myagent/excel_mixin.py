@@ -21,15 +21,17 @@ Architecture notes (mirrors the mail mixins):
 - On macOS the import also moves xlwings' per-user config path OUT of
   Excel's sandbox container (see under the import): one stat in there is a
   TCC "access data from other apps" dialog on every new process.
-- Two tools (2026-11-18) reach past xlwings to the native object model, each
-  in ONE place, because xlwings has no desktop implementation of either:
-  excel_table's convert_to_range (_excel_table_unlist) and the whole of
-  excel_freeze_panes (_excel_pane_window hands out the window;
-  _excel_win_get / _excel_win_set are where COM and appscript differ). The
-  panes go through the WORKBOOK'S OWN window, never the application's
+- Three things (2026-11-18) reach past xlwings to the native object model,
+  each in ONE place, because xlwings has no desktop implementation of them:
+  excel_table's convert_to_range (_excel_table_unlist); a window's view —
+  excel_freeze_panes and excel_zoom (_excel_pane_window hands out the
+  window; _excel_win_get / _excel_win_set are where COM and appscript
+  differ); and moving an existing sheet (_excel_sheet_native_move). The
+  view goes through the WORKBOOK'S OWN window, never the application's
   active one — attached to the user's Excel, the active window is whatever
-  they have in front. What a real Excel does with a freeze, and why each
-  step and each refusal is there, was measured that day:
+  they have in front. A move is made in the ONE form that cannot send a
+  sheet out of its workbook. What a real Excel does with each, and why
+  every step and every refusal is there, was measured that day:
   docs/excel-table-freeze-panes-2026-11-18.md.
 """
 
@@ -93,10 +95,15 @@ class ExcelMixin:
                                "TableStyleMedium1-28 and TableStyleDark1-11.")
     #: How many of a table's columns excel_table names before summing up the rest.
     _EXCEL_TABLE_COLS_SHOWN = 40
+    #: What Excel takes for a sheet name and for a zoom (measured 2026-11-18).
+    _EXCEL_SHEET_NAME_MAX = 31
+    _EXCEL_SHEET_NAME_BAD = "\\/?*[]:"
+    _EXCEL_ZOOM_MIN, _EXCEL_ZOOM_MAX = 10, 400
 
-    #: A window's pane properties: the name this module uses → (the COM
-    #: attribute, the appscript property). Reads and writes go through
-    #: _excel_win_get / _excel_win_set, the one place the two shapes differ.
+    #: A window's view properties — panes and zoom: the name this module uses
+    #: → (the COM attribute, the appscript property). Reads and writes go
+    #: through _excel_win_get / _excel_win_set, the one place the two shapes
+    #: differ.
     _EXCEL_PANE_PROPS = {
         "frozen": ("FreezePanes", "freeze_panes"),
         "split_row": ("SplitRow", "split_row"),
@@ -104,6 +111,7 @@ class ExcelMixin:
         "scroll_row": ("ScrollRow", "scroll_row"),
         "scroll_column": ("ScrollColumn", "scroll_column"),
         "view": ("View", "view"),
+        "zoom": ("Zoom", "zoom"),
     }
 
     # ── Pure helpers (unit-tested in tests/test_excel_mixin.py) ──────────
@@ -341,12 +349,12 @@ class ExcelMixin:
         return value is not None and value != ""
 
     @staticmethod
-    def _excel_pane_count(value, what, limit):
-        """excel_freeze_panes' rows / columns → a whole number from 0 to
-        limit-1 (one row or column has to stay scrollable). Takes what the
-        providers send for a JSON number — 8, 8.0, '8' — and raises a
-        ValueError that names the parameter for anything else."""
-        problem = f"'{what}' must be a whole number (0 = none), got {value!r}"
+    def _excel_whole(value, what, hint):
+        """A numeric tool parameter → int. Takes what the providers send for
+        a JSON number — 8, 8.0, '8' — and raises a ValueError that names the
+        parameter for anything else, a fraction included: Excel would take
+        one and quietly drop the fraction (a zoom of 85.6 became 85)."""
+        problem = f"'{what}' must be a whole number ({hint}), got {value!r}"
         if isinstance(value, bool):
             raise ValueError(problem)
         try:
@@ -355,13 +363,91 @@ class ExcelMixin:
             raise ValueError(problem) from None
         if not _math.isfinite(num) or num != int(num):
             raise ValueError(problem)
-        count = int(num)
+        return int(num)
+
+    @staticmethod
+    def _excel_pane_count(value, what, limit):
+        """excel_freeze_panes' rows / columns → a whole number from 0 to
+        limit-1 (one row or column has to stay scrollable)."""
+        count = ExcelMixin._excel_whole(value, what, "0 = none")
         if count < 0:
             raise ValueError(f"'{what}' cannot be negative (0 = none)")
         if count >= limit:
             raise ValueError(f"'{what}' must be below {limit:,} — a sheet has "
                              f"{limit:,}, and one has to stay scrollable")
         return count
+
+    @staticmethod
+    def _excel_zoom_percent(value):
+        """excel_zoom's percent → a whole number in Excel's range. Checked
+        before Excel is touched: outside 10-400 Excel's own refusal is the
+        bare "Unable to set the Zoom property of the Window class"."""
+        low, high = ExcelMixin._EXCEL_ZOOM_MIN, ExcelMixin._EXCEL_ZOOM_MAX
+        percent = ExcelMixin._excel_whole(value, "percent", f"{low} to {high}")
+        if not low <= percent <= high:
+            raise ValueError(f"'percent' must be from {low} to {high}, got {percent}")
+        return percent
+
+    @staticmethod
+    def _excel_sheet_name_problem(name):
+        """Why Excel would refuse `name` for a sheet, worded to finish the
+        sentence "'X' cannot be a sheet name — …", or None when it is fine.
+
+        Checked before a sheet is added, for the reason a table's name is
+        (_excel_table_name_problem): xlwings adds the sheet and only then
+        names it, so a refused name left a `Sheet5` behind (2026-11-18).
+        The rules are what Excel answered that day: 31 characters at most;
+        none of \\ / ? * [ ] : ; no apostrophe first or last; and not
+        History, which it reserves. Spaces, digits, punctuation and a name
+        that reads as a cell are all fine."""
+        if not name:
+            return "it is empty"
+        limit = ExcelMixin._EXCEL_SHEET_NAME_MAX
+        if len(name) > limit:
+            return f"it is {len(name)} characters long ({limit} at most)"
+        bad = [ch for ch in dict.fromkeys(name) if ch in ExcelMixin._EXCEL_SHEET_NAME_BAD]
+        if bad:
+            return ("it contains " + " ".join(bad)
+                    + " — none of \\ / ? * [ ] : is allowed")
+        if name[0] == "'" or name[-1] == "'":
+            return "it begins or ends with an apostrophe"
+        if name.lower() == "history":
+            return "History is a name Excel reserves"
+        return None
+
+    @staticmethod
+    def _excel_sheet_where(params):
+        """excel_sheet's 'before' / 'after' → ("before" | "after", the other
+        sheet's name), or (None, None) when neither is given. Both at once
+        is a ValueError: they would name two places."""
+        before = (params.get("before") or "").strip()
+        after = (params.get("after") or "").strip()
+        if before and after:
+            raise ValueError("give 'before' or 'after', not both")
+        if before:
+            return "before", before
+        return ("after", after) if after else (None, None)
+
+    @staticmethod
+    def _excel_sheet_in_place(names, name, how, ref):
+        """Whether `name` sits directly before / after `ref` in `names`, the
+        workbook's sheets in tab order. False too when either is missing —
+        a sheet that has LEFT the workbook is not in place."""
+        if name not in names or ref not in names:
+            return False
+        return names.index(name) - names.index(ref) == (-1 if how == "before" else 1)
+
+    @staticmethod
+    def _excel_sheet_order(names, name, how, ref):
+        """The tab order a placement asks for: `names` with `name` directly
+        before / after `ref` and every OTHER sheet where it was. `name` may
+        be new to the list (add) or already in it (move). This is what the
+        read-back is held to — beside the right sheet is not enough: with a
+        chart sheet ahead, xlwings' own "add after" swapped two other sheets
+        and left the new one beside the sheet named (2026-11-18)."""
+        rest = [n for n in names if n != name]
+        at = rest.index(ref) + (how == "after")
+        return rest[:at] + [name] + rest[at:]
 
     @staticmethod
     def _excel_pane_words(rows, cols):
@@ -645,6 +731,180 @@ class ExcelMixin:
                 f"{addr} ({ur.rows.count} rows x {ur.columns.count} cols)")
         return "\n".join(lines)
 
+    # ── Sheet position ───────────────────────────────────────────────────
+
+    def _excel_structure_locked(self, book):
+        """True when the workbook's structure is protected: no sheet can be
+        added or moved then, and Excel's refusal of a move says nothing."""
+        return bool(self._excel_api_bool(book, "ProtectStructure", "protect_structure"))
+
+    @staticmethod
+    def _excel_sheet_native_move(book, sht, how, ref):
+        """Move `sht` directly before / after `ref` — the sheet tool's one
+        native call: xlwings can place a NEW sheet and has nothing for an
+        existing one.
+
+        On Windows exactly ONE form of Worksheet.Move is used: a real sheet
+        as the first, positional argument (Before). Measured 2026-11-18, in
+        early- and late-bound COM alike:
+          * A Move with no valid target does not fail — Excel moves the sheet
+            OUT of the workbook, into a new one. Leaving Before empty to pass
+            After by position did exactly that, every time; After by name did
+            it once in a late-bound call, and is what xlwings' own source
+            calls "broken in certain environments".
+          * So "after R" is "before R's follower", and after the LAST tab it
+            is two moves: the sheet before R, then R before the sheet.
+          * R's follower is looked up among ALL the workbook's sheets, not
+            its worksheets: Worksheet.Index counts chart sheets too.
+        macOS uses AppleScript's `move … to before / after`, taken from
+        xlwings' terminology table and NOT yet run on a Mac."""
+        if sys.platform == "darwin":
+            sht.api.move(to=ref.api.before if how == "before" else ref.api.after)
+            return
+        moved, target = sht.api, ref.api
+        if how == "before":
+            moved.Move(target)
+            return
+        every = book.api.Sheets
+        position = int(target.Index)
+        if position < int(every.Count):
+            follower = every(position + 1)
+            if str(follower.Name) != sht.name:
+                moved.Move(follower)
+        else:
+            moved.Move(target)
+            target.Move(moved)
+
+    @staticmethod
+    def _excel_sheet_index_off(book, ref):
+        """True when `ref`'s Worksheet.Index is not its place among the
+        worksheets: a chart sheet — any tab that is not a worksheet — lies
+        ahead of it. xlwings' Windows `sheets.add(after=…)` works the place
+        out from that Index over a collection that holds worksheets only.
+        Measured 2026-11-18 with one chart sheet ahead of A, B, C, D: after A
+        and after B the new sheet landed a tab late, and after C it landed
+        before C's old place with C and D swapped. macOS adds by reference,
+        with no arithmetic."""
+        if sys.platform == "darwin":
+            return False
+        names = [s.name for s in book.sheets]
+        return int(ref.api.Index) != names.index(ref.name) + 1
+
+    def _excel_sheet_put(self, book, sht, how, ref, want):
+        """Put `sht` directly before / after `ref`. Returns (whether the
+        workbook's sheets are now in the order `want`, the order as read).
+
+        The workbook is brought forward first, because in a workbook that
+        is NOT the active one Excel works the landing place out as if that
+        workbook's ACTIVE sheet were the one leaving: it allows for the
+        removal of the active sheet, not of the moved one, so the sheet
+        lands one tab off whenever the two lie on opposite sides of the
+        destination — and a move that should change nothing changes
+        something. Measured 2026-11-18 over every active sheet, moved sheet
+        and place among four sheets: 22 of this method's 96 moves wrong
+        "behind", each exactly where that rule puts it, and 96 of 96 right
+        "in front" (docs/excel-table-freeze-panes-2026-11-18.md).
+        The caller puts the view back. The order is read back WHOLE — the
+        sheet beside the one named and every other sheet where it was
+        (_excel_sheet_order) — and a miss is tried once more: another
+        workbook coming forward between the two calls is the one way left
+        to get one."""
+        name = sht.name
+        names = []
+        for _attempt in (1, 2):
+            book.activate()
+            self._excel_sheet_native_move(book, sht, how, ref)
+            names = [s.name for s in book.sheets]
+            if name not in names or names == want:
+                break
+        return names == want, names
+
+    def _excel_sheet_add(self, book, name, params):
+        how, ref_name = self._excel_sheet_where(params)
+        # The name is settled before a sheet exists (_excel_sheet_name_problem).
+        problem = self._excel_sheet_name_problem(name)
+        if problem:
+            return (f"excel_sheet error: '{name}' cannot be a sheet name — {problem}. "
+                    "Nothing was added.")
+        existing = [s.name for s in book.sheets]
+        taken = self._excel_resolve_sheet_name(existing, name)
+        if taken is not None:
+            return (f"excel_sheet error: {book.name} already has a sheet named "
+                    f"'{taken}'. Nothing was added. Sheets: " + ", ".join(existing))
+        ref = (self._excel_get_sheet(book, ref_name) if how
+               else book.sheets[book.sheets.count - 1])
+        if self._excel_structure_locked(book):
+            return (f"excel_sheet error: the structure of {book.name} is protected, so "
+                    "no sheet can be added — unprotect the workbook first.")
+        side = how or "after"           # no place asked for: after the last sheet
+        want = self._excel_sheet_order(existing, name, side, ref.name)
+        front, _shown = self._excel_view_mark(book)
+        try:
+            # xlwings' "after" is not used where a chart sheet lies ahead of
+            # `ref` (_excel_sheet_index_off): the sheet is added BEFORE it — a
+            # plain Sheets.Add, no arithmetic — and moved after it below.
+            if side == "before" or self._excel_sheet_index_off(book, ref):
+                new = book.sheets.add(name, before=ref)
+            else:
+                new = book.sheets.add(name, after=ref)
+            names = [s.name for s in book.sheets]
+            if names != want:
+                _placed, names = self._excel_sheet_put(book, new, side, ref, want)
+            if book.sheets.active.name != name:
+                new.activate()      # a new sheet is the sheet in view, as in Excel itself
+        finally:
+            # ... of ITS workbook: which workbook is in front stays as it was.
+            self._excel_view_restore(book, (front, None))
+        out = (f"Added sheet '{name}' to {book.name}"
+               + (f" {how} '{ref.name}'" if how else "")
+               + ". Sheets: " + ", ".join(names))
+        if names != want:
+            if self._excel_sheet_in_place(names, name, side, ref.name):
+                out += ("\n⚠ The other sheets are no longer in the order they were — "
+                        "the list shows the order now.")
+            else:
+                out += (f"\n⚠ It is not {side} '{ref.name}': Excel left it where the "
+                        "list shows — action=move can put it right.")
+        return out
+
+    def _excel_sheet_move(self, book, sht, params):
+        how, ref_name = self._excel_sheet_where(params)
+        if not how:
+            return ("excel_sheet error: 'before' or 'after' is required for move — the "
+                    "name of the sheet to put this one next to.")
+        ref = self._excel_get_sheet(book, ref_name)
+        name = sht.name
+        if ref.name == name:
+            return f"excel_sheet error: sheet '{name}' cannot be moved {how} itself."
+        names = [s.name for s in book.sheets]
+        want = self._excel_sheet_order(names, name, how, ref.name)
+        if names == want:
+            # No Move for a sheet that is there: behind, Excel moves one anyway.
+            return (f"Sheet '{name}' is already {how} '{ref.name}' in {book.name} — "
+                    "nothing to do. Sheets: " + ", ".join(names))
+        if self._excel_structure_locked(book):
+            return (f"excel_sheet error: the structure of {book.name} is protected, so "
+                    "no sheet can be moved — unprotect the workbook first.")
+        mark = self._excel_view_mark(book)
+        try:
+            placed, names = self._excel_sheet_put(book, sht, how, ref, want)
+        finally:
+            self._excel_view_restore(book, mark)
+        if name not in names:
+            return (f"excel_sheet error: sheet '{name}' is no longer in {book.name} — "
+                    "Excel moved it OUT, into a new workbook, which is what it does "
+                    "with a move that has no target. Look for an unsaved workbook "
+                    "holding it. Sheets left: " + ", ".join(names))
+        if not placed:
+            if self._excel_sheet_in_place(names, name, how, ref.name):
+                return (f"excel_sheet error: sheet '{name}' is {how} '{ref.name}' in "
+                        f"{book.name}, but the other sheets are no longer in the order "
+                        "they were. Sheets now: " + ", ".join(names))
+            return (f"excel_sheet error: sheet '{name}' did not end up {how} "
+                    f"'{ref.name}' in {book.name}. Sheets now: " + ", ".join(names))
+        return (f"Moved sheet '{name}' {how} '{ref.name}' in {book.name}. Sheets: "
+                + ", ".join(names))
+
     # ── Tables ───────────────────────────────────────────────────────────
 
     def _excel_tables(self, book, sheet=None):
@@ -819,9 +1079,10 @@ class ExcelMixin:
             pass
 
     def _excel_pane_window(self, book, sht):
-        """The window whose panes are `sht`'s, with `sht` showing in it.
+        """The window whose view of `sht` — its panes, its zoom — is to be
+        read or set, with `sht` showing in it.
 
-        Panes belong to a (window, sheet) pair and can only be read or set
+        Both belong to a (window, sheet) pair and can only be read or set
         for the sheet a window currently shows — so the sheet is shown first
         (the caller restores the view afterwards).
 
@@ -1252,10 +1513,10 @@ class ExcelMixin:
             if not name:
                 return f"excel_sheet error: 'name' is required for '{action}'."
             if action == "add":
-                book.sheets.add(name, after=book.sheets[book.sheets.count - 1])
-                return (f"Added sheet '{name}' to {book.name}. Sheets: "
-                        + ", ".join(s.name for s in book.sheets))
+                return self._excel_sheet_add(book, name, params)
             sht = self._excel_get_sheet(book, name)
+            if action == "move":
+                return self._excel_sheet_move(book, sht, params)
             if action == "rename":
                 new_name = (params.get("new_name") or "").strip()
                 if not new_name:
@@ -1542,6 +1803,45 @@ class ExcelMixin:
                 self._excel_view_restore(book, mark)
         except Exception as e:
             return f"excel_freeze_panes error: {self._excel_err(e)}"
+
+    def _excel_zoom_read(self, win):
+        """A window's zoom as a whole percentage (COM answers 85.0)."""
+        return int(round(float(self._excel_win_get(win, "zoom"))))
+
+    def do_excel_zoom(self, params):
+        try:
+            asked = params.get("percent")
+            report_only = not self._excel_given(asked)
+            # Validated before Excel is touched, like the pane counts.
+            percent = None if report_only else self._excel_zoom_percent(asked)
+            book, sht = self._excel_target(params)
+            where = f"[{book.name}]{sht.name}"
+            mark = self._excel_view_mark(book)
+            try:
+                # A zoom, like the panes, belongs to a (window, sheet) pair:
+                # the same window, reached the same way, for the same reason.
+                win = self._excel_pane_window(book, sht)
+                before = self._excel_zoom_read(win)
+                # Normal view and Page Layout view each keep a zoom of their
+                # own (2026-11-18: 90% set in one left the other at 120%).
+                note = (" The sheet is in Page Layout view, which keeps a zoom of its "
+                        "own — Normal view's is not this one."
+                        if self._excel_page_layout(win) else "")
+                if report_only:
+                    return f"Zoom on {where}: {before}%.{note}"
+                if before == percent:
+                    return (f"Zoom on {where} is already {percent}% — nothing to do."
+                            + note)
+                self._excel_win_set(win, "zoom", percent)
+                after = self._excel_zoom_read(win)
+                if after != percent:
+                    return (f"excel_zoom error: asked for {percent}% on {where}, and "
+                            f"Excel reports {after}%.")
+                return f"Set the zoom of {where} to {percent}% (before: {before}%).{note}"
+            finally:
+                self._excel_view_restore(book, mark)
+        except Exception as e:
+            return f"excel_zoom error: {self._excel_err(e)}"
 
     def do_excel_find(self, params):
         try:

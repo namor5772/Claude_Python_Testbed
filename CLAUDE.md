@@ -30,7 +30,8 @@ Tests: `tests/_util.py` builds bare mixin hosts via `__new__` (no Tk, keys or ne
 widgets on a withdrawn or transparent root and skip without a display; the five `tests/check_*_live.py` are hand-run
 live checks outside discovery (voice, Kimi and OpenAI-usage are billed; Excel and Ollama are free). Run the Excel one
 as `python tests/check_excel_live.py --private` whenever the user has a workbook open: it then drives a hidden Excel
-instance of its own and never attaches to theirs. Every command's flags, the ruff baseline's makeup and the
+instance of its own and never attaches to theirs (`--show` with it draws that instance's windows — Excel answers some
+calls differently in a workbook that is not in front). Every command's flags, the ruff baseline's makeup and the
 module-by-module test history: `docs/claude/commands-and-tests.md`.
 
 ## Project Structure

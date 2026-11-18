@@ -2276,7 +2276,7 @@ PARALLEL_SAFE_TOOLS = {"web_search", "fetch_webpage", "csv_search", "get_skill",
 # excel_sheet's action set — single source of truth for the schema enum below
 # AND the mixin's guard/error message (excel_mixin imports it as
 # SHEET_ACTIONS), so a new action can't reach one list and miss the other.
-EXCEL_SHEET_ACTIONS = ("list", "add", "rename", "delete", "activate", "clear")
+EXCEL_SHEET_ACTIONS = ("list", "add", "rename", "delete", "activate", "clear", "move")
 
 # excel_table's action set and display options (2026-11-18) — the same single
 # source of truth: the schema's enum and its boolean properties are built from
@@ -2472,8 +2472,10 @@ EXCEL_TOOLS = [
     {
         "name": "excel_sheet",
         "description": (
-            "Manage worksheets: list (names + used-range sizes), add, rename, delete, "
-            "activate, or clear one."
+            "Manage worksheets: list (names + used-range sizes, in tab order), add, "
+            "rename, delete, activate, clear, or move one. add and move take 'before' "
+            "or 'after' — the name of another sheet — to say where the tab goes; "
+            "without either, add puts the new sheet last."
         ),
         "input_schema": {
             "type": "object",
@@ -2494,6 +2496,17 @@ EXCEL_TOOLS = [
                 "new_name": {
                     "type": "string",
                     "description": "New sheet name (rename only).",
+                },
+                "before": {
+                    "type": "string",
+                    "description": "add / move: put the sheet directly before this sheet.",
+                },
+                "after": {
+                    "type": "string",
+                    "description": (
+                        "add / move: put the sheet directly after this sheet. Give "
+                        "'before' or 'after', not both."
+                    ),
                 },
             },
             "required": ["action"],
@@ -2593,6 +2606,33 @@ EXCEL_TOOLS = [
                 "columns": {
                     "type": "number",
                     "description": "How many columns to keep frozen at the left (0 = none).",
+                },
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "excel_zoom",
+        "description": (
+            "Set a sheet's zoom — the magnification its window shows it at, 10 to 400 "
+            "percent — or, called without 'percent', report it. Every sheet has a zoom "
+            "of its own. It acts on the named workbook's own window and leaves the "
+            "active sheet as it was."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "workbook": {
+                    "type": "string",
+                    "description": "Workbook name. Default: the active workbook.",
+                },
+                "sheet": {
+                    "type": "string",
+                    "description": "Sheet name. Default: the active sheet.",
+                },
+                "percent": {
+                    "type": "number",
+                    "description": "Zoom in percent: a whole number from 10 to 400 (100 = actual size).",
                 },
             },
             "required": [],

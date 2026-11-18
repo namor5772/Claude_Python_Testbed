@@ -1,4 +1,8 @@
-# Two Excel layout tools — `excel_table` and `excel_freeze_panes` (2026-11-18)
+# Excel's layout tools — tables, frozen panes, a place for a sheet, zoom (2026-11-18)
+
+Two requests on one day. The morning's `excel_table` and `excel_freeze_panes` fill this page down to
+**Afterwards**; `excel_zoom` and a place for a sheet (`excel_sheet`'s `before` / `after` and its
+`move` action) followed that afternoon and are the last part, **Later the same day**.
 
 ## The request
 
@@ -204,7 +208,8 @@ the private instances the live check and the day's probes start are quit through
   `python tests/check_excel_live.py` on the Mac: the checks that need COM skip themselves and name
   why.
 - **What the Documents sheet still needed beyond these two**: the zoom, and placing the new sheet
-  right after Spending (`excel_sheet add` appends at the end).
+  right after Spending (`excel_sheet add` appended at the end). Both were added that afternoon —
+  **Later the same day**, below.
 - **A report on a frozen part larger than the window reads one short** (39 for 40). The freeze
   itself is warned about when it is made.
 - **The `deathbook-workbook` skill was not edited.** It still sends structural edits to a COM
@@ -224,3 +229,197 @@ still open, and they serve the old catalogue until they reconnect as well.
 The table-name rule was closed off the same afternoon. Of its 24 names, 22 had been given to the
 display-name setter in the morning's probes; the other two (`TableDOCS`, `Table 1`) and a
 255-character name through `.Name` were measured then, and came out as the rule says.
+
+## Later the same day: zoom, and a place for a sheet
+
+### The request
+
+> add zoom and sheet position tools to the excel MCP
+
+The two things the Documents sheet had still needed a script for (**Open**, above).
+
+### What was added
+
+| | What it does |
+|---|---|
+| `excel_zoom` (a new tool) | set a sheet's zoom, 10 to 400 percent; without `percent`, report it |
+| `excel_sheet` `add` with `before` / `after` | the new sheet goes directly before / after the sheet named; without either it goes last, as it always did |
+| `excel_sheet` `move` (a new action) | put an existing sheet directly before / after another |
+
+A sheet's place went into `excel_sheet` rather than into a tool of its own: that tool already adds,
+renames and deletes sheets, and its actions are one tuple (`EXCEL_SHEET_ACTIONS`) behind both the
+schema and the mixin's guard. MyAgent now offers 104 built-in tools, twelve of them Excel's; the MCP
+server serves 102. Neither is parallel-safe and neither asks for a confirmation — nothing here
+deletes anything.
+
+### What a real Excel turned out to do
+
+Measured as the morning's were: Excel 16.0, xlwings 0.36.12, hidden Excel instances of their own,
+never the user's.
+
+#### A sheet's name
+
+1. **xlwings names a sheet after it has made it**, as it does a table. `sheets.add("a/b", after=…)`
+   got as far as Excel's "You typed an invalid name for a sheet or chart" and left a `Sheet5` in the
+   workbook. A name already in use is the one thing it checks first.
+2. **The rule**, from giving each name to an existing sheet — through COM's own `Name` where
+   xlwings' public setter screens a name itself (the length, six of the characters, the empty
+   name). A refused name leaves the sheet named as it was.
+
+   | Taken | Refused |
+   |---|---|
+   | 31 characters | 32 characters |
+   | `a'b` — an apostrophe inside | `'a`, `a'` — an apostrophe first or last |
+   | `Sheet 1`, `x.y`, `déjà`, `a,b`, `a!b`, `a=b`, `#x` | `a/b`, `a\b`, `a?b`, `a*b`, `a[b`, `a]b`, `a:b` |
+   | `1`, `A1` — a number or a cell reference is fine here | `History`, `history` — "History is a reserved name." |
+   | a single space; a tab or a line break inside | the empty name; a name in use, in any case |
+
+#### Moving a sheet
+
+1. **xlwings has nothing that moves an existing sheet.** `sheets.add(before=, after=)` places a new
+   one; `Worksheet.Move` is the native call.
+2. **A Move with no valid target does not fail — the sheet leaves the workbook.** `Move()` alone
+   made a new workbook holding the sheet. So did leaving Before empty to pass the target as After
+   by position, on every one of 16 such moves (the workbook in front and behind, early- and
+   late-bound COM). After by name did it once, in a late-bound call of the first probe that the
+   later runs did not reproduce; xlwings' own source steers round it under the comment *Hack, since
+   "After" is broken in certain environments*.
+3. **In a workbook that is not the active one, a Move lands one tab off** — not always, and by a
+   rule. Every active sheet, moved sheet and place among four sheets (96 moves, each from a fresh
+   workbook), and the same over five sheets for three of the active sheets (120):
+
+   | | The workbook in front | The workbook behind another |
+   |---|---|---|
+   | `Move(Before=…)` / `Move(After=…)`, four sheets | 96 of 96 right | 68 of 96 |
+   | the tool's own form (below), four sheets | 96 of 96 right | 74 of 96 |
+   | five sheets | 120 of 120 right (the tool's form) | 80 of 120 (`Before=` / `After=`) |
+
+   All 312 moves made behind — the 222 right and the 90 wrong — landed where one rule puts them:
+   **Excel allows for the removal of the workbook's ACTIVE sheet instead of the moved one.** Taking
+   a sheet out from the left of the destination shifts the destination down by one; behind, Excel
+   asks that of the sheet in view. So the moved sheet lands a tab early or late whenever it and the
+   sheet in view lie on opposite sides of the destination. With sheets A B C D:
+
+   | Showing | The move | Asked for | Got |
+   |---|---|---|---|
+   | A | D before C | A B D C | A D B C |
+   | D | A before C | B A C D | B C A D |
+   | B | A before B — where A already is | A B C D | B A C D |
+
+   The last row is the one to remember: behind, a move that should change nothing changes
+   something. A first, smaller matrix (8 moves) gave the same answers hidden and on screen, early-
+   and late-bound, and the live check re-measures two of these moves on whatever Excel it runs on.
+4. **A Move shows the moved sheet and brings its workbook forward** — in every one of the 510 moves
+   that changed the order.
+5. **A protected structure answers a Move with an error that has no text** (a tuple of numbers
+   ending in `-2147352565`), and an add with "Add method of Sheets class failed".
+6. **A chart sheet is a tab that is not a worksheet.** `Worksheet.Index` counts it; xlwings'
+   `book.sheets` does not list it (it is COM's `Worksheets`).
+7. **xlwings' own "add after" is thrown by a chart sheet ahead.** On Windows it works the place out
+   from `Worksheet.Index` — every tab — over that collection of worksheets only, and for the last
+   place it moves a sheet. With one chart sheet ahead of A B C D:
+
+   | `sheets.add("RAW", after=…)` | Left |
+   |---|---|
+   | A | Chart1 A B **RAW** C D — a tab late |
+   | B | Chart1 A B C **RAW** D — a tab late |
+   | C | Chart1 A B **RAW** D C — before C's old place, **and C and D swapped** |
+   | D | Chart1 A B C D **RAW** — right |
+
+   With two chart sheets ahead, after B left `Chart1 Chart2 A RAW B D C`. The third row is the
+   costly one: a sheet nobody named has moved. `add(before=…)` is a plain `Sheets.Add(Before=…)`
+   and has none of this. On macOS xlwings adds by reference, with no arithmetic — read from its
+   source, not run.
+8. Its last-place route also ends in an `Activate` that brings the workbook forward; its other
+   routes leave the workbook in front alone.
+
+#### Zoom
+
+1. **`Window.Zoom` belongs to a (window, sheet) pair**, as panes do, and reads as a float (`100.0`).
+   Set to 85 on one sheet through the workbook's own window — `book.api.Windows(1)`, with another
+   workbook active — the next sheet and the other workbook still read 100.
+2. **10 and 400 are taken; 9, 401, 0, −5 and 1000 are refused**, each with the same bare "Unable to
+   set the Zoom property of the Window class".
+3. **A fraction is dropped without a word**: 85.4, 85.5 and 85.6 all became 85.
+4. **Frozen panes are untouched** by a zoom.
+5. **Page Layout view keeps a zoom of its own**: 90 set there left Normal view at 120.
+
+### What the tools do about it
+
+- **A new sheet's name is settled before the sheet exists.** `_excel_sheet_name_problem` applies the
+  rule above — it agrees with Excel on all 25 names measured, and the live check re-measures 16 on
+  whatever Excel it runs on — and the workbook's own sheet names are checked, in any case. A refusal
+  costs nothing: "Nothing was added".
+- **One form of Move, and only one**: a real sheet as the first, positional argument. "After R" is
+  "before R's follower" — looked up among ALL the workbook's tabs, since the follower can be a chart
+  sheet — and after the last tab it is two moves, the sheet before R and then R before the sheet.
+  `After` is never passed, by name or by position.
+- **The workbook is brought forward before a move**, which is where 312 of 312 were right, **and no
+  move is made that is not needed**: a sheet already in place is answered "nothing to do".
+- **xlwings' "add after" is not used behind a chart sheet** (`_excel_sheet_index_off`: the
+  neighbour's `Index` is not its place among the worksheets). There the sheet is added BEFORE the
+  neighbour — the plain route — and moved after it.
+- **The order is read back whole**, not just the pair: the sheet beside the one named AND every
+  other sheet where it was (`_excel_sheet_order`). A miss is tried once more, then reported with
+  the order as it stands. A sheet that is no longer in the workbook is said in so many words, and so
+  is an order in which other sheets have moved.
+- **The view is put back**: the sheet in view and the workbook in front, with the helpers the panes
+  use. A new sheet is left in view in ITS workbook, as Excel leaves it; which workbook is in front
+  does not change.
+- **A protected structure is asked about first**, and refused in words.
+- **A zoom is validated before Excel is touched** — a whole number from 10 to 400, a fraction
+  refused rather than dropped — set through the workbook's own window (the panes' route: the sheet
+  shown and checked, never `ActiveWindow`), and read back. Asking for the zoom a sheet has does
+  nothing; Page Layout view's separate zoom is said in the result.
+
+### Two things that were wrong before the commit
+
+Both sat in the working tree with every unit test and every live check passing.
+
+- **The rule for a move made behind.** The first matrix made 8 moves, always with sheet A showing,
+  and read as "the sheet lands before the active sheet". One result from an earlier probe, with D
+  showing, did not fit, and the 312-move run settled it: that reading fits 215 of the 312, the rule
+  above all of them. A matrix that holds one thing constant cannot tell two rules apart. The tool's
+  logic never depended on which rule it was; the tests' fake did, and it now moves as Excel was
+  measured to.
+- **An add that swapped two other sheets and reported success.** The read-back checked that the new
+  sheet sat beside the one named. With a chart sheet ahead, xlwings' "add after C" left the new
+  sheet before C's old place with C and D swapped; the correcting move then brought the new sheet
+  beside C, and the tool answered "Added sheet … after 'C'" over a workbook whose other sheets had
+  changed places. Found by putting a chart sheet AHEAD of the neighbour in a probe — the live check
+  had only ever put one behind it. Fixed twice over: that route is no longer taken, and the
+  read-back is the whole order.
+
+### Tests
+
+- **`tests/test_excel_sheet_zoom.py`** — 62 tests over the fakes of
+  `tests/test_excel_tables_panes.py`, which gained a `Worksheet.Move` and an xlwings `sheets.add`
+  that BEHAVE as measured: a Move with no real sheet first sends the sheet out; behind, it allows
+  for the sheet in view; "add after" does xlwings' own arithmetic, chart sheets and all.
+  `MeasuredMoveTests` holds the fake to what Excel did with all 48 `Move(Before=…)` of four sheets,
+  behind (fourteen of them a tab off) and in front, and the tool to all 96 requests from a workbook
+  that starts behind; the measured outcomes of "add after" behind chart sheets are a table of their
+  own, and the tool is held to every place behind one chart sheet and behind two. Checked the other
+  way round: eighteen safeguards disabled one at a time were each caught, and so was each fake
+  given the wrong behaviour (the first, narrower rule; a Move that is always right; an add that is
+  always right).
+- **`tests/check_excel_live.py`** — sections 12 (a place for a sheet, 36 checks) and 13 (zoom, 14):
+  129 of 129 on Windows, hidden and — with `--show`, new that afternoon — with the private
+  instance's windows drawn, which is what an attached Excel's are. Three things are re-measured on
+  whatever Excel it runs on before the tool is asked to do better: a move made behind landing a tab
+  off (twice — the second tells the rule from the first reading of it), and xlwings' own add thrown
+  by a chart sheet ahead.
+- **The MCP server**, spawned fresh: 102 tools, twelve `excel_*`, `excel_zoom` and the sheet tool's
+  new surface routed (called with input they refuse before Excel is touched).
+- The suite: 125 modules, 2,541 tests.
+
+### Open
+
+- **macOS**, again. The move is AppleScript's `move … to before / after`, from xlwings' terminology
+  table, and the zoom goes through the application's active window as the panes do there. Neither
+  has been run on a Mac.
+- **A session's own MCP server** lists `excel_zoom`, and `move` among `excel_sheet`'s actions, after
+  its next reconnect (`/mcp`): the one these were written from was still serving 101 tools.
+- **The `deathbook-workbook` skill is still not edited.** With these the Documents sheet of that
+  morning needs no script: `excel_sheet add … after`, `excel_table create`, `excel_freeze_panes`,
+  `excel_zoom` — column widths and number formats were `excel_format`'s already.

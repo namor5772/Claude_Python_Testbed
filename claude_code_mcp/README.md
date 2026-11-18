@@ -14,8 +14,8 @@ From the repository root, once per machine:
 
     claude mcp add --scope user myagent -- "$PWD/.venv/bin/python" "$PWD/claude_code_mcp/server.py"
 
-Tools appear in Claude Code as `mcp__myagent__<name>` (101 since 2026-11-18,
-when `excel_table` and `excel_freeze_panes` joined — 99 until then; the same on
+Tools appear in Claude Code as `mcp__myagent__<name>` (102 since 2026-11-18,
+when `excel_table`, `excel_freeze_panes` and `excel_zoom` joined — 99 until then; the same on
 the Mac Mini and the Windows laptop: desktop, browser, Excel, camera + microphone,
 Gmail / Proton / Outlook, read_document, the file tools, run_command,
 web_search / fetch_webpage,
@@ -171,7 +171,7 @@ over-trash hazard MyAgent's version of this instruction guards against (a
 numbered list is the only authority, and the matching step is what enforces
 it.
 
-### Two tools added from inside a session (2026-11-18, the Windows laptop)
+### Tools added from inside a session (2026-11-18, the Windows laptop)
 
 `excel_table` and `excel_freeze_panes` were written in a Claude Code session
 that was itself using this server — to attach to an open workbook, read it back
@@ -197,6 +197,14 @@ What that took in practice:
   Excel instance of its own. (`smoke.py` lists the catalogue but exercises no
   Excel tool — and its `clipboard_read` call prints whatever is on the clipboard,
   which an agent's transcript then holds.)
+
+`excel_zoom`, and a place for a sheet in `excel_sheet` (`before` / `after` on
+`add`, and a `move` action), followed the same afternoon the same way — a
+schema and a `do_` method, nothing in this folder — and were checked against a
+server spawned fresh over stdio: 102 tools, twelve `excel_*`, both called with
+input they refuse before any Excel is touched. A changed SCHEMA of an existing
+tool (`excel_sheet`'s new action and parameters) reaches a session exactly as a
+new tool does: at its server's next start, so after `/mcp` → Reconnect.
 
 Server log lines go to stderr (Claude Code's MCP log); the protocol owns the
 real stdout, and fd 1 is pointed at stderr so child processes cannot corrupt it.

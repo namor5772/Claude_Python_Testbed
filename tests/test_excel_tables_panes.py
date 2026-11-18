@@ -228,6 +228,7 @@ class _Panes:
         self.top_row = self.top_col = 1         # first row / column of the window — of the frozen part, once frozen
         self.scroll_row = self.scroll_col = 1   # the scrollable part's, once frozen
         self.view = 1
+        self.zoom = self.layout_zoom = 100      # Normal view and Page Layout view keep one each
 
     def _reads(self, count, top, hidden):
         if not count:
@@ -251,6 +252,8 @@ class _Panes:
             return self.scroll_col if self.frozen and self.cols else self.top_col
         if key == "View":
             return self.view
+        if key == "Zoom":                       # COM answers a float
+            return float(self.layout_zoom if self.view == 3 else self.zoom)
         raise AttributeError(key)
 
     def put(self, key, value):
@@ -289,6 +292,15 @@ class _Panes:
                 self.top_col = value
         elif key == "View":
             self.view = value
+        elif key == "Zoom":
+            if not 10 <= value <= 400:
+                raise RuntimeError("Unable to set the Zoom property of the Window class")
+            if self.sheet.book.zoom_stuck:
+                return
+            if self.view == 3:
+                self.layout_zoom = int(value)   # a fraction is dropped, silently
+            else:
+                self.zoom = int(value)
         else:
             raise AttributeError(key)
 
@@ -338,7 +350,7 @@ class _MacProp:
 class _MacWindow:
     """app.api.active_window: every property a reference with .get() / .set()."""
     NAMES = {"freeze_panes": "FreezePanes", "split_row": "SplitRow", "split_column": "SplitColumn",
-             "scroll_row": "ScrollRow", "scroll_column": "ScrollColumn", "view": "View"}
+             "scroll_row": "ScrollRow", "scroll_column": "ScrollColumn", "view": "View", "zoom": "Zoom"}
 
     def __init__(self, window):
         self._window = window
@@ -347,6 +359,91 @@ class _MacWindow:
         if name not in self.NAMES:      # appscript: "Unknown property, element or command"
             raise AttributeError(name)
         return _MacProp(self._window, self.NAMES[name])
+
+
+_NO_ARGUMENT = object()
+
+
+class _TabApi:
+    """A sheet's native object in both shapes: COM's Index / Name / Move, and
+    appscript's before / after / move. Move BEHAVES as a real Excel was
+    measured to on 2026-11-18 (tests/test_excel_sheet_zoom.py):
+
+      * without a real sheet as its first argument — nothing given, or the
+        target passed as After — the sheet LEAVES the workbook for a new one;
+      * in a workbook that is not in front, the landing place allows for the
+        removal of that workbook's ACTIVE sheet instead of the moved one, so
+        the sheet lands one tab off whenever the two lie on opposite sides
+        of the destination (312 moves behind, every one as this says);
+      * it shows the moved sheet and brings its workbook forward.
+    """
+
+    def __init__(self, tab):
+        self.tab = tab
+
+    @property
+    def Index(self):                # among ALL the tabs, chart sheets included
+        return self.tab.book.tabs.index(self.tab) + 1
+
+    @property
+    def Name(self):
+        return self.tab.name
+
+    @property
+    def before(self):
+        return ("before", self.tab)
+
+    @property
+    def after(self):
+        return ("after", self.tab)
+
+    def Move(self, before=_NO_ARGUMENT, after=_NO_ARGUMENT):
+        book, tab = self.tab.book, self.tab
+        book.log.append(("Move", tab.name, getattr(getattr(before, "tab", None), "name", None),
+                         getattr(getattr(after, "tab", None), "name", None)))
+        if book.protected:
+            raise RuntimeError(OPAQUE)
+        if after is not _NO_ARGUMENT or not isinstance(before, _TabApi):
+            book.tabs.remove(tab)           # out, into a new workbook
+            book.exiled.append(tab.name)
+            book.sync()
+            return
+        if book.move_stuck:
+            return
+        tabs = book.tabs
+        target = tabs.index(before.tab) + 1                 # 1-based: "before index `target`"
+        # Taking a sheet out from the left of the target shifts the target one
+        # down. In front Excel asks that of the moved sheet; behind, of the
+        # workbook's active sheet — the measured slip.
+        leaving = tab if book.app.books.active is book else book.sheets.active
+        final = target - 1 if tabs.index(leaving) + 1 < target else target
+        tabs.remove(tab)
+        tabs.insert(final - 1, tab)
+        book.sync()
+        if isinstance(tab, _Sheet) and tab.visible:
+            book.sheets.active = tab
+        book.app.books.active = book
+
+    def move(self, to=None):                # appscript: move … to before / after …
+        how, ref = to
+        book, tab = self.tab.book, self.tab
+        book.log.append(("move", tab.name, how, ref.name))
+        book.tabs.remove(tab)
+        slot = book.tabs.index(ref)
+        book.tabs.insert(slot if how == "before" else slot + 1, tab)
+        book.sync()
+
+
+class _Chart:
+    """A chart sheet: a tab that is not a worksheet. It is in the workbook's
+    Sheets and has an Index, and xlwings' book.sheets does not list it."""
+
+    def __init__(self, book, name="Chart1"):
+        self.book, self.name = book, name
+
+    @property
+    def api(self):
+        return _TabApi(self)
 
 
 class _Sheet:
@@ -358,6 +455,10 @@ class _Sheet:
         self.visible = True
         self.unreadable = False     # the visibility probe raises
         self.probes = 0
+
+    @property
+    def api(self):
+        return _TabApi(self)
 
     def range(self, first, last=None):
         if isinstance(first, str):
@@ -374,12 +475,71 @@ class _Sheet:
 
 
 class _Sheets(list):
+    """xlwings' book.sheets: the worksheets, in tab order."""
     active = None
+
+    def __init__(self, book, sheets):
+        super().__init__(sheets)
+        self.book = book
 
     def __getitem__(self, key):
         if isinstance(key, str):
             return next(s for s in self if s.name == key)
         return super().__getitem__(key)
+
+    @property
+    def count(self):
+        return len(self)
+
+    def add(self, name=None, before=None, after=None):
+        """As xlwings does it on Windows (its source, and a real Excel on
+        2026-11-18):
+
+          * the sheet is made FIRST and named second, so a name Excel refuses
+            leaves a sheet behind under its automatic one;
+          * `before` is a plain Sheets.Add(Before=…);
+          * `after` works the place out from Worksheet.Index — which counts
+            every tab — over a collection that holds worksheets only. With a
+            chart sheet ahead the new sheet lands a tab late, and beside the
+            last worksheets ANOTHER sheet is moved: after C in
+            Chart1, A, B, C, D left Chart1, A, B, new, D, C.
+        """
+        book = self.book
+        book.log.append(("sheets.add", name, getattr(before, "name", None), getattr(after, "name", None)))
+        if book.protected:
+            raise RuntimeError("Add method of Sheets class failed")
+        if name is not None and name.lower() in (s.name.lower() for s in self):
+            raise ValueError("Sheet named '%s' already present in workbook" % name)
+        book.auto_sheet += 1
+        new = _Sheet(book, f"Sheet{book.auto_sheet}")
+        tabs = book.tabs
+        shown = new                         # a new sheet is the sheet in view
+        if book.add_misplaces:              # a stand-in: a placement that missed for a reason not yet seen
+            tabs.append(new)
+        elif before is not None:
+            tabs.insert(tabs.index(before), new)
+        elif after is not None:
+            new_index = tabs.index(after) + 2               # after.xl.Index + 1
+            if new_index > len(self):                       # ... against Worksheets.Count
+                tabs.insert(tabs.index(after), new)         # Add(Before=after)
+                book.sync()
+                last, second_last = self[-1], self[-2]      # Worksheets(Count).Move(Before=Worksheets(Count - 1))
+                tabs.remove(last)
+                tabs.insert(tabs.index(second_last), last)
+                book.sync()
+                shown = self[-1]                            # Worksheets(Count).Activate()
+                book.app.books.active = book                # ... which brings the workbook forward
+            else:
+                tabs.insert(tabs.index(self[new_index - 1]), new)   # Add(Before=Worksheets(Index + 1))
+        else:
+            tabs.insert(tabs.index(self.active), new)
+        book.sync()
+        self.active = shown
+        if name is not None:
+            if ExcelMixin._excel_sheet_name_problem(name):
+                raise RuntimeError("You typed an invalid name for a sheet or chart.")
+            new.name = name
+        return new
 
 
 class _Books(list):
@@ -400,6 +560,36 @@ class _App:
         return type("AppApi", (), {"active_window": _MacWindow(self.books.active.window)})()
 
 
+class _AllTabs:
+    """book.api.Sheets: every tab, chart sheets included, by 1-based index."""
+
+    def __init__(self, book):
+        self.book = book
+
+    @property
+    def Count(self):
+        return len(self.book.tabs)
+
+    def __call__(self, index):
+        return self.book.tabs[index - 1].api
+
+
+class _BookApi:
+    def __init__(self, book):
+        self.book = book
+
+    def Windows(self, index):
+        return self.book.window
+
+    @property
+    def Sheets(self):
+        return _AllTabs(self.book)
+
+    @property
+    def ProtectStructure(self):
+        return self.book.protected
+
+
 class _Book:
     def __init__(self, name="fake.xlsx", sheets=("Data", "Second"), app=None):
         self.name = name
@@ -413,17 +603,39 @@ class _Book:
         self.window_size = 32               # rows (and columns) the window can show
         self.activating_fronts = False      # showing a sheet brings the workbook forward
         self.fail_on = None                 # (property, value) whose write raises
-        self.sheets = _Sheets(_Sheet(self, n) for n in sheets)
+        self.tabs = [_Sheet(self, n) for n in sheets]      # every tab; a _Chart may join them
+        self.sheets = _Sheets(self, self.tabs)
         self.sheets.active = self.sheets[0]
+        self.auto_sheet = len(self.tabs)
+        self.protected = False              # the workbook's structure
+        self.add_misplaces = False          # sheets.add puts the new sheet last, whatever was asked
+        self.move_stuck = False             # Move raises nothing and moves nothing
+        self.zoom_stuck = False             # a zoom write raises nothing and changes nothing
+        self.front_stolen = 0               # how many activate() calls another workbook pre-empts
+        self.exiled = []                    # sheets that left for a new workbook
         self.window = _ComWindow(self)
-        self.api = type("BookApi", (), {"Windows": lambda _api, index: self.window})()
+        self.api = _BookApi(self)
         self.app = app or _App()
         self.app.books.append(self)
         if self.app.books.active is None:
             self.app.books.active = self
 
+    def sync(self):
+        """book.sheets follows the tabs: the worksheets among them, in order."""
+        self.sheets[:] = [t for t in self.tabs if isinstance(t, _Sheet)]
+
+    def order(self):
+        return [t.name for t in self.tabs]
+
+    def moves(self):
+        """The native Move calls: (moved, Before, After)."""
+        return [e[1:] for e in self.log if e[0] == "Move"]
+
     def activate(self):
         self.log.append(("book.activate", self.name))
+        if self.front_stolen:
+            self.front_stolen -= 1          # someone clicked another workbook just then
+            return
         self.app.books.active = self
 
     def sets(self):
@@ -670,7 +882,7 @@ class SchemaTests(unittest.TestCase):
                 self.assertTrue(callable(getattr(ExcelMixin, f"do_{name}", None)))
                 self.assertNotIn(name, c.PARALLEL_SAFE_TOOLS)       # one shared COM apartment
                 self.assertRegex(name, r"^[a-zA-Z0-9_-]{1,64}$")    # every provider's name rule
-        self.assertEqual(len(c.EXCEL_TOOLS), 11)
+        self.assertEqual(len(c.EXCEL_TOOLS), 12)
 
 
 # ── excel_table ──────────────────────────────────────────────────────────────
