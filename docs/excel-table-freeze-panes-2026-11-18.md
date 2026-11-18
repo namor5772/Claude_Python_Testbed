@@ -1,8 +1,9 @@
 # Excel's layout tools — tables, frozen panes, a place for a sheet, zoom (2026-11-18)
 
-Two requests on one day. The morning's `excel_table` and `excel_freeze_panes` fill this page down to
-**Afterwards**; `excel_zoom` and a place for a sheet (`excel_sheet`'s `before` / `after` and its
-`move` action) followed that afternoon and are the last part, **Later the same day**.
+Three requests on one day. The morning's `excel_table` and `excel_freeze_panes` fill this page down
+to **Afterwards**; `excel_zoom` and a place for a sheet (`excel_sheet`'s `before` / `after` and its
+`move` action) followed that afternoon, **Later the same day**; and that evening the
+`deathbook-workbook` skill was brought up to date with all four, **That evening: the skill**.
 
 ## The request
 
@@ -17,7 +18,7 @@ formats and sheets and had no operation for a table or a window. Told so, the us
 ## The sheet that prompted it — `[Documents]` / `TableDOCS`
 
 Recorded here because nothing else in the repo does: the skills that drive the workbook live in
-OneDrive, and `deathbook-workbook`'s sheet list does not name the sheet yet.
+OneDrive, and `deathbook-workbook`'s sheet list did not name the sheet until that evening.
 
 - **Where.** A worksheet `Documents`, the tab directly after `Spending`. `Data Sources` is still the
   last tab, which is all the reconciliation scripts rely on — they find their sheets by name and
@@ -212,9 +213,10 @@ the private instances the live check and the day's probes start are quit through
   **Later the same day**, below.
 - **A report on a frozen part larger than the window reads one short** (39 for 40). The freeze
   itself is warned about when it is made.
-- **The `deathbook-workbook` skill was not edited.** It still sends structural edits to a COM
-  script and tells a run to map `TableALL`'s columns by reading header row 8 — `excel_table list`
-  now answers that in one call — and its sheet list does not name `Documents`.
+- **The `deathbook-workbook` skill was not edited** at this point. It still sent structural edits
+  to a COM script and told a run to map `TableALL`'s columns by reading header row 8 —
+  `excel_table list` now answers that in one call — and its sheet list did not name `Documents`.
+  It was updated that evening: **That evening: the skill**, at the end.
 
 ## Afterwards: the tools in the session that asked for them
 
@@ -420,6 +422,54 @@ Both sat in the working tree with every unit test and every live check passing.
   has been run on a Mac.
 - **A session's own MCP server** lists `excel_zoom`, and `move` among `excel_sheet`'s actions, after
   its next reconnect (`/mcp`): the one these were written from was still serving 101 tools.
-- **The `deathbook-workbook` skill is still not edited.** With these the Documents sheet of that
-  morning needs no script: `excel_sheet add … after`, `excel_table create`, `excel_freeze_panes`,
-  `excel_zoom` — column widths and number formats were `excel_format`'s already.
+- **The `deathbook-workbook` skill** was still unedited at this commit. With these tools the
+  Documents sheet of that morning needs no script: `excel_sheet add … after`, `excel_table create`,
+  `excel_freeze_panes`, `excel_zoom` — column widths and number formats were `excel_format`'s
+  already. It was updated that evening — next.
+
+## That evening: the skill
+
+> update the deathbook-workbook skill with the new tools
+
+The skill lives in OneDrive (`<OneDrive>/MyAppShare/skills/deathbook-workbook/SKILL.md`), outside
+this repo, so what changed is recorded here.
+
+- **The sheet list names `Documents`**, the tab after Spending, and a bullet gives its table:
+  `TableDOCS`, header row 8, `B:F` = Date, Category1-3, Comments, frozen below row 8, zoom 85 %,
+  rows 1-7 empty by design, nothing in the workbook or the helper scripts reading it, and no
+  business rule for it in any skill — a run writes to it only when the task says so.
+- **Column maps come from `excel_table list`.** The rule "address TableALL's columns by header
+  name, never by a remembered letter" now names the one call that returns each table's live range
+  and every column as LETTER=header.
+- **A `Layout tools` subsection** under "Efficient reads and structural edits": the four tools with
+  their call shapes, and the workbook rules that bound them here. Never rename, resize, restyle or
+  convert `TableALL`, `Table2` or `TableDOCS` unless the user asks for exactly that — macros,
+  formulas and the helper scripts find them by name. Always give `before=` / `after=` when adding
+  a sheet: a bare `add` puts it last, and Data Sources must stay the last tab. Clear a filter
+  before a new freeze. One "verified on" line: Windows, that day; none of it run on macOS.
+- **The scripted freeze is gone.** The recipe the skill carried —
+  `sheet.Activate(); app.ActiveWindow.FreezePanes=False; SplitRow=n; FreezePanes=True` — is the one
+  the morning's measurements condemn: the active window, at whatever scroll position it is in. In
+  its place: the tool; and, for a MyAgent not yet updated from the repo, the workbook's own window
+  and the measured sequence.
+- The description names the layout tools (about 440 characters, inside the 600 the conventions
+  ask). The headings other skills cite — **Required Excel application shutdown** above all — and
+  the bundled scripts are untouched.
+
+How it was put in. A SKILL.md changed from outside is written back by any app that loaded the tree
+earlier (`claude_code_mcp/README.md`, **Editing a SKILL.md from a Claude Code session**), so:
+
+1. No MyAgent or SelfBot was running. All 25 skill files were already in the form the serializer
+   writes, and none was newer than the session's MCP server.
+2. The file was copied to
+   `<OneDrive>/MyAppShare/skills_backups/20261118_excel_layout_tools/deathbook-workbook/`.
+3. The edit was made with exact replacements, the file's CRLF line endings kept.
+4. The full new body went through `manage_skills` `update`. Before sending it, the file was scanned
+   for what a retyping loses — non-ASCII characters (six kinds, 70 in all), tabs, trailing blanks,
+   runs of spaces (one, inside a number format) — and it arrived exact the first time: the file's
+   SHA-256 and modification time were unchanged afterwards, again after a second update that
+   changes nothing, and no other file in the tree had been touched.
+
+Not covered: two other Claude Code sessions were open on the laptop with servers of their own,
+started before the edit. They hold the old text until they reconnect, and would write it back if
+they saved a skill first. The same goes for a MyAgent left running on another machine.
