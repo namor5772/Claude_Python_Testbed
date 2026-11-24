@@ -56,6 +56,20 @@
 # 2026-10-07); whenever it is present the 13th is too, blank for a one-model
 # run → the CHAT column, rightmost after INSTRUCTION, blank on older lines
 # (SelfBot writes it since 2026-10-14).
+#
+# The stamps are UTC since 2026-11-24, marked with a trailing Z in the file
+# ("2026-11-23 23:56:26Z"): the providers book usage by the UTC day and month,
+# and a stamp from the machine's own clock put every run before 10:00 / 11:00
+# Sydney time on the provider's PREVIOUS day, so the day rows here could not be
+# reconciled with theirs. Every date this viewer shows — today, the seven days
+# under it, this month, the FULL LOG's DATE/TIME — is therefore a UTC date,
+# read from the UTC clock, and the SUMMARY opens by saying so, with the hours
+# a UTC day covers on this machine's clock. A line WITHOUT the Z is still in
+# its machine's local time: that machine has not yet started an updated
+# MyAgent / SelfBot, which converts its own log (myagent/datapaths.py —
+# migrate_costlog_to_utc; no machine rewrites another's file). Such a line is
+# converted here for display, by THIS machine's time zone, and a note under
+# the first names the machines and counts the runs.
 DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(dirname "$DIR")"
 
@@ -127,10 +141,88 @@ S=13
 # Windows twin's $runsPerGroup must match — the two viewers rule the same rows.
 RUNS_PER_GROUP=5
 MERGED="$(mktemp)"
-trap 'rm -f "$MERGED"' EXIT
+LEGACY="$(mktemp)"
+trap 'rm -f "$MERGED" "$LEGACY"' EXIT
+
+# toutc(): a stamp still in its machine's local time (a line without the Z, see
+# the header) as the UTC stamp the rest of the log carries, or "" when the
+# zone's offset cannot be read. The offset is this machine's zone at THAT local
+# time, so a July line converts by +10:00 and a November one by +11:00 in
+# Sydney — the rule myagent/datapaths.py's costlog_stamp applies when the
+# line's own machine converts it for good, and the Windows twin's
+# ConvertTo-UtcStamp. BSD date supplies it (-j: parse, do not set the clock;
+# -f: the stamp's own format, read in the local zone; +%z: "+1100"), asked once
+# for each end of a calendar day and remembered: the two ends agree on every
+# day but the two a year the clocks change, and only a line of such a day costs
+# a call of its own. The arithmetic stays in awk — days since 1970 of a civil
+# date and back (the proleptic Gregorian calendar) — because a date call per
+# LINE would cost seconds on a log of a few thousand runs. Only text that the
+# merge below has already matched as a stamp, digit for digit, reaches the
+# command line. No apostrophes in the awk: it is spliced inside single quotes.
+UTC_FN='function dfc(y, m, d,   era, yoe, doy, doe) {
+  if (m <= 2) y -= 1
+  era = int(y / 400)
+  yoe = y - era * 400
+  doy = int((153 * (m > 2 ? m - 3 : m + 9) + 2) / 5) + d - 1
+  doe = yoe * 365 + int(yoe / 4) - int(yoe / 100) + doy
+  return era * 146097 + doe - 719468
+}
+function cfd(z,   era, doe, yoe, y, doy, mp, d, m) {
+  z += 719468
+  era = int(z / 146097)
+  doe = z - era * 146097
+  yoe = int((doe - int(doe / 1460) + int(doe / 36524) - int(doe / 146096)) / 365)
+  y = yoe + era * 400
+  doy = doe - (365 * yoe + int(yoe / 4) - int(yoe / 100))
+  mp = int((5 * doy + 2) / 153)
+  d = doy - int((153 * mp + 2) / 5) + 1
+  m = (mp < 10) ? mp + 3 : mp - 9
+  if (m <= 2) y += 1
+  return sprintf("%04d-%02d-%02d", y, m, d)
+}
+function probe(stamp,   cmd, z, s) {
+  cmd = "date -j -f \"%Y-%m-%d %H:%M:%S\" \"" stamp "\" +%z 2>/dev/null"
+  z = ""
+  cmd | getline z
+  close(cmd)
+  if (z !~ /^[+-][0-9][0-9][0-9][0-9]$/) return "?"
+  s = (substr(z, 2, 2) * 60 + substr(z, 4, 2)) * 60
+  return (substr(z, 1, 1) == "-") ? -s : s
+}
+function offset(stamp,   d) {
+  d = substr(stamp, 1, 10)
+  if (!(d in lo)) { lo[d] = probe(d " 00:00:00"); hi[d] = probe(d " 23:59:59") }
+  return (lo[d] == hi[d]) ? lo[d] : probe(stamp)
+}
+function toutc(stamp,   off, secs, day, rem) {
+  off = offset(stamp)
+  if (off == "?") return ""
+  secs = dfc(substr(stamp, 1, 4) + 0, substr(stamp, 6, 2) + 0, substr(stamp, 9, 2) + 0) * 86400 \
+         + substr(stamp, 12, 2) * 3600 + substr(stamp, 15, 2) * 60 + substr(stamp, 18, 2) - off
+  day = int(secs / 86400)
+  if (day * 86400 > secs) day -= 1
+  rem = secs - day * 86400
+  return cfd(day) sprintf(" %02d:%02d:%02d", int(rem / 3600), int((rem % 3600) / 60), rem % 60)
+}'
+
+# The stamp (2026-11-24): UTC when it ends in Z, which is dropped here so every
+# merged row carries the same 19 characters; without one it is still its
+# machine's local time, converted for display (toutc) and counted — one
+# "machine<TAB>runs" line per file into $LEGACY, for the SUMMARY's note. Text
+# that is not a stamp passes through as it is.
 for i in "${!LOGS[@]}"; do
-  awk -F';' -v M="${LABELS[$i]}" -v W="$W" '{ sub(/\r$/, "") }
-    NF>=4 { line=$0; for (i=NF; i<W-1; i++) line=line ";"; print line ";" M }' "${LOGS[$i]}"
+  awk -F';' -v M="${LABELS[$i]}" -v W="$W" -v LEGACY="$LEGACY" "$UTC_FN"'
+    { sub(/\r$/, "") }
+    NF>=4 {
+      line=$0
+      if ($1 ~ /Z$/) line = substr($1, 1, length($1) - 1) substr($0, length($1) + 1)
+      else if ($1 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]:[0-9][0-9]$/) {
+        u = toutc($1)
+        if (u != "") { line = u substr($0, length($1) + 1); legacy++ }
+      }
+      for (i=NF; i<W-1; i++) line=line ";"; print line ";" M
+    }
+    END { if (legacy) print M "\t" legacy >> LEGACY }' "${LOGS[$i]}"
 done | sort -t';' -k1,1 > "$MERGED"
 
 # tok(): a token count compacted to <=7 chars so the four TOKENS columns stay
@@ -256,8 +348,11 @@ rollups() {
   echo "SUMMARY"
   # One clock reading for every date below: the month and the seven days under
   # "today" are all derived from the TODAY string — read separately, a viewer
-  # opened across midnight could show a day twice.
-  TODAY="$(date +%Y-%m-%d)"; MONTH="${TODAY%-*}"
+  # opened across midnight could show a day twice. The UTC clock (2026-11-24):
+  # the stamps are UTC, so "today" is the UTC day — the day the providers'
+  # usage pages are on at this moment. The -v arithmetic below is calendar
+  # arithmetic on that date string, at noon, so the local zone cannot move it.
+  TODAY="$(date -u +%Y-%m-%d)"; MONTH="${TODAY%-*}"
   # The last seven days (2026-09-22, the user's request) as "YYYY-MM-DD Dow;"
   # entries, yesterday first — every calendar day, so a day without a run
   # shows as $0.0000. BSD date: -j = do not set the clock, -f parses TODAY
@@ -269,6 +364,31 @@ rollups() {
     DAYS="$DAYS$(LC_ALL=C date -j -v12H -v-"$back"d -f %Y-%m-%d "$TODAY" '+%Y-%m-%d %a' 2>/dev/null);"
   done
   if awk -F';' -v W="$W" 'NF>=W { found=1 } END { exit !found }' "$MERGED"; then
+    # The SUMMARY opens with the clock it is on (2026-11-24): a reader in
+    # Sydney sees "today" turn over at 11:00 (10:00 in winter), not at
+    # midnight, and the line says why and where the day's edges fall on this
+    # machine's clock — UTC 00:00 as a local time of day, from the zone's
+    # offset at this moment ("+1100"; 10# keeps "08" and "09" out of octal).
+    # The Windows twin prints the same line.
+    ZONE="$(date +%z)"
+    case "$ZONE" in [+-][0-9][0-9][0-9][0-9]) ;; *) ZONE="+0000" ;; esac
+    ZMIN=$(( 10#${ZONE:1:2} * 60 + 10#${ZONE:3:2} ))
+    if [ "${ZONE:0:1}" = "-" ]; then ZMIN=$(( -ZMIN )); fi
+    EDGE=$(( ((ZMIN % 1440) + 1440) % 1440 ))
+    EDGE_TEXT="$(printf '%02d:%02d' $(( EDGE / 60 )) $(( EDGE % 60 )))"
+    printf "  Dates and times are UTC, the clock the providers bill by: a UTC day runs %s to %s on this machine's clock (UTC%s%s:%s).\n" \
+      "$EDGE_TEXT" "$EDGE_TEXT" "${ZONE:0:1}" "${ZONE:1:2}" "${ZONE:3:2}"
+    # Lines still in their machine's local time (no Z — that machine has not
+    # started an updated MyAgent / SelfBot yet): how many, and whose. Names in
+    # byte order, the order the Windows twin's ordinal sort gives.
+    if [ -s "$LEGACY" ]; then
+      LEGACY_RUNS="$(awk -F'\t' '{ n += $2 } END { print n + 0 }' "$LEGACY")"
+      LEGACY_NAMES="$(cut -f1 "$LEGACY" | LC_ALL=C sort | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+      if [ "$LEGACY_RUNS" -eq 1 ]; then LEGACY_WORD="run"; LEGACY_VERB="is"; else LEGACY_WORD="runs"; LEGACY_VERB="are"; fi
+      printf "  Note: %s %s (%s) %s still stored in local time, shown here converted by this machine's time zone.\n" \
+        "$LEGACY_RUNS" "$LEGACY_WORD" "$LEGACY_NAMES" "$LEGACY_VERB"
+      echo "        Each machine converts its own log the next time MyAgent or SelfBot starts there after a git pull."
+    fi
     # The today row's tail (2026-10-19): the run count behind today's figure
     # and each machine's share of it, highest spend first — ranked on the
     # 4-place figure shown, so two machines that print alike are a tie
@@ -371,7 +491,7 @@ rollups() {
   # and it goes before the 6th, 11th, 16th … run — line 1 is the heading — so
   # a table of five or fewer has none and none trails the last run. The
   # Windows twin rules the same rows at the same width.
-  { echo "DATE/TIME;MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;TOK-IN;TOK-OUT;CACHE-W;CACHE-R;MODEL;PARAMETERS;INSTRUCTION;CHAT"
+  { echo "DATE/TIME (UTC);MACHINE;PROVIDER;COST(USD);TIME(sec);CALLS;TOK-IN;TOK-OUT;CACHE-W;CACHE-R;MODEL;PARAMETERS;INSTRUCTION;CHAT"
     tail -r "$MERGED" | awk -F';' -v W="$W" "$TOK_FN"'
       NF>=W {
       t=($6=="" ? "-" : $6); k=($8=="" ? "-" : $8); p=($5=="" ? "-" : $5);

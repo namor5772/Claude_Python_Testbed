@@ -41,7 +41,7 @@ import time
 import signal
 import concurrent.futures
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone   # the package-absent costlog_stamp stub
 
 # --- Optional MyAgent tool subsystems (reused as mixins) --------------------
 # SelfBot borrows MyAgent's native MCP / Gmail / Proton(IMAP) / Outlook mixins
@@ -740,6 +740,7 @@ try:
     from myagent.datapaths import (
         resolve_store as _resolve_store,
         resolve_costlog as _resolve_costlog,
+        costlog_stamp,
         load_store as _load_store,
         save_store as _save_store,
         store_unreadable as _store_unreadable,
@@ -759,6 +760,21 @@ except ImportError:
 
     def _resolve_costlog():
         return os.path.join(os.path.dirname(os.path.abspath(__file__)), "APICostLog.txt")
+
+    def costlog_stamp(local_stamp=None):
+        # datapaths.costlog_stamp: the cost log's stamp is UTC, marked with a
+        # trailing Z (2026-11-24) — now, or the stamp handed in, an unmarked
+        # one being local time and converted by this machine's zone rules.
+        if not local_stamp:
+            return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") + "Z"
+        stamp = str(local_stamp)
+        if stamp.endswith("Z"):
+            return stamp
+        try:
+            return (datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
+                    .astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") + "Z")
+        except (ValueError, OverflowError, OSError):
+            return stamp
 
     def _load_store(path):
         try:
@@ -7122,6 +7138,12 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         Line format:
         {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
         ;{in};{out};{cache_write};{cache_read}[;{split}[;{chat}]]
+        — timestamp is UTC, marked with a trailing Z ("2026-11-23 23:56:26Z",
+        since 2026-11-24; costlog_stamp): the providers book usage by the
+        UTC day, and a stamp from the machine's own clock put every run
+        before 10:00 / 11:00 Sydney time on the provider's previous day. A
+        line without the Z is from before the change, local time, until its
+        machine's next launch converts it (datapaths.migrate_costlog_to_utc);
         — split (13th field, 2026-09-27, `_cost_split_field`) is present
         only for a run served by more than one model, or by one model other
         than the MODEL field, which is the model the run ENDED on;
@@ -7187,8 +7209,10 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         in-progress record a killed instance left behind
         (_run_progress_fold_in): the record's own provider and model, its
         raw parameter summary (joined here like the live one) and the time
-        of its last completed call, never this process's. None = the live
-        value, so every existing caller writes exactly what it wrote."""
+        of its last completed call, never this process's — a record written
+        before 2026-11-24 carries that time unmarked, in local time, and
+        costlog_stamp converts it. None = the live value, so every existing
+        caller writes exactly what it wrote."""
         provider = provider or self.provider
         model = model or self.model
         if not total_cost or total_cost <= 0:
@@ -7207,7 +7231,9 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
                 return False
             total_cost = 0.0
         try:
-            timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # UTC, marked Z — now, or the stamp handed in (an unmarked one
+            # is local time and is converted).
+            timestamp = costlog_stamp(timestamp)
             # 5th field: the title-bar parameter summary (e.g. "mode=Adaptive",
             # "reasoning=Medium temp=1"), comma-joined for log readability —
             # parts never contain ';' or ',' so the field can't split.
@@ -7292,7 +7318,7 @@ class App(MCPMixin, GmailMixin, ProtonMailMixin, OutlookMixin, DocumentMixin, Fi
         try:
             record = {
                 "version": 1,
-                "written": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "written": costlog_stamp(),
                 "provider": self.provider,
                 "model": self.model,
                 "params": self._get_model_param_summary(),

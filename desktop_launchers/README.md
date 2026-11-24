@@ -205,6 +205,48 @@ first" analog is the totals rather than a `grep -v`. Icon master from `make_cost
 (`python desktop_launchers/make_costlog_icon.py`). Its Windows twin is
 `CostLog_Win.ps1` (same OneDrive share on Windows) — see the Windows section.
 
+**Both viewers are on the UTC clock since 2026-11-24.** The providers book
+usage by the UTC day and month, and the log's stamps, until that day the
+machine's own clock, put every Sydney run before 10:00 / 11:00 on the
+provider's previous day; the apps now stamp in UTC, marked with a trailing
+`Z` (`2026-11-23 23:56:26Z`; `myagent/datapaths.py`, `costlog_stamp`). So:
+- `TODAY` is `date -u +%Y-%m-%d` (`[DateTime]::UtcNow` on Windows), and the
+  month and the seven days derive from it as before — the `-v12H -v-Nd` steps
+  are calendar arithmetic on that string, which the local zone cannot move.
+- The `Z` is dropped at ingest (the merge awk on macOS, the row loop on
+  Windows), so every row carries the same 19 characters and sorts as text; the
+  FULL LOG's first heading reads `DATE/TIME (UTC)`.
+- The SUMMARY's first line names the clock and where a UTC day's edges fall on
+  the reading machine's: `Dates and times are UTC, the clock the providers
+  bill by: a UTC day runs 11:00 to 11:00 on this machine's clock (UTC+11:00).`
+  — UTC 00:00 as a local time of day, from `date +%z` /
+  `[TimeZoneInfo]::Local.GetUtcOffset`.
+- A line WITHOUT the `Z` is still in its machine's local time: that machine
+  has not started an updated MyAgent / SelfBot, which converts its own log in
+  place (`migrate_costlog_to_utc`; no machine rewrites another's file — the
+  rule that keeps the per-machine logs free of conflict forks). Both viewers
+  convert such a line for display, by the READING machine's zone rules for the
+  line's date — `ConvertTo-UtcStamp` on Windows (`TryParseExact` with
+  `AssumeLocal`, then `ToUniversalTime`), `toutc()` on macOS — and print a
+  note under the clock line: `Note: 857 runs (DESKTOP-NAMOR,
+  Romans-Mac-mini.local) are still stored in local time, shown here converted
+  by this machine's time zone.` (names in byte order; `1 run … is`). On macOS
+  the offset comes from BSD `date -j -f "%Y-%m-%d %H:%M:%S" <stamp> +%z`, asked
+  once for each end of a calendar day and cached — the two ends agree on every
+  day but the two a year the clocks change, and only a line of such a day costs
+  a call of its own — and the arithmetic (days since 1970 of a civil date and
+  back) stays in awk, because a `date` call per line would cost seconds on a
+  log of a few thousand runs. Only text the merge has already matched as a
+  stamp, digit for digit, reaches that command line. The log as a machine's
+  own conversion found it is kept beside it as
+  `APICostLog_<machine>.txt.local-time.bak`, a name neither viewer's
+  `APICostLog_*.txt` match takes.
+Pinned by `tests/test_costlog_viewer_days.py`'s UtcClockTests on the real
+viewer of the platform the suite runs on; the macOS viewer was held to the same
+twelve tests on Windows under Git Bash, with stand-ins for `date -j` (GNU
+`date -d`), `tail -r` (`tac`) and `less` (`cat`) and awk in `--posix` mode —
+**its run under the Mac's own BSD tools is still open.**
+
 ## Windows
 
 `ProtonBridge_Watchdog_Win.ps1` is not a shortcut but a Task Scheduler job (Windows only, no macOS twin — launchd `KeepAlive` would be the Mac equivalent): it starts Proton Bridge's launcher (`proton-bridge.exe --no-window`) when no `bridge.exe` process exists, so a Bridge quit from the tray or crashed doesn't leave the localhost IMAP server dead until the next login (Bridge's own "start on login" is only a Startup-folder shortcut, and it comes up ~3 min after logon). Register it once with `-Register` — task `ProtonBridge_Watchdog`, at logon +2 min then every 15 min, `MultipleInstances IgnoreNew`; a copy of the XML is kept in `C:\Users\<you>\TaskScheduler_Backups\`. The task's action is `conhost.exe --headless powershell.exe …`, not `powershell.exe -WindowStyle Hidden`: powershell.exe is a console program, so Windows creates its console — a Windows Terminal window when Terminal is the default host — before PowerShell parses that switch, and the first registration flashed a Terminal window for ~0.5 s on every 15-minute run (measured 2026-09-03 by polling `EnumWindows` while firing the task; under Terminal `-WindowStyle Hidden` never hid it at all). A headless conhost gives the script a pseudoconsole with no window, verified the same way: no window appears. Verified 2026-09-03: with Bridge stopped, firing the task brought `bridge.exe` and port 1143 back within 20 s and the next `UnreadSummary.py --dry-run` listed the Proton account with 0 account errors.
@@ -481,7 +523,10 @@ hidden task. `HeartbeatLog_Win.ps1` pages `<repo>\heartbeat.log` (meaningful
 events first via `-notmatch 'nothing found'`, then the full log);
 `CostLog_Win.ps1` aggregates every machine's `;`-delimited
 `APICostLog_<machine>.txt` from `<OneDrive>\MyAppShare` (plus any unmigrated
-repo-root `APICostLog.txt`) into a spend summary (grand total, today — since
+repo-root `APICostLog.txt`) into a spend summary (first, since 2026-11-24, the
+clock line — every date and time is UTC, see **Both viewers are on the UTC
+clock** in the macOS section, which covers this twin's `ConvertTo-UtcStamp`
+and its note about lines still in local time too — then the grand total, today — since
 2026-10-19 with its run count and each machine's share of the figure after the
 money column, counted and summed per machine in the same single pass that
 builds `$byDay`, ranked by the 4-place figure shown then by name, the macOS

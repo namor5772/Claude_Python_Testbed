@@ -31,6 +31,7 @@ import pathlib
 import queue
 import re
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -38,7 +39,8 @@ import myagent.streaming_mixin as sm
 from tests.test_costlog_run_fields import _CacheHost
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-STAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+# UTC, marked Z (2026-11-24 — tests/test_costlog_utc.py has the why).
+STAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z$")
 
 
 class _RecordHost(_CacheHost):
@@ -180,7 +182,7 @@ class FoldInTests(_TempFiles):
     def _leftover(self, **over):
         """A record as a dead instance 7 leaves it, with overrides."""
         rec = {
-            "version": 1, "written": "2026-10-08 10:08:04",
+            "version": 1, "written": "2026-10-07 23:08:04Z",
             "provider": "OpenAI", "model": "gpt-6-astra",
             "params": "reasoning=Max verbosity=medium",
             "total_cost": 7.7744525, "had_usage": True, "duration_secs": 1234.6,
@@ -208,7 +210,7 @@ class FoldInTests(_TempFiles):
         self.assertTrue(host._run_progress_fold_in())
         f = self.lines()[0].split(";")
         self.assertEqual(len(f), 14)
-        self.assertEqual(f[0], "2026-10-08 10:08:04")   # the record's time
+        self.assertEqual(f[0], "2026-10-07 23:08:04Z")   # the record's time
         self.assertEqual(f[1:3], ["OpenAI", "gpt-6-astra"])
         self.assertEqual(f[3], "7.7745")
         self.assertEqual(f[4], "reasoning=Max, verbosity=medium, unfinished@call53")
@@ -223,6 +225,19 @@ class FoldInTests(_TempFiles):
         self.assertEqual(len(warns), 1)
         self.assertIn("unfinished@call53", warns[0])
         self.assertIn("Process_Dockets_PROGRAM_2026-10-08_092704", warns[0])
+
+    def test_a_record_from_before_the_utc_change_is_stamped_in_utc(self):
+        # A copy of the app from before 2026-11-24 wrote the record's time
+        # unmarked, in local time; the line it becomes is UTC like every other.
+        self._leftover(written="2026-10-08 10:08:04")
+        host = self._launching_host()
+        self.assertTrue(host._run_progress_fold_in())
+        stamp = self.lines()[0].split(";")[0]
+        self.assertRegex(stamp, STAMP)
+        # The local time as UTC, by the C library rather than by datetime.
+        self.assertEqual(stamp, time.strftime(
+            "%Y-%m-%d %H:%M:%SZ",
+            time.gmtime(time.mktime(time.strptime("2026-10-08 10:08:04", "%Y-%m-%d %H:%M:%S")))))
 
     def test_no_record_means_nothing_happens(self):
         host = self._launching_host()

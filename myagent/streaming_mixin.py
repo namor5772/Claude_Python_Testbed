@@ -6,7 +6,6 @@ import os
 import tempfile
 import time
 import tkinter as tk
-from datetime import datetime
 
 from myagent.constants import (
     TOOLS, FILE_TOOLS, META_TOOLS, DESKTOP_TOOLS, BROWSER_TOOLS, MCP_TOOLS,
@@ -24,6 +23,7 @@ from myagent.constants import (
     APICOST_LOG_FILE, CONVO_END_WORDS, CONVO_EXIT_WORD, convo_end_word,
     AGENT_RUN_PREFIX,
 )
+from myagent.datapaths import costlog_stamp
 from myagent.helpers import (_ToolBlock, camera_aware_hint, is_camera_result,
                              responses_replay_refused, screenshot_hint)
 from myagent.pane_notes import PaneNotesMixin
@@ -1345,6 +1345,12 @@ class StreamingMixin(PaneNotesMixin):
         Line format:
         {timestamp};{provider};{model};{cost};{params};{secs};{instruction};{calls}
         ;{in};{out};{cache_write};{cache_read}[;{split}[;{chat}]]
+        — timestamp is UTC, marked with a trailing Z ("2026-11-23 23:56:26Z",
+        since 2026-11-24; costlog_stamp): the providers book usage by the
+        UTC day, and a stamp from the machine's own clock put every run
+        before 10:00 / 11:00 Sydney time on the provider's previous day. A
+        line without the Z is from before the change, local time, until its
+        machine's next launch converts it (datapaths.migrate_costlog_to_utc);
         — split (13th field, 2026-09-27, `_cost_split_field`) is present
         only for a run served by more than one model, or by one model other
         than the MODEL field, which is the model the run ENDED on;
@@ -1410,8 +1416,10 @@ class StreamingMixin(PaneNotesMixin):
         in-progress record a killed instance left behind
         (_run_progress_fold_in): the record's own provider and model, its
         raw parameter summary (joined here like the live one) and the time
-        of its last completed call, never this process's. None = the live
-        value, so every existing caller writes exactly what it wrote."""
+        of its last completed call, never this process's — a record written
+        before 2026-11-24 carries that time unmarked, in local time, and
+        costlog_stamp converts it. None = the live value, so every existing
+        caller writes exactly what it wrote."""
         provider = provider or self.provider
         model = model or self.model
         if not total_cost or total_cost <= 0:
@@ -1430,7 +1438,9 @@ class StreamingMixin(PaneNotesMixin):
                 return False
             total_cost = 0.0
         try:
-            timestamp = timestamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # UTC, marked Z — now, or the stamp handed in (an unmarked one
+            # is local time and is converted).
+            timestamp = costlog_stamp(timestamp)
             # 5th field: the title-bar parameter summary (e.g. "mode=Adaptive",
             # "reasoning=Medium temp=1"), comma-joined for log readability —
             # parts never contain ';' or ',' so the field can't split.
@@ -1516,7 +1526,7 @@ class StreamingMixin(PaneNotesMixin):
         try:
             record = {
                 "version": 1,
-                "written": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "written": costlog_stamp(),
                 "provider": self.provider,
                 "model": self.model,
                 "params": self._get_model_param_summary(),

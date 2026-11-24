@@ -30,7 +30,8 @@ from tests.test_selfbot_anthropic_parity import (
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-STAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
+# UTC, marked Z (2026-11-24 — tests/test_costlog_utc.py has the why).
+STAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z$")
 OPUS5 = "claude-opus-5"
 
 
@@ -299,7 +300,7 @@ class RealLoopTests(_TempLog):
 @_needs_selfbot
 class FoldInTests(_TempLog):
     def _record(self, **over):
-        rec = {"version": 1, "written": "2026-10-14 09:42:25", "provider": "Anthropic",
+        rec = {"version": 1, "written": "2026-10-13 22:42:25Z", "provider": "Anthropic",
                "model": OPUS55, "params": "mode=Adaptive", "total_cost": 0.59,
                "had_usage": True, "duration_secs": 41.7, "instruction": "SHAUN_friend",
                "calls": 6, "tokens": [12, 1277, 58445, 290000], "split": {}, "chat": "Hi mate"}
@@ -313,7 +314,7 @@ class FoldInTests(_TempLog):
         app._state_file = "app_state.json"
         self.assertTrue(app._run_progress_fold_in())
         f = self.fields()
-        self.assertEqual(f[0], "2026-10-14 09:42:25")           # the record's own time
+        self.assertEqual(f[0], "2026-10-13 22:42:25Z")          # the record's own time
         # the params joined like a live line's: comma-separated, one token each
         self.assertEqual(f[1:5], ["Anthropic", OPUS55, "0.5900", "mode=Adaptive, unfinished@call6"])
         self.assertEqual(f[5:12], ["42", "SHAUN_friend", "6", "12", "1277", "58445", "290000"])

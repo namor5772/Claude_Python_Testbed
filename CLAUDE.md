@@ -58,6 +58,8 @@ Authored stores (`agent_instructions.json`, `system_prompts.json`, the `skills/`
 `todos.json`, MyAgent's `saved_chats/`) live in `<OneDrive>/MyAppShare/`, outside this public repo, with gitignored
 repo-root fallbacks; per-machine state (`agent_state*.json`, `~/.config/myagent-*`) stays local. Full tables:
 `docs/claude/onedrive-shared-folders.md` (kept in step with the README's **OneDrive shared folders** section).
+The cost logs' stamps are UTC, marked `Z`, since 2026-11-24 — the providers book by the UTC day, and so do both
+viewers; each machine converts its own older local-time lines at launch (`docs/costlog-utc-2026-11-24.md`).
 
 ## Anthropic model work
 For routine edits to model ids, pricing rows or model wiring in this repo, do NOT load the `claude-api` skill:

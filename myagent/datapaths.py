@@ -40,6 +40,12 @@ Design invariants:
   the stores, its one-shot repo→shared migration runs AT RESOLVE TIME (there
   is no load step to hang it on), claimed atomically by the local-file
   rename so concurrently-launching apps migrate exactly once.
+- The cost log's stamps are UTC, marked with a trailing Z (2026-11-24):
+  costlog_stamp() is the one place a stamp is made, for both apps, and
+  migrate_costlog_to_utc() — also run at resolve time — converts this
+  machine's older local-time lines in place, with the file as it stood
+  kept beside it. The mark is per line, so the pass is idempotent and the
+  machines change over in any order; each converts only its own file.
 - resolve_chats_dir() (2026-10-08) puts MyAgent's chat files — every run's
   <name>.json + .txt and the code-interpreter outputs — in <shared>/
   saved_chats, one folder for every machine: each run's files are named
@@ -79,6 +85,7 @@ Design invariants:
   in "\\n" compares UNequal to its file-era twin in union_stores.
 """
 
+import datetime
 import errno
 import glob
 import json
@@ -223,13 +230,19 @@ def resolve_costlog():
     <shared>/APICostLog_<machine>.txt — every machine's log syncs side by
     side and any machine can total ALL of them — else the classic repo-root
     APICostLog.txt. Runs the one-shot repo→shared migration of this
-    machine's legacy log (so pre-move history counts in the aggregate)."""
+    machine's legacy log (so pre-move history counts in the aggregate),
+    and then — since 2026-11-24, on either path — converts any line of
+    this machine's log still stamped in local time to UTC
+    (migrate_costlog_to_utc: a scan that finds nothing after the first
+    pass)."""
     shared = _ensured_shared_dir()
     if not shared:
-        return os.path.join(_BASE_DIR, COSTLOG_BASENAME)
-    stem, ext = os.path.splitext(COSTLOG_BASENAME)
-    path = os.path.join(shared, f"{stem}_{machine_label()}{ext}")
-    _migrate_costlog(os.path.join(_BASE_DIR, COSTLOG_BASENAME), path)
+        path = os.path.join(_BASE_DIR, COSTLOG_BASENAME)
+    else:
+        stem, ext = os.path.splitext(COSTLOG_BASENAME)
+        path = os.path.join(shared, f"{stem}_{machine_label()}{ext}")
+        _migrate_costlog(os.path.join(_BASE_DIR, COSTLOG_BASENAME), path)
+    migrate_costlog_to_utc(path)
     return path
 
 
@@ -274,6 +287,124 @@ def _migrate_costlog(local, shared_path):
         os.replace(old_local, old_local + _MIGRATED_SUFFIX)
     except OSError:
         pass
+
+
+# ── The cost log's clock: UTC, marked Z (2026-11-24) ──────────────────────
+# Every provider books usage by the UTC day and month — Anthropic's usage and
+# cost reports bucket by UTC and its spend caps reset at 00:00 UTC, OpenAI's
+# usage dashboard shows its data in UTC — while the log was stamped with
+# the machine's own clock. In Sydney (UTC+10 / +11) a run before 10:00 or
+# 11:00 local therefore sat on the provider's PREVIOUS day and the two day
+# columns could not be reconciled. The stamp is now UTC and says so with a
+# trailing "Z": a line is self-describing, which is what lets machines change
+# over in any order — a copy of the app from before the change keeps writing
+# unmarked local stamps, and they are told apart line by line.
+COSTLOG_STAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+# The log as it stood before its first conversion, kept beside it (the
+# viewers match APICostLog_<machine>.txt exactly, so they never read it).
+COSTLOG_LOCAL_BACKUP_SUFFIX = ".local-time.bak"
+# A line still stamped in local time: the stamp runs straight into the field
+# separator, where a UTC stamp carries its Z. Bytes, so a line's every other
+# byte — CRLF endings of the oldest Windows lines included — passes through.
+_COSTLOG_LOCAL_STAMP = re.compile(rb"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2});", re.M)
+
+
+def costlog_stamp(local_stamp=None, tz=None):
+    """A cost-log time stamp: UTC, marked with a trailing Z —
+    "2026-11-23 23:56:26Z" — the clock the providers bill by. With no
+    argument, now. With a stamp, that stamp in the same form: one already
+    marked is returned as it is, and an unmarked one is LOCAL time — what
+    every line carried until 2026-11-24, and what an in-progress record
+    written by an older copy of the app still carries — so it is converted,
+    by `tz` when given (tests) and otherwise by this machine's own zone
+    rules for that date, daylight saving included. Anything that is not a
+    stamp comes back unchanged, never raising: a caller's own text, or a
+    date the platform's clock cannot place."""
+    if not local_stamp:
+        return datetime.datetime.now(datetime.timezone.utc).strftime(COSTLOG_STAMP_FORMAT) + "Z"
+    stamp = str(local_stamp)
+    if stamp.endswith("Z"):
+        return stamp
+    try:
+        naive = datetime.datetime.strptime(stamp, COSTLOG_STAMP_FORMAT)
+        aware = naive.replace(tzinfo=tz) if tz is not None else naive.astimezone()
+        return aware.astimezone(datetime.timezone.utc).strftime(COSTLOG_STAMP_FORMAT) + "Z"
+    except (ValueError, OverflowError, OSError):
+        return stamp
+
+
+def migrate_costlog_to_utc(path, tz=None):
+    """Convert this machine's cost log to UTC stamps in place: every line
+    still stamped in local time (no Z) gets its stamp converted and marked;
+    nothing else in the file changes by a byte. Returns the number of lines
+    converted — 0 when there is nothing to do, which is every call after the
+    first unless a pre-change copy of the app has appended since.
+
+    Run by resolve_costlog, so each machine converts ITS OWN log the first
+    time an updated app starts there, with the zone rules of the machine
+    that wrote the stamps; no machine ever rewrites another's file (the
+    rule that keeps the per-machine logs free of OneDrive conflict forks —
+    the viewers convert a not-yet-migrated machine's lines for display in
+    the meantime). The pass is idempotent, line by line, so it is simply
+    repeated at every launch: a line an old copy appended later is picked
+    up then.
+
+    Safety, since the log is a ledger: the file as it stood before its
+    first conversion is kept beside it (COSTLOG_LOCAL_BACKUP_SUFFIX, never
+    overwritten by a later pass); the new content goes in by an atomic
+    replace from a temp file in the same directory; and the replace is
+    abandoned when the log changed underneath (a run ending in another
+    process between the read and the replace), to be retried at the next
+    launch. Best-effort: any I/O failure leaves the log exactly as it was."""
+    try:
+        before = os.stat(path)
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return 0
+    count = 0
+
+    def to_utc(match):
+        nonlocal count
+        stamp = costlog_stamp(match.group(1).decode("ascii"), tz)
+        if not stamp.endswith("Z"):
+            return match.group(0)
+        count += 1
+        return stamp.encode("ascii") + b";"
+
+    converted = _COSTLOG_LOCAL_STAMP.sub(to_utc, raw)
+    if not count:
+        return 0
+    try:
+        backup = path + COSTLOG_LOCAL_BACKUP_SUFFIX
+        if not os.path.exists(backup):
+            _replace_with(backup, raw)
+        now = os.stat(path)
+        if (now.st_size, now.st_mtime_ns) != (before.st_size, before.st_mtime_ns):
+            return 0
+        _replace_with(path, converted)
+    except OSError:
+        return 0
+    return count
+
+
+def _replace_with(path, data):
+    """Write bytes to `path` atomically: a temp file in the same directory
+    (the same volume, so os.replace is a rename — OneDrive's File Provider
+    volume on macOS included), then the replace. A failure removes the temp
+    file and leaves whatever was at `path` untouched."""
+    fd, tmp = tempfile.mkstemp(prefix=os.path.basename(path) + ".", suffix=".tmp",
+                               dir=os.path.dirname(path) or ".")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 CHATS_DIRNAME = "saved_chats"

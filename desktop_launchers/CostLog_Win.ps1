@@ -52,6 +52,20 @@
 # too, blank for a one-model run -> the CHAT column, rightmost after
 # INSTRUCTION, blank on older lines (SelfBot writes it since 2026-10-14).
 #
+# The stamps are UTC since 2026-11-24, marked with a trailing Z in the file
+# ("2026-11-23 23:56:26Z"): the providers book usage by the UTC day and month,
+# and a stamp from the machine's own clock put every run before 10:00 / 11:00
+# Sydney time on the provider's PREVIOUS day, so the day rows here could not be
+# reconciled with theirs. Every date this viewer shows -- today, the seven days
+# under it, this month, the FULL LOG's DATE/TIME -- is therefore a UTC date,
+# read from the UTC clock, and the SUMMARY opens by saying so, with the hours
+# a UTC day covers on this machine's clock. A line WITHOUT the Z is still in
+# its machine's local time: that machine has not yet started an updated
+# MyAgent / SelfBot, which converts its own log (myagent/datapaths.py --
+# migrate_costlog_to_utc; no machine rewrites another's file). Such a line is
+# converted here for display, by THIS machine's time zone, and a note under
+# the first names the machines and counts the runs.
+#
 # The desktop shortcut targets a VISIBLE window (it's a viewer, NOT -WindowStyle Hidden):
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass
 #       -File "<repo>\desktop_launchers\CostLog_Win.ps1"
@@ -127,6 +141,21 @@ function Format-Tok($n) {
     # No thousands separator below 10k, so this matches the macOS twin's
     # awk "%d" exactly -- the two viewers must render a log line identically.
     return ([string][long]$n)
+}
+
+# A stamp still in its machine's local time (a line without the Z, see the
+# header) as the UTC stamp the rest of the log carries, or $null when the text
+# is not a stamp at all. AssumeLocal + ToUniversalTime apply this machine's
+# zone rules for THAT date, so a July line converts by +10:00 and a November
+# one by +11:00 in Sydney -- the rule myagent/datapaths.py's costlog_stamp
+# applies when the line's own machine converts it for good.
+function ConvertTo-UtcStamp([string]$stamp) {
+    $d = [datetime]::MinValue
+    $styles = [Globalization.DateTimeStyles]::AssumeLocal
+    if ([datetime]::TryParseExact($stamp, 'yyyy-MM-dd HH:mm:ss', $inv, $styles, [ref]$d)) {
+        return $d.ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss', $inv)
+    }
+    return $null
 }
 
 # The four token fields (9th-12th) are written all-or-nothing by both apps
@@ -262,14 +291,26 @@ try {
     # added 2026-09-27) exists only on a run more than one model served; the
     # chat file stem (14th, 2026-10-07) on every MyAgent run since -- and
     # then the 13th is always there, blank for a one-model run.
+    # The stamp (2026-11-24): UTC when it ends in Z, which is dropped here so
+    # every row carries the same 19 characters; without one it is still its
+    # machine's local time, converted for display and counted per machine for
+    # the SUMMARY's note. Text that is not a stamp passes through as it is.
+    $legacy = @{}
     $rows = foreach ($logf in $logs) {
         foreach ($line in Get-Content -LiteralPath $logf.Path -Encoding UTF8) {
             if ([string]::IsNullOrWhiteSpace($line)) { continue }
             $f = $line.Split(';')
             if ($f.Count -lt 4) { continue }   # also skips the rotation marker line
+            $stamp = $f[0]
+            if ($stamp.EndsWith('Z')) {
+                $stamp = $stamp.Substring(0, $stamp.Length - 1)
+            } else {
+                $utc = ConvertTo-UtcStamp $stamp
+                if ($utc) { $stamp = $utc; $legacy[$logf.Machine] = 1 + [int]$legacy[$logf.Machine] }
+            }
             $tok = Parse-TokGroup $f
             [pscustomobject]@{
-                Time = $f[0]; Provider = $f[1]; Model = $f[2]
+                Time = $stamp; Provider = $f[1]; Model = $f[2]
                 Cost = [double]::Parse($f[3], $inv); Machine = $logf.Machine
                 Params = if ($f.Count -ge 5) { $f[4] } else { '' }
                 Secs = if ($f.Count -ge 6) { $f[5] } else { '' }
@@ -291,8 +332,10 @@ try {
         $total    = ($rows | Measure-Object Cost -Sum).Sum
         # One clock reading for every date below: read separately, a viewer
         # opened across midnight could take "today" from one day and the seven
-        # days under it from the next, and show a day twice.
-        $now      = Get-Date
+        # days under it from the next, and show a day twice. The UTC clock
+        # (2026-11-24): the stamps are UTC, so "today" is the UTC day -- the
+        # day the providers' usage pages are on at this moment.
+        $now      = [DateTime]::UtcNow
         $today    = $now.ToString('yyyy-MM-dd', $inv)
         $month    = $now.ToString('yyyy-MM', $inv)
         $monthRows = @($rows | Where-Object { $_.Time.StartsWith($month) })
@@ -309,6 +352,30 @@ try {
             $dayKey = $r.Time.Substring(0, 10)
             $byDay[$dayKey] += $r.Cost
             if ($dayKey -eq $today) { $todayByMachine[$r.Machine] += $r.Cost; $todayRuns++ }
+        }
+        # The SUMMARY opens with the clock it is on (2026-11-24): a reader in
+        # Sydney sees "today" turn over at 11:00 (10:00 in winter), not at
+        # midnight, and the line says why and where the day's edges fall on
+        # this machine's clock -- UTC 00:00 as a local time of day, from the
+        # zone's offset at this moment. The macOS twin prints the same line.
+        $offMin   = [int][TimeZoneInfo]::Local.GetUtcOffset($now).TotalMinutes
+        $offAbs   = [Math]::Abs($offMin)
+        $offSign  = if ($offMin -lt 0) { '-' } else { '+' }
+        $offText  = '{0}{1:00}:{2:00}' -f $offSign, [int][Math]::Floor($offAbs / 60), ($offAbs % 60)
+        $edge     = (($offMin % 1440) + 1440) % 1440
+        $edgeText = '{0:00}:{1:00}' -f [int][Math]::Floor($edge / 60), ($edge % 60)
+        $out += "  Dates and times are UTC, the clock the providers bill by: a UTC day runs $edgeText to $edgeText on this machine's clock (UTC$offText)."
+        # Lines still in their machine's local time (no Z -- that machine has
+        # not started an updated MyAgent / SelfBot yet): how many, and whose.
+        # Names in ordinal order, the order the macOS twin's awk gives.
+        if ($legacy.Count -gt 0) {
+            [string[]]$legacyNames = @($legacy.Keys)
+            [Array]::Sort($legacyNames, [StringComparer]::Ordinal)
+            $legacyRuns = ($legacy.Values | Measure-Object -Sum).Sum
+            $legacyWord = if ($legacyRuns -eq 1) { 'run' } else { 'runs' }
+            $legacyVerb = if ($legacyRuns -eq 1) { 'is' } else { 'are' }
+            $out += ("  Note: {0} {1} ({2}) {3} still stored in local time, shown here converted by this machine's time zone." -f $legacyRuns, $legacyWord, ($legacyNames -join ', '), $legacyVerb)
+            $out += '        Each machine converts its own log the next time MyAgent or SelfBot starts there after a git pull.'
         }
         $out += ('  {0} runs - ${1:N4} total' -f $rows.Count, $total)
         $out += ('  span: {0}  ->  {1}' -f $rows[0].Time, $rows[-1].Time)
@@ -398,7 +465,7 @@ try {
         $fmt = "{0,-19} {1,-$machW} {2,-$provW} {3,9} {4,9} {5,5} {6,8} {7,8} {8,8} {9,8} {10,-$modW} {11,-$parW} {12,-$instrW} {13}"
         # The dash rule under each heading is exactly the heading's width, so
         # it is derived from the one heading list rather than kept by hand.
-        $hdr = @('DATE/TIME', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS',
+        $hdr = @('DATE/TIME (UTC)', 'MACHINE', 'PROVIDER', 'COST(USD)', 'TIME(sec)', 'CALLS',
                  'TOK-IN', 'TOK-OUT', 'CACHE-W', 'CACHE-R', 'MODEL', 'PARAMETERS', 'INSTRUCTION', 'CHAT')
         $head = $fmt -f $hdr
         $out += $head

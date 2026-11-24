@@ -24,6 +24,15 @@ The macOS viewer adds it AFTER `column -t` has laid the table out, because a
 dash row fed into `column -t` would be one field and widen DATE/TIME to its
 length.
 
+Since 2026-11-24 the log's stamps are UTC, marked with a trailing Z, because
+the providers book usage by the UTC day (tests/test_costlog_utc.py has the
+why): every date a viewer shows is a UTC date read from the UTC clock, so the
+logs written here are dated from `utc_today()` and carry the mark; the SUMMARY
+opens with a line naming the clock and the hours a UTC day covers on this
+machine's; and a line WITHOUT the mark — its machine has not started an
+updated app yet — is converted for display by this machine's zone and counted
+in a note (UtcClockTests).
+
 This runs the REAL viewer for the platform the suite runs on — CostLog_Win.ps1
 under Windows PowerShell, view_costlog.command under bash on macOS (so the Mac
 pass exercises the real BSD `date -j -v…` and awk) — and compares its day
@@ -55,6 +64,20 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHERS = REPO / "desktop_launchers"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")   # not %a: locale-free
 TAIL = ";mode=Adaptive;12;Some_Instruction;3;1000;200;0;5000"  # fields 5-12 of a current line
+
+
+def utc_today():
+    """The day the viewers call today: the UTC date (2026-11-24). In Sydney
+    it is yesterday's date until 10:00 or 11:00 in the morning."""
+    return datetime.datetime.now(datetime.timezone.utc).date()
+
+
+def local_stamp(utc):
+    """A UTC 'YYYY-MM-DD HH:MM:SS' as the unmarked stamp a pre-2026-11-24 app
+    on THIS machine wrote for that moment: its own clock's reading."""
+    moment = datetime.datetime.strptime(utc, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=datetime.timezone.utc)
+    return moment.astimezone().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def month_sum(rows, today):
@@ -105,11 +128,17 @@ class _ViewerCase(unittest.TestCase):
             less.write_text("#!/bin/sh\nexec cat\n", encoding="utf-8")
             less.chmod(less.stat().st_mode | stat.S_IXUSR)
 
-    def write_log(self, machine, rows, today, newline="\n", tail=TAIL, preamble=""):
-        """rows: (days back, 'HH:MM:SS', 'cost') — dated relative to today."""
+    def write_log(self, machine, rows, today, newline="\n", tail=TAIL, preamble="", local=False):
+        """rows: (days back, 'HH:MM:SS', 'cost') — dated relative to today, in
+        UTC. Written as the apps write them, UTC and marked Z — or, with
+        `local`, as a copy of the app from before 2026-11-24 wrote them: the
+        same moments on this machine's own clock, unmarked."""
+        def stamp(back, clock):
+            utc = f"{(today - datetime.timedelta(days=back)).isoformat()} {clock}"
+            return local_stamp(utc) if local else utc + "Z"
+
         body = preamble + "".join(
-            f"{(today - datetime.timedelta(days=back)).isoformat()} {clock};"
-            f"Anthropic;claude-sonnet-5;{cost}{tail}\n"
+            f"{stamp(back, clock)};Anthropic;claude-sonnet-5;{cost}{tail}\n"
             for back, clock, cost in rows)
         path = self.share / f"APICostLog_{machine}.txt"
         path.write_bytes(body.replace("\n", newline).encode("utf-8"))
@@ -140,10 +169,10 @@ class _ViewerCase(unittest.TestCase):
         """build(today) writes the logs and returns the expected block. Run
         again when the date changed underneath (a suite crossing midnight)."""
         for _attempt in range(2):
-            today = datetime.date.today()
+            today = utc_today()
             expected = build(today)
             lines = self.run_viewer()
-            if datetime.date.today() == today:
+            if utc_today() == today:
                 break
         starts = [i for i, line in enumerate(lines) if line.startswith("  today (")]
         self.assertEqual(len(starts), 1, "\n".join(lines[:30]))
@@ -255,12 +284,12 @@ class ModelSplitTests(_ViewerCase):
     def write(self, today):
         day = today.isoformat()
         lines = [
-            f"{day} 08:00:00;Anthropic;claude-sonnet-5;0.5000;mode=Low;30;Split_Test;4;"
+            f"{day} 08:00:00Z;Anthropic;claude-sonnet-5;0.5000;mode=Low;30;Split_Test;4;"
             "1000;200;0;5000",
-            f"{day} 09:00:00;Anthropic;claude-fable-5-1;1.2500;mode=Max, "
+            f"{day} 09:00:00Z;Anthropic;claude-fable-5-1;1.2500;mode=Max, "
             f"upgraded-from=claude-sonnet-5@call2;60;Split_Test;5;3000;700;10000;20000;"
             f"{self.UPGRADED}",
-            f"{day} 10:00:00;Anthropic;claude-fable-5-1;2.0000;mode=Max;20;Split_Test;3;"
+            f"{day} 10:00:00Z;Anthropic;claude-fable-5-1;2.0000;mode=Max;20;Split_Test;3;"
             "1000;200;0;5000",
         ]
         (self.share / "APICostLog_MACHINE-A.txt").write_bytes(
@@ -277,10 +306,10 @@ class ModelSplitTests(_ViewerCase):
 
     def test_both_by_model_blocks_split_the_upgraded_run_and_nothing_else_does(self):
         for _attempt in range(2):          # a run crossing a month boundary retries
-            today = datetime.date.today()
+            today = utc_today()
             self.write(today)
             lines = self.run_viewer()
-            if datetime.date.today() == today:
+            if utc_today() == today:
                 break
         cost_rows = ["    claude-fable-5-1                 $    3.0000  (2)",
                      "    claude-sonnet-5                  $    0.7500  (2)"]
@@ -335,20 +364,20 @@ class ChatColumnTests(_ViewerCase):
         self.chat_adhoc = f"Agent_{day}_110000"
         lines = [
             # 13 fields: a split, no chat (a run from before the column)
-            f"{day} 07:00:00;Anthropic;claude-fable-5-1;0.3000;mode=Max, "
+            f"{day} 07:00:00Z;Anthropic;claude-fable-5-1;0.3000;mode=Max, "
             f"upgraded-from=claude-sonnet-5@call1;10;Old_Split;2;100;50;0;0;{self.SPLIT_A}",
             # 14 fields: a one-model run, blank split, a chat
-            f"{day} 08:00:00;OpenAI;gpt-6-luna;0.0129;reasoning=Max, verbosity=low;117;"
+            f"{day} 08:00:00Z;OpenAI;gpt-6-luna;0.0129;reasoning=Max, verbosity=low;117;"
             f"Act_on_unread_emails;9;612;8138;48113;276910;;{self.chat_luna}",
             # 14 fields: a split AND a chat
-            f"{day} 09:00:00;Anthropic;claude-fable-5-1;1.2500;mode=Max, "
+            f"{day} 09:00:00Z;Anthropic;claude-fable-5-1;1.2500;mode=Max, "
             f"upgraded-from=claude-sonnet-5@call2;60;Split_Test;5;3000;700;10000;20000;"
             f"{self.SPLIT_B};{self.chat_split}",
             # 12 fields: an older line
-            f"{day} 10:00:00;Anthropic;claude-sonnet-5;0.5000;mode=Low;30;Old_Line;4;"
+            f"{day} 10:00:00Z;Anthropic;claude-sonnet-5;0.5000;mode=Low;30;Old_Line;4;"
             "1000;200;0;5000",
             # 14 fields: an ad-hoc GUI run — empty INSTRUCTION, a chat
-            f"{day} 11:00:00;OpenAI;gpt-6-luna;0.0100;reasoning=Max, verbosity=low;8;;3;"
+            f"{day} 11:00:00Z;OpenAI;gpt-6-luna;0.0100;reasoning=Max, verbosity=low;8;;3;"
             f"10;20;0;0;;{self.chat_adhoc}",
         ]
         (self.share / "APICostLog_MACHINE-A.txt").write_bytes(
@@ -356,10 +385,10 @@ class ChatColumnTests(_ViewerCase):
 
     def test_the_chat_is_the_last_column_and_the_splits_still_split(self):
         for _attempt in range(2):          # a run crossing a month boundary retries
-            today = datetime.date.today()
+            today = utc_today()
             self.write(today)
             lines = self.run_viewer()
-            if datetime.date.today() == today:
+            if utc_today() == today:
                 break
         header = next(line for line in lines if line.startswith("DATE/TIME"))
         self.assertEqual(header.split()[-2:], ["INSTRUCTION", "CHAT"])
@@ -411,7 +440,7 @@ class GroupRuleTests(_ViewerCase):
         day = today.isoformat()
         lines = []
         for k in range(runs):
-            line = (f"{day} {k:02d}:00:00;Anthropic;claude-sonnet-5;0.1000;mode=Low;30;"
+            line = (f"{day} {k:02d}:00:00Z;Anthropic;claude-sonnet-5;0.1000;mode=Low;30;"
                     f"Rule_Test;3;1000;200;0;5000")
             if k in chat_at:
                 line += f";;{self.LONG_CHAT}"
@@ -423,10 +452,10 @@ class GroupRuleTests(_ViewerCase):
         """The FULL LOG block of a render of `runs` runs: the heading to the
         last non-blank line."""
         for _attempt in range(2):          # a render crossing midnight retries
-            today = datetime.date.today()
+            today = utc_today()
             self.write(today, runs, chat_at)
             lines = self.run_viewer()
-            if datetime.date.today() == today:
+            if utc_today() == today:
                 break
         starts = [i for i, line in enumerate(lines) if line.startswith("DATE/TIME")]
         self.assertEqual(len(starts), 1, "\n".join(lines[-30:]))
@@ -474,6 +503,121 @@ class GroupRuleTests(_ViewerCase):
     def test_five_runs_or_fewer_are_not_ruled(self):
         block = self.full_log(5)
         self.assertEqual(self.shape(block), ["run"] * 5)
+
+
+class UtcClockTests(_ViewerCase):
+    """The viewers' clock is UTC (2026-11-24): the providers book usage by the
+    UTC day, so the log's stamps are UTC — marked Z in the file, shown without
+    the mark — and "today", the seven days and the month are UTC dates. The
+    SUMMARY opens with a line that names the clock and where a UTC day's edges
+    fall on this machine's own. A line without the mark is still in its
+    machine's local time (that machine has not started an updated app, which
+    converts its own log): it is converted for display, by THIS machine's
+    zone, and a note counts such runs and names their machines. Both platforms
+    are held to the one expectation."""
+
+    NOTE_TAIL = ("        Each machine converts its own log the next time MyAgent or SelfBot starts "
+                 "there after a git pull.")
+
+    @staticmethod
+    def clock_line():
+        """The line as this machine's zone makes it: UTC 00:00 as a local
+        time of day, and the offset."""
+        minutes = int(datetime.datetime.now().astimezone().utcoffset().total_seconds() // 60)
+        edge = minutes % 1440                      # Python's % is never negative here
+        at = f"{edge // 60:02d}:{edge % 60:02d}"
+        sign = "-" if minutes < 0 else "+"
+        return ("  Dates and times are UTC, the clock the providers bill by: a UTC day runs "
+                f"{at} to {at} on this machine's clock "
+                f"(UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}).")
+
+    def require_round_trip(self, rows, today):
+        """The one hour a year the clocks go back, a local time names two
+        moments and no reader can tell which was meant — skip rather than
+        fail when a row lands there."""
+        from myagent import datapaths as dp
+        for back, clock, _cost in rows:
+            utc = f"{(today - datetime.timedelta(days=back)).isoformat()} {clock}"
+            if dp.costlog_stamp(local_stamp(utc)) != utc + "Z":
+                self.skipTest(f"{utc} UTC falls in this zone's repeated hour")
+
+    def test_the_summary_names_the_clock_and_marked_stamps_show_without_the_mark(self):
+        rows = [(0, "08:00:00", "1.0000"), (1, "23:59:59", "0.5000")]
+
+        def build(today):
+            # The line whose "stamp" is one character is no stamp at all: it
+            # must neither be converted nor counted as a local-time run.
+            self.write_log("MACHINE-A", rows, today, preamble="x;y;z;7.0000\n")
+            return expected_block(today, {0: 1.0, 1: 0.5}, month_sum(rows, today),
+                                  "  (1 run: MACHINE-A $1.0000)")
+
+        expected, block, lines = self.day_block(build)
+        self.assertEqual(block, expected)
+        self.assertEqual(lines[lines.index("SUMMARY") + 1], self.clock_line())
+        self.assertFalse([line for line in lines if line.lstrip().startswith("Note:")])
+        self.assertNotIn(self.NOTE_TAIL, lines)
+        header = next(line for line in lines if line.startswith("DATE/TIME"))
+        self.assertTrue(header.startswith("DATE/TIME (UTC) "), header)
+        today = utc_today()
+        shown = [line for line in lines if line.startswith(f"{today} 08:00:00 ")]
+        self.assertEqual(len(shown), 1, "\n".join(lines[-12:]))      # no Z on screen
+        self.assertFalse([line for line in lines if "08:00:00Z" in line])
+
+    def test_a_line_without_the_mark_is_local_time_converted_and_noted(self):
+        marked = [(0, "08:00:00", "1.0000")]
+        # The same kind of moments, as two machines still on the old code
+        # wrote them: by their own clock. In Sydney 00:30 UTC is 11:30 that
+        # morning and 23:30 UTC is 10:30 the NEXT morning — the run a local
+        # stamp put on the wrong day.
+        unmarked_b = [(0, "00:30:00", "0.2500"), (1, "23:30:00", "0.5000")]
+        unmarked_c = [(2, "12:00:00", "2.0000")]
+        sums = {0: 1.25, 1: 0.5, 2: 2.0}
+        tail = "  (2 runs: MACHINE-A $1.0000, MACHINE-B $0.2500)"
+
+        def build(today):
+            self.require_round_trip(unmarked_b + unmarked_c, today)
+            self.write_log("MACHINE-A", marked, today)
+            self.write_log("MACHINE-B", unmarked_b, today, local=True)
+            # C: CRLF and the 4-field shape of the oldest Windows lines.
+            self.write_log("MACHINE-C", unmarked_c, today, local=True, newline="\r\n", tail="")
+            return expected_block(today, sums, month_sum(marked + unmarked_b + unmarked_c, today),
+                                  tail)
+
+        expected, block, lines = self.day_block(build)
+        self.assertEqual(block, expected)
+        at = lines.index("SUMMARY")
+        self.assertEqual(lines[at + 1], self.clock_line())
+        self.assertEqual(lines[at + 2],
+                         "  Note: 3 runs (MACHINE-B, MACHINE-C) are still stored in local time, "
+                         "shown here converted by this machine's time zone.")
+        self.assertEqual(lines[at + 3], self.NOTE_TAIL)
+        # The rows and the machine's last run carry the converted stamps.
+        today = utc_today()
+        yesterday = today - datetime.timedelta(days=1)
+        for stamp, machine in ((f"{today} 00:30:00", "MACHINE-B"),
+                               (f"{yesterday} 23:30:00", "MACHINE-B"),
+                               (f"{today - datetime.timedelta(days=2)} 12:00:00", "MACHINE-C")):
+            found = [line for line in lines if line.startswith(stamp + " ") and machine in line]
+            self.assertEqual(len(found), 1, stamp)
+        machines = ModelSplitTests.block(lines, "  By machine:")
+        self.assertIn(f"    MACHINE-B                $    0.7500  (2 runs, last {today} 00:30:00)",
+                      machines)
+
+    def test_one_such_run_reads_in_the_singular(self):
+        unmarked = [(1, "12:00:00", "0.5000")]
+
+        def build(today):
+            self.require_round_trip(unmarked, today)
+            self.write_log("MACHINE-A", [(0, "08:00:00", "1.0000")], today)
+            self.write_log("MACHINE-B", unmarked, today, local=True)
+            return expected_block(today, {0: 1.0, 1: 0.5},
+                                  month_sum([(0, "", "1.0000")] + unmarked, today),
+                                  "  (1 run: MACHINE-A $1.0000)")
+
+        expected, block, lines = self.day_block(build)
+        self.assertEqual(block, expected)
+        self.assertIn("  Note: 1 run (MACHINE-B) is still stored in local time, "
+                      "shown here converted by this machine's time zone.", lines)
 
 
 if __name__ == "__main__":
