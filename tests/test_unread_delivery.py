@@ -13,7 +13,10 @@ list / get / insert, each answering through execute()), the wait runs on a
 fake clock whose sleep makes scheduled messages "arrive", and LOG_FILE is a
 temp file. main()'s side of it — the watch begun before the send, the marks
 held back until the digest is delivered — is in tests/test_review_jobs.py's
-MainTests, which owns the main() harness."""
+MainTests, which owns the main() harness. What happens between "not seen"
+and "placed" since the same evening — the second emailed copy, and the texts
+noted so that later digests do not quote them — is in
+tests/test_unread_second_copy.py, on this module's mailbox and clock."""
 
 import base64
 import email
@@ -136,6 +139,9 @@ class _Base(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.log_file = Path(tmp.name) / "delivery.log"
         _patch(self, "LOG_FILE", self.log_file)
+        # The notes of texts not to quote again: never this machine's own.
+        self.notes_file = Path(tmp.name) / "delivery_unquoted.json"
+        _patch(self, "UNQUOTED_FILE", self.notes_file)
         _patch(self, "SEND_TO", RECIPIENT)
         _patch(self, "DELIVERY_WAIT_SECONDS", 30)
         _patch(self, "DELIVERY_POLL_SECONDS", 2)
@@ -163,9 +169,9 @@ class _Base(unittest.TestCase):
         deliver.done = False
         self.gmail.before_list = deliver
 
-    def ensure(self, watch=None):
+    def ensure(self, watch=None, second=None):
         return US.ensure_delivered(watch or self.watch(), SENDER, SUBJECT, BODY,
-                                   sleep=self.clock.sleep, clock=self.clock)
+                                   second=second, sleep=self.clock.sleep, clock=self.clock)
 
 
 class RecipientAccountTests(_Base):

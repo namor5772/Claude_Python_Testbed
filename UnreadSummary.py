@@ -24,9 +24,14 @@ instruction's daily email; when that send fails (a Graph 5xx outage, a
 dead token) it goes by SMTP from roman@ri.com.au instead
 (SEND_FALLBACK_IMAP_ACCOUNT). A send that was ACCEPTED is then checked at
 the other end: the recipient is one of the Gmail accounts this script
-reads, so the pass watches that mailbox for the digest and, when it has
-not arrived within DELIVERY_WAIT_SECONDS (or was filed under Spam), places
-it in the inbox directly through the Gmail API — see "Delivery check".
+reads, so the pass watches that mailbox for the digest. When it has not
+arrived within DELIVERY_WAIT_SECONDS it is emailed again without the text
+of its Spam / Junk folder entries — the quoted words of a spam campaign
+are what gets a digest discarded on the way — and those texts are noted,
+so that later digests do not quote them and arrive on their first send.
+Only when that second copy does not arrive either (or a copy was filed
+under Spam) is the digest placed in the inbox directly through the Gmail
+API — see "Delivery check" and "The second copy".
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text — so a daily run costs $0.00 in API tokens (the AI run cost
@@ -68,7 +73,8 @@ where the email keeps its 50-char dividers — and opened in a text viewer on
 the machine that ran the pass — Notepad++ (else Notepad) on Windows, the
 default text editor via `open -t` on macOS — so it can be read the moment the
 run ends rather than when the email arrives. --no-view keeps the file and
-skips the viewer.
+skips the viewer. The file quotes every message's text, also where an
+emailed copy leaves one out.
 
 Usage:
   python UnreadSummary.py            # real run: acts on matches, sends email
@@ -90,6 +96,7 @@ import email
 import email.header
 import email.message
 import email.utils
+import hashlib
 import imaplib
 import json
 import os
@@ -151,6 +158,7 @@ MARK_MATCHES_READ = True   # mark the matched email as read
 TRASH_MATCHES = False      # move the matched email to Trash/Bin
 
 SUMMARY_MAX_WORDS = 45  # "under 50 word summary"
+NO_BODY_TEXT = "(no readable body text)"  # the Summary of a message with none
 DIV = "=" * 50   # instruction: every divider EXACTLY 50 chars
 SUB = "-" * 50
 WRAP = 63        # entry text wraps to ~50 content chars past the label column
@@ -395,7 +403,7 @@ def summarize(lines, subject):
         if len(words) >= SUMMARY_MAX_WORDS:
             break
     if not words:
-        return "(no readable body text)"
+        return NO_BODY_TEXT
     out = " ".join(words[:SUMMARY_MAX_WORDS])
     if len(words) > SUMMARY_MAX_WORDS:
         out += " ..."
@@ -1089,19 +1097,26 @@ def send_summary(outlook_accounts, imap_accounts, subject, body):
 # newest messages (delivery_watch); after it, it watches for a NEW message
 # carrying the digest's subject, which is unique to the second
 # (ensure_delivered). Seen outside Spam within DELIVERY_WAIT_SECONDS:
-# delivered. Not seen, or filed under Spam: the digest is placed in the
-# recipient's inbox directly with users.messages.insert — an IMAP APPEND in
-# API form, which sends nothing and so passes no filter, and which the
-# gmail.modify token already covers — under a note saying so; an emailed copy
-# that turns up later is then a harmless duplicate. Only a pass whose digest
-# is in that mailbox goes on to mark its matches read; a digest that was
-# neither seen arriving nor could be placed is a failed pass (exit 1).
+# delivered. Not seen: the digest is emailed once more — the second copy,
+# without the text of its Spam / Junk folder entries (see "The second copy"
+# below) — and watched for again. Still not seen, or filed under Spam: the
+# digest is placed in the recipient's inbox directly with
+# users.messages.insert — an IMAP APPEND in API form, which sends nothing and
+# so passes no filter, and which the gmail.modify token already covers —
+# under a note saying so; an emailed copy that turns up later is then a
+# harmless duplicate. Only a pass whose digest is in that mailbox goes on to
+# mark its matches read; a digest that was neither seen arriving nor could be
+# placed is a failed pass (exit 1).
 #
 # Where the check cannot run at all — SEND_TO is not a Gmail account this
 # script reads, its token is dead, the API errors mid-watch — the send is
 # trusted as it always was, and the log line says the arrival was not checked.
-DELIVERY_WAIT_SECONDS = 30   # an Outlook -> Gmail digest takes 3-4 s, measured;
-# None turns the check off
+DELIVERY_WAIT_SECONDS = 60   # measured over the four weeks before, an Outlook ->
+# Gmail digest took 3 s as a rule — under 10 s 95 times in 99 — and 24-27 s
+# the other four. The first setting, 30, left those four a few seconds'
+# margin, and a copy that is merely slow must not be taken for a missing one
+# (it costs a second copy, and texts noted for nothing). The whole wait is
+# spent only on a digest that never comes. None turns the check off
 DELIVERY_POLL_SECONDS = 2
 DELIVERY_SCAN = 10           # newest messages looked at per poll
 
@@ -1167,38 +1182,82 @@ def gmail_place(service, sender, subject, body):
         userId="me", body={"raw": raw, "labelIds": ["INBOX", "UNREAD"]}).execute()
 
 
-def ensure_delivered(watch, sender, subject, body, sleep=time.sleep,
+def _note(text):
+    """The NOTE that heads a copy which is not simply the emailed digest,
+    wrapped to the 50-character dividers. Never broken at a hyphen: an
+    address, or "Spam/Junk-folder", stays in one piece."""
+    return textwrap.fill(f"NOTE: {text}", width=len(DIV), break_on_hyphens=False)
+
+
+def _await_digest(watch, subject, sleep, clock):
+    """Look for the digest every DELIVERY_POLL_SECONDS for up to
+    DELIVERY_WAIT_SECONDS, counted from this call. Returns (labels, waited):
+    the labels it arrived with — None when it has not — and the seconds
+    looked."""
+    start = clock()
+    while True:
+        labels = find_delivered(watch, subject)
+        waited = clock() - start
+        if labels is not None or waited >= DELIVERY_WAIT_SECONDS:
+            return labels, waited
+        sleep(DELIVERY_POLL_SECONDS)
+
+
+def ensure_delivered(watch, sender, subject, body, second=None, sleep=time.sleep,
                      clock=time.monotonic):
-    """After an accepted send: see the digest INTO the recipient's mailbox,
-    placing it there when the emailed copy has not arrived. Returns the
-    outcome, the tail of the "sent summary" log line. Raises when the digest
-    is neither there nor could be placed; the caller then changes no mailbox,
-    exactly as after a failed send. ``sleep`` and ``clock`` are injectable so
-    the tests can run the wait without waiting."""
+    """After an accepted send: see the digest INTO the recipient's mailbox.
+    A copy seen arriving outside Spam ends it. One that is not seen is
+    emailed once more when the caller has a ``second`` copy to offer —
+    (how, send_again) from second_copy: ``send_again()`` sends it, ``how``
+    says how it differs — and that copy is watched for in its turn. A digest
+    still not there, or filed under Spam, is placed in the inbox directly.
+    Returns the outcome, the tail of the "sent summary" log line. Raises when
+    the digest is neither there nor could be placed; the caller then changes
+    no mailbox, exactly as after a failed send. ``sleep`` and ``clock`` are
+    injectable so the tests can run the wait without waiting."""
     if "unchecked" in watch:
         return f"arrival not checked ({watch['unchecked']})"
-    start = clock()
     try:
-        while True:
-            labels = find_delivered(watch, subject)
-            waited = clock() - start
-            if labels is not None or waited >= DELIVERY_WAIT_SECONDS:
-                break
-            sleep(DELIVERY_POLL_SECONDS)
+        labels, waited = _await_digest(watch, subject, sleep, clock)
     except Exception as e:
         return f"arrival not checked ({type(e).__name__}: {e})"
-    in_spam = labels is not None and "SPAM" in labels
-    if labels is not None and not in_spam:
+    if labels is not None and "SPAM" not in labels:
         return f"arrived after {waited:.0f}s"
-    if in_spam:
+    if labels is not None:
         what = f"arrived in Spam after {waited:.0f}s"
         why = f"the copy emailed from {sender} was filed under Spam."
     else:
         what = f"NOT arrived after {DELIVERY_WAIT_SECONDS}s"
         why = (f"the copy emailed from {sender} had not arrived after "
                f"{DELIVERY_WAIT_SECONDS} s.")
+        if second is not None:
+            how, send_again = second
+            log(f"digest from {sender} to {SEND_TO}: {what} — sending it again {how}")
+            try:
+                send_again()
+            except Exception as e:
+                # Nothing more to watch for: the digest is placed, as it
+                # would have been with no second copy to offer.
+                log(f"second copy NOT sent ({type(e).__name__}: {e})")
+            else:
+                what = f"{what} — sent again {how}"
+                try:
+                    labels, waited = _await_digest(watch, subject, sleep, clock)
+                except Exception as e:
+                    return f"{what}: arrival not checked ({type(e).__name__}: {e})"
+                if labels is not None and "SPAM" not in labels:
+                    return f"{what}: arrived after {waited:.0f}s"
+                if labels is not None:
+                    what = f"{what}: arrived in Spam after {waited:.0f}s"
+                    why = (f"the copy emailed from {sender} had not arrived after "
+                           f"{DELIVERY_WAIT_SECONDS} s, and a second, sent {how}, was "
+                           f"filed under Spam.")
+                else:
+                    what = f"{what}: NOT arrived after {DELIVERY_WAIT_SECONDS}s either"
+                    why = (f"neither the copy emailed from {sender} nor a second, sent "
+                           f"{how}, had arrived after {DELIVERY_WAIT_SECONDS} s.")
     log(f"digest from {sender} to {SEND_TO}: {what} — placing it in the inbox directly")
-    note = textwrap.fill(f"NOTE: placed in this mailbox directly — {why}", width=len(DIV))
+    note = _note(f"placed in this mailbox directly — {why}")
     try:
         gmail_place(watch["service"], sender, subject, f"{note}\n\n{body}")
     except Exception as e:
@@ -1206,6 +1265,152 @@ def ensure_delivered(watch, sender, subject, body, sleep=time.sleep,
             f"digest from {sender} to {SEND_TO}: {what}, and placing it in the "
             f"inbox directly failed ({type(e).__name__}: {e})") from e
     return f"{what} — placed in the inbox directly"
+
+
+# ── The second copy, and the texts not quoted again (2026-11-27) ─────────────
+# What gets a digest discarded on the way is the TEXT it quotes. The Summary
+# line is the opening 45 words of each message, and a mass-mailed pitch is
+# often no longer than that: the digest then carries a known spam campaign
+# word for word, and is taken for it. On 2026-11-27 one search-ranking pitch
+# in a Spam folder — the summary held all of it, greeting to signature — sat
+# in every one of the twelve digests and test sends that never arrived and in
+# none of the ten that did. Controlled sends minutes apart, each differing
+# from a digest dropped half an hour before in one thing, said which part of
+# the entry mattered: with the sender's address rewritten and the text still
+# quoted it was dropped; with the text left out it arrived in 6-7 s, the
+# address verbatim or not. And once the message had left its Spam folder the
+# next real digest arrived in 5 s, another spam message's text still in it.
+# Quoting such text is harmless nearly always — the 99 digests of the four
+# weeks before had all arrived, most of them quoting some.
+# (docs/unread-summary-delivery-check-2026-11-27.md, part 2, has the sends.)
+#
+# So the text of a Spam / Junk folder message is quoted as it always was —
+# until a digest quoting it is not seen arriving. Then, before anything is
+# placed, the digest is EMAILED again without the text of its Spam / Junk
+# entries (account, sender, subject and date stay), under a note saying so:
+# the second copy, which second_copy prepares and ensure_delivered sends.
+# Only when that copy does not arrive either is the digest placed in the
+# inbox directly.
+#
+# And the texts are noted. When a first copy is not seen arriving, the
+# SHA-256 of each Spam / Junk text it quoted goes into UNQUOTED_FILE, beside
+# the log — the hash only, never the text. A later digest does not quote a
+# text noted there, in whatever folder its message sits, and so arrives on
+# its first send: a campaign's follow-ups (that evening's pitch came twice,
+# twelve hours apart, the same words) and a second pass over the same unread
+# mail cost no further discarded message. Which of the texts did it cannot
+# be told, so all of that copy's are noted; a note lapses after
+# UNQUOTED_KEEP_DAYS. The file is this machine's own: another machine learns
+# the same at the cost of one discarded copy of its own.
+#
+# That makes three renderings of one digest, each leaving out more
+# (build_body's ``withhold``): the digest FILE, which never travels, quotes
+# everything; the first emailed copy leaves out the texts noted before; the
+# second leaves out, besides, the text of every Spam / Junk folder entry.
+WITHHOLD_NOTHING, WITHHOLD_NOTED, WITHHOLD_SPAM = 0, 1, 2
+NOT_QUOTED_NOTED = "(not quoted — a digest quoting it did not arrive)"
+NOT_QUOTED_HERE = "(not quoted in this copy — see the NOTE above)"
+UNQUOTED_FILE = LOG_FILE.with_name("unread_summary_unquoted.json")
+UNQUOTED_KEEP_DAYS = 90
+
+
+def text_key(text):
+    """A quoted text's identity: the SHA-256 of its words, letter case and
+    spacing aside. This is all that is ever stored of it."""
+    return hashlib.sha256(" ".join(text.lower().split()).encode("utf-8")).hexdigest()
+
+
+def load_unquoted(today=None):
+    """The texts noted in UNQUOTED_FILE as {key: "YYYY-MM-DD"}, those noted
+    more than UNQUOTED_KEEP_DAYS ago left out. Never raises: no file, or one
+    that cannot be read, is simply nothing noted."""
+    today = today or datetime.now().date()
+    try:
+        texts = json.loads(UNQUOTED_FILE.read_text(encoding="utf-8"))["texts"]
+        return {key: day for key, day in texts.items()
+                if (today - datetime.strptime(day, "%Y-%m-%d").date()).days
+                <= UNQUOTED_KEEP_DAYS}
+    except Exception:
+        return {}
+
+
+def note_unquoted(keys, today=None):
+    """Note these text keys in UNQUOTED_FILE under today's date, keeping what
+    is already there (a key noted again gets the new date). Never raises: a
+    text that could not be noted costs one more discarded copy some day, a
+    raise here would cost this pass its second copy."""
+    today = today or datetime.now().date()
+    keys = list(keys)
+    try:
+        texts = load_unquoted(today)
+        texts.update(dict.fromkeys(keys, f"{today:%Y-%m-%d}"))
+        UNQUOTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = UNQUOTED_FILE.with_name(UNQUOTED_FILE.name + ".tmp")
+        tmp.write_text(json.dumps({"texts": texts}, indent=1) + "\n", encoding="utf-8")
+        os.replace(tmp, UNQUOTED_FILE)
+        log(f"{len(keys)} text(s) noted in {UNQUOTED_FILE.name}: later digests "
+            f"will not quote them")
+    except Exception as e:
+        log(f"texts NOT noted in {UNQUOTED_FILE.name} ({type(e).__name__}: {e})")
+
+
+def mark_unquoted(entries_by_account, noted):
+    """Flag every entry whose text is among the ``noted`` keys, so that no
+    emailed copy quotes it. Returns how many were flagged."""
+    flagged = 0
+    for entries in entries_by_account.values():
+        for entry in entries:
+            text = summarize(entry["lines"], entry["subject"])
+            if text != NO_BODY_TEXT and text_key(text) in noted:
+                entry["unquoted"] = True
+                flagged += 1
+    return flagged
+
+
+def summary_text(entry, withhold=WITHHOLD_NOTHING):
+    """An entry's Summary line in one rendering: the opening words of its
+    text, or the marker that stands in for them."""
+    text = summarize(entry["lines"], entry["subject"])
+    if text == NO_BODY_TEXT or withhold == WITHHOLD_NOTHING:
+        return text
+    if entry.get("unquoted"):
+        return NOT_QUOTED_NOTED
+    if withhold >= WITHHOLD_SPAM and entry["folder_tag"]:
+        return NOT_QUOTED_HERE
+    return text
+
+
+def quotes_spam_text(entry):
+    """True when the first emailed copy quotes the text of this entry and the
+    entry sits in a Spam / Junk folder: what the second copy leaves out."""
+    return bool(entry["folder_tag"]) and \
+        summary_text(entry, WITHHOLD_NOTED) not in (NO_BODY_TEXT, NOT_QUOTED_NOTED)
+
+
+def second_copy(entries_by_account, build, send):
+    """The copy to email when the first is not seen arriving, as
+    ensure_delivered takes it: (how, send_again), or None when the first copy
+    quotes no Spam / Junk folder text and a second would say nothing else.
+    ``build()`` returns the digest rendered without that text and
+    ``send(body)`` emails a body, returning the address it went from.
+    send_again() notes the texts first — that a digest quoting them was not
+    seen arriving is known by then, whatever becomes of the second copy."""
+    quoted = [entry for entries in entries_by_account.values()
+              for entry in entries if quotes_spam_text(entry)]
+    if not quoted:
+        return None
+    how = (f"without the text of its {len(quoted)} Spam/Junk-folder "
+           f"entr{'y' if len(quoted) == 1 else 'ies'}")
+
+    def send_again():
+        note_unquoted(text_key(summarize(entry["lines"], entry["subject"]))
+                      for entry in quoted)
+        note = _note(
+            f"a second copy, sent {how} — the first, which quoted that text, had not "
+            f"arrived after {DELIVERY_WAIT_SECONDS} s. The whole digest is in "
+            f"{DIGEST_FILE.name} on the machine that ran this pass.")
+        return send(f"{note}\n\n{build()}")
+    return how, send_again
 
 
 # ── Output assembly ──────────────────────────────────────────────────────────
@@ -1219,13 +1424,15 @@ def _field(label, value, width=9, wrap=WRAP):
                          subsequent_indent=" " * len(prefix)) or prefix.rstrip()
 
 
-def format_entry(n, entry, wrap=WRAP):
+def format_entry(n, entry, wrap=WRAP, withhold=WITHHOLD_NOTHING):
     """A SPECIFYING match renders like any other email; the only additions
     are the bare "SPECIFYING LIST EMAIL" marker line at the top, followed by
     one "Type={Type}, Index={Index}" line echoing those rule columns
     verbatim (blank value -> bare "Type=" / "Index="), and, at the bottom,
     the names of any downloaded PDF attachments plus a Determine: line
-    echoing the rule's Determine column verbatim from SpecifyingList.csv."""
+    echoing the rule's Determine column verbatim from SpecifyingList.csv.
+    ``withhold`` decides whether the Summary line quotes the message's text
+    (summary_text); every other line is the same in every rendering."""
     tag = f" [{entry['folder_tag']}]" if entry["folder_tag"] else ""
     num = f"{n}. "
     lines = []
@@ -1242,8 +1449,7 @@ def format_entry(n, entry, wrap=WRAP):
         lines.append(_field("To:", fwd, wrap=wrap))
     lines.append(_field("Subject:", entry["subject"], wrap=wrap))
     lines.append(_field("Date:", entry["date"], wrap=wrap))
-    lines.append(_field("Summary:", summarize(entry["lines"], entry["subject"]),
-                        wrap=wrap))
+    lines.append(_field("Summary:", summary_text(entry, withhold), wrap=wrap))
     pdfs = entry.get("pdfs") or []
     if pdfs:
         lines.append(_field("PDFs:", "; ".join(pdfs), wrap=wrap))
@@ -1255,7 +1461,7 @@ def format_entry(n, entry, wrap=WRAP):
 
 
 def build_body(account_order, entries_by_account, errors, dry_run, width=None,
-               now=None):
+               now=None, withhold=WITHHOLD_NOTHING):
     """The emailed digest: a header, then the TOTAL section, then the
     per-account enumeration, closed by a bare divider. The enumeration is
     rendered FIRST so the TOTAL line that precedes it in the email can quote
@@ -1267,8 +1473,11 @@ def build_body(account_order, entries_by_account, errors, dry_run, width=None,
     ``width`` is None for the email (the instruction's 50-char dividers, text
     wrapped at WRAP) or a line width — the text-file copy uses
     DIGEST_FILE_WIDTH — that sets both the dividers' length and the column
-    the entry lines wrap at. ``now`` lets the two renderings of one pass
-    carry the same Generated timestamp."""
+    the entry lines wrap at. ``now`` lets the renderings of one pass carry
+    the same Generated timestamp. ``withhold`` says whose text the Summary
+    lines leave out — nobody's (the file), the texts noted before (the first
+    emailed copy), or those and every Spam / Junk folder entry's (the second
+    copy); the numbering, the TOTAL and every other line never differ."""
     now = now or datetime.now()
     div, sub, wrap = ("=" * width, "-" * width, width) if width else (DIV, SUB, WRAP)
     listing = []
@@ -1283,7 +1492,7 @@ def build_body(account_order, entries_by_account, errors, dry_run, width=None,
             listing += ["", "No unread emails."]
         for entry in entries:
             n += 1
-            listing += ["", format_entry(n, entry, wrap=wrap)]
+            listing += ["", format_entry(n, entry, wrap=wrap, withhold=withhold)]
     matched = [e for es in entries_by_account.values() for e in es if e.get("spec")]
 
     out = [div, "COMPREHENSIVE LIST OF UNREAD EMAILS", div,
@@ -1450,13 +1659,24 @@ def main(argv=None):
         for (provider, account), reason in errors.items():
             log(f"ACCOUNT ERROR {account or provider + ' accounts.json'}: {reason}")
 
+        # A text that a digest was not delivered with is not quoted in an
+        # emailed copy again (see "The second copy"): its entries are flagged
+        # before anything is rendered. Reading the notes changes nothing, so
+        # a dry run shows the same body a real pass would send first.
+        unquoted = mark_unquoted(entries_by_account, load_unquoted())
+        if unquoted:
+            log(f"{unquoted} entr{'y' if unquoted == 1 else 'ies'} not quoted in the "
+                f"emailed digest: a digest quoting that text did not arrive")
+
         now = datetime.now()
-        body = build_body(account_order, entries_by_account, errors, args.dry_run, now=now)
+        body = build_body(account_order, entries_by_account, errors, args.dry_run, now=now,
+                          withhold=WITHHOLD_NOTED)
         subject = f"{SUBJECT_PREFIX} - {now:%Y-%m-%d %H:%M:%S}"
         total = sum(len(v) for v in entries_by_account.values())
 
         # The local copy first — the same digest laid out at the file's wider
-        # line width — so it exists whether or not the send below succeeds.
+        # line width, and quoting every text: it never travels — so it exists
+        # whether or not the send below succeeds.
         log(show_digest(build_body(account_order, entries_by_account, errors,
                                    args.dry_run, width=DIGEST_FILE_WIDTH, now=now),
                         view=not args.no_view))
@@ -1469,12 +1689,21 @@ def main(argv=None):
             return
 
         # The recipient mailbox's newest messages are noted BEFORE the send,
-        # so the check after it looks only at what arrives from here on. The
-        # one log line is written once the digest's fate is known: its tail
-        # says whether the digest arrived, had to be placed, or went unchecked.
+        # so the check after it looks only at what arrives from here on. A
+        # copy that is not seen arriving is emailed once more without the
+        # text of its Spam / Junk folder entries (second_copy), and placed
+        # only when that does not arrive either. The one log line is written
+        # once the digest's fate is known: its tail says whether the digest
+        # arrived, was sent again, had to be placed, or went unchecked.
         watch = delivery_watch(gmail_accounts)
         sender = send_summary(outlook_accounts, imap_accounts, subject, body)
-        delivery = ensure_delivered(watch, sender, subject, body)
+        delivery = ensure_delivered(
+            watch, sender, subject, body,
+            second=second_copy(
+                entries_by_account,
+                lambda: build_body(account_order, entries_by_account, errors, False,
+                                   now=now, withhold=WITHHOLD_SPAM),
+                lambda text: send_summary(outlook_accounts, imap_accounts, subject, text)))
         log(f"sent summary to {SEND_TO} from {sender}: {total} unread across "
             f"{len(account_order)} accounts, {len(matched)} specifying match(es), "
             f"{len(errors)} account error(s); {delivery}")

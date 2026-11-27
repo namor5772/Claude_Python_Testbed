@@ -20,6 +20,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -417,6 +418,9 @@ class MainTests(_TempLog):
             self.dirs[provider] = d
             _patch(self, US, attr, d)
         _patch(self, US, "DIGEST_FILE", self.root / "review_digest.txt")
+        # The notes of texts not to quote again: never this machine's own.
+        self.notes_file = self.root / "review_unquoted.json"
+        _patch(self, US, "UNQUOTED_FILE", self.notes_file)
         _patch(self, US, "DOWNLOAD_DIR", self.root / "review_attachments")
         _patch(self, US, "_SPECS", [SPEC])
         _patch(self, US, "MARK_MATCHES_READ", True)
@@ -424,6 +428,7 @@ class MainTests(_TempLog):
         _patch(self, US, "TRASH_MATCHES", False)
         self.events = []
         self.sent = []
+        self.shown = []             # what went to the digest file, per pass
         self.collected = {"Gmail": {}, "IMAP": {}, "Outlook": {}}
         _patch(self, US, "gmail_collect",
                lambda account, addr: self.collected["Gmail"][account])
@@ -460,6 +465,7 @@ class MainTests(_TempLog):
 
     def _show(self, body, view=True):
         self.events.append("digest")
+        self.shown.append(body)
         return "digest written (test)"
 
     def _send(self, account, account_email, subject, body):
@@ -599,12 +605,14 @@ class MainTests(_TempLog):
             self.watched.append(dict(gmail_accounts))
             return {"service": "the service", "known": set()}
 
-        def ensure(watch, sender, subject, body):
+        def ensure(watch, sender, subject, body, second=None):
             self.events.append("ensure")
             self.ensured.append((watch, sender, subject, body))
+            self.seconds.append(second)
             if error:
                 raise error
             return outcome
+        self.seconds = []
         _patch(self, US, "delivery_watch", watch)
         _patch(self, US, "ensure_delivered", ensure)
 
@@ -746,6 +754,200 @@ class MainTests(_TempLog):
         self.assertIn("arrived in Spam after 0s — placed in the inbox directly\n",
                       self.log_text())
         self.assertIn("mark:Gmail", self.events)
+
+    # The second copy (2026-11-27, the same evening): the functions are pinned
+    # in tests/test_unread_second_copy.py; these pin where main() uses them.
+
+    PITCH = "We can place your website on the first page. May I send you a quote?"
+
+    def _spam_entry(self, text=None, tag="SPAM"):
+        entry = _entry("IMAP", "webcentral", "Re: May I send you a quote?",
+                       frm="Pitcher <p@pitch.example>")
+        entry["folder_tag"] = tag
+        entry["lines"] = [text or self.PITCH]
+        return entry
+
+    def test_a_pass_quoting_no_spam_text_offers_no_second_copy(self):
+        self._delivery()
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        US.main(["--no-view"])
+        self.assertEqual(self.seconds, [None])
+
+    def test_a_pass_quoting_spam_text_has_the_second_copy_ready_and_unsent(self):
+        self._delivery()
+        self.accounts("Gmail", ["main"])
+        self.accounts("IMAP", ["webcentral"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        self.collected["IMAP"]["webcentral"] = [self._spam_entry()]
+        US.main(["--no-view"])
+        how, send_again = self.seconds[0]
+        self.assertEqual(how, "without the text of its 1 Spam/Junk-folder entry")
+        self.assertEqual(len(self.sent), 1)                  # only the first copy went out
+        self.assertIn(self.PITCH, " ".join(self.sent[0].split()))
+        self.assertFalse(self.notes_file.exists())
+        # Sending it goes through the same sender, under the same subject.
+        self.assertEqual(send_again(), US.SEND_FROM_OUTLOOK_ACCOUNT)
+        self.assertEqual(len(self.sent), 2)
+        second = self.sent[1]
+        self.assertTrue(second.startswith("NOTE: a second copy, sent without the text"))
+        self.assertNotIn("We can place", second)
+        self.assertIn("Opening words.", second)              # the inbox entry's text stays
+        self.assertIn(f"   Summary: {US.NOT_QUOTED_HERE}", second.splitlines())
+        # The same digest otherwise: its Generated line, TOTAL and numbering.
+        for line in self.sent[0].splitlines():
+            if line.startswith(("Generated ", "TOTAL: ", "1. ", "2. ", "   From:", "   Subject:")):
+                self.assertIn(line, second.splitlines())
+
+    def test_the_second_copy_is_the_same_digest_stamp_and_all(self):
+        # A clock that moves at every look: the second copy, built later,
+        # must still carry the first copy's Generated line — and it is a real
+        # send, never a dry run's.
+        class Ticking(datetime):
+            ticks = 0
+
+            @classmethod
+            def now(cls, tz=None):
+                cls.ticks += 1
+                return datetime(2026, 11, 27, 21, 0, 0) + timedelta(seconds=cls.ticks)
+        _patch(self, US, "datetime", Ticking)
+        self._delivery()
+        self.accounts("IMAP", ["webcentral"])
+        self.collected["IMAP"]["webcentral"] = [self._spam_entry()]
+        US.main(["--no-view"])
+        self.seconds[0][1]()                               # the second copy, ticks later
+        first, second = self.sent
+        stamp = next(line for line in first.splitlines() if line.startswith("Generated "))
+        self.assertIn(stamp, second.splitlines())
+        self.assertNotIn("DRY RUN", second)
+        self.assertNotIn("DRY RUN", first)
+
+    def _sent_lines(self):
+        """The log's "sent summary to" lines, one per completed pass."""
+        return [line for line in self.log_text().splitlines() if "sent summary to" in line]
+
+    def _filtered_route(self, drops=None):
+        """The REAL delivery functions over an in-memory recipient mailbox,
+        behind a route that — like 2026-11-27's — accepts every send and
+        discards the ones quoting the campaign's text. Two entries are
+        unread: a bill in the Gmail inbox and the pitch in an IMAP Spam
+        folder."""
+        drops = drops or (lambda body: "We can place" in body)
+        gmail = FakeGmail({"id": "old1", "subject": "Your parcel", "labels": ["INBOX"]})
+        _patch(self, US, "SEND_TO", "main@gmail.example")
+        _patch(self, US, "gmail_service", lambda account: gmail)
+        _patch(self, US, "DELIVERY_WAIT_SECONDS", 0)      # one look per copy, no sleeping
+
+        def send(account, account_email, subject, body):
+            self._send(account, account_email, subject, body)
+            if not drops(body):
+                gmail.add(subject, ("INBOX", "UNREAD"))
+        _patch(self, US, "outlook_send", send)
+        self.accounts("Gmail", ["main"])
+        self.accounts("IMAP", ["webcentral"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        self.collected["IMAP"]["webcentral"] = [self._spam_entry()]
+        return gmail
+
+    def test_a_digest_dropped_for_the_text_it_quotes_arrives_as_the_second_copy(self):
+        gmail = self._filtered_route()
+        US.main(["--no-view"])
+        first, second = self.sent
+        self.assertIn(self.PITCH, " ".join(first.split()))
+        self.assertNotIn("We can place", second)
+        self.assertIn("Pitcher <p@pitch.example>", second)       # who and what stay
+        self.assertIn("Re: May I send you a quote?", second)
+        self.assertEqual(gmail.count("insert"), 0)               # nothing was placed
+        self.assertEqual(gmail.mailbox[0]["labels"], ["INBOX", "UNREAD"])
+        # Delivered, so the bill is marked read as on any pass.
+        self.assertEqual(self.events, ["save:Gmail", "digest", "send", "send", "mark:Gmail",
+                                       "logout"])
+        # The digest file had everything, the pitch included.
+        self.assertIn(self.PITCH, " ".join(self.shown[0].split()))
+        log = self.log_text()
+        self.assertIn("NOT arrived after 0s — sending it again without the text of its 1 "
+                      "Spam/Junk-folder entry\n", log)
+        self.assertIn("1 text(s) noted in review_unquoted.json", log)
+        self.assertIn("0 account error(s); NOT arrived after 0s — sent again without the "
+                      "text of its 1 Spam/Junk-folder entry: arrived after 0s\n", log)
+        self.assertLess(log.index("sending it again"), log.index("sent summary to"))
+        self.assertEqual(set(US.load_unquoted()), {US.text_key(self.PITCH)})
+
+    def test_the_next_pass_does_not_quote_the_noted_text_and_arrives_at_once(self):
+        gmail = self._filtered_route()
+        US.main(["--no-view"])
+        del self.sent[:], self.events[:], self.shown[:]
+        US.main(["--no-view"])                # the same unread mail, a second pass
+        self.assertEqual(len(self.sent), 1)   # one send: it arrives
+        self.assertNotIn("We can place", self.sent[0])
+        self.assertFalse(self.sent[0].startswith("NOTE"))
+        self.assertIn(f"   Summary: {US.NOT_QUOTED_NOTED}", self.sent[0].splitlines())
+        self.assertIn("Re: May I send you a quote?", self.sent[0])
+        self.assertIn(self.PITCH, " ".join(self.shown[0].split()))   # the file: everything
+        self.assertEqual(gmail.count("insert"), 0)
+        self.assertEqual(self.events, ["save:Gmail", "digest", "send", "mark:Gmail", "logout"])
+        log = self.log_text()
+        self.assertIn("1 entry not quoted in the emailed digest: a digest quoting that "
+                      "text did not arrive\n", log)
+        first_pass, second_pass = self._sent_lines()
+        self.assertTrue(first_pass.endswith("Spam/Junk-folder entry: arrived after 0s"))
+        self.assertTrue(second_pass.endswith("0 account error(s); arrived after 0s"))
+        self.assertEqual(log.count("sending it again"), 1)       # only the first pass
+        self.assertEqual(log.count("text(s) noted"), 1)
+
+    def test_a_follow_up_with_the_same_words_is_not_quoted_wherever_it_lands(self):
+        gmail = self._filtered_route()
+        US.main(["--no-view"])
+        del self.sent[:], self.events[:]
+        # The first message is gone; the campaign's next one reaches an INBOX,
+        # from another sender, the same words in other casing and spacing.
+        follow_up = _entry("IMAP", "webcentral", "Re: Re: May I send you a quote?",
+                           frm="Other Pitcher <q@pitch2.example>")
+        follow_up["lines"] = ["WE CAN PLACE your website on the first page.",
+                              "  May I   send you a quote?"]
+        self.collected["IMAP"]["webcentral"] = [follow_up]
+        US.main(["--no-view"])
+        self.assertEqual(len(self.sent), 1)
+        self.assertNotIn("PLACE your website", self.sent[0])
+        self.assertIn(US.NOT_QUOTED_NOTED, self.sent[0])
+        self.assertIn("Other Pitcher <q@pitch2.example>", self.sent[0])
+        self.assertEqual(gmail.count("insert"), 0)
+        self.assertTrue(self._sent_lines()[-1].endswith(
+            "0 account error(s); arrived after 0s"))
+
+    def test_neither_copy_arriving_ends_with_the_whole_digest_placed(self):
+        gmail = self._filtered_route(drops=lambda body: True)
+        US.main(["--no-view"])
+        self.assertEqual(len(self.sent), 2)
+        placed = gmail.placed()
+        self.assertEqual(len(placed), 1)
+        text = placed[0].get_content()
+        self.assertTrue(text.startswith("NOTE: placed in this mailbox directly — neither"))
+        self.assertIn(self.sent[0], text)                    # the first copy, whole
+        self.assertIn(self.PITCH, " ".join(text.split()))
+        self.assertIn("mark:Gmail", self.events)             # in the mailbox after all
+        self.assertIn("NOT arrived after 0s either — placed in the inbox directly\n",
+                      self.log_text())
+
+    def test_a_dry_run_shows_the_first_copy_and_notes_nothing(self):
+        self._filtered_route()
+        US.note_unquoted([US.text_key(self.PITCH)])
+        before = self.notes_file.read_bytes()
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            US.main(["--dry-run", "--no-view"])
+        self.assertEqual(self.sent, [])
+        self.assertNotIn("We can place", out.getvalue())
+        self.assertIn(US.NOT_QUOTED_NOTED, out.getvalue())
+        self.assertIn(self.PITCH, " ".join(self.shown[0].split()))   # the file: everything
+        self.assertEqual(self.notes_file.read_bytes(), before)
+
+    def test_a_dry_run_over_spam_text_writes_no_notes_file(self):
+        self._filtered_route()
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            US.main(["--dry-run", "--no-view"])
+        self.assertFalse(self.notes_file.exists())
+        self.assertEqual(self.sent, [])
 
 
 # ── Heartbeat ─────────────────────────────────────────────────────────────
