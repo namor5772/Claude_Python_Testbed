@@ -22,7 +22,11 @@ its own flag; see the constants below). The list is sent from
 grobliro@outlook.com to namor5772@gmail.com, mirroring the AI-run
 instruction's daily email; when that send fails (a Graph 5xx outage, a
 dead token) it goes by SMTP from roman@ri.com.au instead
-(SEND_FALLBACK_IMAP_ACCOUNT).
+(SEND_FALLBACK_IMAP_ACCOUNT). A send that was ACCEPTED is then checked at
+the other end: the recipient is one of the Gmail accounts this script
+reads, so the pass watches that mailbox for the digest and, when it has
+not arrived within DELIVERY_WAIT_SECONDS (or was filed under Spam), places
+it in the inbox directly through the Gmail API — see "Delivery check".
 
 No LLM is involved — the "summary" is the first ~45 words of the cleaned
 body text — so a daily run costs $0.00 in API tokens (the AI run cost
@@ -36,9 +40,14 @@ Safety properties, by construction rather than by prompt:
     MARK_MATCHES_READ (default True), TRASH_MATCHES (default False). The
     only default mailbox mutation is clearing the unread flag on matches.
   * Mailbox mutations run only AFTER the digest that lists those matches
-    has been sent: a pass that fails before or during the send changes
-    nothing, so the next pass lists the same mail again. (Saving PDFs is
-    read-only and runs before the digest is built, so their names are in it.)
+    has been sent — and, where the arrival can be checked, is IN the
+    recipient's mailbox: a pass that fails before or during the send, or
+    whose digest neither arrived nor could be placed, changes nothing, so
+    the next pass lists the same mail again. (Saving PDFs is read-only and
+    runs before the digest is built, so their names are in it.)
+  * The one message this script ever ADDS to a mailbox is its own digest,
+    to the recipient's inbox, and only when the emailed copy did not get
+    there (the delivery check). It never adds anything else, anywhere.
   * Even with all flags enabled, actions run only for emails matching a
     SPECIFYING entry, and Trash is recoverable from each provider's UI —
     nothing is permanently deleted (same boundary as MyAgent's mail mixins;
@@ -71,7 +80,7 @@ Designed for launchd/Task Scheduler (e.g. daily at 07:00); exits 0 on a
 normal pass (even with per-account errors — they're visible in the email AND
 logged one per account as "ACCOUNT ERROR <account>: <reason>", e.g. Proton
 Bridge not running), 1 on a fatal failure such as the summary send itself
-failing.
+failing, or a digest that neither arrived nor could be placed.
 """
 
 import argparse
@@ -93,6 +102,7 @@ import ssl
 import subprocess
 import sys
 import textwrap
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -992,6 +1002,19 @@ def outlook_send(account, account_email, subject, body):
     })
 
 
+def _digest_message(sender, subject, body):
+    """The digest as an RFC 5322 message: what the SMTP fallback sends and
+    what the delivery check places in the recipient's mailbox."""
+    msg = email.message.EmailMessage()
+    msg["From"] = sender
+    msg["To"] = SEND_TO
+    msg["Subject"] = subject
+    msg["Date"] = email.utils.formatdate(localtime=True)
+    msg["Message-ID"] = email.utils.make_msgid()
+    msg.set_content(body)
+    return msg
+
+
 def smtp_send(account, cfg, subject, body):
     """Send the digest by SMTP from an IMAP account (the fallback sender).
     TLS mirrors imap_connect: implicit TLS when smtp_ssl, else STARTTLS, and
@@ -1012,13 +1035,7 @@ def smtp_send(account, cfg, subject, body):
                     f"STARTTLS failed on {host}: {e} — refusing to send the password "
                     f"unencrypted (set smtp_ssl: true if the server speaks implicit TLS)"
                 ) from e
-    msg = email.message.EmailMessage()
-    msg["From"] = cfg.get("email", account)
-    msg["To"] = SEND_TO
-    msg["Subject"] = subject
-    msg["Date"] = email.utils.formatdate(localtime=True)
-    msg["Message-ID"] = email.utils.make_msgid()
-    msg.set_content(body)
+    msg = _digest_message(cfg.get("email", account), subject, body)
     try:
         client.login(cfg.get("username") or cfg.get("email"), cfg["app_password"])
         client.send_message(msg)
@@ -1052,6 +1069,143 @@ def send_summary(outlook_accounts, imap_accounts, subject, body):
                 f"send failed via {primary} ({type(e).__name__}: {e}) and via "
                 f"{SEND_FALLBACK_IMAP_ACCOUNT} ({type(e2).__name__}: {e2})") from e2
         return fallback.get("email", SEND_FALLBACK_IMAP_ACCOUNT)
+
+
+# ── Delivery check (2026-11-27) ──────────────────────────────────────────────
+# A send the provider ACCEPTED is not a digest the recipient HAS. Graph's
+# sendMail answers 202 once Microsoft has queued the message, and that is all
+# the "sent summary" log line ever knew. On 2026-11-27 six digests in a row
+# were accepted, filed in the sender's Sent Items and never reached Gmail —
+# no bounce either — and the launcher said "Run complete" six times. The
+# route itself was sound (a plain message, and the previous day's digest sent
+# again, each arrived in 5 s); what was dropped on the way was THAT day's
+# digest, which lists the sender and opening words of every unread message,
+# Spam folders included: sent without its Spam-folder entries it arrived in
+# 6 s, sent whole it never did. The digest had been taken for the spam it
+# quotes (docs/unread-summary-delivery-check-2026-11-27.md has the sends).
+#
+# So when the recipient is one of the Gmail accounts this script reads
+# anyway, the pass LOOKS. Before the send it notes the ids of the mailbox's
+# newest messages (delivery_watch); after it, it watches for a NEW message
+# carrying the digest's subject, which is unique to the second
+# (ensure_delivered). Seen outside Spam within DELIVERY_WAIT_SECONDS:
+# delivered. Not seen, or filed under Spam: the digest is placed in the
+# recipient's inbox directly with users.messages.insert — an IMAP APPEND in
+# API form, which sends nothing and so passes no filter, and which the
+# gmail.modify token already covers — under a note saying so; an emailed copy
+# that turns up later is then a harmless duplicate. Only a pass whose digest
+# is in that mailbox goes on to mark its matches read; a digest that was
+# neither seen arriving nor could be placed is a failed pass (exit 1).
+#
+# Where the check cannot run at all — SEND_TO is not a Gmail account this
+# script reads, its token is dead, the API errors mid-watch — the send is
+# trusted as it always was, and the log line says the arrival was not checked.
+DELIVERY_WAIT_SECONDS = 30   # an Outlook -> Gmail digest takes 3-4 s, measured;
+# None turns the check off
+DELIVERY_POLL_SECONDS = 2
+DELIVERY_SCAN = 10           # newest messages looked at per poll
+
+
+def recipient_gmail_account(gmail_accounts):
+    """The key of the configured Gmail account whose address is SEND_TO, or
+    None: only a mailbox this script can open can be checked for the digest."""
+    for account, cfg in gmail_accounts.items():
+        if cfg.get("email", account).lower() == SEND_TO.lower():
+            return account
+    return None
+
+
+def _gmail_newest_ids(service):
+    """The ids of the mailbox's DELIVERY_SCAN newest messages, Spam and Trash
+    included, newest first: one list call, no message fetched."""
+    resp = service.users().messages().list(
+        userId="me", maxResults=DELIVERY_SCAN, includeSpamTrash=True).execute()
+    return [m["id"] for m in resp.get("messages", [])]
+
+
+def delivery_watch(gmail_accounts):
+    """Begin watching the recipient's mailbox. Call BEFORE the send, so that
+    everything already there is known and only a later arrival is looked at.
+    Returns {"service", "known"}, or {"unchecked": reason} when this pass
+    cannot check the arrival. Never raises: the digest is sent either way."""
+    if DELIVERY_WAIT_SECONDS is None:
+        return {"unchecked": "the delivery check is turned off"}
+    account = recipient_gmail_account(gmail_accounts)
+    if account is None:
+        return {"unchecked": f"{SEND_TO} is not a Gmail account this script reads"}
+    try:
+        service = gmail_service(account)
+        return {"service": service, "known": set(_gmail_newest_ids(service))}
+    except Exception as e:
+        return {"unchecked": f"{type(e).__name__}: {e}"}
+
+
+def find_delivered(watch, subject):
+    """One look at the watched mailbox: the labels of a message that arrived
+    since the watch began and carries exactly this subject, else None. A new
+    message's subject is fetched once; after that its id is known."""
+    service, known = watch["service"], watch["known"]
+    for mid in _gmail_newest_ids(service):
+        if mid in known:
+            continue
+        known.add(mid)
+        m = service.users().messages().get(
+            userId="me", id=mid, format="metadata", metadataHeaders=["Subject"]).execute()
+        found = next((h.get("value", "") for h in m.get("payload", {}).get("headers", [])
+                      if (h.get("name") or "").lower() == "subject"), "")
+        if decode_header(found) == subject:
+            return m.get("labelIds", [])
+    return None
+
+
+def gmail_place(service, sender, subject, body):
+    """Put the digest in the mailbox's inbox, unread, WITHOUT sending it:
+    users.messages.insert stores the message as an IMAP APPEND would."""
+    raw = base64.urlsafe_b64encode(
+        _digest_message(sender, subject, body).as_bytes()).decode("ascii")
+    service.users().messages().insert(
+        userId="me", body={"raw": raw, "labelIds": ["INBOX", "UNREAD"]}).execute()
+
+
+def ensure_delivered(watch, sender, subject, body, sleep=time.sleep,
+                     clock=time.monotonic):
+    """After an accepted send: see the digest INTO the recipient's mailbox,
+    placing it there when the emailed copy has not arrived. Returns the
+    outcome, the tail of the "sent summary" log line. Raises when the digest
+    is neither there nor could be placed; the caller then changes no mailbox,
+    exactly as after a failed send. ``sleep`` and ``clock`` are injectable so
+    the tests can run the wait without waiting."""
+    if "unchecked" in watch:
+        return f"arrival not checked ({watch['unchecked']})"
+    start = clock()
+    try:
+        while True:
+            labels = find_delivered(watch, subject)
+            waited = clock() - start
+            if labels is not None or waited >= DELIVERY_WAIT_SECONDS:
+                break
+            sleep(DELIVERY_POLL_SECONDS)
+    except Exception as e:
+        return f"arrival not checked ({type(e).__name__}: {e})"
+    in_spam = labels is not None and "SPAM" in labels
+    if labels is not None and not in_spam:
+        return f"arrived after {waited:.0f}s"
+    if in_spam:
+        what = f"arrived in Spam after {waited:.0f}s"
+        why = f"the copy emailed from {sender} was filed under Spam."
+    else:
+        what = f"NOT arrived after {DELIVERY_WAIT_SECONDS}s"
+        why = (f"the copy emailed from {sender} had not arrived after "
+               f"{DELIVERY_WAIT_SECONDS} s.")
+    log(f"digest from {sender} to {SEND_TO}: {what} — placing it in the inbox directly")
+    note = textwrap.fill(f"NOTE: placed in this mailbox directly — {why}", width=len(DIV))
+    try:
+        gmail_place(watch["service"], sender, subject, f"{note}\n\n{body}")
+    except Exception as e:
+        raise RuntimeError(
+            f"digest from {sender} to {SEND_TO}: {what}, and placing it in the "
+            f"inbox directly failed ({type(e).__name__}: {e})") from e
+    return f"{what} — placed in the inbox directly"
 
 
 # ── Output assembly ──────────────────────────────────────────────────────────
@@ -1226,8 +1380,9 @@ def main(argv=None):
     imap_conns = {}
 
     try:
-        for account, cfg in _provider_accounts("Gmail", GOOGLE_CONFIG_DIR,
-                                               account_order, errors).items():
+        gmail_accounts = _provider_accounts("Gmail", GOOGLE_CONFIG_DIR,
+                                            account_order, errors)
+        for account, cfg in gmail_accounts.items():
             slot = ("Gmail", account)
             email_addr = cfg.get("email", account)
             account_order.append((slot, f"{email_addr} (Gmail)"))
@@ -1313,12 +1468,19 @@ def main(argv=None):
                 f"{len(errors)} account error(s)")
             return
 
+        # The recipient mailbox's newest messages are noted BEFORE the send,
+        # so the check after it looks only at what arrives from here on. The
+        # one log line is written once the digest's fate is known: its tail
+        # says whether the digest arrived, had to be placed, or went unchecked.
+        watch = delivery_watch(gmail_accounts)
         sender = send_summary(outlook_accounts, imap_accounts, subject, body)
+        delivery = ensure_delivered(watch, sender, subject, body)
         log(f"sent summary to {SEND_TO} from {sender}: {total} unread across "
             f"{len(account_order)} accounts, {len(matched)} specifying match(es), "
-            f"{len(errors)} account error(s)")
+            f"{len(errors)} account error(s); {delivery}")
 
-        # The mailbox half, now that the digest listing these matches is SENT.
+        # The mailbox half, now that the digest listing these matches is SENT
+        # and, where that can be checked, IN the recipient's mailbox.
         # Matches used to be marked read before the build and the send, so a
         # pass that died there — a bad header, the sender's expired token, a
         # Graph 5xx — had already cleared their unread flag, and no later
@@ -1348,9 +1510,10 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        # Fatal (e.g. the summary send itself failed). Collected state is
-        # lost, but no mailbox was changed: matches are marked read (or
-        # trashed) only after a successful send, so the next scheduled pass
-        # lists them again. (PDFs already saved stay; saving is idempotent.)
+        # Fatal (e.g. the summary send itself failed, or the digest neither
+        # arrived nor could be placed). Collected state is lost, but no
+        # mailbox was changed: matches are marked read (or trashed) only
+        # after a delivered digest, so the next scheduled pass lists them
+        # again. (PDFs already saved stay; saving is idempotent.)
         log(f"ERROR {type(e).__name__}: {e}")
         sys.exit(1)

@@ -25,6 +25,7 @@ from unittest import mock
 
 import Heartbeat
 import UnreadSummary as US
+from tests.test_unread_delivery import FakeGmail
 
 
 def _patch(test, target, name, value):
@@ -584,6 +585,167 @@ class MainTests(_TempLog):
         self.assertIn("ACCOUNT ERROR IMAP accounts.json: accounts.json unreadable",
                       self.log_text())
         self.assertIn("Hello", body)                        # Gmail still listed
+
+    # The delivery check (2026-11-27): the functions themselves are pinned in
+    # tests/test_unread_delivery.py; these pin where main() calls them.
+
+    def _delivery(self, outcome="arrived after 4s", error=None):
+        """Route main()'s two delivery calls through recorders."""
+        self.watched = []
+        self.ensured = []
+
+        def watch(gmail_accounts):
+            self.events.append("watch")
+            self.watched.append(dict(gmail_accounts))
+            return {"service": "the service", "known": set()}
+
+        def ensure(watch, sender, subject, body):
+            self.events.append("ensure")
+            self.ensured.append((watch, sender, subject, body))
+            if error:
+                raise error
+            return outcome
+        _patch(self, US, "delivery_watch", watch)
+        _patch(self, US, "ensure_delivered", ensure)
+
+    def test_the_watch_begins_before_the_send_and_the_marks_wait_for_delivery(self):
+        self._delivery()
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        US.main(["--no-view"])
+        self.assertEqual(self.events,
+                         ["save:Gmail", "digest", "watch", "send", "ensure", "mark:Gmail"])
+        self.assertEqual(self.watched, [{"main": {"email": "main@gmail.example"}}])
+        watch, sender, subject, body = self.ensured[0]
+        self.assertEqual(watch, {"service": "the service", "known": set()})
+        self.assertEqual(sender, US.SEND_FROM_OUTLOOK_ACCOUNT)   # no Outlook account file
+        self.assertRegex(subject, r"^Summary of Unread Emails - \d{4}-\d\d-\d\d \d\d:\d\d:\d\d$")
+        self.assertEqual(body, self.sent[0])                     # what was emailed, whole
+        # One line, the delivery outcome its tail.
+        self.assertRegex(self.log_text(),
+                         r"sent summary to \S+ from outlook: 1 unread across 1 accounts, "
+                         r"1 specifying match\(es\), 0 account error\(s\); arrived after 4s\n")
+
+    def test_an_undelivered_digest_changes_no_mailbox(self):
+        self._delivery(error=RuntimeError("NOT arrived after 30s, and placing it failed"))
+        self.accounts("Gmail", ["main"])
+        self.accounts("IMAP", ["webcentral"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        self.collected["IMAP"]["webcentral"] = [_entry("IMAP", "webcentral", "Your bill")]
+        with self.assertRaisesRegex(RuntimeError, "NOT arrived after 30s"):
+            US.main(["--no-view"])
+        self.assertEqual(self.events, ["save:Gmail", "save:IMAP", "digest", "watch", "send",
+                                       "ensure", "logout"])
+        log = self.log_text()
+        self.assertNotIn("sent summary", log)
+        self.assertNotIn("acted on match", log)
+
+    def test_the_sender_that_worked_is_the_one_checked(self):
+        self._delivery()
+        self.accounts("Gmail", ["main"])
+        self.accounts("IMAP", ["fallback"])
+        self.collected["Gmail"]["main"] = []
+        self.collected["IMAP"]["fallback"] = []
+        self.send_error = RuntimeError("Graph 504 UnknownError")
+        US.main(["--no-view"])
+        self.assertEqual(self.events, ["digest", "watch", "send", "smtp:fallback", "ensure",
+                                       "logout"])
+        self.assertEqual(self.ensured[0][1], "fallback@imap.example")
+        self.assertIn("from fallback@imap.example: 0 unread across 2 accounts, "
+                      "0 specifying match(es), 0 account error(s); arrived after 4s",
+                      self.log_text())
+
+    def test_a_failed_send_is_never_checked_for_arrival(self):
+        self._delivery()
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = []
+        _patch(self, US, "SEND_FALLBACK_IMAP_ACCOUNT", None)
+        self.send_error = RuntimeError("Graph 503 ServiceUnavailable")
+        with self.assertRaises(RuntimeError):
+            US.main(["--no-view"])
+        self.assertEqual(self.events, ["digest", "watch", "send"])
+
+    def test_a_dry_run_neither_watches_nor_checks(self):
+        self._delivery()
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = []
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            US.main(["--dry-run", "--no-view"])
+        self.assertEqual(self.events, ["digest"])
+
+    def test_a_recipient_outside_the_scanned_accounts_is_sent_unchecked(self):
+        # The real functions, no recorders: SEND_TO is not one of the accounts.
+        opened = []
+        _patch(self, US, "gmail_service", opened.append)
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        US.main(["--no-view"])
+        self.assertEqual(opened, [])
+        self.assertEqual(self.events, ["save:Gmail", "digest", "send", "mark:Gmail"])
+        self.assertIn(f"0 account error(s); arrival not checked ({US.SEND_TO} is not a "
+                      f"Gmail account this script reads)", self.log_text())
+
+    def _real_delivery(self, delivers):
+        """The REAL delivery functions over an in-memory recipient mailbox:
+        SEND_TO is the scanned Gmail account, and the faked Outlook send
+        either puts the digest in that mailbox or, like 2026-11-27's six,
+        is accepted and goes nowhere."""
+        gmail = FakeGmail({"id": "old1", "subject": "Your parcel", "labels": ["INBOX"]})
+        _patch(self, US, "SEND_TO", "main@gmail.example")
+        _patch(self, US, "gmail_service", lambda account: gmail)
+        _patch(self, US, "DELIVERY_WAIT_SECONDS", 0)      # one look, no sleeping
+
+        def send(account, account_email, subject, body):
+            self._send(account, account_email, subject, body)
+            if delivers:
+                gmail.add(subject, delivers)
+        _patch(self, US, "outlook_send", send)
+        self.accounts("Gmail", ["main"])
+        self.collected["Gmail"]["main"] = [_entry("Gmail", "main", "Your bill is ready")]
+        return gmail
+
+    def test_a_delivered_digest_is_seen_and_nothing_is_placed(self):
+        gmail = self._real_delivery(delivers=("INBOX", "UNREAD"))
+        US.main(["--no-view"])
+        self.assertEqual(gmail.count("insert"), 0)
+        self.assertEqual(self.events, ["save:Gmail", "digest", "send", "mark:Gmail"])
+        self.assertIn("0 account error(s); arrived after 0s\n", self.log_text())
+
+    def test_an_accepted_send_that_goes_nowhere_ends_with_the_digest_in_the_inbox(self):
+        gmail = self._real_delivery(delivers=None)
+        US.main(["--no-view"])
+        placed = gmail.placed()
+        self.assertEqual(len(placed), 1)
+        self.assertEqual(gmail.mailbox[0]["labels"], ["INBOX", "UNREAD"])
+        self.assertEqual(placed[0]["To"], "main@gmail.example")
+        self.assertEqual(placed[0]["From"], US.SEND_FROM_OUTLOOK_ACCOUNT)
+        text = placed[0].get_content()
+        self.assertTrue(text.startswith("NOTE: placed in this mailbox directly"))
+        self.assertIn(self.sent[0], text)                    # the emailed digest, whole
+        self.assertIn("SPECIFYING LIST EMAIL", text)
+        # Delivered after all, so the match is marked read as on any pass.
+        self.assertEqual(self.events, ["save:Gmail", "digest", "send", "mark:Gmail"])
+        log = self.log_text()
+        self.assertIn("NOT arrived after 0s — placing it in the inbox directly", log)
+        self.assertIn("0 account error(s); NOT arrived after 0s — placed in the inbox "
+                      "directly\n", log)
+        self.assertLess(log.index("placing it in the inbox"), log.index("sent summary to"))
+
+    def test_a_digest_that_cannot_be_placed_either_marks_nothing(self):
+        gmail = self._real_delivery(delivers=None)
+        gmail.fail["insert"] = OSError("network down")
+        with self.assertRaisesRegex(RuntimeError, "placing it in the inbox directly failed"):
+            US.main(["--no-view"])
+        self.assertNotIn("mark:Gmail", self.events)
+        self.assertNotIn("sent summary", self.log_text())
+
+    def test_a_digest_filed_under_spam_is_placed_in_the_inbox_too(self):
+        gmail = self._real_delivery(delivers=("SPAM", "UNREAD"))
+        US.main(["--no-view"])
+        self.assertEqual(len(gmail.placed()), 1)
+        self.assertIn("arrived in Spam after 0s — placed in the inbox directly\n",
+                      self.log_text())
+        self.assertIn("mark:Gmail", self.events)
 
 
 # ── Heartbeat ─────────────────────────────────────────────────────────────

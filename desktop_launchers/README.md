@@ -257,7 +257,14 @@ twelve tests on Windows under Git Bash, with stand-ins for `date -j` (GNU
 it runs `UnreadSummary.py` with the venv python in a hidden window, then a
 success chime + self-dismissing dialog with the run's log line (from
 `<repo>\unread_summary.log`), or a blocking error dialog with the log tail
-on failure. Unlike the AppleScript it needs no path patching — the repo is
+on failure. Since 2026-11-27 that log line ends with what became of the
+digest — `arrived after 4s`, `NOT arrived after 30s — placed in the inbox
+directly`, `arrival not checked (…)` — because the script now watches the
+recipient's mailbox instead of taking the provider's acceptance for a
+delivery: the dialog had said *Run complete* over six digests that never
+arrived (`docs/unread-summary-delivery-check-2026-11-27.md`). A pass whose
+emailed digest is dropped shows its dialog about 30 s later than usual, the
+digest already open in the viewer by then. Unlike the AppleScript it needs no path patching — the repo is
 resolved from the script's own location — so only the Desktop shortcut is
 per-machine. `-DryRun` passes `--dry-run` through for a read-only test.
 It waits with `$proc.WaitForExit()` rather than `Start-Process -Wait`: since
